@@ -1,0 +1,227 @@
+# ──────────────────────────────────────────────────────────────────────
+#  Local-only override (gitignored: .gitignore:127). Never committed.
+#
+#  Four jobs:
+#   1. Redirect OmniRoute runtime state OUT of the source tree into an
+#      isolated external workspace, so the fork at ./ stays pristine and no
+#      environment-specific paths ever leak into a PR.
+#
+#        src        -> /mnt/devvm/custom/omnirouter/src        (this fork)
+#        workspace  -> /mnt/devvm/custom/omnirouter/workspace  (all runtime state)
+#
+#   2. Pin the pre-built, ESM-fixed image (omniroute:base, produced by
+#      bin/omniroute-deploy.sh). The boot path (bin/omniroute-up.sh) runs
+#      `compose up -d` WITHOUT --build, so the prebuilt image is used as-is.
+#      See bin/omniroute-fix.Containerfile for the ESM fix rationale.
+#
+#   3. userns_mode: keep-id maps the in-container user onto the host ndsadmin
+#      user (uid/gid 400) so the bind-mounted workspace is owned by ndsadmin
+#      on the host, editable with zero permission friction, while the app
+#      still runs as its non-root `node` user inside the container.
+#        - app:   node = container uid/gid 1000 -> host 400 (keep-id:uid=1000,gid=1000)
+#        - redis: runs as container uid/gid 0   -> host 400 (keep-id:uid=0,gid=0)
+#      Both therefore write workspace files as host 400:400 (ndsadmin).
+#
+#   4. Residential codex egress via a TUN-mode tailscale sidecar (ts-egress).
+#      The codex-egress container joins that sidecar's network namespace, so
+#      ALL of codex's traffic — TCP + UDP/QUIC + DNS — exits at the IP layer
+#      through the NUC residential exit node (armin-nuc-win 100.100.95.35 ->
+#      TELUS 66.183.196.137). This is the container equivalent of the camoufox
+#      gncall netns. A SOCKS5 proxy was the WRONG approach (TCP-only, cannot
+#      carry QUIC/UDP); TUN mode carries everything, proven 2026-08-22
+#      (UDP + TCP STUN/ipify both == 66.183.196.137, zero AWS leak).
+#
+#  Absolute, symlink-resolved paths are used deliberately so podman-compose
+#  and the systemd unit that auto-starts this stack resolve them identically
+#  regardless of the invoking cwd.
+# ──────────────────────────────────────────────────────────────────────
+# in_pod: false disables podman-compose's shared project pod. Required because
+# podman refuses `--userns` together with `--pod` ("--userns and --pod cannot be
+# set together"), and we need per-container keep-id userns mapping (job 3 below).
+x-podman:
+  in_pod: false
+
+services:
+  omniroute-base:
+    image: localhost/omniroute:base
+    pull_policy: never
+    # Root (0:0) instead of keep-id userns: the in-container tailscaled TUN needs
+    # root to program its route/iptables. In rootless podman the container root
+    # still maps to the host ndsadmin (uid 400) that owns the workspace, so
+    # /app/data stays writable + host-editable exactly as under keep-id (verified).
+    user: "0:0"
+    # In-container TUN residential egress (see the entrypoint wrapper below):
+    # the WHOLE app process egresses the NUC residential exit node. LAN access is
+    # allowed so the src_default bridge (redis, DNS 10.89.9.1, codex ts-egress:1456)
+    # stays DIRECT — only internet traffic is tunneled. The app keeps its own
+    # bridge + published ports (portal path 127.0.0.1:20128 unchanged).
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    # Wrap the image's real entrypoint: bring the TUN up, then exec the app's
+    # own entrypoint + command. We must respell the image CMD here because
+    # overriding `entrypoint` drops the image default CMD.
+    entrypoint: ["bash", "/run/app-egress/entrypoint.sh", "/app/check-permissions.sh", "node", "dev/run-standalone.mjs"]
+    volumes:
+      - /mnt/devvm/custom/omnirouter/workspace:/app/data
+      # Read-only mount of the codex app-server ws capability token so OmniRoute
+      # can authenticate to the app-server (same token the codex-egress container
+      # enforces). Minted by bin/omniroute-egress-prereqs.sh.
+      - /mnt/devvm/custom/omnirouter/workspace/codex-egress/ws-token:/run/codex-ws-token:ro
+      # ── App residential-egress assets (in-container tailscaled TUN) ──
+      - /mnt/devvm/custom/omnirouter/bin/omniroute-app-egress-entrypoint.sh:/run/app-egress/entrypoint.sh:ro
+      - /mnt/devvm/custom/omnirouter/workspace/app-egress/bin:/run/app-egress/bin:ro
+      - /mnt/devvm/custom/omnirouter/workspace/app-egress/state:/run/app-egress/state
+      - /mnt/devvm/custom/omnirouter/workspace/app-egress/authkey:/run/app-egress/authkey:ro
+    environment:
+      # OmniRoute reaches the codex app-server over the compose network. Codex
+      # runs INSIDE the ts-egress TUN netns (network_mode: container:...), so it
+      # has NO alias of its own — it is reachable at the SIDECAR's alias
+      # ts-egress:1456. This hop stays local on the bridge (LAN access is kept
+      # direct even with the app's own TUN up). The ws capability token is mounted
+      # at /run/codex-ws-token (see volumes) for auth.
+      - OMNIROUTE_CODEX_APPSERVER_WS=ws://ts-egress:1456
+      - OMNIROUTE_CODEX_APPSERVER_WS_TOKEN_FILE=/run/codex-ws-token
+      # MaxAI provider: enable the wreq-js TLS fingerprint overlay + allowlist the
+      # `maxai` provider so its executor fetch presents a Windows Firefox-150
+      # ClientHello (proxyFetch TLS_PROVIDER_PROFILE) instead of the Node/undici
+      # default. Combined with the whole-app residential egress above, MaxAI
+      # traffic exits the NUC IP with a Firefox fingerprint (MaxAI bot-bans
+      # datacenter IPs). No per-provider proxy is needed — the app itself is
+      # residential.
+      - ENABLE_TLS_FINGERPRINT=true
+      - TLS_FINGERPRINT_PROVIDERS=maxai
+      # Residential exit node for the in-container TUN (NUC; the failover watcher
+      # can repoint this). accept-dns stays false so bridge DNS (redis) keeps
+      # working while internet DNS resolves through the tunnel's upstream.
+      - APP_EGRESS_EXIT_NODE=100.100.95.35
+      - APP_EGRESS_HOSTNAME=omni-app-egress
+
+  redis:
+    userns_mode: "keep-id:uid=0,gid=0"
+    volumes:
+      - /mnt/devvm/custom/omnirouter/workspace/redis:/data
+
+  # ── TUN-mode tailscale egress sidecar ─────────────────────────────────
+  # Real IP-layer routing (NOT a SOCKS proxy): joins the tailnet as a node and
+  # routes its ENTIRE default route (TCP + UDP/QUIC + DNS) through the NUC
+  # residential exit node. The codex-egress container shares this netns, so all
+  # codex traffic egresses residential. OmniRoute's main app stays direct.
+  #
+  # Rootless-podman prereqs (all REQUIRED — see bin/omniroute-egress-prereqs.sh
+  # and /etc/modules-load.d/omniroute-tailscale-egress.conf):
+  #   * --device /dev/net/tun + NET_ADMIN + NET_RAW  (TUN + routing)
+  #   * sysctl net.ipv4.conf.all.src_valid_mark=1    (or rp_filter drops the
+  #                                                    WireGuard underlay -> UDP:false)
+  #   * host netfilter modules loaded                (tailscale sets fwmark
+  #                                                    0x80000 via iptables to
+  #                                                    bypass its own tunnel for
+  #                                                    the underlay)
+  ts-egress:
+    image: ghcr.io/tailscale/tailscale:latest
+    container_name: omni-ts-egress
+    hostname: omni-ts-egress
+    restart: unless-stopped
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    # Public resolvers instead of the podman bridge gateway (10.89.9.1). With
+    # accept-dns=false the container resolves via these, and because the default
+    # route is the tunnel, the DNS queries EGRESS THROUGH THE NUC exit node too
+    # (verified: 8.8.8.8 returns edns0-client-subnet 66.183.196.0/24 = residential)
+    # — so DNS does NOT leak to the EC2/AWS resolver. codex-egress shares this
+    # netns + resolv.conf (network_mode: container), so it inherits the fix.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    environment:
+      - TS_USERSPACE=false
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_AUTHKEY=file:/run/ts-authkey
+      # Primary exit = NUC (100.100.95.35). The failover watcher (bin/
+      # ts-egress-failover.sh) flips this to the laptop (100.76.165.46) if NUC
+      # goes offline, and cuts egress (tailscale down) if both are down.
+      # netfilter stays ON (default) so the underlay-bypass fwmark is set.
+      #
+      # accept-dns=FALSE is REQUIRED: codex's Rust HTTP client (hickory-dns)
+      # intermittently fails ("failed to lookup address information: Try again")
+      # against tailscale MagicDNS (100.100.100.100) when it opens the
+      # wss://chatgpt.com/backend-api/codex/responses websocket, which stalls
+      # every turn. With accept-dns=false the container uses its normal resolver
+      # and DNS egresses at the IP layer through the exit node like all other
+      # traffic. Verified 2026-08-22: turns return real completions + egress stays
+      # residential (66.183.196.137) with zero Try-again errors.
+      - TS_EXTRA_ARGS=--exit-node=100.100.95.35 --exit-node-allow-lan-access=true --accept-dns=false --hostname=omni-ts-egress
+    volumes:
+      - /mnt/devvm/custom/omnirouter/.ts-sidecar-authkey:/run/ts-authkey:ro
+      - /mnt/devvm/custom/omnirouter/workspace/ts-egress-state:/var/lib/tailscale
+    healthcheck:
+      # Healthy only when tailscaled reports Running AND an exit node is engaged
+      # AND its UDP underlay is up. Note the JSON is pretty-printed, so match
+      # '"Online": true' WITH the space (an earlier no-space grep never matched).
+      test: ["CMD-SHELL", "tailscale --socket=/tmp/tailscaled.sock status --json 2>/dev/null | grep -q '\"ExitNodeStatus\"' && tailscale --socket=/tmp/tailscaled.sock status --json 2>/dev/null | grep -q '\"Online\": *true'"]
+      interval: 30s
+      timeout: 12s
+      retries: 3
+      start_period: 30s
+
+  # ── Codex app-server, egressing through the TUN netns ─────────────────
+  # network_mode: container:omni-ts-egress puts this container INSIDE the
+  # sidecar's network namespace (same trick as the camoufox netns), so every
+  # byte codex sends to chatgpt.com/api.openai.com exits via the NUC. It shares
+  # the host's authenticated ~/.codex (sessions/skills/auth.json; app-server
+  # self-refreshes auth) and exposes the app-server ws on :1456 — reachable by
+  # OmniRoute at ws://ts-egress:1456 (NOT codex-egress: this container shares the
+  # ts-egress netns via network_mode:container, so it has no alias of its own;
+  # :1456 lives in the ts-egress netns whose bridge alias is ts-egress). Do NOT
+  # run the host `codex` CLI and this app-server against the same ~/.codex
+  # simultaneously (refresh-token rotation race).
+  #
+  # Runs as root (user: "0:0") — NOT keep-id — because keep-id userns remapping
+  # is incompatible with network_mode:container (crun errors "mount_setattr
+  # /sys: Function not implemented"). As root in the shared netns it can write
+  # the bind-mounted ~/.codex (host uid 400 -> container root's view) and init
+  # its sqlite state. Proven 2026-08-22.
+  #
+  # WS AUTH: the app-server REFUSES a non-loopback ws listener without auth
+  # ("refusing to start non-loopback websocket listener without auth"). We use
+  # capability-token mode with a random token minted into workspace/codex-egress/
+  # ws-token by bin/omniroute-egress-prereqs.sh; OmniRoute presents the same
+  # token (OMNIROUTE_CODEX_APPSERVER_WS_TOKEN). Unauthenticated clients get 401.
+  codex-egress:
+    image: localhost/omniroute:base
+    container_name: omni-codex-egress
+    pull_policy: never
+    # Gated behind the 'codex' profile so it only starts once codex is baked
+    # into the image (bin/omniroute-fix.Containerfile) and you opt in with
+    # `--profile codex`. Until then the always-on ts-egress sidecar provides the
+    # egress foundation without a crash-looping codex container.
+    profiles: ["codex"]
+    network_mode: "container:omni-ts-egress"
+    depends_on:
+      - ts-egress
+    user: "0:0"
+    restart: unless-stopped
+    environment:
+      - CODEX_HOME=/home/node/.codex
+    volumes:
+      - /home/ndsadmin/.codex:/home/node/.codex:rw
+      - /mnt/devvm/custom/omnirouter/workspace/codex-egress/ws-token:/run/ws-token:ro
+    # The app-server binary is baked into the image (see bin/omniroute-fix.
+    # Containerfile). --listen ws://0.0.0.0:1456 exposes it on the shared netns;
+    # it also serves http://.../readyz + /healthz for health.
+    command: ["codex", "app-server", "--listen", "ws://0.0.0.0:1456", "--ws-auth", "capability-token", "--ws-token-file", "/run/ws-token"]
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:1456/readyz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 25s

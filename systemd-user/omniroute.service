@@ -1,0 +1,24 @@
+[Unit]
+Description=OmniRoute container stack (rootless podman), autostart on boot/reboot/EC2 stop-start
+Documentation=file:///mnt/devvm/custom/omnirouter/bin/omniroute-up.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/mnt/devvm/custom/omnirouter/src
+# Start logic lives in the helper script (mirrors the cmx-postgres convention):
+#   - If the containers already exist (stopped after reboot/stop-start), just
+#     `podman start` them (podman-compose errors 125 on "name already in use").
+#   - Only fall back to `compose up` (no --build) to CREATE the stack fresh,
+#     e.g. after a prune when containers are gone but the workspace survives.
+# The script waits for the app healthcheck before returning success.
+ExecStart=/usr/bin/env bash /mnt/devvm/custom/omnirouter/bin/omniroute-up.sh
+# Graceful stop: stop but DON'T remove containers, so next boot can `podman
+# start` them instead of recreating.
+ExecStop=/usr/bin/env bash /mnt/devvm/custom/omnirouter/bin/omniroute-down.sh
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

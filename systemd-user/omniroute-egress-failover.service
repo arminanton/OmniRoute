@@ -1,0 +1,24 @@
+[Unit]
+Description=OmniRoute codex-egress exit-node failover watcher + kill-switch
+Documentation=file:///mnt/devvm/custom/omnirouter/bin/ts-egress-failover.sh
+# Steers the TUN-mode tailscale egress sidecar (omni-ts-egress): NUC primary,
+# armin-win-laptop fallback, fail-closed (iptables DROP) if both are down so no
+# codex traffic ever leaks via the EC2 AWS IP. Runs after the stack is up.
+After=omniroute.service network-online.target
+Wants=omniroute.service
+
+[Service]
+Type=simple
+# Ensure the host prereqs (netfilter modules, /dev/net/tun, auth) are satisfied
+# before steering — cheap + idempotent, protects against a watcher that starts
+# before systemd-modules-load on a cold boot.
+ExecStartPre=/usr/bin/env bash /mnt/devvm/custom/omnirouter/bin/omniroute-egress-prereqs.sh
+ExecStart=/usr/bin/env bash /mnt/devvm/custom/omnirouter/bin/ts-egress-failover.sh
+Restart=always
+RestartSec=10
+# The watcher is a plain loop; give it a clean SIGTERM stop.
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

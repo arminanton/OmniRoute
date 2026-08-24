@@ -1,0 +1,26 @@
+[Unit]
+Description=OmniRoute APP in-container TUN exit-node failover watcher (omni-app-egress)
+Documentation=file:///mnt/devvm/custom/omnirouter/bin/app-egress-failover.sh
+# Steers the app's OWN in-container tailscale TUN (omni-app-egress, brought up by
+# bin/omniroute-app-egress-entrypoint.sh): NUC primary, armin-win-laptop fallback.
+# Relies on tailscale's VERIFIED natural fail-closed (an offline exit node drops
+# traffic into the dead TUN, no AWS leak) instead of an iptables kill-switch, so
+# it never unsets the exit node. Sibling to omniroute-egress-failover.service
+# (which steers the codex omni-ts-egress sidecar). Runs after the stack is up.
+After=omniroute.service network-online.target
+Wants=omniroute.service
+
+[Service]
+Type=simple
+# Reuse the shared residential-egress prereqs (netfilter modules, /dev/net/tun,
+# auth) — cheap + idempotent; protects a watcher that starts before
+# systemd-modules-load on a cold boot.
+ExecStartPre=/usr/bin/env bash /mnt/devvm/custom/omnirouter/bin/omniroute-egress-prereqs.sh
+ExecStart=/usr/bin/env bash /mnt/devvm/custom/omnirouter/bin/app-egress-failover.sh
+Restart=always
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target

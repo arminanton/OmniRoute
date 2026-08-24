@@ -1,0 +1,23 @@
+[Unit]
+Description=OmniRoute codex-egress app-server (codex in the TUN residential-egress netns)
+Documentation=file:///mnt/devvm/custom/omnirouter/bin/omniroute-codex-egress-up.sh
+# Starts codex app-server INSIDE the omni-ts-egress netns so all codex traffic
+# (TCP + UDP/QUIC + DNS) egresses via the NUC residential exit node. Must start
+# after the egress sidecar + failover watcher are up.
+After=omniroute.service omniroute-egress-failover.service network-online.target
+Wants=omniroute-egress-failover.service
+# Bind to the failover watcher so if the sidecar netns is being managed, we come
+# up after it.
+PartOf=omniroute-egress-failover.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The up script pins the shared-netns DNS + (re)creates codex-egress attached to
+# the live sidecar netns, then waits for the app-server readyz. Idempotent.
+ExecStart=/usr/bin/env bash /mnt/devvm/custom/omnirouter/bin/omniroute-codex-egress-up.sh
+ExecStop=/usr/bin/podman rm -f omni-codex-egress
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target
