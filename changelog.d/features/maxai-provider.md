@@ -2,6 +2,6 @@
 - **feat(providers):** MaxAI vision input — image_url content parts are forwarded inline in `message_content` to the 6 vision-capable models (GPT-5.6 / Luna / Thinking, Claude Haiku 4.5, Gemini 3.1 Pro / Flash-Lite)
 - **feat(providers):** MaxAI image generation — 6 image models (gpt-image-1, dall-e-3, flux-1-schnell/dev/pro, sd3-medium) exposed through `POST /v1/images/generations`
 - **feat(providers):** MaxAI document RAG — inline base64 file/document attachments are uploaded to MaxAI (content-addressed `doc_id`) and attached to the chat via `doc_list`
-- **feat(providers):** MaxAI onboarding — browserless email-code login plus a signed access-token refresh path; upstream refresh rejection is surfaced as reauthentication rather than a durability guarantee
-- **feat(providers):** optional per-provider TLS impersonation profile for bot-sensitive deployments (MaxAI can present a Windows Firefox-150 client fingerprint); network routing remains operator-configured
+- **feat(providers):** MaxAI onboarding — browserless email-code login acquires the roughly yearly refresh token, and signed refresh mints the roughly daily access token
+- **feat(providers):** required Windows Firefox 150 client profile for MaxAI requests; egress and proxy routing remain operator-configured
 - **feat(providers):** MaxAI speech-to-text through the captured `/gpt/speech_to_text` multipart contract, exposed as `maxai/speech-to-text` through `POST /v1/audio/transcriptions` and live verified against the official web client

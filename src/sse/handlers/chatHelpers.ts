@@ -24,6 +24,7 @@ import {
   runWithAppliedProxyCapture,
   runWithTlsTracking,
   isTlsFingerprintActive,
+  isTlsFingerprintRequired,
   type AppliedProxySink,
 } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { resolveProxyForConnection } from "@/lib/localDb";
@@ -552,6 +553,18 @@ export async function executeChatWithBreaker({
     // after resolving NO_PROXY/local bypasses, so predicting from proxyInfo here
     // would drop the account scope when a configured proxy resolves to direct.
     const tlsFingerprintActive = isTlsFingerprintActive(provider);
+    if (isTlsFingerprintRequired(provider) && !tlsFingerprintActive) {
+      const detail = "Required MaxAI Windows Firefox 150 transport is unavailable";
+      return {
+        result: {
+          success: false,
+          response: unavailableResponse(HTTP_STATUS.SERVICE_UNAVAILABLE, detail, 2),
+          status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+          error: detail,
+        },
+        tlsFingerprintUsed: false,
+      };
+    }
 
     if (isShadowTraffic) {
       if (!bypassCircuitBreaker && breaker && !breaker.canExecute()) {

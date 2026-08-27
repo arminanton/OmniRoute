@@ -10,14 +10,15 @@
  *   • SSE response parsed for text deltas, with inline `<think>` reasoning split
  *     out into `reasoning_content` (see ./stream.ts).
  *
- * Transport: this executor uses the ambient patched `fetch`, so the operator's
- * normal per-connection proxy policy applies. When provider-scoped TLS
- * impersonation is enabled, MaxAI uses the Firefox-150 client profile. Neither
- * behavior requires a particular IP or egress class.
+ * Transport: every request uses the required Windows Firefox 150 client profile.
+ * The ambient patched `fetch` still honors the operator's per-connection proxy
+ * policy, so residential routing remains an optional deployment choice rather
+ * than a provider requirement.
  *
- * Auth refresh: the executor attempts MaxAI's signed `/oauth/refresh_access_token`
- * request through the configured transport. Failure is non-fatal while the stored
- * access token remains usable; an eventual 401/418 prompts reauthentication.
+ * Auth refresh: email login supplies the roughly yearly refresh token. The
+ * executor uses MaxAI's signed `/oauth/refresh_access_token` request to mint a
+ * fresh roughly daily access token as expiry approaches. A transient failure is
+ * non-fatal while the stored access token remains usable.
  */
 import { BaseExecutor, type ExecuteInput, type ExecutorExecuteResult } from "./base.ts";
 import { PROVIDERS } from "../config/constants.ts";
@@ -25,7 +26,7 @@ import { sanitizeErrorMessage } from "../utils/error.ts";
 import { resolveMaxaiCredential, type MaxaiCredential } from "./maxai/credentials.ts";
 import { buildMaxaiSignedHeaders } from "./maxai/signing.ts";
 import { ensureMaxaiConstants } from "./maxai/constantsStore.ts";
-import { maxaiAccessTokenNeedsRefresh, maxaiRefreshAccessToken } from "./maxai/refresh.ts";
+import { ensureFreshMaxaiCredential } from "./maxai/refresh.ts";
 import {
   assembleMaxaiContext,
   buildMaxaiChatBody,
@@ -35,7 +36,11 @@ import {
   maxaiStaticHeaders,
   newConversationId,
 } from "./maxai/protocol.ts";
-import { resolveMaxaiDocList, type MaxaiDocListEntry } from "./maxai/documents.ts";
+import {
+  MaxaiDocumentInputError,
+  resolveMaxaiDocList,
+  type MaxaiDocListEntry,
+} from "./maxai/documents.ts";
 import { estimateMaxaiTokens, isMaxaiTextFrame, ThinkSplitter } from "./maxai/stream.ts";
 import { prepareToolMessages, parseToolCallsFromText } from "../translator/webTools.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
@@ -214,11 +219,12 @@ export class MaxAiExecutor extends BaseExecutor {
         { signal: input.signal ?? undefined }
       );
     } catch (err) {
+      const invalidInput = err instanceof MaxaiDocumentInputError;
       return wrap(
         errorResponse(
-          502,
+          invalidInput ? 400 : 502,
           sanitizeErrorMessage(err instanceof Error ? err.message : err),
-          "maxai_document_upload_failed"
+          invalidInput ? "maxai_invalid_document" : "maxai_document_upload_failed"
         ),
         url
       );
@@ -430,42 +436,19 @@ export class MaxAiExecutor extends BaseExecutor {
    * proceeds (a truly-dead token then surfaces as an upstream 401/418).
    */
   private async ensureFreshAccess(cred: MaxaiCredential, input: ExecuteInput): Promise<string> {
-    if (!cred.refreshToken) return cred.accessToken;
-    if (!maxaiAccessTokenNeedsRefresh(cred.accessToken)) return cred.accessToken;
-
-    const result = await maxaiRefreshAccessToken({
-      refreshToken: cred.refreshToken,
-      deviceId: cred.deviceId,
-      userId: cred.userId,
+    const updated = await ensureFreshMaxaiCredential({
+      credential: cred,
+      connectionId: input.credentials?.connectionId,
+      providerSpecificData: input.credentials?.providerSpecificData,
       signal: input.signal ?? undefined,
+      onCredentialsRefreshed: input.onCredentialsRefreshed,
+      onPersistError: (err) =>
+        input.log?.warn?.(
+          "maxai",
+          `refreshed token persist failed: ${sanitizeErrorMessage(err instanceof Error ? err.message : err)}`
+        ),
     });
-    if (!result.ok || !result.accessToken) {
-      input.log?.warn?.(
-        "maxai",
-        `access-token refresh failed (${result.status}); using existing token`
-      );
-      return cred.accessToken;
-    }
-
-    // Persist both tokens atomically. MaxAI usually returns only a new access
-    // token, but retain a replacement refresh token when the upstream rotates it.
-    try {
-      const refreshToken = result.refreshToken ?? cred.refreshToken;
-      await input.onCredentialsRefreshed?.({
-        accessToken: result.accessToken,
-        providerSpecificData: {
-          ...(input.credentials?.providerSpecificData ?? {}),
-          maxaiAccessToken: result.accessToken,
-          ...(refreshToken ? { maxaiRefreshToken: refreshToken } : {}),
-        },
-      });
-    } catch (err) {
-      input.log?.warn?.(
-        "maxai",
-        `refreshed token persist failed: ${sanitizeErrorMessage(err instanceof Error ? err.message : err)}`
-      );
-    }
-    return result.accessToken;
+    return updated.accessToken;
   }
 
   /**
@@ -532,6 +515,8 @@ export class MaxAiExecutor extends BaseExecutor {
     let sseBuf = "";
     let sentRole = false;
     let completionChars = 0;
+    let cancelled = false;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
     const emitDelta = (controller: ReadableStreamDefaultController, r: string, a: string) => {
       if (!sentRole && (r || a)) {
@@ -563,49 +548,62 @@ export class MaxAiExecutor extends BaseExecutor {
     };
 
     return new ReadableStream({
-      async start(controller) {
-        const reader = source.getReader();
-        try {
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            sseBuf += decoder.decode(value, { stream: true });
-            let nl: number;
-            while ((nl = sseBuf.indexOf("\n")) !== -1) {
-              const line = sseBuf.slice(0, nl).trim();
-              sseBuf = sseBuf.slice(nl + 1);
-              if (line.startsWith("data:")) processFrame(controller, line.slice(5).trim());
-            }
-          }
-          // flush held tail from the think splitter
-          const tail = splitter.flush();
-          emitDelta(controller, tail.reasoning, tail.answer);
-          // final chunk with usage + finish
-          const completionTokens = estimateMaxaiTokens("x".repeat(completionChars));
-          const finalChunk = {
-            id,
-            object: "chat.completion.chunk",
-            created,
-            model,
-            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-            usage: {
-              prompt_tokens: promptTokens,
-              completion_tokens: completionTokens,
-              total_tokens: promptTokens + completionTokens,
-            },
-          };
-          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(finalChunk)}\n\n`));
-          controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
-          controller.close();
-        } catch (err) {
+      start(controller) {
+        const sourceReader = source.getReader();
+        reader = sourceReader;
+        void (async () => {
           try {
-            controller.error(err);
-          } catch {
-            /* already errored */
+            for (;;) {
+              const { done, value } = await sourceReader.read();
+              if (cancelled) return;
+              if (done) break;
+              sseBuf += decoder.decode(value, { stream: true });
+              let nl: number;
+              while (!cancelled && (nl = sseBuf.indexOf("\n")) !== -1) {
+                const line = sseBuf.slice(0, nl).trim();
+                sseBuf = sseBuf.slice(nl + 1);
+                if (line.startsWith("data:")) processFrame(controller, line.slice(5).trim());
+              }
+            }
+            if (cancelled) return;
+            // flush held tail from the think splitter
+            const tail = splitter.flush();
+            emitDelta(controller, tail.reasoning, tail.answer);
+            if (cancelled) return;
+            // final chunk with usage + finish
+            const completionTokens = estimateMaxaiTokens("x".repeat(completionChars));
+            const finalChunk = {
+              id,
+              object: "chat.completion.chunk",
+              created,
+              model,
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+              usage: {
+                prompt_tokens: promptTokens,
+                completion_tokens: completionTokens,
+                total_tokens: promptTokens + completionTokens,
+              },
+            };
+            controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(finalChunk)}\n\n`));
+            controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"));
+            controller.close();
+          } catch (err) {
+            if (!cancelled) {
+              try {
+                controller.error(err);
+              } catch {
+                /* already errored */
+              }
+            }
+          } finally {
+            sourceReader.releaseLock();
+            if (reader === sourceReader) reader = null;
           }
-        } finally {
-          reader.releaseLock();
-        }
+        })();
+      },
+      cancel(reason) {
+        cancelled = true;
+        if (reader) void reader.cancel(reason).catch(() => undefined);
       },
     });
   }

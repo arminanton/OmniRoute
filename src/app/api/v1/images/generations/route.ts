@@ -36,6 +36,11 @@ import { enforceClientApiRouteAuth } from "@/shared/utils/clientApiRouteAuth";
 import { runWithCallLogApiKeyContext } from "@/lib/usage/callLogApiKeyContext";
 import { executeImageWithCredentialFallback } from "@/sse/services/imageCredentialRetry";
 import { AUTHZ_HEADER_PEER_LOCALITY } from "@/server/authz/headers";
+import {
+  MaxaiTransportError,
+  runMaxaiConnectionTransport,
+} from "@omniroute/open-sse/services/maxaiTransport.ts";
+import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 
 export const dynamic = "force-dynamic";
 
@@ -127,16 +132,8 @@ async function postHandler(request, context) {
   if (body.model && typeof body.model === "string" && !body.model.includes("/")) {
     const combo = await getComboByName(body.model as string);
     if (combo) {
-      const { executeImageCombo } = await import(
-        "@omniroute/open-sse/services/imageCombo"
-      );
-      return executeImageCombo(
-        body.model as string,
-        body,
-        { request, policy },
-        startTime,
-        log
-      );
+      const { executeImageCombo } = await import("@omniroute/open-sse/services/imageCombo");
+      return executeImageCombo(body.model as string, body, { request, policy }, startTime, log);
     }
   }
 
@@ -246,7 +243,8 @@ async function postHandler(request, context) {
       provider,
       null,
       syncedEndpointRoute?.connectionIds ?? null,
-      requestedModel    );
+      requestedModel
+    );
     if (!credentials) {
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
@@ -281,15 +279,6 @@ async function postHandler(request, context) {
     requestedModel,
     credentials,
     execute: async (attemptCredentials) => {
-      let proxyInfo = null;
-      if (attemptCredentials?.connectionId) {
-        try {
-          proxyInfo = await resolveProxyForConnection(attemptCredentials.connectionId);
-        } catch {
-          log.debug("PROXY", `Failed to resolve proxy for image provider: ${provider}`);
-        }
-      }
-
       const generateImage = () =>
         runWithCallLogApiKeyContext(
           {
@@ -310,8 +299,33 @@ async function postHandler(request, context) {
               // consumes this (Hard Rules #15 + #17) — every other image
               // provider ignores it.
               peerLocality: request.headers.get(AUTHZ_HEADER_PEER_LOCALITY),
+              onCredentialsRefreshed: attemptCredentials?.connectionId
+                ? (updated) => updateProviderCredentials(attemptCredentials.connectionId, updated)
+                : undefined,
             })
         );
+
+      if (provider === "maxai" && attemptCredentials?.connectionId) {
+        try {
+          return await runMaxaiConnectionTransport(attemptCredentials.connectionId, generateImage);
+        } catch (error) {
+          return {
+            success: false,
+            status: error instanceof MaxaiTransportError ? error.status : 502,
+            error:
+              error instanceof MaxaiTransportError ? error.message : "MaxAI image transport failed",
+          };
+        }
+      }
+
+      let proxyInfo = null;
+      if (attemptCredentials?.connectionId) {
+        try {
+          proxyInfo = await resolveProxyForConnection(attemptCredentials.connectionId);
+        } catch {
+          log.debug("PROXY", `Failed to resolve proxy for image provider: ${provider}`);
+        }
+      }
 
       return attemptCredentials?.connectionId
         ? runWithProxyContext(proxyInfo?.proxy || null, generateImage).catch((err: any) => ({
@@ -346,7 +360,10 @@ async function postHandler(request, context) {
     });
   }
 
-  const errorPayload = toJsonErrorPayload((result as any).error, "Image generation provider error") as {
+  const errorPayload = toJsonErrorPayload(
+    (result as any).error,
+    "Image generation provider error"
+  ) as {
     error?: { message?: string };
   };
   const message =

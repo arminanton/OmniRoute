@@ -514,11 +514,11 @@ export const WEB_COOKIE_PROVIDERS = {
     textIcon: "MX",
     website: "https://www.maxai.co",
     // MaxAI uses a bearer access token plus a stored refresh token, not a pasted
-    // browser-cookie jar. The executor attempts signed refresh, but an upstream
-    // client-profile rejection can still require reauthentication.
+    // browser-cookie jar. Email login supplies the roughly yearly refresh token;
+    // signed refresh mints the roughly daily access token through Firefox 150.
     toolCalling: "emulated",
     authHint:
-      "Sign in with an email code or import credentials manually. OmniRoute signs each request and follows your configured connection/proxy. It attempts signed token refresh; sign in again if MaxAI rejects the refresh or credential.",
+      "Sign in with an email code or import credentials manually. OmniRoute signs each request, uses the required Windows Firefox 150 client profile, follows your configured connection/proxy, and refreshes the daily access token from the roughly yearly refresh token.",
   },
 };
 

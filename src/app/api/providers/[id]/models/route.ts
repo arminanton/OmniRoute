@@ -57,6 +57,8 @@ import {
   discoverMaxaiModels,
   MAXAI_REGISTRY_MODELS,
 } from "@omniroute/open-sse/services/maxaiModels.ts";
+import { runMaxaiConnectionTransport } from "@omniroute/open-sse/services/maxaiTransport.ts";
+import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 import {
   AZURE_AI_DEFAULT_BASE_URL,
   buildAzureAiModelsUrl,
@@ -616,17 +618,21 @@ export async function GET(
       if (autoFetchDisabledResponse) return autoFetchDisabledResponse;
 
       try {
-        const discovery = await discoverMaxaiModels({
-          providerSpecificData: connection.providerSpecificData,
-          accessToken: apiKey || accessToken,
-          fetchImpl: (url, init) =>
-            safeOutboundFetch(url, {
-              ...SAFE_OUTBOUND_FETCH_PRESETS.modelsDiscovery,
-              guard: getProviderOutboundGuard(),
-              proxyConfig: proxy,
-              ...init,
-            }),
-        });
+        const discovery = await runMaxaiConnectionTransport(connectionId, () =>
+          discoverMaxaiModels({
+            providerSpecificData: connection.providerSpecificData as Record<string, unknown>,
+            accessToken: apiKey || accessToken,
+            connectionId,
+            onCredentialsRefreshed: (updated) => updateProviderCredentials(connectionId, updated),
+            fetchImpl: (url, init) =>
+              safeOutboundFetch(url, {
+                ...SAFE_OUTBOUND_FETCH_PRESETS.modelsDiscovery,
+                guard: getProviderOutboundGuard(),
+                proxyConfig: proxy,
+                ...init,
+              }),
+          })
+        );
         return buildApiDiscoveryResponse(discovery.models, discovery.warning);
       } catch (error) {
         console.log("Error fetching models from maxai", {

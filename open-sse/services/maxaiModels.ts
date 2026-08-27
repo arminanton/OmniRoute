@@ -1,9 +1,8 @@
 /**
  * MaxAI model discovery — live model list + per-model context windows from the
  * web app's own `/models/get_config` endpoint (the signed call the app makes on
- * load). Feeds OmniRoute's model-discovery pipeline so the MaxAI catalog and its
- * per-model context windows self-update instead of relying only on the static
- * catalog (`open-sse/executors/maxai/catalog.ts`).
+ * load). Feeds OmniRoute's model-discovery pipeline so availability and context
+ * windows refresh for the curated catalog in `open-sse/executors/maxai/catalog.ts`.
  *
  * The response's `chat_models[]` carries `model_name` (id), `ui_display_name`,
  * `group`, `max_tokens` (the per-model context window), `is_deprecated`, and a
@@ -13,8 +12,9 @@
  * `contextWindowResolver` reconciles the real window as an `auto:discovery`
  * override.
  *
- * Signed like every MaxAI call (see ./maxai/signing.ts). Network routing follows
- * the operator's configured connection/proxy. Never
+ * Signed like every MaxAI call (see ./maxai/signing.ts) and sent with the required
+ * Windows Firefox 150 client profile. Network routing follows the operator's
+ * configured connection/proxy. Never
  * throws for the caller's convenience is NOT the contract here — the route wraps
  * it in try/catch and falls back to the curated catalog — but it validates HTTP
  * status and shape and throws a sanitized error on failure so the route logs it.
@@ -28,6 +28,7 @@ import {
   MAXAI_MODELS_CONFIG_PATH,
 } from "../executors/maxai/protocol.ts";
 import { maxaiContextWindow, MAXAI_MODELS } from "../executors/maxai/catalog.ts";
+import { ensureFreshMaxaiCredential } from "../executors/maxai/refresh.ts";
 
 // Re-export the registry-shaped catalog through this service so `src/app` routes
 // can consume it WITHOUT importing the executor directly (the no-restricted-imports
@@ -54,6 +55,10 @@ export interface MaxaiModelDiscoveryInput {
   signal?: AbortSignal | null;
   /** Injectable fetch (the route passes a proxy/guard-wrapped safeOutboundFetch). */
   fetchImpl?: typeof fetch;
+  connectionId?: string | null;
+  onCredentialsRefreshed?: Parameters<
+    typeof ensureFreshMaxaiCredential
+  >[0]["onCredentialsRefreshed"];
 }
 
 export interface MaxaiModelDiscoveryResult {
@@ -112,10 +117,18 @@ export async function discoverMaxaiModels(
   input: MaxaiModelDiscoveryInput
 ): Promise<MaxaiModelDiscoveryResult> {
   const doFetch = input.fetchImpl ?? fetch;
-  const cred = resolveMaxaiCredential(input.providerSpecificData, input.accessToken);
-  if (!cred) {
+  const resolved = resolveMaxaiCredential(input.providerSpecificData, input.accessToken);
+  if (!resolved) {
     throw new Error("MaxAI connection is not configured (missing token/device/user id).");
   }
+  const cred = await ensureFreshMaxaiCredential({
+    credential: resolved,
+    connectionId: input.connectionId,
+    providerSpecificData: input.providerSpecificData,
+    signal: input.signal,
+    fetchImpl: doFetch,
+    onCredentialsRefreshed: input.onCredentialsRefreshed,
+  });
 
   const path = MAXAI_MODELS_CONFIG_PATH;
   const constants = await ensureMaxaiConstants({ fetchImpl: doFetch, signal: input.signal });

@@ -14,6 +14,11 @@ import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { enforceClientApiRouteAuth } from "@/shared/utils/clientApiRouteAuth";
 import { runWithCallLogApiKeyContext } from "@/lib/usage/callLogApiKeyContext";
 import { executeImageWithCredentialFallback } from "@/sse/services/imageCredentialRetry";
+import {
+  MaxaiTransportError,
+  runMaxaiConnectionTransport,
+} from "@omniroute/open-sse/services/maxaiTransport.ts";
+import { updateProviderCredentials } from "@/sse/services/tokenRefresh";
 
 /**
  * Handle CORS preflight
@@ -38,6 +43,7 @@ export async function POST(request, { params }) {
   if (!imageProvider) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, `Unknown image provider: ${rawProvider}`);
   }
+  const canonicalProvider = imageProvider.id;
 
   let rawBody;
   try {
@@ -74,7 +80,7 @@ export async function POST(request, { params }) {
 
   const requestedModel = body.model.slice(rawProvider.length + 1);
   let credentials = await getProviderCredentialsWithQuotaPreflight(
-    rawProvider,
+    canonicalProvider,
     null,
     null,
     requestedModel
@@ -95,17 +101,41 @@ export async function POST(request, { params }) {
   }
 
   const execution = await executeImageWithCredentialFallback({
-    provider: rawProvider,
+    provider: canonicalProvider,
     requestedModel,
     credentials,
-    execute: (attemptCredentials) =>
-      runWithCallLogApiKeyContext(
-        {
-          apiKeyId: policy.apiKeyInfo?.id ?? null,
-          apiKeyName: policy.apiKeyInfo?.name ?? null,
-        },
-        () => handleImageGeneration({ body, credentials: attemptCredentials, log })
-      ),
+    execute: async (attemptCredentials) => {
+      const generateImage = () =>
+        runWithCallLogApiKeyContext(
+          {
+            apiKeyId: policy.apiKeyInfo?.id ?? null,
+            apiKeyName: policy.apiKeyInfo?.name ?? null,
+          },
+          () =>
+            handleImageGeneration({
+              body,
+              credentials: attemptCredentials,
+              log,
+              signal: request.signal,
+              onCredentialsRefreshed: attemptCredentials?.connectionId
+                ? (updated) => updateProviderCredentials(attemptCredentials.connectionId, updated)
+                : undefined,
+            })
+        );
+      if (canonicalProvider !== "maxai" || !attemptCredentials?.connectionId) {
+        return generateImage();
+      }
+      try {
+        return await runMaxaiConnectionTransport(attemptCredentials.connectionId, generateImage);
+      } catch (error) {
+        return {
+          success: false,
+          status: error instanceof MaxaiTransportError ? error.status : 502,
+          error:
+            error instanceof MaxaiTransportError ? error.message : "MaxAI image transport failed",
+        };
+      }
+    },
   });
   credentials = execution.credentials;
   const result = execution.result;

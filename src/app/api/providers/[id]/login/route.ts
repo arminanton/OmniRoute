@@ -7,9 +7,14 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getCachedProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
+import { updateProviderConnection } from "@/lib/db/providers";
+import { getCachedProviderConnectionById } from "@/lib/db/readCache";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
+import {
+  MaxaiTransportError,
+  runMaxaiConnectionTransport,
+} from "@omniroute/open-sse/services/maxaiTransport.ts";
 
 const ADOBE_FIREFLY_SLUGS = new Set(["adobe-firefly", "firefly"]);
 
@@ -172,9 +177,8 @@ async function loginMaxaiEmail(
   body: { step?: unknown; email?: unknown; code?: unknown }
 ): Promise<NextResponse> {
   const { randomUUID } = await import("node:crypto");
-  const { requestMaxaiEmailCode, verifyMaxaiEmailCode } = await import(
-    "@omniroute/open-sse/executors/maxai/emailLogin.ts"
-  );
+  const { requestMaxaiEmailCode, verifyMaxaiEmailCode } =
+    await import("@omniroute/open-sse/executors/maxai/emailLogin.ts");
 
   const psd = (connection.providerSpecificData ?? {}) as Record<string, unknown>;
   const step = String(body.step || "request");
@@ -192,7 +196,7 @@ async function loginMaxaiEmail(
     const deviceId = String(psd.maxaiDeviceId || psd.deviceId || randomUUID());
     const clientUserId = String(psd.maxaiClientUserId || psd.clientUserId || randomUUID());
     try {
-      await updateProviderConnection(connectionId, {
+      const saved = await updateProviderConnection(connectionId, {
         providerSpecificData: {
           ...psd,
           maxaiDeviceId: deviceId,
@@ -200,11 +204,27 @@ async function loginMaxaiEmail(
           maxaiLoginEmail: email,
         },
       });
+      if (!saved) throw new Error("connection was not found");
     } catch {
-      /* non-fatal: fall through and still attempt the request */
+      return NextResponse.json(
+        { success: false, error: "Could not persist the pending MaxAI sign-in state." },
+        { status: 500 }
+      );
     }
 
-    const result = await requestMaxaiEmailCode({ email, deviceId });
+    let result;
+    try {
+      result = await runMaxaiConnectionTransport(connectionId, () =>
+        requestMaxaiEmailCode({ email, deviceId })
+      );
+    } catch (error) {
+      const status = error instanceof MaxaiTransportError ? error.status : 502;
+      const message =
+        error instanceof MaxaiTransportError
+          ? error.message
+          : "Required MaxAI Windows Firefox 150 transport failed";
+      return NextResponse.json({ success: false, error: message }, { status });
+    }
     if (!result.ok) {
       return NextResponse.json(
         { success: false, error: result.error || "Failed to send the sign-in code." },
@@ -236,7 +256,19 @@ async function loginMaxaiEmail(
       );
     }
 
-    const result = await verifyMaxaiEmailCode({ email, code, deviceId, clientUserId });
+    let result;
+    try {
+      result = await runMaxaiConnectionTransport(connectionId, () =>
+        verifyMaxaiEmailCode({ email, code, deviceId, clientUserId })
+      );
+    } catch (error) {
+      const status = error instanceof MaxaiTransportError ? error.status : 502;
+      const message =
+        error instanceof MaxaiTransportError
+          ? error.message
+          : "Required MaxAI Windows Firefox 150 transport failed";
+      return NextResponse.json({ success: false, error: message }, { status });
+    }
     if (!result.ok || !result.credential) {
       return NextResponse.json(
         { success: false, error: result.error || "Code verification failed." },
@@ -307,16 +339,20 @@ export async function POST(
   // {step:"request",email} emails a code; {step:"verify",code} mints + persists.
   if (providerSlug === "maxai" || providerSlug === "mx") {
     try {
-      return await loginMaxaiEmail(id, provider as Record<string, unknown>, body as {
-        step?: unknown;
-        email?: unknown;
-        code?: unknown;
-      });
+      return await loginMaxaiEmail(
+        id,
+        provider as Record<string, unknown>,
+        body as {
+          step?: unknown;
+          email?: unknown;
+          code?: unknown;
+        }
+      );
     } catch (err) {
       const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
       return NextResponse.json(
         { success: false, error: `MaxAI sign-in error: ${msg}` },
-        { status: 500 }
+        { status: err instanceof MaxaiTransportError ? err.status : 500 }
       );
     }
   }
@@ -339,9 +375,8 @@ export async function POST(
   // persistence (same shape as the other web-cookie providers).
   if (providerSlug === "conol-web" || providerSlug === "cnl") {
     try {
-      const { startConolBrowserLogin } = await import(
-        "@omniroute/open-sse/services/conolBrowserLogin.ts"
-      );
+      const { startConolBrowserLogin } =
+        await import("@omniroute/open-sse/services/conolBrowserLogin.ts");
       const result = await startConolBrowserLogin(
         typeof body.timeout === "number" ? body.timeout : undefined
       );

@@ -24,9 +24,38 @@ import {
 } from "@/app/api/v1/_shared/rateLimit";
 import { attachOmniRouteMetaToResponse } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
-import { getComboByName, getCombos, getDatabaseSettings } from "@/lib/localDb";
+import { getComboByName, getCombos } from "@/lib/db/combos";
+import { getDatabaseSettings } from "@/lib/db/databaseSettings";
+import { updateProviderConnection } from "@/lib/db/providers";
+import { resolveProxyForConnection } from "@/lib/db/settings";
 import { handleComboChat } from "@omniroute/open-sse/services/combo.ts";
 import { log } from "@omniroute/open-sse/utils/logger.ts";
+import {
+  MaxaiTransportError,
+  runMaxaiConnectionTransport,
+} from "@omniroute/open-sse/services/maxaiTransport.ts";
+
+type MaxaiTransportDeps = {
+  resolveProxy: typeof resolveProxyForConnection;
+  transcribe: () => Promise<Response>;
+};
+
+/** Run selected MaxAI STT work inside its strict account transport context. */
+export async function runMaxaiTranscriptionTransport(
+  connectionId: string,
+  deps: MaxaiTransportDeps
+): Promise<Response> {
+  try {
+    return await runMaxaiConnectionTransport(connectionId, deps.transcribe, {
+      resolveProxy: deps.resolveProxy,
+    });
+  } catch (error) {
+    if (error instanceof MaxaiTransportError) {
+      return errorResponse(error.status, error.message);
+    }
+    return errorResponse(502, "MaxAI transcription transport failed");
+  }
+}
 
 /**
  * Copy a multipart body, swapping only the `model` field. Combo fan-out needs one
@@ -62,7 +91,8 @@ export async function OPTIONS() {
 async function transcribeWithModel(
   formData: FormData,
   modelStr: string,
-  startTime: number
+  startTime: number,
+  signal?: AbortSignal
 ): Promise<Response> {
   // Provider nodes eligible for transcription: this route's own audio type plus
   // general chat/responses gateways. Remote hosts are opt-in (default OFF).
@@ -131,12 +161,38 @@ async function transcribeWithModel(
     }
   }
 
-  let response = await handleAudioTranscription({
-    formData,
-    credentials,
-    resolvedProvider: providerConfig,
-    resolvedModel,
-  });
+  const transcribe = () =>
+    handleAudioTranscription({
+      formData,
+      credentials,
+      resolvedProvider: providerConfig,
+      resolvedModel,
+      signal,
+      onCredentialsRefreshed:
+        provider === "maxai" && credentials?.connectionId
+          ? async (refreshed) => {
+              await updateProviderConnection(credentials.connectionId, {
+                apiKey: refreshed.accessToken,
+                accessToken: refreshed.accessToken,
+                providerSpecificData: {
+                  ...(credentials.providerSpecificData ?? {}),
+                  ...refreshed.providerSpecificData,
+                },
+              });
+            }
+          : undefined,
+    });
+
+  let response: Response;
+  const connectionId = credentials?.connectionId;
+  if (provider === "maxai" && connectionId) {
+    response = await runMaxaiTranscriptionTransport(connectionId, {
+      resolveProxy: resolveProxyForConnection,
+      transcribe,
+    });
+  } else {
+    response = await transcribe();
+  }
   if (response?.ok) {
     await clearRecoveredProviderState(credentials);
     // No text body / playback duration available from the multipart upload, so
@@ -156,7 +212,7 @@ async function transcribeWithModel(
  * POST /v1/audio/transcriptions — transcribe audio files
  * OpenAI Whisper API compatible (multipart/form-data)
  */
-export async function POST(request) {
+export async function POST(request: Request) {
   let formData;
   try {
     formData = await request.formData();
@@ -196,13 +252,18 @@ export async function POST(request) {
           body: { model: modelStr } as any,
           combo: combo as any,
           handleSingleModel: async (_reqBody: any, targetModelStr: string) =>
-            transcribeWithModel(withModel(formData, targetModelStr), targetModelStr, startTime),
+            transcribeWithModel(
+              withModel(formData, targetModelStr),
+              targetModelStr,
+              startTime,
+              request.signal
+            ),
           isModelAvailable: undefined,
           log,
           settings,
           allCombos: allCombos as any,
           relayOptions: undefined,
-          signal: undefined,
+          signal: request.signal,
         } as any);
       }
     } catch (err) {
@@ -210,5 +271,5 @@ export async function POST(request) {
     }
   }
 
-  return transcribeWithModel(formData, modelStr, startTime);
+  return transcribeWithModel(formData, modelStr, startTime, request.signal);
 }

@@ -337,6 +337,7 @@ export async function handleImageGeneration({
   signal = null,
   clientHeaders = null,
   peerLocality = null,
+  onCredentialsRefreshed = undefined,
 }) {
   let provider, model;
 
@@ -578,6 +579,7 @@ export async function handleImageGeneration({
       credentials,
       log,
       signal,
+      onCredentialsRefreshed,
     });
   }
 

@@ -11,9 +11,8 @@
 // X-Authorization signer + Firefox-150 identity the chat path uses); the signer
 // signs whatever `path` it is given, so image and chat share one auth module.
 //
-// Shared transport applies operator-configured proxying and the optional
-// provider-scoped Firefox-150 TLS profile. This handler has no egress-class or
-// provider-specific routing requirement.
+// Shared transport applies the required Windows Firefox 150 client profile and
+// any operator-configured proxy. This handler does not select an egress policy.
 
 import { resolveMaxaiCredential } from "../../../executors/maxai/credentials.ts";
 import { buildMaxaiSignedHeaders } from "../../../executors/maxai/signing.ts";
@@ -21,6 +20,7 @@ import { ensureMaxaiConstants } from "../../../executors/maxai/constantsStore.ts
 import { MAXAI_BASE_URL, maxaiStaticHeaders } from "../../../executors/maxai/protocol.ts";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
 import { saveImageErrorResult, saveImageSuccessResult } from "../../imageGeneration.ts";
+import { ensureFreshMaxaiCredential } from "../../../executors/maxai/refresh.ts";
 
 export const MAXAI_IMAGE_PATH = "/gpt/get_image_generate_response";
 const MAXAI_IMAGE_DEFAULT_SIZE = "1024x1024";
@@ -54,7 +54,8 @@ export function resolveMaxaiImageModel(model: unknown): string {
  * the model default. Models with no constraint pass the size through.
  */
 export function snapMaxaiImageSize(model: string, size: unknown): string {
-  const requested = typeof size === "string" && size.trim() ? size.trim() : MAXAI_IMAGE_DEFAULT_SIZE;
+  const requested =
+    typeof size === "string" && size.trim() ? size.trim() : MAXAI_IMAGE_DEFAULT_SIZE;
   const allowed = MAXAI_STRICT_SIZE_MODELS[model];
   if (!allowed) return requested; // flux / sd3: no constraint
   return allowed.has(requested) ? requested : MAXAI_IMAGE_DEFAULT_SIZE;
@@ -68,7 +69,11 @@ export function extractMaxaiImageUrls(json: unknown): string[] {
   let items: unknown[] = [];
   if (Array.isArray(json)) {
     items = json;
-  } else if (json && typeof json === "object" && Array.isArray((json as Record<string, unknown>).data)) {
+  } else if (
+    json &&
+    typeof json === "object" &&
+    Array.isArray((json as Record<string, unknown>).data)
+  ) {
     items = (json as Record<string, unknown>).data as unknown[];
   }
   const urls: string[] = [];
@@ -94,6 +99,7 @@ export async function handleMaxaiImageGeneration({
   log,
   signal,
   fetchImpl = fetch,
+  onCredentialsRefreshed,
 }: {
   model: string;
   provider: string;
@@ -102,10 +108,14 @@ export async function handleMaxaiImageGeneration({
     apiKey?: string;
     accessToken?: string;
     providerSpecificData?: Record<string, unknown> | null;
+    connectionId?: string;
   };
   log?: { info?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void };
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
+  onCredentialsRefreshed?: Parameters<
+    typeof ensureFreshMaxaiCredential
+  >[0]["onCredentialsRefreshed"];
 }) {
   const startTime = Date.now();
 
@@ -120,11 +130,11 @@ export async function handleMaxaiImageGeneration({
     });
   }
 
-  const cred = resolveMaxaiCredential(
+  const resolved = resolveMaxaiCredential(
     credentials?.providerSpecificData,
     credentials?.accessToken || credentials?.apiKey
   );
-  if (!cred) {
+  if (!resolved) {
     return saveImageErrorResult({
       provider,
       model,
@@ -134,6 +144,20 @@ export async function handleMaxaiImageGeneration({
       retryable: true,
     });
   }
+
+  const cred = await ensureFreshMaxaiCredential({
+    credential: resolved,
+    connectionId: credentials.connectionId,
+    providerSpecificData: credentials.providerSpecificData,
+    signal,
+    fetchImpl,
+    onCredentialsRefreshed,
+    onPersistError: (error) =>
+      log?.error?.(
+        "IMAGE",
+        `MaxAI refreshed token persist failed: ${sanitizeErrorMessage(error instanceof Error ? error.message : error)}`
+      ),
+  });
 
   const canonicalModel = resolveMaxaiImageModel(model);
   const nRaw = Number(body.n);
@@ -158,7 +182,10 @@ export async function handleMaxaiImageGeneration({
   }
   const headers: Record<string, string> = {
     ...maxaiStaticHeaders(),
-    ...buildMaxaiSignedHeaders({ path: MAXAI_IMAGE_PATH, userId: cred.userId, deviceId: cred.deviceId }, constants),
+    ...buildMaxaiSignedHeaders(
+      { path: MAXAI_IMAGE_PATH, userId: cred.userId, deviceId: cred.deviceId },
+      constants
+    ),
     Authorization: `Bearer ${cred.accessToken}`,
     "Content-Type": "application/json",
   };
@@ -174,7 +201,14 @@ export async function handleMaxaiImageGeneration({
   } catch (err) {
     const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
     log?.error?.("IMAGE", `${provider} maxai-image transport error: ${errorText}`);
-    return saveImageErrorResult({ provider, model, status: 502, startTime, error: errorText, requestBody });
+    return saveImageErrorResult({
+      provider,
+      model,
+      status: 502,
+      startTime,
+      error: errorText,
+      requestBody,
+    });
   }
 
   if (!resp.ok) {

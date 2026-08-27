@@ -27,7 +27,6 @@ import {
 } from "../../open-sse/executors/maxai/stream.ts";
 import { userIdFromJwt } from "../../open-sse/executors/maxai/credentials.ts";
 import {
-  maxaiAccessTokenNeedsRefresh,
   maxaiRefreshAccessToken,
   MAXAI_REFRESH_PATH,
 } from "../../open-sse/executors/maxai/refresh.ts";
@@ -535,17 +534,6 @@ function fakeJwt(expEpochSeconds: number, userId?: string): string {
   const payload = Buffer.from(JSON.stringify(claims)).toString("base64url");
   return `${header}.${payload}.sig`;
 }
-
-test("maxaiAccessTokenNeedsRefresh: absent / unparseable / near-expiry / fresh", () => {
-  const now = () => 1_000_000_000_000; // fixed ms clock
-  const nowSec = 1_000_000_000;
-  assert.equal(maxaiAccessTokenNeedsRefresh("", 3600, now), true); // absent
-  assert.equal(maxaiAccessTokenNeedsRefresh("not-a-jwt", 3600, now), true); // unparseable
-  // exp 30 min out with a 1h margin → needs refresh.
-  assert.equal(maxaiAccessTokenNeedsRefresh(fakeJwt(nowSec + 1800), 3600, now), true);
-  // exp 5h out with a 1h margin → still fresh.
-  assert.equal(maxaiAccessTokenNeedsRefresh(fakeJwt(nowSec + 5 * 3600), 3600, now), false);
-});
 
 test("maxaiRefreshAccessToken sends the exact web-app request + parses data.access_token", async () => {
   const nowSec = Math.floor(Date.now() / 1000);

@@ -64,7 +64,7 @@ export const AUDIO_TRANSCRIPTION_PROVIDERS: Record<string, AudioProvider> = {
     authType: "apikey",
     authHeader: "bearer",
     format: "maxai-stt",
-    supportedFormats: ["webm", "wav", "mp3", "m4a", "ogg", "flac", "aac"],
+    supportedFormats: ["webm"],
     models: [{ id: "speech-to-text", name: "MaxAI Speech to Text" }],
   },
 

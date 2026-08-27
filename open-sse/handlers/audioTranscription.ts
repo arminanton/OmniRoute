@@ -31,7 +31,13 @@ import { handleOpenRouterTranscription } from "./openrouterTranscription.ts";
 type TranscriptionCredentials = {
   apiKey?: string;
   accessToken?: string;
+  connectionId?: string;
   providerSpecificData?: Record<string, unknown> | null;
+};
+
+type RefreshedTranscriptionCredentials = {
+  accessToken: string;
+  providerSpecificData: Record<string, unknown>;
 };
 
 /**
@@ -746,11 +752,15 @@ export async function handleAudioTranscription({
   credentials,
   resolvedProvider = null,
   resolvedModel = null,
+  signal,
+  onCredentialsRefreshed,
 }: {
   formData: FormData;
   credentials?: TranscriptionCredentials | null;
   resolvedProvider?: AudioProvider | null;
   resolvedModel?: string | null;
+  signal?: AbortSignal | null;
+  onCredentialsRefreshed?: (credentials: RefreshedTranscriptionCredentials) => void | Promise<void>;
 }): Promise<Response> {
   const model = formData.get("model");
   if (typeof model !== "string" || !model) {
@@ -775,7 +785,7 @@ export async function handleAudioTranscription({
   if (!providerConfig) {
     return errorResponse(
       400,
-      `No transcription provider found for model "${model}". Available: openai, openrouter, groq, deepgram, assemblyai, nvidia, huggingface, qwen, gladia, rev-ai, speechmatics`
+      `No transcription provider found for model "${model}". Available: openai, openrouter, groq, deepgram, assemblyai, nvidia, huggingface, qwen, gladia, rev-ai, speechmatics, maxai`
     );
   }
 
@@ -818,6 +828,9 @@ export async function handleAudioTranscription({
       file,
       providerSpecificData: credentials?.providerSpecificData,
       accessToken: credentials?.accessToken ?? credentials?.apiKey,
+      signal,
+      refreshScope: credentials?.connectionId,
+      onCredentialsRefreshed,
     });
     if (!result.ok) {
       return errorResponse(result.status || 502, result.error || "MaxAI transcription failed");

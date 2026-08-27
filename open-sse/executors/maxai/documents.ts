@@ -25,6 +25,14 @@ import { ensureMaxaiConstants } from "./constantsStore.ts";
 import { maxaiStaticHeaders, MAXAI_BASE_URL } from "./protocol.ts";
 
 export const MAXAI_UPLOAD_PATH = "/app/upload_document";
+export const MAXAI_INLINE_DOCUMENT_MAX_BYTES = 64 * 1024 * 1024;
+
+export class MaxaiDocumentInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MaxaiDocumentInputError";
+  }
+}
 
 export interface MaxaiDocListEntry {
   doc_id: string;
@@ -68,21 +76,64 @@ function requiresPureText(docType: string): boolean {
  * for anything that isn't an inline base64 payload (e.g. a remote URL or an
  * already-uploaded file_id reference, which this bridge does not handle).
  */
-export function parseInlineDataUrl(dataUrl: unknown): { mimeType: string; bytes: Buffer } | null {
+function decodeStrictBase64(value: string, maxBytes: number): Buffer | null {
+  const compact = value.replace(/\s/g, "");
+  if (!compact || compact.length % 4 === 1) return null;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) return null;
+  if (compact.length > Math.ceil(maxBytes / 3) * 4 + 4) return null;
+  const unpadded = compact.replace(/=+$/, "");
+  const padded = unpadded + "=".repeat((4 - (unpadded.length % 4)) % 4);
+  const bytes = Buffer.from(padded, "base64");
+  if (bytes.length === 0 || bytes.length > maxBytes) return null;
+  if (bytes.toString("base64").replace(/=+$/, "") !== unpadded) return null;
+  return bytes;
+}
+
+function safeMimeType(value: string): string {
+  return /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(value)
+    ? value
+    : "application/octet-stream";
+}
+
+export function parseInlineDataUrl(
+  dataUrl: unknown,
+  maxBytes = MAXAI_INLINE_DOCUMENT_MAX_BYTES
+): { mimeType: string; bytes: Buffer } | null {
   if (typeof dataUrl !== "string") return null;
   const m = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(dataUrl);
   if (!m) return null;
-  const mimeType = m[1] || "application/octet-stream";
+  const mimeType = safeMimeType(m[1] || "application/octet-stream");
   const isBase64 = !!m[2];
   try {
-    const bytes = isBase64
-      ? Buffer.from(m[3], "base64")
-      : Buffer.from(decodeURIComponent(m[3]), "utf8");
-    if (bytes.length === 0) return null;
+    if (isBase64) {
+      const bytes = decodeStrictBase64(m[3], maxBytes);
+      return bytes ? { mimeType, bytes } : null;
+    }
+    if (m[3].length > maxBytes * 3) return null;
+    const bytes = Buffer.from(decodeURIComponent(m[3]), "utf8");
+    if (bytes.length === 0 || bytes.length > maxBytes) return null;
     return { mimeType, bytes };
   } catch {
     return null;
   }
+}
+
+export function countCurrentTurnDocumentParts(
+  messages: Array<{ role?: string; content?: unknown }>
+): number {
+  let content: unknown;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === "user") {
+      content = messages[index]?.content;
+      break;
+    }
+  }
+  if (!Array.isArray(content)) return 0;
+  return content.filter((part) => {
+    if (!part || typeof part !== "object") return false;
+    const type = (part as Record<string, unknown>).type;
+    return type === "file" || type === "input_file" || type === "document";
+  }).length;
 }
 
 /**
@@ -123,17 +174,14 @@ export function extractCurrentTurnDocs(
     } else if (type === "document" && p.source && typeof p.source === "object") {
       const source = p.source as Record<string, unknown>;
       if (source.type === "base64" && typeof source.data === "string") {
-        const mimeType =
-          typeof source.media_type === "string" ? source.media_type : "application/octet-stream";
-        try {
-          const bytes = Buffer.from(source.data, "base64");
-          if (bytes.length > 0) {
-            const filename =
-              typeof p.title === "string" && p.title ? p.title : `document.${mimeExt(mimeType)}`;
-            docs.push({ filename, mimeType, bytes });
-          }
-        } catch {
-          /* skip malformed base64 */
+        const mimeType = safeMimeType(
+          typeof source.media_type === "string" ? source.media_type : "application/octet-stream"
+        );
+        const bytes = decodeStrictBase64(source.data, MAXAI_INLINE_DOCUMENT_MAX_BYTES);
+        if (bytes) {
+          const filename =
+            typeof p.title === "string" && p.title ? p.title : `document.${mimeExt(mimeType)}`;
+          docs.push({ filename, mimeType, bytes });
         }
       }
     }
@@ -182,7 +230,7 @@ export function buildUploadMultipart(
   // The file part carries the raw bytes with a content-type.
   parts.push(
     Buffer.from(
-      `${dash}Content-Disposition: form-data; name="file"; filename="${doc.filename.replace(/"/g, "")}"\r\n` +
+      `${dash}Content-Disposition: form-data; name="file"; filename="${doc.filename.replace(/[\r\n"\\]/g, "_")}"\r\n` +
         `Content-Type: ${doc.mimeType}\r\n\r\n`
     )
   );
@@ -198,7 +246,7 @@ export function sawUploadDone(text: string): boolean {
 
 /**
  * Upload one inline document to MaxAI and return its doc_list entry, or null on
- * failure (upload failures are non-fatal: the chat proceeds without the doc).
+ * failure. The caller fails the request rather than silently dropping the doc.
  */
 export async function uploadMaxaiDocument(
   doc: InlineDoc,
@@ -261,8 +309,14 @@ export async function resolveMaxaiDocList(
   auth: { accessToken: string; userId: string; deviceId: string },
   opts?: { fetchImpl?: typeof fetch; signal?: AbortSignal }
 ): Promise<MaxaiDocListEntry[]> {
+  const requestedCount = countCurrentTurnDocumentParts(messages);
   const docs = extractCurrentTurnDocs(messages);
-  if (docs.length === 0) return [];
+  if (requestedCount === 0) return [];
+  if (docs.length !== requestedCount) {
+    throw new MaxaiDocumentInputError(
+      "MaxAI document input is malformed, unsupported, or exceeds the 64 MiB inline limit"
+    );
+  }
   const results: MaxaiDocListEntry[] = [];
   for (const doc of docs) {
     const uploaded = await uploadMaxaiDocument(doc, auth, opts);

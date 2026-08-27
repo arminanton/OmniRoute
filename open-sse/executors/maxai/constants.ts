@@ -45,8 +45,7 @@ export const MAXAI_WEBAPP_APP_PATH = "/app/";
 export const MAXAI_CONSTANTS_SETTINGS_KEY = "maxaiSigningConstants";
 
 /** Firefox-150 UA used for the (unauthenticated) static-asset fetches. */
-const FETCH_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0";
+const FETCH_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0";
 
 /**
  * The header/slot NAMES the signer emits. These are standard HTTP header names
@@ -187,10 +186,7 @@ export function looksLikeSignerChunk(js: string): boolean {
  * Parse the two bundle chunks into raw constants. Pure (no network) so it is
  * unit-tested directly against synthetic fixtures.
  */
-export function parseMaxaiConstants(
-  appChunk: string,
-  signerChunk: string
-): MaxaiParsedConstants {
+export function parseMaxaiConstants(appChunk: string, signerChunk: string): MaxaiParsedConstants {
   const decoded = decodeNjHeaderNames(signerChunk);
   return {
     hmacKey: resolveWebpackGetter(appChunk, "Mn"),
@@ -209,7 +205,10 @@ function isHexKey(v: string | null | undefined): boolean {
 
 /** A doc-id key is a UUID (v4-shaped). */
 function isUuidKey(v: string | null | undefined): boolean {
-  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
+  return (
+    typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)
+  );
 }
 
 /** A MaxAI app_version tag looks like `webpage_x.y.z`. */
@@ -223,9 +222,7 @@ function isAppVersion(v: string | null | undefined): boolean {
  * well-formed — return null otherwise, so we never persist a half-configured
  * signer. Only the plain HTTP header names fall back to the standard defaults.
  */
-export function assembleMaxaiConstants(
-  parsed: MaxaiParsedConstants
-): MaxaiSigningConstants | null {
+export function assembleMaxaiConstants(parsed: MaxaiParsedConstants): MaxaiSigningConstants | null {
   if (!isHexKey(parsed.hmacKey) || !isHexKey(parsed.aesKey)) return null;
   if (!isHexKey(parsed.ctxKey)) return null;
   if (!isUuidKey(parsed.docIdKey)) return null;
@@ -411,13 +408,7 @@ export async function fetchMaxaiConstants(
   const appJs = await fetchText(origin + appChunk, fetchImpl, opts.signal);
   if (!appJs) return null;
 
-  const signerJs = await fetchSignerChunk(
-    origin,
-    candidateChunks,
-    fetchImpl,
-    opts.signal,
-    maxScan
-  );
+  const signerJs = await fetchSignerChunk(origin, candidateChunks, fetchImpl, opts.signal, maxScan);
 
   const parsed = parseMaxaiConstants(appJs, signerJs);
   const assembled = assembleMaxaiConstants(parsed);

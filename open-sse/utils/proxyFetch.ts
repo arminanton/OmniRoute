@@ -13,6 +13,7 @@ import {
   proxyConfigToUrl,
   proxyUrlForLogs,
 } from "./proxyDispatcher.ts";
+import { isWreqProxyUrlSupported } from "./wreqProxyCompatibility.ts";
 import tlsClient, { type TlsFetchOptions } from "./tlsClient.ts";
 import { isProxyReachable } from "@/lib/proxyHealth";
 import {
@@ -84,10 +85,21 @@ function isTlsFingerprintEnabled() {
   return process.env.ENABLE_TLS_FINGERPRINT === "true";
 }
 
+const REQUIRED_TLS_FINGERPRINT_PROVIDERS = new Set(["maxai"]);
+
+export function isTlsFingerprintRequired(provider?: string | null): boolean {
+  return REQUIRED_TLS_FINGERPRINT_PROVIDERS.has(provider?.trim().toLowerCase() ?? "");
+}
+
+function isTlsFingerprintEnabledForProvider(provider?: string | null): boolean {
+  return isTlsFingerprintRequired(provider) || isTlsFingerprintEnabled();
+}
+
 function tlsFingerprintProviderAllowed(
   provider: string | null | undefined,
   proxied: boolean
 ): boolean {
+  if (isTlsFingerprintRequired(provider)) return true;
   const configured = process.env.TLS_FINGERPRINT_PROVIDERS?.trim();
   // Preserve the legacy direct-only opt-in. The new proxied transport requires
   // an explicit allowlist so enabling TLS cannot silently change proxy traffic.
@@ -109,9 +121,10 @@ const TLS_PROVIDER_PROFILE: Record<string, { browser: string; os: string }> = {
   maxai: { browser: "firefox_150", os: "windows" },
 };
 
-function tlsProfileForProvider(
-  provider: string | null | undefined
-): { browserProfile?: string; os?: string } {
+function tlsProfileForProvider(provider: string | null | undefined): {
+  browserProfile?: string;
+  os?: string;
+} {
   if (!provider) return {};
   const p = TLS_PROVIDER_PROFILE[provider.trim().toLowerCase()];
   return p ? { browserProfile: p.browser, os: p.os } : {};
@@ -326,18 +339,6 @@ function getEffectiveSignal(
     options.signal ??
     (typeof Request !== "undefined" && input instanceof Request ? input.signal : undefined)
   );
-}
-
-function isWreqProxySupported(proxyUrl: string): boolean {
-  try {
-    const parsed = new URL(proxyUrl);
-    return (
-      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      parsed.searchParams.get("family") === null
-    );
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -778,9 +779,17 @@ async function patchedFetch(
     // TLS fingerprint spoofing for an already-resolved direct route. Explicit
     // proxy:null prevents wreq from re-reading a global environment proxy.
     const tlsStore = tlsFingerprintContext.getStore();
+    const tlsRequired = isTlsFingerprintRequired(tlsStore?.provider);
+    if (tlsRequired && !activeTlsClient.available) {
+      throw sanitizeTransportError(
+        new Error("Required Windows Firefox 150 transport is unavailable"),
+        "Required Windows Firefox 150 transport is unavailable",
+        "TLS_FINGERPRINT_REQUIRED"
+      );
+    }
     let tlsDirectFallback = false;
     if (
-      isTlsFingerprintEnabled() &&
+      isTlsFingerprintEnabledForProvider(tlsStore?.provider) &&
       activeTlsClient.available &&
       tlsFingerprintProviderAllowed(tlsStore?.provider, false) &&
       isTlsRequestEligible(input, options)
@@ -805,12 +814,14 @@ async function patchedFetch(
           typeof error === "object" &&
           "sessionHadCookies" in error &&
           error.sessionHadCookies === true;
-        if (!isTlsFallbackReplaySafe(input, options) || sessionHadCookies) {
+        if (tlsRequired || !isTlsFallbackReplaySafe(input, options) || sessionHadCookies) {
           throw sanitizeTransportError(
             error,
-            sessionHadCookies
-              ? "TLS fingerprint request failed; stateful session cannot be replayed"
-              : "TLS fingerprint request failed; request is not safe to replay",
+            tlsRequired
+              ? "Required Windows Firefox 150 transport failed"
+              : sessionHadCookies
+                ? "TLS fingerprint request failed; stateful session cannot be replayed"
+                : "TLS fingerprint request failed; request is not safe to replay",
             "TLS_FINGERPRINT_FAILED"
           );
         }
@@ -1069,14 +1080,34 @@ async function patchedFetch(
   // The proxied TLS overlay is deliberately narrow: approved provider, exact
   // http(s) proxy, no relay/family pinning, and only options wreq can preserve.
   const tlsStore = tlsFingerprintContext.getStore();
+  const tlsRequired = isTlsFingerprintRequired(tlsStore?.provider);
+  if (tlsRequired && !activeTlsClient.available) {
+    throw sanitizeTransportError(
+      new Error("Required Windows Firefox 150 transport is unavailable"),
+      "Required Windows Firefox 150 transport is unavailable",
+      "TLS_FINGERPRINT_REQUIRED"
+    );
+  }
   if (
-    isTlsFingerprintEnabled() &&
+    tlsRequired &&
+    (typeof tlsStore?.sessionScope !== "string" ||
+      !tlsStore.sessionScope.trim() ||
+      !isWreqProxyUrlSupported(proxyUrl))
+  ) {
+    throw sanitizeTransportError(
+      new Error("Assigned proxy is incompatible with required Windows Firefox 150 transport"),
+      "Assigned proxy is incompatible with required Windows Firefox 150 transport",
+      "TLS_FINGERPRINT_REQUIRED"
+    );
+  }
+  if (
+    isTlsFingerprintEnabledForProvider(tlsStore?.provider) &&
     typeof tlsStore?.sessionScope === "string" &&
     tlsStore.sessionScope.trim().length > 0 &&
     activeTlsClient.available &&
     tlsFingerprintProviderAllowed(tlsStore?.provider, true) &&
     isTlsRequestEligible(input, options) &&
-    isWreqProxySupported(proxyUrl)
+    isWreqProxyUrlSupported(proxyUrl)
   ) {
     try {
       const response = await activeTlsClient.fetch(targetUrl, {
@@ -1098,12 +1129,14 @@ async function patchedFetch(
         typeof error === "object" &&
         "sessionHadCookies" in error &&
         error.sessionHadCookies === true;
-      if (!isTlsFallbackReplaySafe(input, options) || sessionHadCookies) {
+      if (tlsRequired || !isTlsFallbackReplaySafe(input, options) || sessionHadCookies) {
         throw sanitizeTransportError(
           error,
-          sessionHadCookies
-            ? "TLS fingerprint request failed; stateful session cannot be replayed"
-            : "TLS fingerprint request failed; request is not safe to replay",
+          tlsRequired
+            ? "Required Windows Firefox 150 transport failed"
+            : sessionHadCookies
+              ? "TLS fingerprint request failed; stateful session cannot be replayed"
+              : "TLS fingerprint request failed; request is not safe to replay",
           "TLS_FINGERPRINT_FAILED"
         );
       }
@@ -1236,7 +1269,7 @@ export async function runWithTlsTracking<T>(
 /** Check whether TLS fingerprint transport is enabled for this route identity. */
 export function isTlsFingerprintActive(provider?: string | null, proxied = false): boolean {
   return (
-    isTlsFingerprintEnabled() &&
+    isTlsFingerprintEnabledForProvider(provider) &&
     activeTlsClient.available &&
     tlsFingerprintProviderAllowed(provider, proxied)
   );

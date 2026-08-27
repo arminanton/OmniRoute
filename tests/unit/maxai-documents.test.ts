@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import {
+  MaxaiDocumentInputError,
   computeMaxaiDocId,
+  countCurrentTurnDocumentParts,
   maxaiDocType,
   parseInlineDataUrl,
   extractCurrentTurnDocs,
@@ -66,6 +68,12 @@ test("parseInlineDataUrl decodes base64 + plain data urls", () => {
   assert.equal(parseInlineDataUrl(42), null);
 });
 
+test("parseInlineDataUrl rejects malformed base64 and input beyond the byte cap", () => {
+  assert.equal(parseInlineDataUrl("data:text/plain;base64,aGVsbG8*"), null);
+  assert.equal(parseInlineDataUrl("data:text/plain;base64,aGVsbG8=", 4), null);
+  assert.equal(parseInlineDataUrl("data:text/plain,hello", 4), null);
+});
+
 // --- extract inline docs from the current turn --------------------------
 
 test("extractCurrentTurnDocs handles OpenAI file, Responses input_file, Claude document", () => {
@@ -94,6 +102,20 @@ test("extractCurrentTurnDocs handles OpenAI file, Responses input_file, Claude d
   assert.equal(docs[1].filename, "b.md");
   assert.equal(docs[2].filename, "c.pdf");
   assert.equal(docs[2].mimeType, "application/pdf");
+});
+
+test("countCurrentTurnDocumentParts includes malformed references that extraction rejects", () => {
+  const messages = [
+    {
+      role: "user",
+      content: [
+        { type: "input_file", file_id: "already-uploaded" },
+        { type: "file", file: { filename: "broken.txt", file_data: "not-a-data-url" } },
+      ],
+    },
+  ];
+  assert.equal(countCurrentTurnDocumentParts(messages), 2);
+  assert.equal(extractCurrentTurnDocs(messages).length, 0);
 });
 
 test("extractCurrentTurnDocs returns [] for a plain-text turn", () => {
@@ -132,6 +154,17 @@ test("buildUploadMultipart leaves pure_text empty for binary (pdf)", () => {
   const doc = { filename: "r.pdf", mimeType: "application/pdf", bytes: Buffer.from([1, 2, 3, 4]) };
   const body = buildUploadMultipart(doc, "id", "page_content__pdf", "B").toString("latin1");
   assert.ok(body.includes('name="pure_text"\r\n\r\n\r\n')); // empty value
+});
+
+test("buildUploadMultipart removes filename header injection characters", () => {
+  const doc = {
+    filename: 'report"\r\nX-Evil: yes\\.txt',
+    mimeType: "text/plain",
+    bytes: Buffer.from("safe"),
+  };
+  const body = buildUploadMultipart(doc, "id", "chat_file", "B").toString("utf8");
+  assert.doesNotMatch(body, /\r\nX-Evil:/);
+  assert.match(body, /filename="report___X-Evil: yes_\.txt"/);
 });
 
 // --- SSE done detection --------------------------------------------------
@@ -262,6 +295,29 @@ test("resolveMaxaiDocList serializes document uploads", async () => {
   );
   assert.equal(list.length, 2);
   assert.equal(maxInFlight, 1);
+});
+
+test("resolveMaxaiDocList rejects malformed document input before any fetch", async () => {
+  let fetchCalls = 0;
+  await assert.rejects(
+    resolveMaxaiDocList(
+      [
+        {
+          role: "user",
+          content: [{ type: "input_file", file_id: "already-uploaded" }],
+        },
+      ],
+      AUTH,
+      {
+        fetchImpl: (async () => {
+          fetchCalls += 1;
+          throw new Error("must not fetch");
+        }) as unknown as typeof fetch,
+      }
+    ),
+    MaxaiDocumentInputError
+  );
+  assert.equal(fetchCalls, 0);
 });
 
 test("resolveMaxaiDocList returns [] when there are no inline docs", async () => {

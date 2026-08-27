@@ -5,14 +5,16 @@ import { MAXAI_REGISTRY_MODELS } from "../../../../executors/maxai/catalog.ts";
  * MaxAI — the MaxAI web app (chat.maxai.co / api.maxai.me) as an OpenAI-compatible
  * provider. A signed web-app port (like zai-web): each request carries a
  * per-request `X-Authorization` signature + a Bearer access token minted by the
- * email login or manual credential import. Network routing follows the operator's connection
- * configuration; provider-scoped TLS impersonation uses a Firefox-150 profile.
+ * email login or manual credential import. Network routing follows the operator's
+ * connection configuration, while every MaxAI request uses the required Windows
+ * Firefox 150 client profile.
  *
  * authType `apikey`/authHeader `bearer`: the OpenAI-style access token is stored
  * on the connection and replayed as `Authorization: Bearer`; the device id +
  * user id ride in providerSpecificData and are folded into the signature. The
- * executor attempts the signed `/oauth` refresh path when the access token nears
- * expiry and otherwise prompts reauthentication on auth rejection.
+ * email login yields the long-lived refresh token, and the executor uses the
+ * signed `/oauth` refresh path to mint a fresh access token as the daily token
+ * nears expiry.
  */
 export const maxaiProvider: RegistryEntry = {
   id: "maxai",
