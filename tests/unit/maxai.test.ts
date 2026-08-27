@@ -103,7 +103,13 @@ test("computeMaxaiProof blanks the user id only on /oauth/* routes", () => {
   // A blank-user route yields a different proof than the same route with a uid,
   // proving the uid is dropped for /oauth/* (and only there).
   const t = 1784594159681;
-  const oauthWithUid = computeMaxaiProof("/oauth/signin_with_email", t, USER_ID, HMAC_KEY, APP_VERSION);
+  const oauthWithUid = computeMaxaiProof(
+    "/oauth/signin_with_email",
+    t,
+    USER_ID,
+    HMAC_KEY,
+    APP_VERSION
+  );
   const oauthNoUid = computeMaxaiProof("/oauth/signin_with_email", t, "", HMAC_KEY, APP_VERSION);
   assert.equal(oauthWithUid, oauthNoUid); // uid ignored for /oauth/*
   const chatWithUid = computeMaxaiProof("/gpt/cwc/chat", t, USER_ID, HMAC_KEY, APP_VERSION);
@@ -306,7 +312,10 @@ test("buildMaxaiSignedHeaders emits the X-App/X-Browser companions + X-Authoriza
   assert.equal(h["X-App-Version"], MOCK_APP_VERSION);
   assert.equal(h["X-App-Env"], "MaxAI-Browser-Extension");
   assert.ok(h["X-Authorization"].length > 0);
-  assert.equal(Buffer.from(h["X-Authorization"], "base64").subarray(0, 8).toString("ascii"), "Salted__");
+  assert.equal(
+    Buffer.from(h["X-Authorization"], "base64").subarray(0, 8).toString("ascii"),
+    "Salted__"
+  );
 });
 
 // ── Context assembly ─────────────────────────────────────────────────────────
@@ -364,7 +373,12 @@ test("contentToText flattens multipart content, dropping non-text parts", () => 
 });
 
 test("buildMaxaiChatBody pins field order + constants", () => {
-  const body = buildMaxaiChatBody({ conversationId: "conv-1", text: "hi", modelName: "gpt-5.6", appVersion: APP_VERSION });
+  const body = buildMaxaiChatBody({
+    conversationId: "conv-1",
+    text: "hi",
+    modelName: "gpt-5.6",
+    appVersion: APP_VERSION,
+  });
   const keys = Object.keys(body);
   assert.equal(keys[0], "chat_mode");
   assert.equal(keys[3], "message_content");
@@ -379,7 +393,12 @@ test("buildMaxaiChatBody pins field order + constants", () => {
 // ── Vision input (image_url parts) ───────────────────────────────────────────
 
 test("buildMaxaiChatBody text-only path is unchanged (no imageUrls)", () => {
-  const body = buildMaxaiChatBody({ conversationId: "c", text: "hi", modelName: "gpt-5.6", appVersion: APP_VERSION });
+  const body = buildMaxaiChatBody({
+    conversationId: "c",
+    text: "hi",
+    modelName: "gpt-5.6",
+    appVersion: APP_VERSION,
+  });
   // Byte-identical to the pre-vision shape: a single text part.
   assert.deepEqual(body.message_content, [{ type: "text", text: "hi" }]);
   assert.deepEqual(body.doc_list, []);
@@ -561,10 +580,29 @@ test("maxaiRefreshAccessToken sends the exact web-app request + parses data.acce
   assert.equal(init.body, JSON.stringify({ app: "maxai_webapp" }));
 });
 
+test("maxaiRefreshAccessToken accepts camelCase tokens and preserves a rotated refresh token", async () => {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const oldRefresh = fakeJwt(nowSec + 1000, USER_ID);
+  const newAccess = fakeJwt(nowSec + 3600, USER_ID);
+  const newRefresh = fakeJwt(nowSec + 2000, USER_ID);
+  const fakeFetch = (async () =>
+    new Response(JSON.stringify({ data: { accessToken: newAccess, refreshToken: newRefresh } }), {
+      status: 200,
+    })) as unknown as typeof fetch;
+
+  const result = await maxaiRefreshAccessToken({
+    refreshToken: oldRefresh,
+    deviceId: MOCK_DEVICE_ID,
+    fetchImpl: fakeFetch,
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.accessToken, newAccess);
+  assert.equal(result.refreshToken, newRefresh);
+});
+
 test("maxaiRefreshAccessToken returns a structured error on non-200 (no throw)", async () => {
   const nowSec = Math.floor(Date.now() / 1000);
-  const fakeFetch = (async () =>
-    new Response("nope", { status: 418 })) as unknown as typeof fetch;
+  const fakeFetch = (async () => new Response("nope", { status: 418 })) as unknown as typeof fetch;
   const result = await maxaiRefreshAccessToken({
     refreshToken: fakeJwt(nowSec + 1000, USER_ID),
     deviceId: "dev",
@@ -687,7 +725,9 @@ test("verifyMaxaiEmailCode maps code 10119 to an expired-code message", async ()
 
 test("verifyMaxaiEmailCode defaults to an invalid-code message otherwise", async () => {
   const fakeFetch = (async () =>
-    new Response(JSON.stringify({ data: { status: "FAIL" } }), { status: 200 })) as unknown as typeof fetch;
+    new Response(JSON.stringify({ data: { status: "FAIL" } }), {
+      status: 200,
+    })) as unknown as typeof fetch;
   const r = await verifyMaxaiEmailCode({
     email: "x@y.z",
     code: "999999",
@@ -846,6 +886,94 @@ test("executor without tools streams normally (no tool_calls, plain content)", a
   assert.equal(json.choices[0].message.tool_calls, undefined);
 });
 
+test("executor fails closed when a requested document upload fails", async () => {
+  const realFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (url: unknown) => {
+    urls.push(String(url));
+    if (String(url).endsWith("/app/upload_document")) {
+      return new Response("upload failed", { status: 500 });
+    }
+    return new Response(maxaiSseBody("I did not receive a document."), { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    const result = await new MaxAiExecutor().execute({
+      model: "gpt-5.6-luna",
+      stream: false,
+      credentials: TOOL_CRED,
+      body: {
+        model: "gpt-5.6-luna",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Summarize this file." },
+              {
+                type: "file",
+                file: {
+                  filename: "note.txt",
+                  file_data: "data:text/plain;base64,aGVsbG8=",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    } as unknown as Parameters<MaxAiExecutor["execute"]>[0]);
+    const response = "response" in result ? result.response : (result as Response);
+    assert.equal(response.status, 502);
+    const json = await response.json();
+    assert.equal(json.error?.code, "maxai_document_upload_failed");
+    assert.equal(urls.filter((url) => url.endsWith("/gpt/cwc/chat")).length, 0);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("executor preserves current-turn images during the bounded tool retry", async () => {
+  const realFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  let call = 0;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    call += 1;
+    const text =
+      call === 1
+        ? "I can use get_weather through a <tool> block. Let me do that."
+        : '<tool>{"name":"get_weather","arguments":{"city":"Paris"}}</tool>';
+    return new Response(maxaiSseBody(text), { status: 200 });
+  }) as unknown as typeof fetch;
+  try {
+    const result = await new MaxAiExecutor().execute({
+      model: "gpt-5.6-luna",
+      stream: false,
+      credentials: TOOL_CRED,
+      body: {
+        model: "gpt-5.6-luna",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "Use the image and weather tool." },
+              { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+            ],
+          },
+        ],
+        tools: [WEATHER_TOOL],
+      },
+    } as unknown as Parameters<MaxAiExecutor["execute"]>[0]);
+    const response = "response" in result ? result.response : (result as Response);
+    assert.equal(response.status, 200);
+    assert.equal(bodies.length, 2);
+    for (const body of bodies) {
+      const content = body.message_content as Array<{ type?: string }>;
+      assert.ok(content.some((part) => part.type === "image_url"));
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 /** Like runToolExecute but returns a DIFFERENT sse body per upstream call, so we
  *  can simulate a narration-miss on turn 1 and a clean tool call on turn 2. */
 async function runToolExecuteSeq(bodies: string[]): Promise<Response> {
@@ -984,6 +1112,24 @@ test("discoverMaxaiModels maps curated chat models with live max_tokens as the w
   assert.ok(warning && /no longer offers/.test(warning));
 });
 
+test("discoverMaxaiModels sends the captured web-client request body", async () => {
+  let requestBody = "";
+  const fakeFetch = (async (_url: string, init?: RequestInit) => {
+    requestBody = String(init?.body ?? "");
+    return new Response(
+      modelsConfigBody([{ model_name: "gpt-5.6-luna", type: "chat", max_tokens: 1_050_000 }]),
+      { status: 200 }
+    );
+  }) as unknown as typeof fetch;
+
+  await discoverMaxaiModels({
+    providerSpecificData: DISCOVERY_CRED.providerSpecificData,
+    accessToken: DISCOVERY_CRED.accessToken,
+    fetchImpl: fakeFetch,
+  });
+  assert.equal(requestBody, JSON.stringify({ language: "en", client_type: "web" }));
+});
+
 test("discoverMaxaiModels drops deprecated, non-chat, and non-curated models", async () => {
   const fakeFetch = (async () =>
     new Response(
@@ -1009,10 +1155,9 @@ test("discoverMaxaiModels drops deprecated, non-chat, and non-curated models", a
 
 test("discoverMaxaiModels falls back to the catalog window when max_tokens is absent", async () => {
   const fakeFetch = (async () =>
-    new Response(
-      modelsConfigBody([{ model_name: "claude-5-sonnet", type: "chat" }]),
-      { status: 200 }
-    )) as unknown as typeof fetch;
+    new Response(modelsConfigBody([{ model_name: "claude-5-sonnet", type: "chat" }]), {
+      status: 200,
+    })) as unknown as typeof fetch;
   const { models } = await discoverMaxaiModels({
     providerSpecificData: DISCOVERY_CRED.providerSpecificData,
     accessToken: DISCOVERY_CRED.accessToken,

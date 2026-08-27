@@ -303,7 +303,7 @@ export function validateMaxaiConstants(
 }
 
 /**
- * Fetch a text asset with the Firefox UA through the ambient (residential) fetch.
+ * Fetch a text asset with the Firefox UA through the ambient fetch.
  * Injectable for tests. Returns "" on any failure (caller treats empty as miss).
  */
 async function fetchText(

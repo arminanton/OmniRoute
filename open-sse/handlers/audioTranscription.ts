@@ -23,6 +23,7 @@ import {
 import { buildAuthHeaders } from "../config/registryUtils.ts";
 import { kieExecutor } from "../executors/kie.ts";
 import { vertexTranscribe } from "../executors/vertexMedia.ts";
+import { transcribeMaxaiAudio } from "../executors/maxai/transcription.ts";
 import { errorResponse } from "../utils/error.ts";
 import { isJsonObject } from "../utils/kieTask.ts";
 import { handleOpenRouterTranscription } from "./openrouterTranscription.ts";
@@ -30,6 +31,7 @@ import { handleOpenRouterTranscription } from "./openrouterTranscription.ts";
 type TranscriptionCredentials = {
   apiKey?: string;
   accessToken?: string;
+  providerSpecificData?: Record<string, unknown> | null;
 };
 
 /**
@@ -809,6 +811,18 @@ export async function handleAudioTranscription({
         `Vertex transcription failed: ${error?.message || "unknown error"}`
       );
     }
+  }
+
+  if (providerConfig.format === "maxai-stt") {
+    const result = await transcribeMaxaiAudio({
+      file,
+      providerSpecificData: credentials?.providerSpecificData,
+      accessToken: credentials?.accessToken ?? credentials?.apiKey,
+    });
+    if (!result.ok) {
+      return errorResponse(result.status || 502, result.error || "MaxAI transcription failed");
+    }
+    return Response.json({ text: result.text ?? "" }, { headers: { ...CORS_HEADERS } });
   }
 
   if (providerConfig.format === "deepgram") {

@@ -167,13 +167,20 @@ test("uploadMaxaiDocument returns a doc_list entry on upload_done", async () => 
   assert.equal(entry!.doc_id, computeMaxaiDocId(Buffer.from("hi"), DOC_ID_KEY));
   assert.equal(entry!.doc_type, "chat_file");
   assert.equal(entry!.file_name, "a.txt");
+  assert.equal(entry!.current, false);
   assert.match(hitUrl, /\/app\/upload_document$/);
   assert.match(hitContentType, /^multipart\/form-data; boundary=/);
 });
 
 test("uploadMaxaiDocument returns null on a non-200 (best-effort)", async () => {
   const fetchImpl = (async () =>
-    ({ ok: false, status: 400, async text() { return "bad"; } }) as unknown as Response) as unknown as typeof fetch;
+    ({
+      ok: false,
+      status: 400,
+      async text() {
+        return "bad";
+      },
+    }) as unknown as Response) as unknown as typeof fetch;
   const entry = await uploadMaxaiDocument(
     { filename: "a.txt", mimeType: "text/plain", bytes: Buffer.from("hi") },
     AUTH,
@@ -182,15 +189,62 @@ test("uploadMaxaiDocument returns null on a non-200 (best-effort)", async () => 
   assert.equal(entry, null);
 });
 
-test("resolveMaxaiDocList uploads all current-turn docs, skips failures", async () => {
+test("resolveMaxaiDocList rejects when any requested document upload fails", async () => {
   let call = 0;
   const fetchImpl = (async () => {
     call += 1;
     // first upload succeeds, second fails
     if (call === 1) {
-      return { ok: true, status: 200, async text() { return '{"event":"upload_done"}'; } } as unknown as Response;
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return '{"event":"upload_done"}';
+        },
+      } as unknown as Response;
     }
-    return { ok: false, status: 500, async text() { return ""; } } as unknown as Response;
+    return {
+      ok: false,
+      status: 500,
+      async text() {
+        return "";
+      },
+    } as unknown as Response;
+  }) as unknown as typeof fetch;
+
+  await assert.rejects(
+    resolveMaxaiDocList(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "file", file: { filename: "a.txt", file_data: "data:text/plain;base64,QQ==" } },
+            { type: "file", file: { filename: "b.txt", file_data: "data:text/plain;base64,Qg==" } },
+          ],
+        },
+      ],
+      AUTH,
+      { fetchImpl }
+    ),
+    /upload failed/i
+  );
+});
+
+test("resolveMaxaiDocList serializes document uploads", async () => {
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const fetchImpl = (async () => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    inFlight -= 1;
+    return {
+      ok: true,
+      status: 200,
+      async text() {
+        return '{"event":"upload_done"}';
+      },
+    } as unknown as Response;
   }) as unknown as typeof fetch;
 
   const list = await resolveMaxaiDocList(
@@ -206,13 +260,20 @@ test("resolveMaxaiDocList uploads all current-turn docs, skips failures", async 
     AUTH,
     { fetchImpl }
   );
-  assert.equal(list.length, 1); // one succeeded, one skipped
-  assert.equal(list[0].file_name, "a.txt");
+  assert.equal(list.length, 2);
+  assert.equal(maxInFlight, 1);
 });
 
 test("resolveMaxaiDocList returns [] when there are no inline docs", async () => {
   const list = await resolveMaxaiDocList([{ role: "user", content: "hi" }], AUTH, {
-    fetchImpl: (async () => ({ ok: true, status: 200, async text() { return ""; } }) as unknown as Response) as unknown as typeof fetch,
+    fetchImpl: (async () =>
+      ({
+        ok: true,
+        status: 200,
+        async text() {
+          return "";
+        },
+      }) as unknown as Response) as unknown as typeof fetch,
   });
   assert.deepEqual(list, []);
 });

@@ -13,7 +13,8 @@
  * `contextWindowResolver` reconciles the real window as an `auto:discovery`
  * override.
  *
- * Signed + residential like every MaxAI call (see ./maxai/signing.ts). Never
+ * Signed like every MaxAI call (see ./maxai/signing.ts). Network routing follows
+ * the operator's configured connection/proxy. Never
  * throws for the caller's convenience is NOT the contract here — the route wraps
  * it in try/catch and falls back to the curated catalog — but it validates HTTP
  * status and shape and throws a sanitized error on failure so the route logs it.
@@ -128,7 +129,7 @@ export async function discoverMaxaiModels(
       ...buildMaxaiSignedHeaders({ path, userId: cred.userId, deviceId: cred.deviceId }, constants),
       Authorization: `Bearer ${cred.accessToken}`,
     },
-    body: "{}",
+    body: JSON.stringify({ language: "en", client_type: "web" }),
     signal: input.signal ?? undefined,
   });
 

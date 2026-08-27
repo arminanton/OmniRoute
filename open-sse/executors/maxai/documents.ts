@@ -16,8 +16,8 @@
  * public web-app constant (ships in the bundle), same class as the signing
  * constants; kept here as a named constant (not a secret).
  *
- * The doc_list item shape is exactly what the live web app sends
- * (site chunk 41068): `{ doc_id, doc_type, file_name }`.
+ * The doc_list item shape is exactly what the captured web app sends
+ * (site chunk 41068): `{ doc_id, doc_type, file_name, current:false }`.
  */
 import { createHmac } from "node:crypto";
 import { buildMaxaiSignedHeaders } from "./signing.ts";
@@ -30,6 +30,7 @@ export interface MaxaiDocListEntry {
   doc_id: string;
   doc_type: string;
   file_name: string;
+  current: false;
 }
 
 /** An inline document extracted from an OpenAI/Responses/Claude content part. */
@@ -243,7 +244,7 @@ export async function uploadMaxaiDocument(
     if (!resp.ok) return null;
     const text = await resp.text().catch(() => "");
     if (!sawUploadDone(text)) return null;
-    return { doc_id: docId, doc_type: docType, file_name: doc.filename };
+    return { doc_id: docId, doc_type: docType, file_name: doc.filename, current: false };
   } catch {
     return null;
   }
@@ -251,8 +252,9 @@ export async function uploadMaxaiDocument(
 
 /**
  * Upload every inline document on the current turn and return the doc_list to
- * attach to the chat body. Failures are skipped (best-effort); the chat still
- * proceeds. Empty array when there are no inline docs.
+ * attach to the chat body. Uploads are serialized to match the captured client
+ * and avoid bursty account traffic. Any requested upload failure rejects the
+ * whole operation, so the executor cannot answer as if it had received a file.
  */
 export async function resolveMaxaiDocList(
   messages: Array<{ role?: string; content?: unknown }>,
@@ -261,6 +263,11 @@ export async function resolveMaxaiDocList(
 ): Promise<MaxaiDocListEntry[]> {
   const docs = extractCurrentTurnDocs(messages);
   if (docs.length === 0) return [];
-  const results = await Promise.all(docs.map((d) => uploadMaxaiDocument(d, auth, opts)));
-  return results.filter((r): r is MaxaiDocListEntry => r !== null);
+  const results: MaxaiDocListEntry[] = [];
+  for (const doc of docs) {
+    const uploaded = await uploadMaxaiDocument(doc, auth, opts);
+    if (!uploaded) throw new Error(`MaxAI document upload failed: ${doc.filename}`);
+    results.push(uploaded);
+  }
+  return results;
 }

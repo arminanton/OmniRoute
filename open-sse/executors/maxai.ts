@@ -10,16 +10,14 @@
  *   • SSE response parsed for text deltas, with inline `<think>` reasoning split
  *     out into `reasoning_content` (see ./stream.ts).
  *
- * Egress + TLS: the request MUST exit a residential IP (MaxAI bot-bans datacenter
- * IPs). OmniRoute routes the executor's `fetch()` through the per-connection proxy
- * (a residential HTTP proxy) transparently, and applies the wreq-js Firefox TLS
- * fingerprint when enabled. This executor does not open its own socket; it uses
- * the ambient patched `fetch`, so the proxy + TLS overlay apply automatically.
+ * Transport: this executor uses the ambient patched `fetch`, so the operator's
+ * normal per-connection proxy policy applies. When provider-scoped TLS
+ * impersonation is enabled, MaxAI uses the Firefox-150 client profile. Neither
+ * behavior requires a particular IP or egress class.
  *
- * Auth refresh: MaxAI's `/oauth/refresh_access_token` is deep-TLS-gated and cannot
- * be called by any HTTP client (only a real browser passes). The access token is
- * therefore minted/refreshed out-of-band by OmniRoute's own browser-mint flow
- * (see maxaiBrowserLogin); this executor only consumes the stored credential.
+ * Auth refresh: the executor attempts MaxAI's signed `/oauth/refresh_access_token`
+ * request through the configured transport. Failure is non-fatal while the stored
+ * access token remains usable; an eventual 401/418 prompts reauthentication.
  */
 import { BaseExecutor, type ExecuteInput, type ExecutorExecuteResult } from "./base.ts";
 import { PROVIDERS } from "../config/constants.ts";
@@ -206,8 +204,8 @@ export class MaxAiExecutor extends BaseExecutor {
 
     // Doc-RAG: upload any inline documents (base64 file/input_file/document
     // parts) on the current turn to /app/upload_document and attach the
-    // resulting doc_list to the chat body. Best-effort: upload failures are
-    // skipped and the chat proceeds without the doc.
+    // resulting doc_list to the chat body. A requested upload must succeed;
+    // otherwise answering without the document would be silently ungrounded.
     let docList: MaxaiDocListEntry[] = [];
     try {
       docList = await resolveMaxaiDocList(
@@ -215,8 +213,15 @@ export class MaxAiExecutor extends BaseExecutor {
         { accessToken, userId: cred.userId, deviceId: cred.deviceId },
         { signal: input.signal ?? undefined }
       );
-    } catch {
-      docList = [];
+    } catch (err) {
+      return wrap(
+        errorResponse(
+          502,
+          sanitizeErrorMessage(err instanceof Error ? err.message : err),
+          "maxai_document_upload_failed"
+        ),
+        url
+      );
     }
 
     const constants = await ensureMaxaiConstants({ signal: input.signal });
@@ -326,7 +331,14 @@ export class MaxAiExecutor extends BaseExecutor {
       // nudged retry and keep it only if it actually produces a tool call.
       const firstHasToolCall = !!parseToolCallsFromText(answer, "probe", requestedTools).toolCalls;
       if (!firstHasToolCall && isToolNarrationMiss(reasoning + "\n" + answer, requestedTools)) {
-        const retry = await this.retryToolTurn(cred, accessToken, input, toolNudge(text));
+        const retry = await this.retryToolTurn(
+          cred,
+          accessToken,
+          input,
+          toolNudge(text),
+          imageUrls,
+          docList
+        );
         if (retry && parseToolCallsFromText(retry.answer, "probe", requestedTools).toolCalls) {
           reasoning = retry.reasoning;
           answer = retry.answer;
@@ -435,14 +447,16 @@ export class MaxAiExecutor extends BaseExecutor {
       return cred.accessToken;
     }
 
-    // Persist the new access token (merged into providerSpecificData) so the next
-    // request starts fresh. The refresh token and device id are unchanged.
+    // Persist both tokens atomically. MaxAI usually returns only a new access
+    // token, but retain a replacement refresh token when the upstream rotates it.
     try {
+      const refreshToken = result.refreshToken ?? cred.refreshToken;
       await input.onCredentialsRefreshed?.({
         accessToken: result.accessToken,
         providerSpecificData: {
           ...(input.credentials?.providerSpecificData ?? {}),
           maxaiAccessToken: result.accessToken,
+          ...(refreshToken ? { maxaiRefreshToken: refreshToken } : {}),
         },
       });
     } catch (err) {
@@ -464,7 +478,9 @@ export class MaxAiExecutor extends BaseExecutor {
     cred: MaxaiCredential,
     accessToken: string,
     input: ExecuteInput,
-    nudgedText: string
+    nudgedText: string,
+    imageUrls: string[],
+    docList: MaxaiDocListEntry[]
   ): Promise<{ reasoning: string; answer: string } | null> {
     try {
       const constants = await ensureMaxaiConstants({ signal: input.signal });
@@ -474,6 +490,8 @@ export class MaxAiExecutor extends BaseExecutor {
         text: nudgedText,
         modelName: input.model,
         appVersion: constants.appVersion,
+        imageUrls,
+        docList: docList.length ? docList : undefined,
       });
       const headers: Record<string, string> = {
         ...maxaiStaticHeaders(),

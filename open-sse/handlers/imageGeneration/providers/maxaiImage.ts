@@ -11,9 +11,9 @@
 // X-Authorization signer + Firefox-150 identity the chat path uses); the signer
 // signs whatever `path` it is given, so image and chat share one auth module.
 //
-// Residential egress + Firefox-150 TLS are applied transparently at the infra
-// layer (in-container TUN + TLS_FINGERPRINT_PROVIDERS), so nothing egress-
-// specific lives here.
+// Shared transport applies operator-configured proxying and the optional
+// provider-scoped Firefox-150 TLS profile. This handler has no egress-class or
+// provider-specific routing requirement.
 
 import { resolveMaxaiCredential } from "../../../executors/maxai/credentials.ts";
 import { buildMaxaiSignedHeaders } from "../../../executors/maxai/signing.ts";

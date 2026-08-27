@@ -5,13 +5,14 @@
  * The web app refreshes the access token by POSTing the refresh token to
  * `/oauth/refresh_access_token` (web-app chunk 86042, `refreshAccessToken`). That
  * endpoint carries the SAME per-request `X-Authorization` signature as every other
- * MaxAI call (see ./signing.ts) — it is NOT a browser-only OAuth hop. A residential
- * Firefox-TLS client (wreq-js firefox_150, the OmniRoute egress overlay) passes the
- * TLS gate, so OmniRoute mints fresh access tokens itself with no browser.
+ * MaxAI call (see ./signing.ts). OmniRoute attempts it through the ambient patched
+ * fetch; deployments may enable the provider-scoped Firefox-150 TLS profile. The
+ * endpoint can still reject a client profile, so callers retain the current token
+ * and eventually surface a reauthentication prompt rather than claiming durability.
  *
- * The refresh token is minted out-of-band, once, by the browser Google-OAuth flow
- * (see maxaiBrowserLogin) and only needs re-minting when it itself expires (~yearly).
- * This module handles the routine daily refresh.
+ * The refresh token is minted by email login or manual import and stored with the
+ * connection. The signed TypeScript refresh path has passed a live current-upstream
+ * probe, but callers still treat future rejection as a reauthentication condition.
  *
  * Request shape (byte-faithful to the web app):
  *   POST https://api.maxai.me/oauth/refresh_access_token
@@ -48,6 +49,8 @@ export interface MaxaiRefreshInput {
 export interface MaxaiRefreshResult {
   ok: boolean;
   accessToken?: string;
+  /** Replacement refresh token when MaxAI rotates it. */
+  refreshToken?: string;
   /** access token expiry (epoch seconds), when a token was minted. */
   expiresAt?: number;
   status: number;
@@ -63,7 +66,8 @@ export function maxaiAccessTokenNeedsRefresh(
   if (!accessToken) return true;
   const exp = accessTokenExpiry(accessToken);
   if (!exp) return true;
-  return exp - now() / 1000 <= marginSeconds;
+  const remainingSeconds = exp - now() / 1000;
+  return remainingSeconds <= marginSeconds;
 }
 
 /**
@@ -85,7 +89,11 @@ export async function maxaiRefreshAccessToken(
   // returns the current-best; on a fetch miss it returns whatever's already stored.
   const constants = await refreshMaxaiConstants({ fetchImpl: doFetch, signal: input.signal });
   if (!constants) {
-    return { ok: false, status: 0, error: "MaxAI signing constants unavailable (extraction failed)" };
+    return {
+      ok: false,
+      status: 0,
+      error: "MaxAI signing constants unavailable (extraction failed)",
+    };
   }
 
   const signed = buildMaxaiSignedHeaders(
@@ -126,13 +134,32 @@ export async function maxaiRefreshAccessToken(
   }
 
   let accessToken = "";
+  let refreshToken = "";
   try {
     const parsed = JSON.parse(raw) as {
-      data?: { access_token?: unknown };
+      data?: {
+        access_token?: unknown;
+        accessToken?: unknown;
+        refresh_token?: unknown;
+        refreshToken?: unknown;
+      };
       access_token?: unknown;
+      accessToken?: unknown;
+      refresh_token?: unknown;
+      refreshToken?: unknown;
     };
-    const candidate = parsed?.data?.access_token ?? parsed?.access_token;
+    const candidate =
+      parsed?.data?.access_token ??
+      parsed?.data?.accessToken ??
+      parsed?.access_token ??
+      parsed?.accessToken;
     if (typeof candidate === "string") accessToken = candidate;
+    const refreshCandidate =
+      parsed?.data?.refresh_token ??
+      parsed?.data?.refreshToken ??
+      parsed?.refresh_token ??
+      parsed?.refreshToken;
+    if (typeof refreshCandidate === "string") refreshToken = refreshCandidate;
   } catch {
     return { ok: false, status: res.status, error: "unparseable refresh response" };
   }
@@ -144,6 +171,7 @@ export async function maxaiRefreshAccessToken(
     ok: true,
     status: 200,
     accessToken,
+    ...(refreshToken ? { refreshToken } : {}),
     expiresAt: accessTokenExpiry(accessToken) || undefined,
   };
 }

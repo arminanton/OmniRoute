@@ -58,6 +58,16 @@ export const AUDIO_TRANSCRIPTION_PROVIDERS: Record<string, AudioProvider> = {
     ],
   },
 
+  maxai: {
+    id: "maxai",
+    baseUrl: "https://api.maxai.me/gpt/speech_to_text",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "maxai-stt",
+    supportedFormats: ["webm", "wav", "mp3", "m4a", "ogg", "flac", "aac"],
+    models: [{ id: "speech-to-text", name: "MaxAI Speech to Text" }],
+  },
+
   openrouter: {
     id: "openrouter",
     baseUrl: "https://openrouter.ai/api/v1/audio/transcriptions",

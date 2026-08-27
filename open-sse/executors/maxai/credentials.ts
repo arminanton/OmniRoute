@@ -5,21 +5,19 @@
  * `access_token` (Bearer, ~24h), the `device_id` that minted it (embedded in the
  * signed `X-Authorization` — a mismatch is rejected), and the `user_id` (folded
  * into the signature proof). OmniRoute stores these in the connection's
- * `providerSpecificData` (minted by OmniRoute's own browser-mint flow — see
- * maxaiBrowserLogin), so the router is self-contained and never reads any
+ * `providerSpecificData` (minted by email login or supplied through manual import), so the
+ * router is self-contained and never reads any
  * external (Hermes) token file.
  *
- * The access token is refreshed out-of-band by the browser-mint (the
- * `/oauth/refresh_access_token` endpoint is deep-TLS-gated and cannot be called
- * by any HTTP client — only a real browser passes), so this module only READS
- * the stored credential; it does not attempt an HTTP refresh.
+ * This module only reads the stored credential. Refresh execution lives in
+ * `refresh.ts`; callers must still handle upstream rejection and reauthentication.
  */
 
 export interface MaxaiCredential {
   accessToken: string;
   deviceId: string;
   userId: string;
-  /** ~1-year refresh token used for browserless access-token refresh (optional). */
+  /** Long-lived refresh token used by the signed access-token refresh path (optional). */
   refreshToken?: string;
 }
 
@@ -85,12 +83,10 @@ export function resolveMaxaiCredential(
   const deviceId = firstString(psd?.maxaiDeviceId, psd?.deviceId);
   if (!deviceId) return null;
 
-  const userId =
-    firstString(psd?.maxaiUserId, psd?.userId) ?? userIdFromJwt(accessToken);
+  const userId = firstString(psd?.maxaiUserId, psd?.userId) ?? userIdFromJwt(accessToken);
   if (!userId) return null;
 
-  const refreshToken =
-    firstString(psd?.maxaiRefreshToken, psd?.refreshToken) ?? undefined;
+  const refreshToken = firstString(psd?.maxaiRefreshToken, psd?.refreshToken) ?? undefined;
 
   return { accessToken, deviceId, userId, refreshToken };
 }
