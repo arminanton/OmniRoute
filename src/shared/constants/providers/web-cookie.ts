@@ -517,11 +517,12 @@ export const WEB_COOKIE_PROVIDERS = {
     // — a durable Clerk credential from which OmniRoute mints a fresh short-lived
     // session token per request, browserlessly. It is not a fragile browser-cookie
     // session, so the "webCookie" caveat is inaccurate. The subscription session
-    // renews automatically within its window; daily message limits still apply.
+    // renews automatically within its window. Free is metered, while Premium and
+    // Premium+ are virtually unlimited. Enforcement depends on the current plan.
     // Only the periodic re-login (email code) needs an operator.
     toolCalling: "emulated",
     authHint:
-      "Sign in with an email code to bootstrap UC Persona / Emotional. OmniRoute mints a fresh short-lived token per request browserlessly; daily account message limits still apply, and you re-run email login about once a month when the Clerk session rolls over.",
+      "Sign in with an email code to bootstrap UC Persona / Emotional. OmniRoute mints a fresh short-lived token per request browserlessly. Free is metered; Premium and Premium+ are virtually unlimited, and limits depend on the account plan. Re-run email login when the Clerk session rolls over.",
   },
 };
 

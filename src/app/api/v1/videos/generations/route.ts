@@ -140,6 +140,7 @@ async function postHandler(request, context) {
     body,
     credentials,
     log,
+    signal: request.signal,
     ...(isCustomModel && { resolvedProvider: provider }),
   });
 

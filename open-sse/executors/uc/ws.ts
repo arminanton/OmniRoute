@@ -119,6 +119,10 @@ export function runUcTurn(input: UcTurnInput): Promise<UcTurnResult> {
       timeoutMs
     );
     abortHandler = () => fail("Request aborted");
+    if (input.signal?.aborted) {
+      abortHandler();
+      return;
+    }
     input.signal?.addEventListener("abort", abortHandler, { once: true });
 
     ws.onopen = () => {

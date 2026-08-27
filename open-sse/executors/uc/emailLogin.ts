@@ -109,6 +109,26 @@ export interface UcEmailVerifyResult {
   error?: string;
 }
 
+/** Build the durable providerSpecificData payload after a verified sign-in. */
+export function buildUcPersistedCredentialData(
+  existing: Record<string, unknown>,
+  credential: UcLoginCredential,
+  signedInAt = Date.now()
+): Record<string, unknown> {
+  const next: Record<string, unknown> = {
+    ...existing,
+    ucClientCookie: credential.clientCookie,
+    ucSid: credential.sid,
+    ucUid: credential.uid,
+    ucCookies: credential.cookies,
+    signedInAt,
+  };
+  delete next.ucLoginSia;
+  delete next.ucLoginEmailAddressId;
+  delete next.ucLoginCookieHeader;
+  return next;
+}
+
 /** Pull the `response` envelope from a Clerk body ({response:{...}} | {...}). */
 function clerkResponse(body: Record<string, unknown>): Record<string, unknown> {
   const resp = body?.response;

@@ -41,7 +41,7 @@ const FUTURE_EXP = Math.floor(Date.now() / 1000) + 60;
 
 // --- Registry ------------------------------------------------------------
 
-test("uc-persona and uc-direct own separate image registry entries with 22 models", () => {
+test("uc-persona owns image generation while uc-direct stays chat-only", () => {
   const entry = (
     IMAGE_PROVIDERS as Record<string, { format?: string; baseUrl?: string; models?: unknown[] }>
   )["uc-persona"];
@@ -49,12 +49,7 @@ test("uc-persona and uc-direct own separate image registry entries with 22 model
   assert.equal(entry.format, "uc-image");
   assert.match(String(entry.baseUrl), /internal\.chatuncensored\.ai\/v2\/image-gen/);
   assert.equal((entry.models ?? []).length, 22);
-  const direct = IMAGE_PROVIDERS["uc-direct"];
-  assert.ok(direct, "uc-direct must exist in IMAGE_PROVIDERS");
-  assert.equal(direct.format, "uc-image");
-  assert.equal(direct.authHeader, "x-api-key");
-  assert.match(String(direct.baseUrl), /api\.uncensored\.com\/api\/v1\/images\/generations/);
-  assert.equal(direct.models.length, 22);
+  assert.equal(IMAGE_PROVIDERS["uc-direct"], undefined);
 });
 
 // --- Pure helpers --------------------------------------------------------
@@ -128,6 +123,7 @@ function personaFetch(opts: {
   resultUrl: string;
   jwt: string;
   onImagePost?: (body: Record<string, unknown>, headers: Record<string, string>) => void;
+  onResultPoll?: (init: RequestInit) => Response | undefined;
 }): typeof fetch {
   let pollsSeen = 0;
   return (async (url: string, init: RequestInit = {}) => {
@@ -158,6 +154,9 @@ function personaFetch(opts: {
     }
     // 3) result URL polling
     if (url === opts.resultUrl) {
+      assert.equal(init.redirect, "error");
+      const overridden = opts.onResultPoll?.(init);
+      if (overridden) return overridden;
       pollsSeen += 1;
       const ready = pollsSeen > opts.pendingPolls;
       return {
@@ -212,6 +211,45 @@ test("handleUcImageGeneration (persona) mints, posts, polls to 200, returns the 
   // Auth + origin headers were attached.
   assert.match(String(postedHeaders.Authorization), /^Bearer /);
   assert.equal(postedHeaders.Origin, "https://uncensored.com");
+});
+
+test("persona image result polling rejects redirects without fetching the second host", async () => {
+  const resultUrl = "https://gen.moveinwater.com/img_redirect.png";
+  let secondHostReached = false;
+  const baseFetch = personaFetch({
+    pendingPolls: 0,
+    resultUrl,
+    jwt: fakeJwt("b03dd963-d0c1-4193-99c9-f5a9d0c66b7f", FUTURE_EXP),
+    onResultPoll: (init) => {
+      if (init.redirect !== "error") {
+        secondHostReached = true;
+        return new Response(null, { status: 200 });
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://second-host.example/image.png" },
+      });
+    },
+  });
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    if (url === "https://second-host.example/image.png") {
+      secondHostReached = true;
+      return new Response(null, { status: 200 });
+    }
+    return baseFetch(url, init);
+  }) as typeof fetch;
+
+  const result = (await handleUcImageGeneration({
+    model: "uc-persona/seedream-v4.5",
+    provider: "uc-persona",
+    body: { prompt: "x" },
+    credentials: PERSONA_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  })) as { success: boolean; status?: number };
+  assert.equal(result.success, false);
+  assert.equal(result.status, 302);
+  assert.equal(secondHostReached, false);
 });
 
 test("handleUcImageGeneration (persona) 401s (retryable) when the credential is missing", async () => {

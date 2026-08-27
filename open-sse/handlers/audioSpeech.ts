@@ -845,6 +845,7 @@ export async function handleAudioSpeech({
   resolvedProvider = null,
   resolvedModel = null,
   clientIp = null,
+  signal = null,
 }) {
   if (!body.model) {
     return errorResponse(400, "model is required");
@@ -887,6 +888,7 @@ export async function handleAudioSpeech({
         voice: typeof body.voice === "string" ? body.voice : undefined,
         model: modelId,
         credentials,
+        signal,
       });
       if (!result.ok || !result.audio) {
         return errorResponse(result.status ?? 502, result.error || "UC TTS failed");

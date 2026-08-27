@@ -7,7 +7,8 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { getCachedProviderConnectionById, updateProviderConnection } from "@/lib/localDb";
+import { getCachedProviderConnectionById } from "@/lib/db/readCache";
+import { updateProviderConnection } from "@/lib/db/providers";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 
@@ -160,9 +161,9 @@ async function loginAdobeFirefly(
 async function loginUcEmail(
   connectionId: string,
   connection: Record<string, unknown>,
-  body: { step?: unknown; email?: unknown; code?: unknown }
+  body: { step?: unknown; email?: unknown; code?: unknown; sia?: unknown }
 ): Promise<NextResponse> {
-  const { requestUcEmailCode, verifyUcEmailCode } =
+  const { requestUcEmailCode, verifyUcEmailCode, buildUcPersistedCredentialData } =
     await import("@omniroute/open-sse/executors/uc/emailLogin.ts");
   const psd = (connection.providerSpecificData ?? {}) as Record<string, unknown>;
   const step = String(body.step || "request");
@@ -203,13 +204,17 @@ async function loginUcEmail(
       success: true,
       step: "request",
       email,
+      sia: result.sia,
       message: `A sign-in code was emailed to ${email}. Enter it to finish connecting.`,
     });
   }
 
   if (step === "verify") {
     const code = String(body.code || "").trim();
-    const sia = String(psd.ucLoginSia || "");
+    // Accept the attempt id returned by the request step. Keep the persisted
+    // value as a compatibility fallback for clients that implemented the first
+    // version of this route.
+    const sia = String(body.sia || psd.ucLoginSia || "").trim();
     if (!code || !sia) {
       return NextResponse.json(
         {
@@ -232,18 +237,7 @@ async function loginUcEmail(
       );
     }
 
-    const cred = result.credential;
-    const nextPsd: Record<string, unknown> = {
-      ...psd,
-      ucClientCookie: cred.clientCookie,
-      ucSid: cred.sid,
-      ucUid: cred.uid,
-      ucCookies: cred.cookies,
-      signedInAt: Date.now(),
-    };
-    delete nextPsd.ucLoginSia;
-    delete nextPsd.ucLoginEmailAddressId;
-    delete nextPsd.ucLoginCookieHeader;
+    const nextPsd = buildUcPersistedCredentialData(psd, result.credential);
     try {
       // UC has no API key. The Clerk credential belongs only in
       // providerSpecificData; providerAllowsOptionalApiKey("uc-persona") covers creation.
@@ -291,6 +285,7 @@ export async function POST(
     step?: unknown;
     email?: unknown;
     code?: unknown;
+    sia?: unknown;
   };
   const providerSlug = resolveProviderSlug(provider as Record<string, unknown>);
 

@@ -2,8 +2,9 @@ import type { RegistryEntry } from "../../shared.ts";
 import { UC_REGISTRY_MODELS } from "../../../../executors/uc/catalog.ts";
 
 /**
- * UC (uncensored.com) — the consumer app's subscription-backed persona chat
- * (subject to daily account limits) as an OpenAI-compatible provider. A WebSocket web-app port (like
+ * UC (uncensored.com) persona chat as an OpenAI-compatible provider. Free plans
+ * are metered. Premium and Premium+ are virtually unlimited, with enforcement
+ * determined by the account's current plan. A WebSocket web-app port (like
  * muse-spark-web): there is no public API on this path, so the executor mints a
  * short-lived Clerk `__session` JWT from a durable `__client` cookie and drives
  * the persona socket `wss://internal-6.pubyar.com/ws/{uid}?token={jwt}`.

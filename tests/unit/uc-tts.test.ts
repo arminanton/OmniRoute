@@ -20,6 +20,7 @@ import {
   __setUcTtsWebSocketForTesting,
 } from "../../open-sse/handlers/uc/ucTts.ts";
 import { AUDIO_SPEECH_PROVIDERS } from "../../open-sse/config/audioRegistry.ts";
+import { handleAudioSpeech } from "../../open-sse/handlers/audioSpeech.ts";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -174,6 +175,65 @@ test("runUcTtsSocket resolves with an error on a connect failure", async (t) => 
   const result = await runUcTtsSocket({ jwt: "jwt", uid: UID, text: "hi", voice: "jade" });
   assert.equal(result.audio.length, 0);
   assert.ok(result.error);
+});
+
+test("runUcTtsSocket does not open or send when the signal is already aborted", async (t) => {
+  let constructed = 0;
+  let sent = 0;
+  let closed = 0;
+  const restore = __setUcTtsWebSocketForTesting(
+    class AbortedWS {
+      readyState = 0;
+      constructor() {
+        constructed += 1;
+      }
+      send() {
+        sent += 1;
+      }
+      close() {
+        closed += 1;
+      }
+    } as unknown as typeof import("ws").default
+  );
+  t.after(restore);
+
+  const controller = new AbortController();
+  controller.abort();
+  const result = await runUcTtsSocket({
+    jwt: "jwt",
+    uid: UID,
+    text: "do not send",
+    voice: "jade",
+    signal: controller.signal,
+  });
+
+  assert.equal(result.error, "Request aborted");
+  assert.equal(constructed, 0);
+  assert.equal(sent, 0);
+  assert.equal(closed, 0);
+});
+
+test("handleAudioSpeech forwards cancellation to UC before token mint or socket", async (t) => {
+  let constructed = 0;
+  const restore = __setUcTtsWebSocketForTesting(
+    class AbortedWS {
+      constructor() {
+        constructed += 1;
+      }
+    } as unknown as typeof import("ws").default
+  );
+  t.after(restore);
+
+  const controller = new AbortController();
+  controller.abort();
+  const response = (await handleAudioSpeech({
+    body: { model: "uc-persona/default", input: "do not speak", voice: "jade" },
+    credentials: { providerSpecificData: psd() },
+    signal: controller.signal,
+  })) as Response;
+
+  assert.equal(response.status, 499);
+  assert.equal(constructed, 0);
 });
 
 // ─── handleUcTextToSpeech full path (mint + socket) ──────────────────────────

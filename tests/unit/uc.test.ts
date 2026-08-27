@@ -27,6 +27,7 @@ import {
 import {
   requestUcEmailCode,
   verifyUcEmailCode,
+  buildUcPersistedCredentialData,
   UC_SIGNIN_PATH,
 } from "../../open-sse/executors/uc/emailLogin.ts";
 import {
@@ -41,11 +42,21 @@ import {
   estimateUcTokens,
 } from "../../open-sse/executors/uc/stream.ts";
 import { UC_REGISTRY_MODELS, ucContextWindow } from "../../open-sse/executors/uc/catalog.ts";
-import { buildUcWsUrl, __setUcWebSocketForTesting } from "../../open-sse/executors/uc/ws.ts";
-import { UcExecutor, __resetUcQuotaCooldownsForTesting } from "../../open-sse/executors/uc.ts";
+import {
+  buildUcWsUrl,
+  runUcTurn,
+  __setUcWebSocketForTesting,
+} from "../../open-sse/executors/uc/ws.ts";
+import {
+  UcExecutor,
+  __resetUcQuotaCooldownsForTesting,
+  parseUcResetAtMs,
+  retryAfterHeaders,
+} from "../../open-sse/executors/uc.ts";
 import { DefaultExecutor } from "../../open-sse/executors/default.ts";
 import { ucDirectProvider } from "../../open-sse/config/providers/registry/uc-direct/index.ts";
 import { PROVIDER_MODELS_CONFIG } from "../../src/app/api/providers/[id]/models/discovery/providerModelsConfig.ts";
+import { decodeUcDataUrl, extractCurrentTurnMedia } from "../../open-sse/executors/uc/media.ts";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -311,6 +322,33 @@ test("verifyUcEmailCode fails when no __client cookie is set", async () => {
   assert.match(r.error ?? "", /__client/);
 });
 
+test("buildUcPersistedCredentialData stores durable auth and removes login state", () => {
+  const result = buildUcPersistedCredentialData(
+    {
+      keep: "value",
+      ucLoginSia: "sia_old",
+      ucLoginEmailAddressId: "idn_old",
+      ucLoginCookieHeader: "__client=temporary",
+    },
+    {
+      clientCookie: "durable-cookie",
+      sid: SID,
+      uid: UID,
+      cookies: { __client: "durable-cookie", rotated: "yes" },
+    },
+    1_800_000_000_000
+  );
+
+  assert.deepEqual(result, {
+    keep: "value",
+    ucClientCookie: "durable-cookie",
+    ucSid: SID,
+    ucUid: UID,
+    ucCookies: { __client: "durable-cookie", rotated: "yes" },
+    signedInAt: 1_800_000_000_000,
+  });
+});
+
 // ─── protocol.ts ─────────────────────────────────────────────────────────────
 
 test("ucContentToText flattens string and multipart content", () => {
@@ -494,6 +532,33 @@ test("buildUcWsUrl embeds uid, token, and a cache-bust", () => {
   assert.match(url, new RegExp(`wss://internal-6\\.pubyar\\.com/ws/${UID}`));
   assert.match(url, /token=JWT123/);
   assert.match(url, /_t=\d+/);
+});
+
+test("runUcTurn closes immediately when its signal is already aborted", async (t) => {
+  let closed = false;
+  class IdleSocket {
+    readyState = 0;
+    close() {
+      closed = true;
+    }
+  }
+  const restore = __setUcWebSocketForTesting(IdleSocket as never);
+  t.after(restore);
+  const controller = new AbortController();
+  controller.abort();
+
+  const result = await runUcTurn({
+    jwt: "jwt",
+    uid: UID,
+    model: "claude-opus-46",
+    text: "hello",
+    history: [],
+    signal: controller.signal,
+    timeoutMs: 10_000,
+  });
+
+  assert.equal(result.error, "Request aborted");
+  assert.equal(closed, true);
 });
 
 // ─── Executor path with a MOCKED WebSocket ───────────────────────────────────
@@ -768,6 +833,77 @@ test("UcExecutor surfaces an attachment upload failure instead of sending text-o
   assert.equal(json.error?.code, "uc_attachment_upload_failed");
 });
 
+test("UcExecutor rejects malformed recognized attachments instead of sending text-only chat", async (t) => {
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = tokenFetch();
+  t.after(() => {
+    globalThis.fetch = origFetch;
+  });
+
+  const malformedParts = [
+    { type: "file", file: { filename: "missing.pdf" } },
+    { type: "input_file", filename: "missing.pdf" },
+    { type: "document", source: { type: "base64", media_type: "application/pdf" } },
+    { type: "image_url", image_url: { url: "data:image/png;base64,%%%" } },
+    { type: "file", file: { filename: "bad.pdf", file_data: "%%%" } },
+    { type: "input_file", filename: "bad.pdf", file_data: "%%%" },
+    {
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: "%%%" },
+    },
+  ];
+  for (const part of malformedParts) {
+    const result = await new UcExecutor().execute({
+      model: "claude-opus-46",
+      stream: false,
+      credentials: { providerSpecificData: psd() },
+      body: {
+        messages: [{ role: "user", content: [{ type: "text", text: "read this" }, part] }],
+      },
+    } as never);
+    const { status, json } = await readJson(result);
+    assert.equal(status, 400);
+    assert.equal(json.error?.code, "uc_invalid_attachment");
+  }
+});
+
+test("UC inline media enforces exact decoded byte boundaries for every representation", () => {
+  const exact = Buffer.from("abc").toString("base64");
+  const over = Buffer.from("abcd").toString("base64");
+  const representations = [
+    (data: string) => ({ type: "image_url", image_url: { url: `data:image/png;base64,${data}` } }),
+    (data: string) => ({ type: "file", file: { filename: "x.pdf", file_data: data } }),
+    (data: string) => ({ type: "input_file", filename: "x.pdf", file_data: data }),
+    (data: string) => ({
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data },
+    }),
+  ];
+
+  for (const makePart of representations) {
+    const exactResult = extractCurrentTurnMedia([{ role: "user", content: [makePart(exact)] }], 3);
+    assert.equal(exactResult.requestedMediaCount, 1);
+    assert.equal(exactResult.inline.length, 1);
+    assert.equal(exactResult.inline[0].bytes.toString(), "abc");
+
+    const overResult = extractCurrentTurnMedia([{ role: "user", content: [makePart(over)] }], 3);
+    assert.equal(overResult.requestedMediaCount, 1);
+    assert.equal(overResult.inline.length, 0);
+  }
+});
+
+test("UC data URLs strictly validate base64 and bound percent-decoded bytes", () => {
+  assert.equal(decodeUcDataUrl("data:image/png;base64,YWJj", 3)?.bytes.toString(), "abc");
+  assert.equal(decodeUcDataUrl("data:image/png;base64,YWJjZA==", 3), null);
+  assert.equal(decodeUcDataUrl("data:image/png;base64,YWJj%%%", 8), null);
+  assert.equal(decodeUcDataUrl("data:image/png;base64,YQ==", 1)?.bytes.toString(), "a");
+  assert.equal(decodeUcDataUrl("data:image/png;base64,YQ=", 1), null);
+  assert.equal(decodeUcDataUrl(`data:image/png;base64,${" ".repeat(20)}`, 1), null);
+  assert.equal(decodeUcDataUrl("data:text/plain,a%20b", 3)?.bytes.toString(), "a b");
+  assert.equal(decodeUcDataUrl("data:text/plain,a%20bc", 3), null);
+  assert.equal(decodeUcDataUrl("data:text/plain,%E0%A4%A", 8), null);
+});
+
 test("UcExecutor streaming emits SSE chunks incl the raw_text remainder", async (t) => {
   const origFetch = globalThis.fetch;
   globalThis.fetch = tokenFetch();
@@ -923,6 +1059,42 @@ test("UcExecutor surfaces an auto-cure retry quota error instead of the first re
   const { status, json } = await readJson(result);
   assert.equal(status, 429);
   assert.equal(json.error?.code, "uc_paywall_exceeded");
+});
+
+test("UC reset parsing distinguishes seconds and milliseconds and rejects invalid resets", () => {
+  const now = 1_800_000_000_000;
+  const future = now + 60_000;
+
+  assert.equal(parseUcResetAtMs(String(future / 1000), now), future);
+  assert.equal(parseUcResetAtMs(String(future), now), future);
+  assert.equal(parseUcResetAtMs(new Date(future).toISOString(), now), future);
+  assert.equal(parseUcResetAtMs(String(now / 1000), now), null);
+  assert.equal(parseUcResetAtMs(new Date(now - 1_000).toISOString(), now), null);
+  assert.equal(parseUcResetAtMs("not-a-reset", now), null);
+  assert.equal(parseUcResetAtMs("9007199254740992", now), null);
+  assert.equal(parseUcResetAtMs("1e309", now), null);
+});
+
+test("UC Retry-After is capped while X-RateLimit-Reset preserves the validated backend reset", () => {
+  const now = 1_800_000_000_000;
+
+  assert.deepEqual(retryAfterHeaders(now + 60_001, now), {
+    "Retry-After": "61",
+    "X-RateLimit-Reset": "1800000061",
+  });
+  assert.deepEqual(retryAfterHeaders(now - 1, now), {
+    "Retry-After": "1",
+  });
+  assert.deepEqual(retryAfterHeaders(now + 7 * 86_400_000, now), {
+    "Retry-After": "86400",
+    "X-RateLimit-Reset": "1800604800",
+  });
+  assert.deepEqual(retryAfterHeaders(Number.POSITIVE_INFINITY, now), {
+    "Retry-After": "86400",
+  });
+  assert.deepEqual(retryAfterHeaders(Number.MAX_SAFE_INTEGER + 1, now), {
+    "Retry-After": "86400",
+  });
 });
 
 test("UcExecutor maps quota reset to Retry-After and suppresses repeat sockets", async (t) => {

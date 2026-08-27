@@ -103,6 +103,7 @@ async function postHandler(request, context) {
     resolvedProvider: providerConfig,
     resolvedModel,
     clientIp: getClientIpFromRequest(request),
+    signal: request.signal,
   });
   if (response?.ok) {
     await clearRecoveredProviderState(credentials);

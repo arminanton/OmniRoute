@@ -250,7 +250,8 @@ const EXPLICIT_OPTIONAL_APIKEY_PROVIDER_IDS = new Set([
   "gitlawb",
   "gitlawb-gmi",
   "naga-ac",
-  // UC Persona / Emotional: subscription chat with daily account limits and NO API key —
+  // UC Persona / Emotional: free plans are metered while Premium and Premium+
+  // are virtually unlimited. Limits depend on the account plan. There is no API key:
   // auth is a durable Clerk credential stored in providerSpecificData, from which
   // the executor mints a short-lived session token per connect.
   "uc-persona",

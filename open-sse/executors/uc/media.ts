@@ -18,11 +18,9 @@
  *
  * This module extracts inline media parts from the CURRENT turn's OpenAI message
  * (image_url data/http parts, and file/input_file/document base64 parts), uploads
- * each, and returns the blob descriptors for the executor to fold into the persona
- * frame. Multi-file = N independent uploads (there is no batch endpoint).
- *
- * Best-effort: an upload failure is logged and skipped so the chat still proceeds
- * without that attachment (best-effort doc-list behavior).
+ * it, and returns the blob descriptor for the executor to fold into the persona
+ * frame. The captured chat frame supports one attachment. The executor rejects
+ * additional attachments and fails closed if the upload does not complete.
  */
 import { Buffer } from "node:buffer";
 import { UC_ORIGIN } from "./constants.ts";
@@ -32,6 +30,39 @@ import { validateUcBlobName, validateUcRemoteUrl } from "./urlSafety.ts";
 const UC_SIGNED_URL_ENDPOINT = "https://internal-6.pubyar.com/generate-signed-url";
 /** Poll cap for the post-upload readiness check. */
 const UC_BLOB_READY_TIMEOUT_MS = 20_000;
+
+export const UC_INLINE_MEDIA_MAX_BYTES = 64 * 1024 * 1024;
+
+function decodeStrictBase64(value: string, maxBytes: number): Buffer | null {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > UC_INLINE_MEDIA_MAX_BYTES) {
+    return null;
+  }
+  const maxEncodedLength = Math.ceil(maxBytes / 3) * 4 + 4;
+  // Bound work before stripping whitespace or applying the alphabet regex.
+  if (value.length > maxEncodedLength * 2) return null;
+  const compact = value.replace(/\s/g, "");
+  if (!compact || compact.length > maxEncodedLength) return null;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) return null;
+  const unpadded = compact.replace(/=+$/, "");
+  const paddingLength = compact.length - unpadded.length;
+  const remainder = unpadded.length % 4;
+  if (remainder === 1) return null;
+  const requiredPadding = (4 - remainder) % 4;
+  if (paddingLength > 0 && (compact.length % 4 !== 0 || paddingLength !== requiredPadding)) {
+    return null;
+  }
+  const padded = unpadded + "=".repeat((4 - (unpadded.length % 4)) % 4);
+  const bytes = Buffer.from(padded, "base64");
+  if (bytes.length === 0 || bytes.length > maxBytes) return null;
+  if (bytes.toString("base64").replace(/=+$/, "") !== unpadded) return null;
+  return bytes;
+}
+
+function safeContentType(value: string): string {
+  return /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(value)
+    ? value
+    : "application/octet-stream";
+}
 
 /** A blob reference the persona frame carries. */
 export interface UcMediaBlob {
@@ -61,17 +92,24 @@ interface OpenAiMessage {
   content?: unknown;
 }
 
-/** Decode a data: URL into {bytes, contentType}, or null if not a data URL. */
-function decodeDataUrl(url: string): UcInlineMedia | null {
+/** Decode a data: URL into {bytes, contentType}, or null if invalid. */
+export function decodeUcDataUrl(
+  url: string,
+  maxBytes = UC_INLINE_MEDIA_MAX_BYTES
+): UcInlineMedia | null {
   const m = url.match(/^data:([^;,]+)(;base64)?,(.*)$/s);
   if (!m) return null;
-  const contentType = m[1] || "application/octet-stream";
+  const contentType = safeContentType(m[1] || "application/octet-stream");
   const isBase64 = !!m[2];
   const data = m[3];
   try {
-    const bytes = isBase64
-      ? Buffer.from(data, "base64")
-      : Buffer.from(decodeURIComponent(data), "utf8");
+    if (isBase64) {
+      const bytes = decodeStrictBase64(data, maxBytes);
+      return bytes ? { bytes, contentType } : null;
+    }
+    if (data.length > maxBytes * 3) return null;
+    const bytes = Buffer.from(decodeURIComponent(data), "utf8");
+    if (bytes.length === 0 || bytes.length > maxBytes) return null;
     return { bytes, contentType };
   } catch {
     return null;
@@ -104,7 +142,10 @@ function mimeFromFilename(name: string): string {
  * and base64/data payloads as bytes to upload. Only the current turn — history
  * media would re-upload every request.
  */
-export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
+export function extractCurrentTurnMedia(
+  messages: OpenAiMessage[],
+  maxBytes = UC_INLINE_MEDIA_MAX_BYTES
+): {
   inline: UcInlineMedia[];
   remoteImageUrls: string[];
   requestedMediaCount: number;
@@ -139,7 +180,7 @@ export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
             ? (iu as { url: string }).url
             : "";
       if (!url) continue;
-      const data = decodeDataUrl(url);
+      const data = decodeUcDataUrl(url, maxBytes);
       if (data) {
         inline.push(data);
       } else if (/^https?:\/\//i.test(url)) {
@@ -149,41 +190,45 @@ export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
     }
 
     // OpenAI file part: {type:"file", file:{filename, file_data:"data:...;base64,..."}}
-    if (raw.type === "file" && raw.file) {
+    if (raw.type === "file") {
       requestedMediaCount++;
-      const fd = raw.file.file_data;
-      const fname = typeof raw.file.filename === "string" ? raw.file.filename : "file";
+      const file = raw.file;
+      if (!file || typeof file !== "object") continue;
+      const fd = file.file_data;
+      const fname = typeof file.filename === "string" ? file.filename : "file";
       if (typeof fd === "string") {
-        const dec = decodeDataUrl(fd) ?? {
-          bytes: Buffer.from(fd, "base64"),
-          contentType: mimeFromFilename(fname),
-        };
-        if (dec.bytes.length) inline.push(dec);
+        const dec = decodeUcDataUrl(fd, maxBytes);
+        const rawBytes = dec ? null : decodeStrictBase64(fd, maxBytes);
+        if (dec) inline.push(dec);
+        else if (rawBytes) inline.push({ bytes: rawBytes, contentType: mimeFromFilename(fname) });
       }
       continue;
     }
 
     // Responses-style input_file: {type:"input_file", file_data, filename?}
-    if (raw.type === "input_file" && typeof raw.file_data === "string") {
+    if (raw.type === "input_file") {
       requestedMediaCount++;
-      const dec = decodeDataUrl(raw.file_data) ?? {
-        bytes: Buffer.from(raw.file_data, "base64"),
-        contentType: "application/octet-stream",
-      };
-      if (dec.bytes.length) inline.push(dec);
+      if (typeof raw.file_data !== "string") continue;
+      const dec = decodeUcDataUrl(raw.file_data, maxBytes);
+      const rawBytes = dec ? null : decodeStrictBase64(raw.file_data, maxBytes);
+      if (dec) inline.push(dec);
+      else if (rawBytes) {
+        inline.push({ bytes: rawBytes, contentType: "application/octet-stream" });
+      }
       continue;
     }
 
     // Claude-style document: {type:"document", source:{type:"base64", media_type, data}}
-    if (raw.type === "document" && raw.source && typeof raw.source.data === "string") {
+    if (raw.type === "document") {
       requestedMediaCount++;
-      const contentType =
-        typeof raw.source.media_type === "string" ? raw.source.media_type : "application/pdf";
-      try {
-        const bytes = Buffer.from(raw.source.data, "base64");
-        if (bytes.length) inline.push({ bytes, contentType });
-      } catch {
-        /* skip malformed */
+      const source = raw.source;
+      if (!source || typeof source !== "object" || typeof source.data !== "string") continue;
+      const contentType = safeContentType(
+        typeof source.media_type === "string" ? source.media_type : "application/pdf"
+      );
+      const bytes = decodeStrictBase64(source.data, maxBytes);
+      if (bytes) {
+        inline.push({ bytes, contentType });
       }
       continue;
     }
@@ -220,7 +265,8 @@ export interface UcUploadContext {
 
 /**
  * Upload one inline media payload via the presigned-URL flow. Returns the blob
- * descriptor, or null on any failure (best-effort; caller proceeds without it).
+ * descriptor, or null on any failure. The persona executor treats null as a
+ * failed request and never sends an ungrounded text-only turn.
  */
 export async function uploadUcBlob(
   media: UcInlineMedia,
@@ -269,6 +315,7 @@ export async function uploadUcBlob(
   try {
     const put = await doFetch(signedUrl, {
       method: "PUT",
+      redirect: "error",
       headers: { "Content-Type": media.contentType },
       // Buffer -> ArrayBuffer slice (BodyInit-compatible in this codebase's fetch
       // typing; a Uint8Array view is not assignable to BodyInit here).
@@ -304,7 +351,11 @@ async function confirmBlobReady(blobName: string, ctx: UcUploadContext): Promise
   const deadline = Date.now() + (ctx.readyTimeoutMs ?? UC_BLOB_READY_TIMEOUT_MS);
   for (let attempt = 0; Date.now() < deadline; attempt++) {
     try {
-      const r = await doFetch(finalUrl, { method: "HEAD", signal: ctx.signal ?? undefined });
+      const r = await doFetch(finalUrl, {
+        method: "HEAD",
+        redirect: "error",
+        signal: ctx.signal ?? undefined,
+      });
       if (r.status === 200) return true;
     } catch {
       /* keep trying */
@@ -313,21 +364,4 @@ async function confirmBlobReady(blobName: string, ctx: UcUploadContext): Promise
     if (attempt > 20) break;
   }
   return false;
-}
-
-/**
- * Upload every resolved media payload for a turn, returning successful blob
- * descriptors. The executor enforces one attachment and treats a missing result
- * as an error; this lower-level helper remains reusable for isolated upload tests.
- */
-export async function uploadUcTurnMedia(
-  inline: UcInlineMedia[],
-  ctx: UcUploadContext
-): Promise<UcMediaBlob[]> {
-  const blobs: UcMediaBlob[] = [];
-  for (const media of inline) {
-    const blob = await uploadUcBlob(media, ctx);
-    if (blob) blobs.push(blob);
-  }
-  return blobs;
 }

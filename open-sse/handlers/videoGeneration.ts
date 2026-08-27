@@ -125,7 +125,13 @@ async function getCustomModelVideoPreset(
 /**
  * Handle video generation request
  */
-export async function handleVideoGeneration({ body, credentials, log, resolvedProvider = null }) {
+export async function handleVideoGeneration({
+  body,
+  credentials,
+  log,
+  resolvedProvider = null,
+  signal = undefined,
+}) {
   let { provider, model } = parseVideoModel(body.model);
   if (resolvedProvider) {
     provider = resolvedProvider;
@@ -303,9 +309,9 @@ export async function handleVideoGeneration({ body, credentials, log, resolvedPr
     return handleXaiVideoGeneration({ model, provider, providerConfig, body, credentials, log });
   }
   if (providerConfig.format === "uc-video") {
-    // UC (uncensored.com): separate registry entries share one handler, selected
-    // by provider id: persona web (Clerk JWT) or uc-direct REST (X-api-key).
-    return handleUcVideoGeneration({ model, provider, body, credentials, log });
+    // The public registry exposes persona video. The shared handler retains
+    // provider-id dispatch for legacy/internal Direct callers.
+    return handleUcVideoGeneration({ model, provider, body, credentials, log, signal });
   }
   if (providerConfig.format === "adobe-firefly-video") {
     return handleAdobeFireflyVideoGeneration({

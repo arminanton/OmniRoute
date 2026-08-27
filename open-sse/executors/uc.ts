@@ -47,7 +47,7 @@ import {
 import {
   extractCurrentTurnMedia,
   resolveUcRemoteImages,
-  uploadUcTurnMedia,
+  uploadUcBlob,
   type UcMediaBlob,
 } from "./uc/media.ts";
 
@@ -178,20 +178,32 @@ const UC_QUOTA_ERROR_CODES = new Set([
   "rate_limit_exceeded",
 ]);
 const ucQuotaCooldowns = new Map<string, number>();
+const UC_MAX_RETRY_AFTER_SECONDS = 86_400;
 
 /** Test seam; production cooldowns expire naturally at the captured reset time. */
 export function __resetUcQuotaCooldownsForTesting(): void {
   ucQuotaCooldowns.clear();
 }
 
-function parseUcResetAtMs(value: string | undefined): number | null {
-  if (!value) return null;
-  const numeric = Number(value);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+export function parseUcResetAtMs(value: string | undefined, now = Date.now()): number | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+
+  let parsed: number;
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    const numeric = Number(raw);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    parsed = numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+  } else {
+    parsed = Date.parse(raw);
   }
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
+
+  // Date values outside TimeClip's range, unsafe integer timestamps, and stale
+  // resets must not create a cooldown or leak nonsensical rate-limit headers.
+  if (!Number.isFinite(parsed) || !Number.isSafeInteger(parsed) || parsed > 8_640_000_000_000_000) {
+    return null;
+  }
+  return parsed > now ? parsed : null;
 }
 
 function activeUcCooldown(sid: string, now = Date.now()): number | null {
@@ -212,13 +224,21 @@ function rememberUcCooldown(sid: string, turn: UcTurnResult): number | null {
   return resetAt;
 }
 
-function retryAfterHeaders(resetAt: number): Record<string, string> {
-  const remainingMs = resetAt - Date.now();
-  const seconds = Math.max(1, Math.ceil(remainingMs / 1000));
-  return {
+export function retryAfterHeaders(resetAt: number, now = Date.now()): Record<string, string> {
+  const remainingMs = Number.isFinite(resetAt) ? resetAt - now : Number.POSITIVE_INFINITY;
+  const seconds = Math.min(UC_MAX_RETRY_AFTER_SECONDS, Math.max(1, Math.ceil(remainingMs / 1000)));
+  const headers: Record<string, string> = {
     "Retry-After": String(seconds),
-    "X-RateLimit-Reset": String(Math.ceil(resetAt / 1000)),
   };
+  if (
+    Number.isFinite(resetAt) &&
+    Number.isSafeInteger(resetAt) &&
+    resetAt > now &&
+    resetAt <= 8_640_000_000_000_000
+  ) {
+    headers["X-RateLimit-Reset"] = String(Math.ceil(resetAt / 1000));
+  }
+  return headers;
 }
 
 export class UcExecutor extends BaseExecutor {
@@ -247,7 +267,7 @@ export class UcExecutor extends BaseExecutor {
       return wrap(
         errorResponse(
           429,
-          `UC persona daily limit is active until ${new Date(cooldownReset).toISOString()}.`,
+          `UC Persona plan limit is active until ${new Date(cooldownReset).toISOString()}.`,
           "uc_quota_cooldown",
           retryAfterHeaders(cooldownReset)
         ),
@@ -318,12 +338,13 @@ export class UcExecutor extends BaseExecutor {
         );
       }
       try {
-        media = await uploadUcTurnMedia(uploadCandidates, {
+        const blob = await uploadUcBlob(uploadCandidates[0], {
           jwt,
           uid: cred.uid,
           signal: input.signal,
           log: input.log ?? undefined,
         });
+        media = blob ? [blob] : [];
       } catch {
         media = [];
       }

@@ -324,7 +324,7 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     supportedSizes: ["1024x1024", "1792x1024", "1024x1792"],
   },
 
-  // UC subscription persona image generation (daily account limits apply).
+  // UC plan-backed persona image generation. Limits depend on the account plan.
   "uc-persona": {
     id: "uc-persona",
     alias: "uc",
@@ -334,18 +334,6 @@ export const IMAGE_PROVIDERS: Record<string, ImageProviderConfig> = {
     format: "uc-image",
     models: UC_IMAGE_MODELS,
     // Persona web derives imageWidth/imageHeight from an aspect ratio.
-    supportedSizes: ["1024x1024", "1024x576", "576x1024", "1024x768", "768x1024"],
-  },
-
-  // UC Direct official metered REST image API. It shares the documented model
-  // ids with the web picker but owns a separate connection and X-api-key.
-  "uc-direct": {
-    id: "uc-direct",
-    baseUrl: "https://api.uncensored.com/api/v1/images/generations",
-    authType: "apikey",
-    authHeader: "x-api-key",
-    format: "uc-image",
-    models: UC_IMAGE_MODELS,
     supportedSizes: ["1024x1024", "1024x576", "576x1024", "1024x768", "768x1024"],
   },
 

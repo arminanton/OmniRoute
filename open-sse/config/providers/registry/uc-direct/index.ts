@@ -4,8 +4,8 @@ import type { RegistryEntry } from "../../shared.ts";
  * UC Direct (uncensored.com Developer API) — the METERED, OpenAI-compatible
  * official REST API at https://api.uncensored.com/api/v1.
  *
- * This is the paid Developer surface, distinct from the subscription-backed `uc-persona`
- * persona WebSocket provider (which has daily account limits). It is a
+ * This is the separately metered, pay-as-you-go Developer surface, distinct from
+ * the plan-backed `uc-persona` persona WebSocket provider. It is a
  * straightforward OpenAI-compatible passthrough
  * handled by the default executor:
  *   • Auth: `X-api-key: uai_sk_live_...` (a never-expiring key; NOT Bearer). The

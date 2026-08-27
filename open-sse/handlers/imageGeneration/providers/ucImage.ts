@@ -1,11 +1,12 @@
 // UC (uncensored.com) image-generation handler.
-// Family: uc-image | Providers: uc-persona, uc-direct
+// Family: uc-image | Public provider: uc-persona
 //
-// UC exposes image generation on two separately registered surfaces. This
-// shared handler selects by provider id; key-prefix detection remains only for
-// backward compatibility with callers that previously routed persona through `uc`.
+// The public media registry exposes the persona surface only. This shared
+// handler retains the Direct path for legacy/internal callers; key-prefix
+// detection remains for compatibility with callers that routed persona through `uc`.
 //
-//   (A) PERSONA WEB path (subscription-backed, daily account limits, Clerk-authenticated). No API key: the
+//   (A) PERSONA WEB path (plan-backed and Clerk-authenticated). Free is metered;
+//       Premium and Premium+ are virtually unlimited. No API key: the
 //       durable Clerk `__client` cookie lives in the connection's
 //       providerSpecificData, from which we mint a short-lived `__session` JWT
 //       (mintUcSessionToken) and call:
@@ -19,7 +20,7 @@
 //       We then POLL that url with GET until HTTP 200 (~4s typical), returning
 //       the final url as an OpenAI images response.
 //
-//   (B) uc-direct REST path (metered, OpenAI-compatible). A `uai_sk_live_...`
+//   (B) Legacy/internal uc-direct REST path (metered, OpenAI-compatible). A `uai_sk_live_...`
 //       X-api-key credential is present, so we call the official REST endpoint:
 //         POST https://api.uncensored.com/api/v1/images/generations
 //           X-api-key: <key>
@@ -383,7 +384,7 @@ async function pollUcResultUrl(
     attempt += 1;
     let resp: Response;
     try {
-      resp = await fetchImpl(url, { method: "GET", signal });
+      resp = await fetchImpl(url, { method: "GET", redirect: "error", signal });
     } catch (err) {
       return {
         state: "failed",

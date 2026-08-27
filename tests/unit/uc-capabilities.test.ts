@@ -22,7 +22,6 @@ import {
   extractCurrentTurnMedia,
   resolveUcRemoteImages,
   uploadUcBlob,
-  uploadUcTurnMedia,
 } from "../../open-sse/executors/uc/media.ts";
 import { buildPersonaFrame } from "../../open-sse/executors/uc/protocol.ts";
 import { validateUcBlobName, validateUcRemoteUrl } from "../../open-sse/executors/uc/urlSafety.ts";
@@ -207,6 +206,19 @@ test("extractCurrentTurnMedia decodes OpenAI file, input_file, and Claude docume
   assert.equal(claudeDoc.inline[0].contentType, "application/pdf");
 });
 
+test("extractCurrentTurnMedia counts malformed recognized attachment parts", () => {
+  for (const part of [
+    { type: "file", file: { filename: "missing.pdf" } },
+    { type: "input_file", filename: "missing.pdf" },
+    { type: "document", source: { type: "base64", media_type: "application/pdf" } },
+  ]) {
+    const result = extractCurrentTurnMedia([{ role: "user", content: [part] }]);
+    assert.equal(result.requestedMediaCount, 1);
+    assert.equal(result.inline.length, 0);
+    assert.equal(result.remoteImageUrls.length, 0);
+  }
+});
+
 test("extractCurrentTurnMedia returns empty for a plain text turn", () => {
   const { inline } = extractCurrentTurnMedia([{ role: "user", content: "hello" }]);
   assert.equal(inline.length, 0);
@@ -223,8 +235,14 @@ test("uploadUcBlob runs the signed-url → PUT → ready flow and returns the bl
         { status: 200 }
       );
     }
-    if (u.includes("/up/tok")) return new Response("", { status: 200 }); // PUT
-    if (u.includes("/blob_123")) return new Response("", { status: 200 }); // ready HEAD
+    if (u.includes("/up/tok")) {
+      assert.equal(init?.redirect, "error");
+      return new Response("", { status: 200 }); // PUT
+    }
+    if (u.includes("/blob_123")) {
+      assert.equal(init?.redirect, "error");
+      return new Response("", { status: 200 }); // ready HEAD
+    }
     return new Response("", { status: 404 });
   }) as unknown as typeof fetch;
 
@@ -240,13 +258,96 @@ test("uploadUcBlob runs the signed-url → PUT → ready flow and returns the bl
   assert.ok(calls.some((c) => c.startsWith("PUT") && c.includes("/up/tok")));
 });
 
-test("uploadUcBlob returns null (best-effort) on a signed-url failure", async () => {
+test("uploadUcBlob reports signed-url failure so the executor can fail closed", async () => {
   const fakeFetch = (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch;
   const blob = await uploadUcBlob(
     { bytes: Buffer.from("x"), contentType: "image/png" },
     { jwt: "j", uid: "u", fetchImpl: fakeFetch }
   );
   assert.equal(blob, null);
+});
+
+test("uploadUcBlob disables redirects for a server-supplied upload URL", async () => {
+  const calls: string[] = [];
+  const fakeFetch = (async (url: string, init: RequestInit = {}) => {
+    const value = String(url);
+    calls.push(value);
+    if (value.includes("/generate-signed-url")) {
+      return new Response(
+        JSON.stringify({
+          signed_url: "https://d.moveinwater.com/up/redirect",
+          blob_name: "blob_1",
+        }),
+        { status: 200 }
+      );
+    }
+    if (value === "https://d.moveinwater.com/up/redirect") {
+      if (init.redirect !== "error") {
+        calls.push("https://second-host.example/stolen");
+        return new Response(null, { status: 200 });
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://second-host.example/stolen" },
+      });
+    }
+    if (value === "https://second-host.example/stolen") {
+      return new Response(null, { status: 200 });
+    }
+    throw new Error(`unexpected fetch to ${value}`);
+  }) as unknown as typeof fetch;
+
+  const blob = await uploadUcBlob(
+    { bytes: Buffer.from("x"), contentType: "image/png" },
+    { jwt: "j", uid: "u", fetchImpl: fakeFetch }
+  );
+  assert.equal(blob, null);
+  assert.equal(calls.includes("https://second-host.example/stolen"), false);
+});
+
+test("uploadUcBlob readiness polling rejects redirects without fetching the second host", async () => {
+  const calls: string[] = [];
+  const fakeFetch = (async (url: string, init: RequestInit = {}) => {
+    const value = String(url);
+    calls.push(value);
+    if (value.includes("/generate-signed-url")) {
+      return new Response(
+        JSON.stringify({
+          signed_url: "https://d.moveinwater.com/up/ready",
+          blob_name: "blob_ready",
+        }),
+        { status: 200 }
+      );
+    }
+    if (value === "https://d.moveinwater.com/up/ready") {
+      return new Response(null, { status: 200 });
+    }
+    if (value === "https://d.moveinwater.com/blob_ready") {
+      if (init.redirect !== "error") {
+        calls.push("https://second-host.example/blob_ready");
+        return new Response(null, { status: 200 });
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://second-host.example/blob_ready" },
+      });
+    }
+    throw new Error(`unexpected fetch to ${value}`);
+  }) as unknown as typeof fetch;
+
+  const blob = await uploadUcBlob(
+    { bytes: Buffer.from("x"), contentType: "image/png" },
+    {
+      jwt: "j",
+      uid: "u",
+      fetchImpl: fakeFetch,
+      readyTimeoutMs: 100,
+      sleepImpl: async () => undefined,
+    }
+  );
+  assert.equal(blob, null);
+  assert.equal(calls.includes("https://d.moveinwater.com/blob_ready"), true);
+  assert.equal(calls.includes("https://second-host.example/blob_ready"), false);
 });
 
 test("uploadUcBlob returns null when the uploaded blob never becomes ready", async () => {
@@ -273,37 +374,6 @@ test("uploadUcBlob returns null when the uploaded blob never becomes ready", asy
     }
   );
   assert.equal(blob, null);
-});
-
-test("uploadUcTurnMedia uploads several files and skips failures", async () => {
-  let n = 0;
-  const fakeFetch = (async (url: string) => {
-    const u = String(url);
-    if (u.includes("/generate-signed-url")) {
-      n++;
-      // first file succeeds, second fails at signed-url
-      if (n === 1) {
-        return new Response(
-          JSON.stringify({ signed_url: "https://d.moveinwater.com/up/t1", blob_name: "b1" }),
-          {
-            status: 200,
-          }
-        );
-      }
-      return new Response("", { status: 500 });
-    }
-    return new Response("", { status: 200 });
-  }) as unknown as typeof fetch;
-
-  const blobs = await uploadUcTurnMedia(
-    [
-      { bytes: Buffer.from("a"), contentType: "image/png" },
-      { bytes: Buffer.from("b"), contentType: "application/pdf" },
-    ],
-    { jwt: "j", uid: "u", fetchImpl: fakeFetch }
-  );
-  assert.equal(blobs.length, 1);
-  assert.equal(blobs[0].blobName, "b1");
 });
 
 test("buildPersonaFrame carries a media blob when provided (and stays clean without one)", () => {

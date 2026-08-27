@@ -145,6 +145,12 @@ export interface UcTtsSocketResult {
  * accumulated so far. Mirrors runUcTurn in executors/uc/ws.ts.
  */
 export function runUcTtsSocket(input: UcTtsSocketInput): Promise<UcTtsSocketResult> {
+  if (input.signal?.aborted) {
+    return Promise.resolve({
+      audio: Buffer.alloc(0) as Buffer<ArrayBuffer>,
+      error: "Request aborted",
+    });
+  }
   const timeoutMs = input.timeoutMs ?? UC_TTS_WS_TIMEOUT_MS;
   const url = buildUcTtsWsUrl(input.uid, input.jwt);
   const chunks: Buffer[] = [];
@@ -188,9 +194,17 @@ export function runUcTtsSocket(input: UcTtsSocketInput): Promise<UcTtsSocketResu
       timeoutMs
     );
     abortHandler = () => fail("Request aborted");
+    if (input.signal?.aborted) {
+      abortHandler();
+      return;
+    }
     input.signal?.addEventListener("abort", abortHandler, { once: true });
 
     ws.onopen = () => {
+      if (input.signal?.aborted) {
+        fail("Request aborted");
+        return;
+      }
       try {
         const frame = buildUcTtsStartFrame({
           text: input.text,
@@ -295,6 +309,10 @@ export async function handleUcTextToSpeech(
     return { ok: false, status: 400, error: "input text is required" };
   }
 
+  if (input.signal?.aborted) {
+    return { ok: false, status: 499, error: "Request aborted" };
+  }
+
   const cred: UcCredential | null = resolveUcCredential(input.credentials?.providerSpecificData);
   if (!cred) {
     return {
@@ -325,7 +343,11 @@ export async function handleUcTextToSpeech(
   });
 
   if (result.error) {
-    return { ok: false, status: 502, error: result.error };
+    return {
+      ok: false,
+      status: input.signal?.aborted ? 499 : 502,
+      error: result.error,
+    };
   }
 
   return { ok: true, status: 200, audio: result.audio, contentType: "audio/mpeg" };

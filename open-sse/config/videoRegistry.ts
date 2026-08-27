@@ -37,22 +37,6 @@ interface VideoProvider {
 
 const UC_PERSONA_VIDEO_MODELS: VideoModel[] = [{ id: "wan-2.2-spicy", name: "Wan 2.2 Spicy (UC)" }];
 
-const UC_DIRECT_VIDEO_MODELS: VideoModel[] = [
-  { id: "t2v-turbo", name: "Text-to-Video Turbo (UC Direct)" },
-  { id: "t2v-standard", name: "Text-to-Video Standard (UC Direct)" },
-  { id: "i2v-turbo", name: "Image-to-Video Turbo (UC Direct)" },
-  { id: "i2v-standard", name: "Image-to-Video Standard (UC Direct)" },
-  { id: "i2v-pro", name: "Image-to-Video Pro (UC Direct)" },
-  { id: "i2v-sora", name: "Image-to-Video Sora (UC Direct)" },
-  { id: "i2v-sora-pro", name: "Image-to-Video Sora Pro (UC Direct)" },
-  { id: "cosmos-predict", name: "Cosmos Predict (UC Direct)" },
-  { id: "av-gen", name: "AV Gen (UC Direct)" },
-  { id: "ltx-distilled", name: "LTX Distilled (UC Direct)" },
-  { id: "seedance-2.0", name: "Seedance 2.0 (UC Direct)" },
-  { id: "seedance-2.0-fast", name: "Seedance 2.0 Fast (UC Direct)" },
-  { id: "happyhorse", name: "HappyHorse (UC Direct)" },
-];
-
 export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
   agnes: {
     id: "agnes",
@@ -396,7 +380,7 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
   },
 
   // UC subscription persona video. Only image-to-video with wan-2.2-spicy was
-  // captured; daily account limits apply.
+  // captured. Limits depend on the account plan.
   "uc-persona": {
     id: "uc-persona",
     alias: "uc",
@@ -405,18 +389,6 @@ export const VIDEO_PROVIDERS: Record<string, VideoProvider> = {
     authHeader: "bearer",
     format: "uc-video",
     models: UC_PERSONA_VIDEO_MODELS,
-  },
-
-  // UC Direct official metered REST video API. This separate registry entry is
-  // what makes `uc-direct/model` resolve the developer-key connection.
-  "uc-direct": {
-    id: "uc-direct",
-    baseUrl: "https://api.uncensored.com/api/v1/videos/generations",
-    statusUrl: "https://api.uncensored.com/api/v1/videos/generations",
-    authType: "apikey",
-    authHeader: "x-api-key",
-    format: "uc-video",
-    models: UC_DIRECT_VIDEO_MODELS,
   },
 
   // Adobe Firefly (unofficial) — same IMS/cookie credential as the image entry.

@@ -12,6 +12,8 @@ import {
   UC_DIRECT_VIDEO_URL,
 } from "../../open-sse/handlers/videoGeneration/providers/ucVideo.ts";
 import { VIDEO_PROVIDERS } from "../../open-sse/config/videoRegistry.ts";
+import { handleVideoGeneration } from "../../open-sse/handlers/videoGeneration.ts";
+import { MAX_CURSOR_IMAGE_BYTES } from "../../open-sse/utils/cursorImages.ts";
 
 // A valid PERSONA credential (durable Clerk cookie + sid + uid in psd). No API
 // key, so the handler takes the persona web path (mint -> generate -> poll).
@@ -44,7 +46,7 @@ const noSleep = async () => {};
 
 // --- Registry ------------------------------------------------------------
 
-test("uc-persona and uc-direct own separate video registry entries", () => {
+test("uc-persona owns captured image-to-video while uc-direct stays chat-only", () => {
   const entry = (
     VIDEO_PROVIDERS as Record<string, { format?: string; baseUrl?: string; models?: unknown[] }>
   )["uc-persona"];
@@ -53,15 +55,7 @@ test("uc-persona and uc-direct own separate video registry entries", () => {
   assert.match(String(entry.baseUrl), /chatuncensored\.ai/);
   assert.ok((entry.models ?? []).some((m) => (m as { id?: string }).id === "wan-2.2-spicy"));
   assert.equal((entry.models ?? []).length, 1, "persona must advertise only captured video model");
-  const direct = VIDEO_PROVIDERS["uc-direct"];
-  assert.ok(direct, "uc-direct must exist in VIDEO_PROVIDERS");
-  assert.equal(direct.format, "uc-video");
-  assert.equal(direct.authHeader, "x-api-key");
-  assert.ok(direct.models.some((m) => m.id === "seedance-2.0"));
-  assert.equal(
-    direct.models.some((m) => m.id === "wan-2.2-spicy"),
-    false
-  );
+  assert.equal(VIDEO_PROVIDERS["uc-direct"], undefined);
 });
 
 // --- Pure helpers --------------------------------------------------------
@@ -153,6 +147,7 @@ function personaFetch(opts: {
   ) => void;
   onSigned?: (body: Record<string, unknown>) => void;
   onPut?: (url: string, init: RequestInit) => void;
+  onResultPoll?: (init: RequestInit) => Response | undefined;
 }): typeof fetch {
   let pollsSeen = 0;
   return (async (url: string, init: RequestInit = {}) => {
@@ -215,6 +210,9 @@ function personaFetch(opts: {
     }
     // result URL HEAD polling
     if (url === opts.resultUrl) {
+      assert.equal(init.redirect, "error");
+      const overridden = opts.onResultPoll?.(init);
+      if (overridden) return overridden;
       pollsSeen += 1;
       const ready = pollsSeen > opts.pendingPolls;
       return {
@@ -264,7 +262,8 @@ test("handleUcVideoGeneration (persona i2v) uploads then posts image_to_video", 
     onSigned: (b) => {
       signedBody = b;
     },
-    onPut: () => {
+    onPut: (_url, init) => {
+      assert.equal(init.redirect, "error");
       putSeen = true;
     },
     onGenerate: (u, b) => {
@@ -294,6 +293,71 @@ test("handleUcVideoGeneration (persona i2v) uploads then posts image_to_video", 
   assert.equal(putSeen, true);
   assert.equal(genUrl, UC_PERSONA_IMAGE_TO_VIDEO_URL);
   assert.equal(genBody.media_blob_name, "blob_xyz");
+});
+
+test("persona video rejects malformed data URLs and bare base64 before signed upload", async () => {
+  for (const image of ["data:image/png;base64,%%%", "%%%"] as const) {
+    let signedCalls = 0;
+    let putCalls = 0;
+    const fetchImpl = (async (url: string) => {
+      if (url.includes("clerk.uncensored.com")) {
+        return new Response(
+          JSON.stringify({ jwt: fakeJwt("b03dd963-d0c1-4193-99c9-f5a9d0c66b7f", FUTURE_EXP) }),
+          { status: 200 }
+        );
+      }
+      if (url === UC_PERSONA_SIGNED_URL) signedCalls += 1;
+      if (url.startsWith("https://d.moveinwater.com/up/")) putCalls += 1;
+      throw new Error(`unexpected fetch to ${url}`);
+    }) as unknown as typeof fetch;
+
+    const result = (await handleUcVideoGeneration({
+      model: "uc-persona/wan-2.2-spicy",
+      provider: "uc-persona",
+      body: { prompt: "animate", image },
+      credentials: PERSONA_CRED,
+      fetchImpl,
+      sleepImpl: noSleep,
+    })) as { success: boolean; status?: number };
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 400);
+    assert.equal(signedCalls, 0);
+    assert.equal(putCalls, 0);
+  }
+});
+
+test("persona video rejects oversized data URLs and bare base64 before signed upload", async () => {
+  const oversized = Buffer.alloc(MAX_CURSOR_IMAGE_BYTES + 1).toString("base64");
+  for (const image of [`data:image/png;base64,${oversized}`, oversized]) {
+    let signedCalls = 0;
+    let putCalls = 0;
+    const fetchImpl = (async (url: string) => {
+      if (url.includes("clerk.uncensored.com")) {
+        return new Response(
+          JSON.stringify({ jwt: fakeJwt("b03dd963-d0c1-4193-99c9-f5a9d0c66b7f", FUTURE_EXP) }),
+          { status: 200 }
+        );
+      }
+      if (url === UC_PERSONA_SIGNED_URL) signedCalls += 1;
+      if (url.startsWith("https://d.moveinwater.com/up/")) putCalls += 1;
+      throw new Error(`unexpected fetch to ${url}`);
+    }) as unknown as typeof fetch;
+
+    const result = (await handleUcVideoGeneration({
+      model: "uc-persona/wan-2.2-spicy",
+      provider: "uc-persona",
+      body: { prompt: "animate", image },
+      credentials: PERSONA_CRED,
+      fetchImpl,
+      sleepImpl: noSleep,
+    })) as { success: boolean; status?: number };
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 400);
+    assert.equal(signedCalls, 0);
+    assert.equal(putCalls, 0);
+  }
 });
 
 test("handleUcVideoGeneration (persona) 401s (retryable) when credential missing", async () => {
@@ -462,6 +526,92 @@ test("handleUcVideoGeneration (direct) polls status_url until complete", async (
   assert.equal(statusPolls, 2);
 });
 
+test("persona video result polling rejects redirects without fetching the second host", async () => {
+  const resultUrl = "https://videogen.moveinwater.com/redirect";
+  let secondHostReached = false;
+  const baseFetch = personaFetch({
+    pendingPolls: 0,
+    resultUrl,
+    jwt: fakeJwt("b03dd963-d0c1-4193-99c9-f5a9d0c66b7f", FUTURE_EXP),
+    onResultPoll: (init) => {
+      if (init.redirect !== "error") {
+        secondHostReached = true;
+        return new Response(null, { status: 200 });
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://second-host.example/video.mp4" },
+      });
+    },
+  });
+  const fetchImpl = (async (url: string, init?: RequestInit) => {
+    if (url === "https://second-host.example/video.mp4") {
+      secondHostReached = true;
+      return new Response(null, { status: 200 });
+    }
+    return baseFetch(url, init);
+  }) as typeof fetch;
+
+  const result = await handleUcVideoGeneration({
+    model: "uc-persona/wan-2.2-spicy",
+    provider: "uc-persona",
+    body: { prompt: "x", image: "data:image/png;base64,iVBORw0KGgo=" },
+    credentials: PERSONA_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  });
+  assert.equal(result.success, false);
+  assert.equal((result as { status?: number }).status, 302);
+  assert.equal(secondHostReached, false);
+});
+
+test("direct status polling rejects redirects without fetching the second host", async () => {
+  let secondHostReached = false;
+  const statusUrl = "https://api.uncensored.com/api/v1/videos/status/redirect";
+  const fetchImpl = (async (url: string, init: RequestInit = {}) => {
+    if (url === UC_DIRECT_VIDEO_URL) {
+      return new Response(
+        JSON.stringify({ status: "pending", status_url: statusUrl, id: "job_1" }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }
+      );
+    }
+    if (url === statusUrl) {
+      if (init.redirect !== "error") {
+        secondHostReached = true;
+        return new Response(JSON.stringify({ status: "completed", url: "https://cdn/x.mp4" }), {
+          status: 200,
+        });
+      }
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://second-host.example/status" },
+      });
+    }
+    if (url === "https://second-host.example/status") {
+      secondHostReached = true;
+      return new Response(JSON.stringify({ status: "completed", url: "https://cdn/x.mp4" }), {
+        status: 200,
+      });
+    }
+    throw new Error(`unexpected fetch to ${url}`);
+  }) as unknown as typeof fetch;
+
+  const result = await handleUcVideoGeneration({
+    model: "uc-direct/t2v-standard",
+    provider: "uc-direct",
+    body: { prompt: "x" },
+    credentials: DIRECT_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  });
+  assert.equal(result.success, false);
+  assert.equal((result as { status?: number }).status, 302);
+  assert.equal(secondHostReached, false);
+});
+
 test("handleUcVideoGeneration (direct) returns a job id when callback-only", async () => {
   const fetchImpl = (async () =>
     ({
@@ -524,6 +674,118 @@ test("handleUcVideoGeneration (direct) 429 retryable, 402/403 not", async () => 
   assert.equal(funds.success, false);
   assert.equal(funds.status, 402);
   assert.equal(funds.retryable, undefined);
+});
+
+test("handleVideoGeneration forwards an already-aborted signal without network work", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let fetches = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    fetches += 1;
+    throw new Error("network must not run");
+  }) as typeof fetch;
+  try {
+    const result = (await handleVideoGeneration({
+      body: {
+        model: "uc-persona/wan-2.2-spicy",
+        prompt: "do not generate",
+        image: "data:image/png;base64,iVBORw0KGgo=",
+      },
+      credentials: PERSONA_CRED,
+      signal: controller.signal,
+    })) as { success: boolean; status?: number };
+    assert.equal(result.success, false);
+    assert.equal(result.status, 499);
+    assert.equal(fetches, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("persona abort after upload prevents generation, polling, and sleep", async () => {
+  const controller = new AbortController();
+  const urls: string[] = [];
+  let sleeps = 0;
+  const jwt = fakeJwt("uid", FUTURE_EXP);
+  const fetchImpl = (async (url: string) => {
+    urls.push(url);
+    if (url.includes("clerk.uncensored.com")) {
+      return new Response(JSON.stringify({ object: "token", jwt }), { status: 200 });
+    }
+    if (url === UC_PERSONA_SIGNED_URL) {
+      return new Response(
+        JSON.stringify({
+          signed_url: "https://d.moveinwater.com/up/tok",
+          blob_name: "blob_xyz",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    if (url === "https://d.moveinwater.com/up/tok") {
+      controller.abort();
+      return new Response(null, { status: 200 });
+    }
+    throw new Error(`unexpected fetch to ${url}`);
+  }) as unknown as typeof fetch;
+
+  const result = (await handleUcVideoGeneration({
+    model: "uc-persona/wan-2.2-spicy",
+    provider: "uc-persona",
+    body: { prompt: "x", image: "data:image/png;base64,iVBORw0KGgo=" },
+    credentials: PERSONA_CRED,
+    signal: controller.signal,
+    fetchImpl,
+    sleepImpl: async () => {
+      sleeps += 1;
+    },
+  })) as { success: boolean; status?: number };
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 499);
+  assert.equal(urls.includes(UC_PERSONA_IMAGE_TO_VIDEO_URL), false);
+  assert.equal(sleeps, 0);
+});
+
+test("direct abort during the first status poll prevents another poll or sleep", async () => {
+  const controller = new AbortController();
+  let statusPolls = 0;
+  let sleeps = 0;
+  const fetchImpl = (async (url: string) => {
+    if (url === UC_DIRECT_VIDEO_URL) {
+      return new Response(
+        JSON.stringify({
+          status: "pending",
+          status_url: "https://api.uncensored.com/api/v1/videos/status/abort",
+          id: "job_abort",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    }
+    statusPolls += 1;
+    controller.abort();
+    return new Response(JSON.stringify({ status: "processing" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+
+  const result = (await handleUcVideoGeneration({
+    model: "uc-direct/t2v-standard",
+    provider: "uc-direct",
+    body: { prompt: "x", timeout_ms: 60_000, poll_interval_ms: 1 },
+    credentials: DIRECT_CRED,
+    signal: controller.signal,
+    fetchImpl,
+    sleepImpl: async () => {
+      sleeps += 1;
+    },
+  })) as { success: boolean; status?: number };
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 499);
+  assert.equal(statusPolls, 1);
+  assert.equal(sleeps, 0);
 });
 
 test("handleUcVideoGeneration rejects an empty prompt with 400 (both surfaces)", async () => {

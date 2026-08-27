@@ -1,11 +1,12 @@
 // UC (uncensored.com) video-generation handler.
-// Family: uc-video | Providers: uc-persona, uc-direct
+// Family: uc-video | Public provider: uc-persona
 //
-// UC exposes video generation on two separately registered surfaces. This
-// shared handler selects by provider id; key-prefix detection remains only for
-// backward compatibility with callers that previously routed persona through `uc`.
+// The public media registry exposes the persona surface only. This shared
+// handler retains the Direct path for legacy/internal callers; key-prefix
+// detection remains for compatibility with callers that routed persona through `uc`.
 //
-//   (A) PERSONA WEB path (subscription-backed, daily account limits, Clerk-authenticated). No API key: the
+//   (A) PERSONA WEB path (plan-backed and Clerk-authenticated). Free is metered;
+//       Premium and Premium+ are virtually unlimited. No API key: the
 //       durable Clerk `__client` cookie lives in the connection's
 //       providerSpecificData, from which we mint a short-lived `__session` JWT
 //       (mintUcSessionToken). The capture-proven persona path is image-to-video,
@@ -24,7 +25,7 @@
 //       eta_seconds / timeout_seconds. We then POLL that url with HEAD until
 //       HTTP 200 (403 = not ready), bounded by timeout_seconds.
 //
-//   (B) uc-direct REST path (metered, OpenAI-compatible). A `uai_sk_live_...`
+//   (B) Legacy/internal uc-direct REST path (metered, OpenAI-compatible). A `uai_sk_live_...`
 //       X-api-key credential is present, so we call the official REST endpoint:
 //         POST https://api.uncensored.com/api/v1/videos/generations
 //           X-api-key: <key>
@@ -59,6 +60,35 @@ const UC_POLL_INTERVAL_MS_DEFAULT = 3_000;
 
 type SleepImpl = (ms: number) => Promise<void>;
 const realSleep: SleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const abortedVideoResult = (): UcVideoResult => ({
+  success: false,
+  status: 499,
+  error: "Request aborted",
+});
+
+async function waitForPoll(
+  ms: number,
+  sleepImpl: SleepImpl,
+  signal: AbortSignal | undefined
+): Promise<boolean> {
+  if (signal?.aborted) return false;
+  if (!signal) {
+    await sleepImpl(ms);
+    return true;
+  }
+
+  let abortHandler: (() => void) | undefined;
+  const aborted = new Promise<false>((resolve) => {
+    abortHandler = () => resolve(false);
+    signal.addEventListener("abort", abortHandler, { once: true });
+  });
+  try {
+    return await Promise.race([sleepImpl(ms).then(() => true as const), aborted]);
+  } finally {
+    if (abortHandler) signal.removeEventListener("abort", abortHandler);
+  }
+}
 
 interface UcVideoLog {
   info?: (...args: unknown[]) => void;
@@ -262,31 +292,15 @@ function isDirectFailed(status: string | undefined): boolean {
 async function resolveImageBytes(
   ref: string,
   _fetchImpl: typeof fetch,
-  _signal: AbortSignal | undefined
+  signal: AbortSignal | undefined
 ): Promise<Uint8Array | null> {
-  // data URL: data:image/png;base64,<payload>
-  const dataMatch = /^data:[^;]*;base64,(.*)$/.exec(ref);
-  if (dataMatch) {
-    try {
-      return new Uint8Array(Buffer.from(dataMatch[1], "base64"));
-    } catch {
-      return null;
-    }
-  }
-  // http(s) URL: fetch the bytes.
-  if (/^https?:\/\//i.test(ref)) {
-    try {
-      // Use the canonical public-URL resolver: it validates redirects, DNS, and
-      // private/metadata ranges before any server-side fetch.
-      const images = await resolveCursorImages([ref], { prepareForWire: false });
-      return images[0]?.data ? new Uint8Array(images[0].data) : null;
-    } catch {
-      return null;
-    }
-  }
-  // Bare base64 payload.
+  signal?.throwIfAborted();
+  const imageRef = /^(?:data:|https?:\/\/)/i.test(ref) ? ref : `data:image/png;base64,${ref}`;
   try {
-    return new Uint8Array(Buffer.from(ref, "base64"));
+    // This canonical resolver strictly decodes and bounds inline images, and
+    // applies redirect, DNS, and private-address checks to remote references.
+    const images = await resolveCursorImages([imageRef], { prepareForWire: false, signal });
+    return images[0]?.data ? new Uint8Array(images[0].data) : null;
   } catch {
     return null;
   }
@@ -308,16 +322,25 @@ async function pollUcVideoUrl(
   let attempt = 0;
   // Poll at least once even when timeoutMs is 0.
   do {
+    if (signal?.aborted) {
+      return { state: "failed", status: 499, error: "Request aborted" };
+    }
     attempt += 1;
     let resp: Response;
     try {
-      resp = await fetchImpl(url, { method: "HEAD", signal });
+      resp = await fetchImpl(url, { method: "HEAD", redirect: "error", signal });
     } catch (err) {
+      if (signal?.aborted) {
+        return { state: "failed", status: 499, error: "Request aborted" };
+      }
       return {
         state: "failed",
         status: 502,
         error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
       };
+    }
+    if (signal?.aborted) {
+      return { state: "failed", status: 499, error: "Request aborted" };
     }
     if (resp.ok) return { state: "ready" };
     // 403/404 = not ready yet; anything else is a hard failure.
@@ -330,7 +353,9 @@ async function pollUcVideoUrl(
     }
     log?.info?.("VIDEO", `uc-video result pending, poll #${attempt} in ${pollIntervalMs}ms`);
     if (Date.now() + pollIntervalMs >= deadline) break;
-    await sleepImpl(pollIntervalMs);
+    if (!(await waitForPoll(pollIntervalMs, sleepImpl, signal))) {
+      return { state: "failed", status: 499, error: "Request aborted" };
+    }
   } while (Date.now() < deadline);
 
   return {
@@ -403,6 +428,7 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
   if (inputImage) {
     // Image-to-video: (1) signed URL, (2) PUT bytes, (3) generate.
     const bytes = await resolveImageBytes(inputImage, fetchImpl, signal);
+    if (signal?.aborted) return abortedVideoResult();
     if (!bytes) {
       return {
         success: false,
@@ -456,6 +482,7 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
         error: "UC signed-url response missing signed_url or blob_name",
       };
     }
+    if (signal?.aborted) return abortedVideoResult();
     let signedUrl: string;
     let blobName: string;
     try {
@@ -477,6 +504,7 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     try {
       putResp = await fetchImpl(signedUrl, {
         method: "PUT",
+        redirect: "error",
         headers: { "Content-Type": "image/png" },
         body: putBody,
         signal,
@@ -493,6 +521,7 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
         error: `UC input-image upload failed (HTTP ${putResp.status})`,
       };
     }
+    if (signal?.aborted) return abortedVideoResult();
 
     genUrl = UC_PERSONA_IMAGE_TO_VIDEO_URL;
     requestBody = buildUcPersonaVideoBody(prompt, canonicalModel, body, blobName);
@@ -502,8 +531,7 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     return {
       success: false,
       status: 400,
-      error:
-        "UC persona video requires an input image; use uc-direct for documented text-to-video models",
+      error: "UC persona video requires an input image; text-to-video is not capture-verified",
     };
   }
 
@@ -645,9 +673,12 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
   } catch (err) {
     const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
     log?.error?.("VIDEO", `${provider} uc-video (direct) transport error: ${errorText}`);
-    return { success: false, status: 502, error: errorText };
+    return signal?.aborted
+      ? abortedVideoResult()
+      : { success: false, status: 502, error: errorText };
   }
 
+  if (signal?.aborted) return abortedVideoResult();
   if (!resp.ok) {
     const detail = (await resp.text().catch(() => "")).slice(0, 500);
     log?.error?.("VIDEO", `${provider} uc-video (direct) error ${resp.status}: ${detail}`);
@@ -726,11 +757,13 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
   do {
+    if (signal?.aborted) return abortedVideoResult();
     attempt += 1;
     let statusResp: Response;
     try {
       statusResp = await fetchImpl(statusUrl, {
         method: "GET",
+        redirect: "error",
         headers: { "X-api-key": apiKey },
         signal,
       });
@@ -741,6 +774,7 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
         error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
       };
     }
+    if (signal?.aborted) return abortedVideoResult();
     if (!statusResp.ok) {
       return {
         success: false,
@@ -772,7 +806,7 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
     }
     log?.info?.("VIDEO", `uc-video (direct) job pending, poll #${attempt} in ${pollIntervalMs}ms`);
     if (Date.now() + pollIntervalMs >= deadline) break;
-    await sleepImpl(pollIntervalMs);
+    if (!(await waitForPoll(pollIntervalMs, sleepImpl, signal))) return abortedVideoResult();
   } while (Date.now() < deadline);
 
   return {
@@ -823,6 +857,7 @@ export async function handleUcVideoGeneration({
   if (!prompt) {
     return { success: false, status: 400, error: "Prompt is required for UC video generation" };
   }
+  if (signal?.aborted) return abortedVideoResult();
 
   if (provider === "uc-direct" || isUcDirectVideoCredential(credentials)) {
     return handleUcDirectVideo({

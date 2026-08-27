@@ -32,7 +32,7 @@ interface UcModelSpec {
   supportsVision?: boolean;
 }
 
-/** The 19 offered persona chat models (daily account limits apply). */
+/** The 19 offered persona chat models. Limits depend on the account plan. */
 export const UC_MODELS: UcModelSpec[] = [
   // Anthropic (persona: 4.8 is uncensored-only, so we expose the -uncensored id)
   {

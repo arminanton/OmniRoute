@@ -236,18 +236,25 @@ async function assertHostnameResolvesPublic(hostname: string): Promise<void> {
   assertResolvedAddressesPublic(resolved.map((r) => r.address));
 }
 
-async function fetchImageBytes(url: string): Promise<{ data: Buffer; mimeType: string }> {
+async function fetchImageBytes(
+  url: string,
+  signal?: AbortSignal
+): Promise<{ data: Buffer; mimeType: string }> {
   // Follow redirects MANUALLY and re-validate every hop through the SSRF guard.
   // `fetch` follows redirects by default, so validating only the initial URL
   // would let a public host 30x-redirect to a private/link-local address and
   // bypass the guard. Each Location is resolved + re-checked before we fetch it.
   let currentUrl = url;
   for (let hop = 0; hop <= MAX_IMAGE_REDIRECTS; hop++) {
+    signal?.throwIfAborted();
     const parsed = validatePublicImageUrl(currentUrl);
     // Resolve + IP-check the host (DNS-rebinding defence) before connecting.
     await assertHostnameResolvesPublic(parsed.hostname);
+    signal?.throwIfAborted();
 
     const controller = new AbortController();
+    const abortFromCaller = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", abortFromCaller, { once: true });
     const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
     let response: Response;
     try {
@@ -258,6 +265,7 @@ async function fetchImageBytes(url: string): Promise<{ data: Buffer; mimeType: s
       });
     } catch {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abortFromCaller);
       throw new CursorImageError("Could not fetch the image URL.");
     }
     try {
@@ -294,6 +302,7 @@ async function fetchImageBytes(url: string): Promise<{ data: Buffer; mimeType: s
       return { data, mimeType };
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abortFromCaller);
     }
   }
   throw new CursorImageError("Image URL has too many redirects.");
@@ -657,7 +666,7 @@ export async function prepareCursorImageForWire(input: {
  */
 export async function resolveCursorImages(
   imageUrls: string[],
-  options?: { detail?: string; prepareForWire?: boolean }
+  options?: { detail?: string; prepareForWire?: boolean; signal?: AbortSignal }
 ): Promise<EncodedImage[]> {
   // Cursor's SelectedImage wire format needs the JPEG soft-cap prep (#9840).
   // Browser-upload callers (zai-web, conol-web) upload the ORIGINAL bytes to
@@ -676,7 +685,7 @@ export async function resolveCursorImages(
     // pass the original (un-lowercased) url so the base64 payload is preserved.
     const { data, mimeType } = url.toLowerCase().startsWith("data:")
       ? decodeDataUrl(url)
-      : await fetchImageBytes(url);
+      : await fetchImageBytes(url, options?.signal);
     if (!data.length) {
       throw new CursorImageError("Image input is empty.");
     }
