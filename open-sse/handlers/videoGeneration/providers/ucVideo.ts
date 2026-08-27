@@ -1,28 +1,15 @@
 // UC (uncensored.com) video-generation handler.
-// Family: uc-video | Provider: uc
+// Family: uc-video | Providers: uc-persona, uc-direct
 //
-// UC exposes video generation on TWO surfaces, and this handler serves both,
-// picking by which credential is present (mirrors the sibling image handler,
-// imageGeneration/providers/ucImage.ts):
+// UC exposes video generation on two separately registered surfaces. This
+// shared handler selects by provider id; key-prefix detection remains only for
+// backward compatibility with callers that previously routed persona through `uc`.
 //
-//   (A) PERSONA WEB path (un-metered, Clerk-authenticated). No API key: the
+//   (A) PERSONA WEB path (subscription-backed, daily account limits, Clerk-authenticated). No API key: the
 //       durable Clerk `__client` cookie lives in the connection's
 //       providerSpecificData, from which we mint a short-lived `__session` JWT
-//       (mintUcSessionToken). Two sub-cases keyed on whether the request carries
-//       an input image:
-//
-//         • text-to-video (no input image):
-//             POST https://internal.chatuncensored.ai/text_to_video
-//               {prompt, model, num_frames, frames_per_second, num_inference_steps,
-//                guide_scale, shift, aspect_ratio, pro_mode, turbo, resolution,
-//                sora_resolution, seconds, video_to_video_duration, vdiscount}
-//           NOTE: `/text_to_video` is the documented sibling of `/image_to_video`
-//           but was NOT directly HAR-captured (only `/image_to_video` was). The
-//           wire shape here mirrors `/image_to_video` minus the blob fields; if a
-//           live capture later shows a different path/body, adjust here. See
-//           UC-MEDIA-GENERATION.md lines 44-97.
-//
-//         • image-to-video (has an input image): a 3-step upload+generate flow:
+//       (mintUcSessionToken). The capture-proven persona path is image-to-video,
+//       with a 3-step upload+generate flow:
 //             (1) POST https://internal-6.pubyar.com/generate-signed-url
 //                   {content_type:"image/png", user_identifier:<uid>}
 //                 -> {signed_url:"https://d.moveinwater.com/up/<token>", blob_name}
@@ -46,22 +33,21 @@
 //       status_url). We poll status_url until the job completes and returns a
 //       video url, or return the job id when the backend is callback-only.
 //
-// Residential egress / TLS (if any) is applied transparently at the infra layer;
-// nothing egress-specific lives here. The handler is pure and testable: fetch and
-// sleep are injectable so unit tests drive the upload -> generate -> poll sequence
-// with no live network.
+// Network policy is supplied by shared transport. This handler contains no
+// provider-specific routing or TLS requirement. Fetch and sleep are injectable,
+// so unit tests drive the upload, generate, and poll sequence with no live network.
 
 import { resolveUcCredential } from "../../../executors/uc/credentials.ts";
 import { mintUcSessionToken } from "../../../executors/uc/clerkAuth.ts";
 import { UC_ORIGIN } from "../../../executors/uc/constants.ts";
+import { validateUcBlobName, validateUcRemoteUrl } from "../../../executors/uc/urlSafety.ts";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
+import { resolveCursorImages } from "../../../utils/cursorImages.ts";
 
 /** Persona signed-upload-URL endpoint (for the image-to-video input image). */
 export const UC_PERSONA_SIGNED_URL = "https://internal-6.pubyar.com/generate-signed-url";
 /** Persona image-to-video generation endpoint. */
 export const UC_PERSONA_IMAGE_TO_VIDEO_URL = "https://internal.chatuncensored.ai/image_to_video";
-/** Persona text-to-video generation endpoint (documented sibling; see file header). */
-export const UC_PERSONA_TEXT_TO_VIDEO_URL = "https://internal.chatuncensored.ai/text_to_video";
 /** uc-direct metered REST endpoint (OpenAI-compatible, async). */
 export const UC_DIRECT_VIDEO_URL = "https://api.uncensored.com/api/v1/videos/generations";
 
@@ -143,13 +129,14 @@ type UcVideoResult =
   | { success: false; status: number; error: string; retryable?: boolean };
 
 /**
- * Strip a routing prefix (`uc/` or `uc-direct/`) and return the canonical UC
+ * Strip a routing prefix (`uc-persona/`, legacy `uc/`, or `uc-direct/`) and return the canonical UC
  * video model id (the web picker shortname / the REST `model`). Empty input
  * falls back to the persona default (`wan-2.2-spicy`).
  */
 export function resolveUcVideoModel(model: unknown): string {
   let m = typeof model === "string" ? model.trim() : "";
   if (m.startsWith("uc-direct/")) m = m.slice("uc-direct/".length);
+  else if (m.startsWith("uc-persona/")) m = m.slice("uc-persona/".length);
   else if (m.startsWith("uc/")) m = m.slice("uc/".length);
   return m || UC_DEFAULT_VIDEO_MODEL;
 }
@@ -274,8 +261,8 @@ function isDirectFailed(status: string | undefined): boolean {
 /** Decode an input image reference into raw bytes for the signed-URL PUT. */
 async function resolveImageBytes(
   ref: string,
-  fetchImpl: typeof fetch,
-  signal: AbortSignal | undefined
+  _fetchImpl: typeof fetch,
+  _signal: AbortSignal | undefined
 ): Promise<Uint8Array | null> {
   // data URL: data:image/png;base64,<payload>
   const dataMatch = /^data:[^;]*;base64,(.*)$/.exec(ref);
@@ -289,10 +276,10 @@ async function resolveImageBytes(
   // http(s) URL: fetch the bytes.
   if (/^https?:\/\//i.test(ref)) {
     try {
-      const resp = await fetchImpl(ref, { method: "GET", signal });
-      if (!resp.ok) return null;
-      const buf = await resp.arrayBuffer();
-      return new Uint8Array(buf);
+      // Use the canonical public-URL resolver: it validates redirects, DNS, and
+      // private/metadata ranges before any server-side fetch.
+      const images = await resolveCursorImages([ref], { prepareForWire: false });
+      return images[0]?.data ? new Uint8Array(images[0].data) : null;
     } catch {
       return null;
     }
@@ -460,13 +447,25 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
       string,
       unknown
     >;
-    const signedUrl = typeof signedRec.signed_url === "string" ? signedRec.signed_url : "";
-    const blobName = typeof signedRec.blob_name === "string" ? signedRec.blob_name : "";
-    if (!signedUrl || !blobName) {
+    const rawSignedUrl = typeof signedRec.signed_url === "string" ? signedRec.signed_url : "";
+    const rawBlobName = typeof signedRec.blob_name === "string" ? signedRec.blob_name : "";
+    if (!rawSignedUrl || !rawBlobName) {
       return {
         success: false,
         status: 502,
         error: "UC signed-url response missing signed_url or blob_name",
+      };
+    }
+    let signedUrl: string;
+    let blobName: string;
+    try {
+      signedUrl = validateUcRemoteUrl(rawSignedUrl, "upload").toString();
+      blobName = validateUcBlobName(rawBlobName);
+    } catch (err) {
+      return {
+        success: false,
+        status: 502,
+        error: sanitizeErrorMessage(err instanceof Error ? err.message : err),
       };
     }
 
@@ -498,9 +497,14 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     genUrl = UC_PERSONA_IMAGE_TO_VIDEO_URL;
     requestBody = buildUcPersonaVideoBody(prompt, canonicalModel, body, blobName);
   } else {
-    // Text-to-video: single generate POST (no media blob).
-    genUrl = UC_PERSONA_TEXT_TO_VIDEO_URL;
-    requestBody = buildUcPersonaVideoBody(prompt, canonicalModel, body, null);
+    // Only image-to-video was captured on the persona surface. Do not call the
+    // guessed /text_to_video sibling as production behavior.
+    return {
+      success: false,
+      status: 400,
+      error:
+        "UC persona video requires an input image; use uc-direct for documented text-to-video models",
+    };
   }
 
   let genResp: Response;
@@ -537,12 +541,22 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     return { success: false, status: 502, error: "UC persona returned a non-JSON video response" };
   }
   const genRec = (genJson && typeof genJson === "object" ? genJson : {}) as Record<string, unknown>;
-  const resultUrl = typeof genRec.url === "string" ? genRec.url : "";
-  if (!resultUrl) {
+  const rawResultUrl = typeof genRec.url === "string" ? genRec.url : "";
+  if (!rawResultUrl) {
     return {
       success: false,
       status: 502,
       error: "UC persona video response carried no result url",
+    };
+  }
+  let resultUrl: string;
+  try {
+    resultUrl = validateUcRemoteUrl(rawResultUrl, "video-result").toString();
+  } catch (err) {
+    return {
+      success: false,
+      status: 502,
+      error: sanitizeErrorMessage(err instanceof Error ? err.message : err),
     };
   }
   const requestId = typeof genRec.request_id === "string" ? genRec.request_id : undefined;
@@ -694,7 +708,16 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
   }
 
   // Poll status_url until complete or timeout.
-  const statusUrl = extracted.statusUrl;
+  let statusUrl: string;
+  try {
+    statusUrl = validateUcRemoteUrl(extracted.statusUrl, "direct-status").toString();
+  } catch (err) {
+    return {
+      success: false,
+      status: 502,
+      error: sanitizeErrorMessage(err instanceof Error ? err.message : err),
+    };
+  }
   const timeoutMs = normalizePositiveNumber(body.timeout_ms, UC_POLL_TIMEOUT_MS_DEFAULT);
   const pollIntervalMs = normalizePositiveNumber(
     body.poll_interval_ms,
@@ -777,13 +800,12 @@ function buildDirectSuccess(url: string, requestId?: string, status?: string): U
 }
 
 /**
- * UC video generation entrypoint. Picks the surface by credential:
- * a `uai_...` X-api-key routes to the metered REST path; otherwise the persona
- * web path (mint -> upload/generate -> poll) is used.
+ * UC video generation entrypoint. The provider id owns the surface; a `uai_...`
+ * key remains a compatibility fallback for older callers that used `uc` for both.
  */
 export async function handleUcVideoGeneration({
   model,
-  provider = "uc",
+  provider = "uc-persona",
   body,
   credentials,
   prompt: promptArg,
@@ -802,7 +824,7 @@ export async function handleUcVideoGeneration({
     return { success: false, status: 400, error: "Prompt is required for UC video generation" };
   }
 
-  if (isUcDirectVideoCredential(credentials)) {
+  if (provider === "uc-direct" || isUcDirectVideoCredential(credentials)) {
     return handleUcDirectVideo({
       model,
       provider,

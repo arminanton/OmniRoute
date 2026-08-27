@@ -160,10 +160,8 @@ export function buildPersonaFrame(opts: {
   /** Uploaded input-media blob references (images/docs) for the current turn. */
   media?: Array<{ blobName: string; contentType: string }>;
 }): Record<string, unknown> {
-  // UC persona carries ONE media blob per frame (the captured single-file chat
-  // case); when several were uploaded we attach the first and list the rest under
-  // `media_blob_names` for forward-compat (the multi-file field is untested but
-  // harmless if the server ignores it). See UC-FILE-UPLOAD.md.
+  // UC persona carries ONE media blob per frame. The executor rejects additional
+  // attachments before this point because no multi-file frame was captured.
   const media = opts.media ?? [];
   const primary = media[0];
   return {
@@ -190,9 +188,6 @@ export function buildPersonaFrame(opts: {
     no_media_in_chat: true,
     media_blob_name: primary?.blobName ?? "",
     media_content_type: primary?.contentType ?? "",
-    ...(media.length > 1
-      ? { media_blob_names: media.map((m) => m.blobName), _uc_media_count: media.length }
-      : {}),
     adapty_profile_id: null,
   };
 }

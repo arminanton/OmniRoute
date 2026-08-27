@@ -66,6 +66,8 @@ export const PROVIDER_CONNECTION_FAMILY_ALIASES: Readonly<Record<string, readonl
   // alias so old URLs and pre-migration connection rows keep working.
   magnific: ["freepik"],
   freepik: ["magnific"],
+  "uc-persona": ["uc"],
+  uc: ["uc-persona"],
 };
 
 export function getProviderConnectionFamilyIds(providerId: unknown): readonly string[] {
@@ -248,9 +250,11 @@ const EXPLICIT_OPTIONAL_APIKEY_PROVIDER_IDS = new Set([
   "gitlawb",
   "gitlawb-gmi",
   "naga-ac",
-  // UC (uncensored.com) persona: un-metered subscription chat with NO API key —
+  // UC Persona / Emotional: subscription chat with daily account limits and NO API key —
   // auth is a durable Clerk credential stored in providerSpecificData, from which
   // the executor mints a short-lived session token per connect.
+  "uc-persona",
+  // Legacy connection/provider id retained for pre-rename rows.
   "uc",
 ]);
 

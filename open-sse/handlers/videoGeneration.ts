@@ -303,9 +303,8 @@ export async function handleVideoGeneration({ body, credentials, log, resolvedPr
     return handleXaiVideoGeneration({ model, provider, providerConfig, body, credentials, log });
   }
   if (providerConfig.format === "uc-video") {
-    // UC (uncensored.com): one handler serves both surfaces, picking by
-    // credential — persona web (Clerk JWT, un-metered, upload/generate + HEAD
-    // poll) or uc-direct REST (X-api-key, metered, async submit + status poll).
+    // UC (uncensored.com): separate registry entries share one handler, selected
+    // by provider id: persona web (Clerk JWT) or uc-direct REST (X-api-key).
     return handleUcVideoGeneration({ model, provider, body, credentials, log });
   }
   if (providerConfig.format === "adobe-firefly-video") {

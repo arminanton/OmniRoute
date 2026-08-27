@@ -155,6 +155,121 @@ async function loginAdobeFirefly(
   }
 }
 
+// --- UC: browserless Clerk email-code login ---------------------------------
+
+async function loginUcEmail(
+  connectionId: string,
+  connection: Record<string, unknown>,
+  body: { step?: unknown; email?: unknown; code?: unknown }
+): Promise<NextResponse> {
+  const { requestUcEmailCode, verifyUcEmailCode } =
+    await import("@omniroute/open-sse/executors/uc/emailLogin.ts");
+  const psd = (connection.providerSpecificData ?? {}) as Record<string, unknown>;
+  const step = String(body.step || "request");
+
+  if (step === "request") {
+    const email = String(body.email || "").trim();
+    if (!email) {
+      return NextResponse.json(
+        { success: false, error: "An email address is required." },
+        { status: 400 }
+      );
+    }
+    const result = await requestUcEmailCode({ email });
+    if (!result.ok || !result.sia || !result.emailAddressId) {
+      return NextResponse.json(
+        { success: false, error: result.error || "Failed to send the sign-in code." },
+        { status: result.status && result.status >= 400 ? result.status : 400 }
+      );
+    }
+    try {
+      await updateProviderConnection(connectionId, {
+        providerSpecificData: {
+          ...psd,
+          ucLoginEmail: email,
+          ucLoginSia: result.sia,
+          ucLoginEmailAddressId: result.emailAddressId,
+          ucLoginCookieHeader: result.cookieHeader,
+        },
+      });
+    } catch (err) {
+      const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
+      return NextResponse.json(
+        { success: false, error: `Code sent but failed to persist login state: ${msg}` },
+        { status: 500 }
+      );
+    }
+    return NextResponse.json({
+      success: true,
+      step: "request",
+      email,
+      message: `A sign-in code was emailed to ${email}. Enter it to finish connecting.`,
+    });
+  }
+
+  if (step === "verify") {
+    const code = String(body.code || "").trim();
+    const sia = String(psd.ucLoginSia || "");
+    if (!code || !sia) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: !sia ? "No pending sign-in. Request a code first." : "The code is required.",
+        },
+        { status: 400 }
+      );
+    }
+    const result = await verifyUcEmailCode({
+      sia,
+      code,
+      emailAddressId: String(psd.ucLoginEmailAddressId || "") || undefined,
+      cookieHeader: String(psd.ucLoginCookieHeader || "") || undefined,
+    });
+    if (!result.ok || !result.credential) {
+      return NextResponse.json(
+        { success: false, error: result.error || "Code verification failed." },
+        { status: result.status && result.status >= 400 ? result.status : 400 }
+      );
+    }
+
+    const cred = result.credential;
+    const nextPsd: Record<string, unknown> = {
+      ...psd,
+      ucClientCookie: cred.clientCookie,
+      ucSid: cred.sid,
+      ucUid: cred.uid,
+      ucCookies: cred.cookies,
+      signedInAt: Date.now(),
+    };
+    delete nextPsd.ucLoginSia;
+    delete nextPsd.ucLoginEmailAddressId;
+    delete nextPsd.ucLoginCookieHeader;
+    try {
+      // UC has no API key. The Clerk credential belongs only in
+      // providerSpecificData; providerAllowsOptionalApiKey("uc-persona") covers creation.
+      await updateProviderConnection(connectionId, { providerSpecificData: nextPsd });
+    } catch (err) {
+      const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
+      return NextResponse.json(
+        { success: false, error: `Signed in but failed to persist: ${msg}` },
+        { status: 500 }
+      );
+    }
+    return NextResponse.json({
+      success: true,
+      step: "verify",
+      persisted: true,
+      account: String(psd.ucLoginEmail || "") || undefined,
+      message: "UC persona connection verified and saved.",
+    });
+  }
+
+  return NextResponse.json(
+    { success: false, error: `Unknown login step: ${step}` },
+    { status: 400 }
+  );
+}
+
 // --- POST: Start login flow -------------------------------------------------
 
 export async function POST(
@@ -173,8 +288,26 @@ export async function POST(
   const body = (await req.json().catch(() => ({}))) as {
     timeout?: unknown;
     freshSession?: unknown;
+    step?: unknown;
+    email?: unknown;
+    code?: unknown;
   };
   const providerSlug = resolveProviderSlug(provider as Record<string, unknown>);
+
+  // UC persona: browserless Clerk email-code login. The request step persists
+  // the sign-in attempt; verify proves it with a token mint and stores the full
+  // durable credential. No browser and no API key are involved.
+  if (providerSlug === "uc-persona" || providerSlug === "uc") {
+    try {
+      return await loginUcEmail(id, provider as Record<string, unknown>, body);
+    } catch (err) {
+      const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
+      return NextResponse.json(
+        { success: false, error: `UC sign-in error: ${msg}` },
+        { status: 500 }
+      );
+    }
+  }
 
   // Adobe Firefly: dedicated JWT capture (never cookies/localStorage alone).
   if (isAdobeFireflyProvider(provider as { provider?: unknown }, providerSlug)) {
@@ -194,9 +327,8 @@ export async function POST(
   // persistence (same shape as the other web-cookie providers).
   if (providerSlug === "conol-web" || providerSlug === "cnl") {
     try {
-      const { startConolBrowserLogin } = await import(
-        "@omniroute/open-sse/services/conolBrowserLogin.ts"
-      );
+      const { startConolBrowserLogin } =
+        await import("@omniroute/open-sse/services/conolBrowserLogin.ts");
       const result = await startConolBrowserLogin(
         typeof body.timeout === "number" ? body.timeout : undefined
       );

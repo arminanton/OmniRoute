@@ -56,6 +56,10 @@ export interface UcTurnResult {
   reasoning: string;
   /** Set when the turn failed (error frame, transport failure, or timeout). */
   error?: string;
+  /** Structured top-level UC error code, when supplied by the backend. */
+  errorCode?: string;
+  /** UC's account reset timestamp, preserved for Retry-After/cooldown handling. */
+  nextReset?: string;
 }
 
 /**
@@ -89,6 +93,8 @@ export function runUcTurn(input: UcTurnInput): Promise<UcTurnResult> {
 
     let settled = false;
     let errorText: string | undefined;
+    let errorCode: string | undefined;
+    let nextReset: string | undefined;
     let timeout: ReturnType<typeof setTimeout> | null = null;
     let abortHandler: (() => void) | null = null;
 
@@ -150,6 +156,8 @@ export function runUcTurn(input: UcTurnInput): Promise<UcTurnResult> {
           reasoningParts.push(evt.text);
         } else if (evt.kind === "error") {
           errorText = evt.text;
+          errorCode = evt.code;
+          nextReset = evt.nextReset;
         } else if (evt.kind === "done") {
           finish({ content: evt.text, reasoning: reasoningParts.join("") });
           return;
@@ -161,6 +169,8 @@ export function runUcTurn(input: UcTurnInput): Promise<UcTurnResult> {
           content: parser.accumulated.trim(),
           reasoning: reasoningParts.join(""),
           error: errorText,
+          errorCode,
+          nextReset,
         });
       }
     };
@@ -168,11 +178,14 @@ export function runUcTurn(input: UcTurnInput): Promise<UcTurnResult> {
     ws.onerror = () => fail("UC persona WebSocket connection error");
     ws.onclose = () => {
       if (settled) return;
-      // Closed without an explicit end_of_stream: use whatever we accumulated.
+      // A partial answer is not a completed answer. Preserve it for diagnostics,
+      // but surface the missing terminal frame as an upstream error.
       finish({
         content: parser.finalText(),
         reasoning: reasoningParts.join(""),
-        error: errorText,
+        error: errorText ?? "uc_incomplete_response: socket closed before end_of_stream",
+        errorCode: errorCode ?? "incomplete_response",
+        nextReset,
       });
     };
   });

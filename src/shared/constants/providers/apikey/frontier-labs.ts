@@ -48,13 +48,13 @@ export const APIKEY_PROVIDERS_FRONTIER = {
   "uc-direct": {
     id: "uc-direct",
     alias: "ucd",
-    name: "UC Direct (uncensored.com)",
+    name: "UC Direct / Developer",
     icon: "auto_awesome",
     color: "#111827",
     textIcon: "UD",
     website: "https://uncensored.com",
     authHint:
-      "Use your uncensored.com Developer API key (uai_sk_live_...). OmniRoute sends it as the X-api-key header to the OpenAI-compatible https://api.uncensored.com/api/v1 endpoint. The key never expires. This is the metered/credits surface; the un-metered subscription chat is the separate 'uc' provider.",
+      "Use your uncensored.com Developer API key (uai_sk_live_...). OmniRoute sends it as the X-api-key header to the OpenAI-compatible https://api.uncensored.com/api/v1 endpoint. The key never expires. This is UC Direct / Developer; the subscription-backed, daily-limited persona surface is the separate 'uc-persona' provider.",
     apiHint:
       "UC Direct is OpenAI-compatible on /api/v1. OmniRoute probes /api/v1/models (public) and routes chat traffic to /api/v1/chat/completions. Errors: 402 out of credits, 403 moderation/scope, 429 rate limit.",
     serviceKinds: ["llm"],

@@ -44,6 +44,12 @@ import { mintUcSessionToken } from "../../executors/uc/clerkAuth.ts";
 
 let WebSocketCtor: typeof WebSocket = WebSocket;
 
+/** Keep the previously-advertised `uc/jade` model id working as an alias. */
+export function normalizeUcTtsModel(model: string | undefined): string {
+  const value = model?.trim();
+  return !value || value === "jade" ? UC_TTS_DEFAULT_MODEL : value;
+}
+
 /** Inject a fake WebSocket constructor for tests. Returns a restore fn. */
 export function __setUcTtsWebSocketForTesting(ctor: typeof WebSocket): () => void {
   const previous = WebSocketCtor;
@@ -314,11 +320,11 @@ export async function handleUcTextToSpeech(
     uid: cred.uid,
     text,
     voice: input.voice?.trim() || UC_TTS_DEFAULT_VOICE,
-    model: input.model,
+    model: normalizeUcTtsModel(input.model),
     signal: input.signal,
   });
 
-  if (result.error && result.audio.length === 0) {
+  if (result.error) {
     return { ok: false, status: 502, error: result.error };
   }
 

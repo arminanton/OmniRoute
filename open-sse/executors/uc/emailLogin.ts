@@ -36,7 +36,8 @@ import {
   UC_CLERK_API_VERSION,
   UC_ORIGIN,
 } from "./constants.ts";
-import { parseSetCookie } from "./clerkAuth.ts";
+import { mintUcSessionToken, parseSetCookie } from "./clerkAuth.ts";
+import { uidFromSessionJwt } from "./credentials.ts";
 
 export const UC_SIGNIN_PATH = "/v1/client/sign_ins";
 
@@ -114,6 +115,23 @@ function clerkResponse(body: Record<string, unknown>): Record<string, unknown> {
   return resp && typeof resp === "object" ? (resp as Record<string, unknown>) : body;
 }
 
+/** Parse a serialized Cookie header (`k=v; k=v`) into a flat jar. */
+function parseCookieHeader(raw: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of String(raw ?? "").split(";")) {
+    const idx = part.indexOf("=");
+    if (idx <= 0) continue;
+    const name = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (name && value) out[name] = value;
+  }
+  return out;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 /**
  * Steps 1 + 2: create the sign-in attempt and ask Clerk to email a code. Returns
  * the `sia` needed for the verify step. Never throws.
@@ -138,7 +156,7 @@ export async function requestUcEmailCode(
   }
 
   const cookieJar = parseSetCookie(res.headers.get("set-cookie") ?? "");
-  const cookieHdr = Object.entries(cookieJar)
+  let cookieHdr = Object.entries(cookieJar)
     .map(([k, v]) => `${k}=${v}`)
     .join("; ");
   const raw = await res.text().catch(() => "");
@@ -204,6 +222,11 @@ export async function requestUcEmailCode(
     };
   }
 
+  Object.assign(cookieJar, parseSetCookie(prep.headers.get("set-cookie") ?? ""));
+  cookieHdr = Object.entries(cookieJar)
+    .map(([k, v]) => `${k}=${v}`)
+    .join("; ");
+
   return {
     ok: true,
     status: 200,
@@ -240,6 +263,7 @@ export async function verifyUcEmailCode(input: UcEmailVerifyInput): Promise<UcEm
   }
 
   // Harvest cookies from BOTH the prior step and this response.
+  const priorCookies = parseCookieHeader(input.cookieHeader);
   const rotated = parseSetCookie(res.headers.get("set-cookie") ?? "");
   const raw = await res.text().catch(() => "");
   if (res.status !== 200) {
@@ -269,22 +293,8 @@ export async function verifyUcEmailCode(input: UcEmailVerifyInput): Promise<UcEm
 
   const sid = (typeof resp.created_session_id === "string" && resp.created_session_id) || "";
 
-  // uid + the durable __client cookie live in the `client` envelope / Set-Cookie.
-  const client = (body.client && typeof body.client === "object" ? body.client : {}) as Record<
-    string,
-    unknown
-  >;
-  const sessions = Array.isArray(client.sessions)
-    ? (client.sessions as Array<Record<string, unknown>>)
-    : [];
-  const session = sessions.find((s) => s?.id === sid) ?? sessions[0];
-  const user = (session?.user && typeof session.user === "object" ? session.user : {}) as Record<
-    string,
-    unknown
-  >;
-  const uid = typeof user.id === "string" ? user.id : "";
-
-  const clientCookie = rotated.__client ?? "";
+  const cookies = { ...priorCookies, ...rotated };
+  const clientCookie = cookies.__client ?? "";
   if (!clientCookie) {
     return {
       ok: false,
@@ -292,13 +302,41 @@ export async function verifyUcEmailCode(input: UcEmailVerifyInput): Promise<UcEm
       error: "verify OK but no __client cookie in Set-Cookie (cannot persist durable credential)",
     };
   }
-  if (!sid || !uid) {
-    return { ok: false, status: 200, error: "verify OK but session id or uid missing" };
+  if (!sid) {
+    return { ok: false, status: 200, error: "verify OK but session id missing" };
   }
+
+  // Clerk's client envelope identifies the account as `user_...`; that is NOT
+  // the UUID UC requires in the persona WebSocket path. Prove the freshly
+  // harvested credential by minting a 60s session token and read its custom
+  // `uid` claim, which is the exact WS user_identifier.
+  const mint = await mintUcSessionToken({
+    sid,
+    cookies,
+    signal: input.signal,
+    fetchImpl: doFetch,
+  });
+  if (!mint.ok || !mint.token) {
+    return {
+      ok: false,
+      status: mint.status || 502,
+      error: mint.error || "sign-in completed but session token mint failed",
+    };
+  }
+  const uid = uidFromSessionJwt(mint.token.jwt) ?? "";
+  if (!isUuid(uid)) {
+    return { ok: false, status: 502, error: "session token had no valid UC uid claim" };
+  }
+  const finalCookies = { ...cookies, ...(mint.rotatedCookies ?? {}) };
 
   return {
     ok: true,
     status: 200,
-    credential: { clientCookie, sid, uid, cookies: rotated },
+    credential: {
+      clientCookie: finalCookies.__client ?? clientCookie,
+      sid,
+      uid,
+      cookies: finalCookies,
+    },
   };
 }

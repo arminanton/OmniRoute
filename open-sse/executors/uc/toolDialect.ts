@@ -77,9 +77,35 @@ export function ucLooksLikeRefusal(text: string): boolean {
 
 interface OpenAiTool {
   type?: string;
-  function?: { name?: string; parameters?: { properties?: Record<string, unknown> } };
+  function?: {
+    name?: string;
+    description?: string;
+    parameters?: { properties?: Record<string, unknown>; required?: string[] };
+  };
   name?: string;
-  parameters?: { properties?: Record<string, unknown> };
+  description?: string;
+  parameters?: { properties?: Record<string, unknown>; required?: string[] };
+}
+
+/** Render the natural code-style contract without any XML/JSON tool markup. */
+export function buildUcCodestylePreamble(tools: unknown): string {
+  if (!Array.isArray(tools) || tools.length === 0) return UC_CODESTYLE_HEADER;
+  const lines: string[] = [];
+  for (const tool of tools as OpenAiTool[]) {
+    const fn = tool?.type === "function" ? tool.function : (tool.function ?? tool);
+    const name = typeof fn?.name === "string" ? fn.name : "";
+    if (!name) continue;
+    const properties = fn?.parameters?.properties ?? {};
+    const required = new Set(fn?.parameters?.required ?? []);
+    const args = Object.entries(properties).map(([param, raw]) => {
+      const spec = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+      const type = typeof spec.type === "string" ? spec.type : "any";
+      return `${param}${required.has(param) ? "" : "?"}:${type}`;
+    });
+    const description = typeof fn?.description === "string" ? fn.description.trim() : "";
+    lines.push(`- ${name}(${args.join(", ")})${description ? ` — ${description}` : ""}`);
+  }
+  return lines.length ? `${UC_CODESTYLE_HEADER}\n${lines.join("\n")}` : UC_CODESTYLE_HEADER;
 }
 
 /** Map tool name → ordered param names, for positional code-style args. */

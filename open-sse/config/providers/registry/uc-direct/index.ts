@@ -4,8 +4,9 @@ import type { RegistryEntry } from "../../shared.ts";
  * UC Direct (uncensored.com Developer API) — the METERED, OpenAI-compatible
  * official REST API at https://api.uncensored.com/api/v1.
  *
- * This is the paid Developer surface, distinct from the un-metered `uc` persona
- * WebSocket provider. It is a straightforward OpenAI-compatible passthrough
+ * This is the paid Developer surface, distinct from the subscription-backed `uc-persona`
+ * persona WebSocket provider (which has daily account limits). It is a
+ * straightforward OpenAI-compatible passthrough
  * handled by the default executor:
  *   • Auth: `X-api-key: uai_sk_live_...` (a never-expiring key; NOT Bearer). The
  *     default executor maps authHeader "x-api-key" to the X-API-Key header
@@ -26,7 +27,14 @@ export const ucDirectProvider: RegistryEntry = {
   alias: "ucd",
   format: "openai",
   executor: "default",
-  baseUrl: "https://api.uncensored.com/api/v1",
+  // Named default-executor providers must carry the complete chat endpoint;
+  // DefaultExecutor only appends /chat/completions for generated
+  // openai-compatible-* providers.
+  baseUrl: "https://api.uncensored.com/api/v1/chat/completions",
+  // Public, no-auth catalog. The route-specific discovery config deliberately
+  // sends no bogus Bearer header; this static 82-model list remains the fallback.
+  modelsUrl: "https://api.uncensored.com/api/v1/models",
+  passthroughModels: true,
   authType: "apikey",
   // UC standardises on X-api-key (never-expiring uai_sk_live_ key), NOT Bearer.
   // The default executor resolves "x-api-key" to the X-API-Key header.

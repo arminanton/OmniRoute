@@ -42,13 +42,16 @@ import {
 } from "../../open-sse/executors/uc/stream.ts";
 import { UC_REGISTRY_MODELS, ucContextWindow } from "../../open-sse/executors/uc/catalog.ts";
 import { buildUcWsUrl, __setUcWebSocketForTesting } from "../../open-sse/executors/uc/ws.ts";
-import { UcExecutor } from "../../open-sse/executors/uc.ts";
+import { UcExecutor, __resetUcQuotaCooldownsForTesting } from "../../open-sse/executors/uc.ts";
+import { DefaultExecutor } from "../../open-sse/executors/default.ts";
 import { ucDirectProvider } from "../../open-sse/config/providers/registry/uc-direct/index.ts";
+import { PROVIDER_MODELS_CONFIG } from "../../src/app/api/providers/[id]/models/discovery/providerModelsConfig.ts";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
 const UID = "b03dd963-d0c1-4193-99c9-f5a9d0c66b7f";
 const SID = "sess_3EyqBpAa2C25iB8eJzZ2fwdsqLM";
+const FUTURE_EXP = Math.floor(Date.now() / 1000) + 3600;
 
 /** Build a fake unsigned JWT with the given claims (base64url payload). */
 function fakeJwt(claims: Record<string, unknown>): string {
@@ -202,6 +205,7 @@ test("requestUcEmailCode creates the sign-in attempt and requests the code", asy
     if (u.includes("/prepare_first_factor")) {
       return new Response(JSON.stringify({ response: { status: "needs_first_factor" } }), {
         status: 200,
+        headers: { "set-cookie": "__client=PREPARED; path=/, __cf_bm=ROTATED; path=/" },
       });
     }
     // step 1: create sign-in
@@ -224,6 +228,8 @@ test("requestUcEmailCode creates the sign-in attempt and requests the code", asy
   assert.equal(r.ok, true);
   assert.equal(r.sia, "sia_ABC");
   assert.equal(r.emailAddressId, "idn_XYZ");
+  assert.match(r.cookieHeader ?? "", /__client=PREPARED/);
+  assert.match(r.cookieHeader ?? "", /__cf_bm=ROTATED/);
   // Both steps hit the sign-in path; the second is prepare_first_factor.
   assert.equal(calls.length, 2);
   assert.ok(calls[0].includes(UC_SIGNIN_PATH));
@@ -243,25 +249,42 @@ test("requestUcEmailCode errors when email_code is not an available factor", asy
   assert.match(r.error ?? "", /email_code/);
 });
 
-test("verifyUcEmailCode harvests __client + sid + uid on complete", async () => {
-  const fakeFetch = (async () =>
-    new Response(
+test("verifyUcEmailCode mints a token and derives UC's UUID uid instead of Clerk user.id", async () => {
+  const calls: string[] = [];
+  const fakeFetch = (async (url: string) => {
+    calls.push(String(url));
+    if (String(url).includes("/tokens")) {
+      return new Response(JSON.stringify({ jwt: fakeJwt({ uid: UID, exp: FUTURE_EXP }) }), {
+        status: 200,
+        headers: { "set-cookie": "__cf_bm=CF_ROTATED; path=/" },
+      });
+    }
+    return new Response(
       JSON.stringify({
         response: { status: "complete", created_session_id: SID },
-        client: { sessions: [{ id: SID, user: { id: UID } }] },
+        // Clerk's ordinary user id is not the UUID used by the persona socket.
+        client: { sessions: [{ id: SID, user: { id: "user_clerk_subject" } }] },
       }),
       {
         status: 200,
-        headers: { "set-cookie": "__client=DURABLE_COOKIE; path=/, __cf_bm=CF; path=/" },
+        headers: { "set-cookie": "__client=DURABLE_COOKIE; path=/" },
       }
-    )) as unknown as typeof fetch;
+    );
+  }) as unknown as typeof fetch;
 
-  const r = await verifyUcEmailCode({ sia: "sia_ABC", code: "123456", fetchImpl: fakeFetch });
+  const r = await verifyUcEmailCode({
+    sia: "sia_ABC",
+    code: "123456",
+    cookieHeader: "__client=SIGNIN_COOKIE; __client_uat=1",
+    fetchImpl: fakeFetch,
+  });
   assert.equal(r.ok, true);
   assert.equal(r.credential!.clientCookie, "DURABLE_COOKIE");
   assert.equal(r.credential!.sid, SID);
   assert.equal(r.credential!.uid, UID);
-  assert.equal(r.credential!.cookies.__cf_bm, "CF");
+  assert.equal(r.credential!.cookies.__client_uat, "1");
+  assert.equal(r.credential!.cookies.__cf_bm, "CF_ROTATED");
+  assert.equal(calls.length, 2, "verify must prove the credential with one token mint");
 });
 
 test("verifyUcEmailCode fails when the sign-in is not complete", async () => {
@@ -404,6 +427,10 @@ test("UcFrameParser surfaces a top-level error frame immediately (incl paywall)"
     assert.equal(evts.length, 1);
     assert.equal(evts[0].kind, "error");
     assert.match(evts[0].text, new RegExp(code));
+    if (evts[0].kind === "error") {
+      assert.equal(evts[0].code, code);
+      assert.equal(evts[0].nextReset, "2026-01-01");
+    }
     assert.equal(p.done, true);
   }
 });
@@ -476,7 +503,10 @@ test("buildUcWsUrl embeds uid, token, and a cache-bust", () => {
  * onmessage / onerror / onclose + send/close. It replays a scripted set of
  * server frames (newline-delimited JSON strings) right after `send` is called.
  */
-function makeFakeWs(frames: string[], opts: { failConnect?: boolean } = {}) {
+function makeFakeWs(
+  frames: string[],
+  opts: { failConnect?: boolean; onSend?: (data: string) => void } = {}
+) {
   return class FakeWS {
     onopen: (() => void) | null = null;
     onmessage: ((e: { data: unknown }) => void) | null = null;
@@ -490,10 +520,36 @@ function makeFakeWs(frames: string[], opts: { failConnect?: boolean } = {}) {
       }
       setTimeout(() => this.onopen?.(), 0);
     }
-    send(_data: string) {
+    send(data: string) {
+      opts.onSend?.(data);
       // Deliver scripted frames, then close.
       setTimeout(() => {
         for (const f of frames) this.onmessage?.({ data: f });
+        this.onclose?.();
+      }, 0);
+    }
+    close() {
+      /* no-op */
+    }
+  } as unknown as typeof import("ws").default;
+}
+
+/** Replay a different server transcript for each successive socket instance. */
+function makeSequencedFakeWs(turns: string[][]) {
+  let turnIndex = 0;
+  return class FakeWS {
+    onopen: (() => void) | null = null;
+    onmessage: ((e: { data: unknown }) => void) | null = null;
+    onerror: (() => void) | null = null;
+    onclose: (() => void) | null = null;
+    readyState = 1;
+    private readonly frames = turns[turnIndex++] ?? [];
+    constructor(_url: string, _opts?: unknown) {
+      setTimeout(() => this.onopen?.(), 0);
+    }
+    send(_data: string) {
+      setTimeout(() => {
+        for (const frame of this.frames) this.onmessage?.({ data: frame });
         this.onclose?.();
       }, 0);
     }
@@ -554,6 +610,162 @@ test("UcExecutor non-streaming returns an OpenAI chat.completion", async (t) => 
   assert.equal(json.choices[0].message.content, "PONG");
   assert.equal(json.choices[0].finish_reason, "stop");
   assert.ok(json.usage.total_tokens > 0);
+});
+
+test("UcExecutor rejects a partial socket close without end_of_stream", async (t) => {
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = tokenFetch();
+  const restore = __setUcWebSocketForTesting(
+    makeFakeWs([JSON.stringify({ message_type: "text", text: "partial" })])
+  );
+  t.after(() => {
+    restore();
+    globalThis.fetch = origFetch;
+  });
+
+  const result = await new UcExecutor().execute({
+    model: "claude-opus-46",
+    stream: false,
+    credentials: { providerSpecificData: psd() },
+    body: { messages: [{ role: "user", content: "finish this answer" }] },
+  } as never);
+  const { status, json } = await readJson(result);
+  assert.equal(status, 502);
+  assert.equal(json.error?.code, "uc_incomplete_response");
+});
+
+test("UcExecutor sends GPT 5.5 a pure code-style tool contract with no formal markup", async (t) => {
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = tokenFetch();
+  let sentText = "";
+  const restore = __setUcWebSocketForTesting(
+    makeFakeWs(
+      [
+        JSON.stringify({
+          message_type: "text",
+          end_of_stream: true,
+          raw_text: 'get_weather("Paris")',
+        }),
+      ],
+      {
+        onSend: (raw) => {
+          sentText = String((JSON.parse(raw) as { text?: unknown }).text ?? "");
+        },
+      }
+    )
+  );
+  t.after(() => {
+    restore();
+    globalThis.fetch = origFetch;
+  });
+
+  const exec = new UcExecutor();
+  const result = await exec.execute({
+    model: "gpt-5.5",
+    stream: false,
+    credentials: { providerSpecificData: psd() },
+    body: {
+      messages: [{ role: "user", content: "What is the weather in Paris?" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "get_weather",
+            description: "Read current weather",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+              required: ["city"],
+            },
+          },
+        },
+      ],
+    },
+  } as never);
+  const { status, json } = await readJson(result);
+  assert.equal(status, 200);
+  assert.match(sentText, /write a short python-style call/i);
+  assert.match(sentText, /- get_weather\(city:string\) — Read current weather/);
+  assert.doesNotMatch(sentText, /<tool(?:_call)?\b/i);
+  assert.ok(Array.isArray(json.choices?.[0]?.message?.tool_calls));
+});
+
+test("UcExecutor rejects more than one persona attachment before opening the chat socket", async (t) => {
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = tokenFetch();
+  t.after(() => {
+    globalThis.fetch = origFetch;
+  });
+  const image = `data:image/png;base64,${Buffer.from("image").toString("base64")}`;
+  const exec = new UcExecutor();
+  const result = await exec.execute({
+    model: "claude-opus-46",
+    stream: false,
+    credentials: { providerSpecificData: psd() },
+    body: {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "compare" },
+            { type: "image_url", image_url: { url: image } },
+            { type: "image_url", image_url: { url: image } },
+          ],
+        },
+      ],
+    },
+  } as never);
+  const { status, json } = await readJson(result);
+  assert.equal(status, 400);
+  assert.equal(json.error?.code, "uc_too_many_attachments");
+});
+
+test("UcExecutor surfaces an attachment upload failure instead of sending text-only chat", async (t) => {
+  const origFetch = globalThis.fetch;
+  const sid = "sess_media_upload_failure";
+  globalThis.fetch = (async (url: string) => {
+    if (String(url).includes("/tokens")) {
+      return new Response(
+        JSON.stringify({
+          jwt: fakeJwt({ uid: UID, sid, exp: Math.floor(Date.now() / 1000) + 60 }),
+        }),
+        { status: 200 }
+      );
+    }
+    if (String(url).includes("/generate-signed-url")) {
+      return new Response("upload unavailable", { status: 503 });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  }) as unknown as typeof fetch;
+  t.after(() => {
+    globalThis.fetch = origFetch;
+  });
+  const image = `data:image/png;base64,${Buffer.from("image").toString("base64")}`;
+  const exec = new UcExecutor();
+  const result = await exec.execute({
+    model: "claude-opus-46",
+    stream: false,
+    credentials: {
+      providerSpecificData: psd({
+        ucSid: sid,
+        ucCookies: { __client: "client.jwt.cookie" },
+      }),
+    },
+    body: {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "what is this?" },
+            { type: "image_url", image_url: { url: image } },
+          ],
+        },
+      ],
+    },
+  } as never);
+  const { status, json } = await readJson(result);
+  assert.equal(status, 502);
+  assert.equal(json.error?.code, "uc_attachment_upload_failed");
 });
 
 test("UcExecutor streaming emits SSE chunks incl the raw_text remainder", async (t) => {
@@ -632,21 +844,105 @@ test("UcExecutor streaming flushes long delta content without duplication", asyn
   assert.equal(assembled, "Hello");
 });
 
-test("UcExecutor maps a paywall_exceeded frame to a 429", async (t) => {
+test("UcExecutor streaming emits an error, not a successful stop, after a partial delta", async (t) => {
   const origFetch = globalThis.fetch;
   globalThis.fetch = tokenFetch();
   const restore = __setUcWebSocketForTesting(
     makeFakeWs([
+      JSON.stringify({ message_type: "text", text: "partial" }),
       JSON.stringify({
         type: "error",
-        code: "paywall_exceeded",
-        message: "Paywall limit exceeded",
+        code: "rate_limit_exceeded",
+        message: "rate limited",
       }),
     ])
   );
   t.after(() => {
     restore();
     globalThis.fetch = origFetch;
+  });
+
+  const result = await new UcExecutor().execute({
+    model: "claude-opus-46",
+    stream: true,
+    credentials: { providerSpecificData: psd() },
+    body: { messages: [{ role: "user", content: "continue" }] },
+  } as never);
+  const response = (result as { response: Response }).response;
+  const body = await response.text();
+  assert.match(body, /uc_rate_limit_exceeded/);
+  assert.doesNotMatch(body, /"finish_reason":"stop"/);
+  assert.match(body, /data: \[DONE\]/);
+});
+
+test("UcExecutor surfaces an auto-cure retry quota error instead of the first refusal", async (t) => {
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = tokenFetch();
+  const restore = __setUcWebSocketForTesting(
+    makeSequencedFakeWs([
+      [
+        JSON.stringify({
+          message_type: "text",
+          end_of_stream: true,
+          raw_text: "I'm sorry, but I cannot assist with that.",
+        }),
+      ],
+      [
+        JSON.stringify({
+          type: "error",
+          code: "paywall_exceeded",
+          message: "daily limit reached",
+        }),
+      ],
+    ])
+  );
+  t.after(() => {
+    restore();
+    globalThis.fetch = origFetch;
+    __resetUcQuotaCooldownsForTesting();
+  });
+
+  const result = await new UcExecutor().execute({
+    model: "claude-opus-46",
+    stream: false,
+    credentials: { providerSpecificData: psd() },
+    body: {
+      messages: [{ role: "user", content: "Use the tool." }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "get_weather",
+            description: "Read weather",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+    },
+  } as never);
+  const { status, json } = await readJson(result);
+  assert.equal(status, 429);
+  assert.equal(json.error?.code, "uc_paywall_exceeded");
+});
+
+test("UcExecutor maps quota reset to Retry-After and suppresses repeat sockets", async (t) => {
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = tokenFetch();
+  const nextReset = new Date(Date.now() + 60_000).toISOString();
+  const restore = __setUcWebSocketForTesting(
+    makeFakeWs([
+      JSON.stringify({
+        type: "error",
+        code: "paywall_exceeded",
+        message: "Paywall limit exceeded",
+        next_reset: nextReset,
+      }),
+    ])
+  );
+  t.after(() => {
+    restore();
+    globalThis.fetch = origFetch;
+    __resetUcQuotaCooldownsForTesting();
   });
 
   const exec = new UcExecutor();
@@ -656,9 +952,27 @@ test("UcExecutor maps a paywall_exceeded frame to a 429", async (t) => {
     credentials: { providerSpecificData: psd() },
     body: { messages: [{ role: "user", content: "ping" }] },
   } as never);
-  const { status, json } = await readJson(result);
-  assert.equal(status, 429);
-  assert.equal(json.error.code, "uc_paywall_exceeded");
+  const response = (result as { response: Response }).response;
+  assert.equal(response.status, 429);
+  const firstRetryAfter = Number(response.headers.get("retry-after"));
+  assert.ok(firstRetryAfter >= 55 && firstRetryAfter <= 60);
+  const json = (await response.json()) as LooseCompletion;
+  assert.equal(json.error?.code, "uc_paywall_exceeded");
+
+  // Same session must fail locally until next_reset, without opening another
+  // quota-consuming inference socket.
+  const repeated = await exec.execute({
+    model: "claude-opus-46",
+    stream: false,
+    credentials: { providerSpecificData: psd() },
+    body: { messages: [{ role: "user", content: "do not send" }] },
+  } as never);
+  const repeatResponse = (repeated as { response: Response }).response;
+  assert.equal(repeatResponse.status, 429);
+  const repeatRetryAfter = Number(repeatResponse.headers.get("retry-after"));
+  assert.ok(repeatRetryAfter >= 55 && repeatRetryAfter <= firstRetryAfter);
+  const repeatJson = (await repeatResponse.json()) as LooseCompletion;
+  assert.equal(repeatJson.error?.code, "uc_quota_cooldown");
 });
 
 test("UcExecutor returns 401 when the connection is unconfigured", async () => {
@@ -712,7 +1026,16 @@ test("ucDirectProvider is a default-executor OpenAI provider with x-api-key auth
   assert.equal(ucDirectProvider.authType, "apikey");
   // UC uses X-api-key (never-expiring uai_sk_live_ key), NOT Bearer.
   assert.equal(ucDirectProvider.authHeader, "x-api-key");
-  assert.equal(ucDirectProvider.baseUrl, "https://api.uncensored.com/api/v1");
+  assert.equal(ucDirectProvider.baseUrl, "https://api.uncensored.com/api/v1/chat/completions");
+  assert.equal(ucDirectProvider.modelsUrl, "https://api.uncensored.com/api/v1/models");
+  assert.equal(ucDirectProvider.passthroughModels, true);
+  assert.equal(
+    new DefaultExecutor("uc-direct").buildUrl("gpt-5.6-sol", true),
+    "https://api.uncensored.com/api/v1/chat/completions"
+  );
+  const discovery = PROVIDER_MODELS_CONFIG["uc-direct"];
+  assert.equal(discovery.url, "https://api.uncensored.com/api/v1/models");
+  assert.equal(discovery.authHeader, undefined, "public catalog must not send bogus Bearer auth");
 });
 
 test("ucDirectProvider ships the metered catalog with unique ids", () => {

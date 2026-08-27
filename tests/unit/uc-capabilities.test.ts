@@ -20,10 +20,12 @@ import {
 } from "../../open-sse/executors/uc/toolDialect.ts";
 import {
   extractCurrentTurnMedia,
+  resolveUcRemoteImages,
   uploadUcBlob,
   uploadUcTurnMedia,
 } from "../../open-sse/executors/uc/media.ts";
 import { buildPersonaFrame } from "../../open-sse/executors/uc/protocol.ts";
+import { validateUcBlobName, validateUcRemoteUrl } from "../../open-sse/executors/uc/urlSafety.ts";
 import { UC_MODELS, UC_REGISTRY_MODELS } from "../../open-sse/executors/uc/catalog.ts";
 
 // ─── Tool dialect ────────────────────────────────────────────────────────────
@@ -103,7 +105,7 @@ const PDF_DATA_URL =
   "data:application/pdf;base64," + Buffer.from("%PDF-1.4 fake").toString("base64");
 
 test("extractCurrentTurnMedia pulls data-url images and remote image urls from the last user turn", () => {
-  const { inline, remoteImageUrls } = extractCurrentTurnMedia([
+  const { inline, remoteImageUrls, requestedMediaCount } = extractCurrentTurnMedia([
     { role: "user", content: [{ type: "image_url", image_url: { url: "https://ex.com/a.png" } }] },
     { role: "assistant", content: "ok" },
     {
@@ -118,6 +120,64 @@ test("extractCurrentTurnMedia pulls data-url images and remote image urls from t
   assert.equal(inline.length, 1);
   assert.equal(inline[0].contentType, "image/png");
   assert.equal(remoteImageUrls.length, 0);
+  assert.equal(requestedMediaCount, 1);
+});
+
+test("resolveUcRemoteImages uses the guarded resolver and preserves bytes + MIME", async () => {
+  const resolved = await resolveUcRemoteImages(
+    ["https://example.com/a.png"],
+    async (urls, opts) => {
+      assert.deepEqual(urls, ["https://example.com/a.png"]);
+      assert.equal(opts?.prepareForWire, false);
+      return [{ data: Buffer.from("png"), mimeType: "image/png", uuid: "u" }];
+    }
+  );
+  assert.equal(resolved.length, 1);
+  assert.equal(resolved[0].contentType, "image/png");
+  assert.equal(resolved[0].bytes.toString(), "png");
+});
+
+test("resolveUcRemoteImages rejects loopback through the canonical SSRF guard", async () => {
+  await assert.rejects(
+    () => resolveUcRemoteImages(["http://127.0.0.1/private.png"]),
+    /blocked|url/i
+  );
+});
+
+test("UC server-returned URL allow-list accepts captured hosts and rejects SSRF pivots", () => {
+  assert.equal(
+    validateUcRemoteUrl("https://d.moveinwater.com/up/token", "upload").hostname,
+    "d.moveinwater.com"
+  );
+  assert.equal(
+    validateUcRemoteUrl("https://gen.moveinwater.com/img_x.png", "image-result").hostname,
+    "gen.moveinwater.com"
+  );
+  assert.equal(
+    validateUcRemoteUrl("https://videogen.moveinwater.com/result", "video-result").hostname,
+    "videogen.moveinwater.com"
+  );
+  assert.equal(
+    validateUcRemoteUrl(
+      "https://api.uncensored.com/api/v1/videos/generations/job_1",
+      "direct-status"
+    ).hostname,
+    "api.uncensored.com"
+  );
+  assert.throws(
+    () => validateUcRemoteUrl("http://169.254.169.254/latest/meta-data", "upload"),
+    /https/i
+  );
+  assert.throws(
+    () => validateUcRemoteUrl("https://evil.example/up/token", "upload"),
+    /not allowed/i
+  );
+  assert.throws(
+    () => validateUcRemoteUrl("https://d.moveinwater.com/not-upload/token", "upload"),
+    /path/i
+  );
+  assert.equal(validateUcBlobName("uid_ts_1-month_uuid"), "uid_ts_1-month_uuid");
+  assert.throws(() => validateUcBlobName("../metadata"), /invalid/i);
 });
 
 test("extractCurrentTurnMedia decodes OpenAI file, input_file, and Claude document parts", () => {
@@ -189,6 +249,32 @@ test("uploadUcBlob returns null (best-effort) on a signed-url failure", async ()
   assert.equal(blob, null);
 });
 
+test("uploadUcBlob returns null when the uploaded blob never becomes ready", async () => {
+  const fakeFetch = (async (url: string) => {
+    const value = String(url);
+    if (value.includes("/generate-signed-url")) {
+      return new Response(
+        JSON.stringify({ signed_url: "https://d.moveinwater.com/up/tok", blob_name: "blob_wait" }),
+        { status: 200 }
+      );
+    }
+    if (value.includes("/up/tok")) return new Response("", { status: 200 });
+    return new Response("", { status: 404 });
+  }) as unknown as typeof fetch;
+
+  const blob = await uploadUcBlob(
+    { bytes: Buffer.from("x"), contentType: "image/png" },
+    {
+      jwt: "j",
+      uid: "u",
+      fetchImpl: fakeFetch,
+      readyTimeoutMs: 1,
+      sleepImpl: async () => undefined,
+    }
+  );
+  assert.equal(blob, null);
+});
+
 test("uploadUcTurnMedia uploads several files and skips failures", async () => {
   let n = 0;
   const fakeFetch = (async (url: string) => {
@@ -230,6 +316,18 @@ test("buildPersonaFrame carries a media blob when provided (and stays clean with
   });
   assert.equal(withMedia.media_blob_name, "blob_9");
   assert.equal(withMedia.media_content_type, "image/png");
+  const multiple = buildPersonaFrame({
+    model: "claude-opus-46",
+    text: "hi",
+    history: [],
+    uid: "uid",
+    media: [
+      { blobName: "one", contentType: "image/png" },
+      { blobName: "two", contentType: "application/pdf" },
+    ],
+  });
+  assert.equal("media_blob_names" in multiple, false);
+  assert.equal("_uc_media_count" in multiple, false);
 
   const noMedia = buildPersonaFrame({
     model: "claude-opus-46",

@@ -41,19 +41,26 @@ const FUTURE_EXP = Math.floor(Date.now() / 1000) + 60;
 
 // --- Registry ------------------------------------------------------------
 
-test("uc is registered in IMAGE_PROVIDERS with the uc-image format + 22 models", () => {
+test("uc-persona and uc-direct own separate image registry entries with 22 models", () => {
   const entry = (
     IMAGE_PROVIDERS as Record<string, { format?: string; baseUrl?: string; models?: unknown[] }>
-  )["uc"];
-  assert.ok(entry, "uc must exist in IMAGE_PROVIDERS");
+  )["uc-persona"];
+  assert.ok(entry, "uc-persona must exist in IMAGE_PROVIDERS");
   assert.equal(entry.format, "uc-image");
   assert.match(String(entry.baseUrl), /internal\.chatuncensored\.ai\/v2\/image-gen/);
   assert.equal((entry.models ?? []).length, 22);
+  const direct = IMAGE_PROVIDERS["uc-direct"];
+  assert.ok(direct, "uc-direct must exist in IMAGE_PROVIDERS");
+  assert.equal(direct.format, "uc-image");
+  assert.equal(direct.authHeader, "x-api-key");
+  assert.match(String(direct.baseUrl), /api\.uncensored\.com\/api\/v1\/images\/generations/);
+  assert.equal(direct.models.length, 22);
 });
 
 // --- Pure helpers --------------------------------------------------------
 
-test("resolveUcImageModel strips uc/ and uc-direct/ prefixes", () => {
+test("resolveUcImageModel strips canonical, legacy, and direct prefixes", () => {
+  assert.equal(resolveUcImageModel("uc-persona/seedream-v4.5"), "seedream-v4.5");
   assert.equal(resolveUcImageModel("uc/seedream-v4.5"), "seedream-v4.5");
   assert.equal(resolveUcImageModel("uc-direct/seedream-v5"), "seedream-v5");
   assert.equal(resolveUcImageModel("nano-banana-pro"), "nano-banana-pro");
@@ -182,8 +189,8 @@ test("handleUcImageGeneration (persona) mints, posts, polls to 200, returns the 
   });
 
   const result = (await handleUcImageGeneration({
-    model: "uc/seedream-v4.5",
-    provider: "uc",
+    model: "uc-persona/seedream-v4.5",
+    provider: "uc-persona",
     body: { prompt: "a red cube on a wooden table", aspect_ratio: "16:9" },
     credentials: PERSONA_CRED,
     fetchImpl,
@@ -209,8 +216,8 @@ test("handleUcImageGeneration (persona) mints, posts, polls to 200, returns the 
 
 test("handleUcImageGeneration (persona) 401s (retryable) when the credential is missing", async () => {
   const result = (await handleUcImageGeneration({
-    model: "uc/seedream-v4.5",
-    provider: "uc",
+    model: "uc-persona/seedream-v4.5",
+    provider: "uc-persona",
     body: { prompt: "x" },
     credentials: {}, // no psd, no api key
     fetchImpl: (async () => {
@@ -231,8 +238,8 @@ test("handleUcImageGeneration (persona) times out with 504 when the result never
     jwt: fakeJwt("uid", FUTURE_EXP),
   });
   const result = (await handleUcImageGeneration({
-    model: "uc/seedream-v5",
-    provider: "uc",
+    model: "uc-persona/seedream-v5",
+    provider: "uc-persona",
     body: { prompt: "x", timeout_ms: 5, poll_interval_ms: 1 },
     credentials: PERSONA_CRED,
     fetchImpl,
@@ -258,8 +265,8 @@ test("handleUcImageGeneration (persona) surfaces a Clerk mint failure", async ()
   }) as unknown as typeof fetch;
 
   const result = (await handleUcImageGeneration({
-    model: "uc/seedream-v4.5",
-    provider: "uc",
+    model: "uc-persona/seedream-v4.5",
+    provider: "uc-persona",
     body: { prompt: "x" },
     credentials: PERSONA_CRED,
     fetchImpl,
@@ -294,7 +301,7 @@ test("handleUcImageGeneration (direct) returns OpenAI image data on success", as
 
   const result = (await handleUcImageGeneration({
     model: "uc-direct/seedream-v5",
-    provider: "uc",
+    provider: "uc-direct",
     body: { prompt: "a blue sphere", size: "1024x1024", n: 2 },
     credentials: DIRECT_CRED,
     fetchImpl,
@@ -325,7 +332,7 @@ test("handleUcImageGeneration (direct) 429 is retryable, 402/403 are not", async
 
   const rate = (await handleUcImageGeneration({
     model: "uc-direct/seedream-v5",
-    provider: "uc",
+    provider: "uc-direct",
     body: { prompt: "x" },
     credentials: DIRECT_CRED,
     fetchImpl: directErr(429),
@@ -336,7 +343,7 @@ test("handleUcImageGeneration (direct) 429 is retryable, 402/403 are not", async
 
   const funds = (await handleUcImageGeneration({
     model: "uc-direct/seedream-v5",
-    provider: "uc",
+    provider: "uc-direct",
     body: { prompt: "x" },
     credentials: DIRECT_CRED,
     fetchImpl: directErr(402),
@@ -348,8 +355,8 @@ test("handleUcImageGeneration (direct) 429 is retryable, 402/403 are not", async
 
 test("handleUcImageGeneration rejects an empty prompt with 400 (both surfaces)", async () => {
   const result = (await handleUcImageGeneration({
-    model: "uc/seedream-v4.5",
-    provider: "uc",
+    model: "uc-persona/seedream-v4.5",
+    provider: "uc-persona",
     body: { prompt: "   " },
     credentials: DIRECT_CRED,
     fetchImpl: (async () => {

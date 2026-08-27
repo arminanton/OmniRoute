@@ -360,7 +360,7 @@ export const WEB_SESSION_CREDENTIAL_REQUIREMENTS = {
     acceptsFullCookieHeader: true,
     storageKeys: ["cookie", "__Secure-better-auth.session_token"],
   },
-  uc: {
+  "uc-persona": {
     // UC (uncensored.com) persona: auth is the durable Clerk `__client` cookie
     // (a JWT with no exp) plus the session id + user id, all stored in
     // providerSpecificData. The executor mints a short-lived `__session` JWT per
@@ -391,9 +391,10 @@ export function getWebSessionCredentialRequirement(
   providerId: unknown
 ): WebSessionCredentialRequirement | null {
   if (typeof providerId !== "string") return null;
+  const canonicalId = providerId === "uc" ? "uc-persona" : providerId;
   return (
     WEB_SESSION_CREDENTIAL_REQUIREMENTS[
-      providerId as keyof typeof WEB_SESSION_CREDENTIAL_REQUIREMENTS
+      canonicalId as keyof typeof WEB_SESSION_CREDENTIAL_REQUIREMENTS
     ] ?? null
   );
 }
@@ -422,6 +423,24 @@ export function hasUsableWebSessionCredential(
   if (!providerSpecificData || typeof providerSpecificData !== "object") return false;
 
   const data = providerSpecificData as Record<string, unknown>;
+  if (providerId === "uc-persona" || providerId === "uc") {
+    const cookieJar =
+      data.ucCookies && typeof data.ucCookies === "object"
+        ? (data.ucCookies as Record<string, unknown>)
+        : data.cookies && typeof data.cookies === "object"
+          ? (data.cookies as Record<string, unknown>)
+          : null;
+    const rawCookie = hasNonEmptyString(data.cookie) ? data.cookie : "";
+    const hasClient =
+      hasNonEmptyString(data.ucClientCookie) ||
+      hasNonEmptyString(data.clientCookie) ||
+      hasNonEmptyString(data.__client) ||
+      hasNonEmptyString(cookieJar?.__client) ||
+      /(?:^|;\s*)__client=\S+/.test(rawCookie);
+    const hasSid = hasNonEmptyString(data.ucSid) || hasNonEmptyString(data.sid);
+    const hasUid = hasNonEmptyString(data.ucUid) || hasNonEmptyString(data.uid);
+    return hasClient && hasSid && hasUid;
+  }
   return requirement.storageKeys.some((key) => hasNonEmptyString(data[key]));
 }
 

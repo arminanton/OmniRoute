@@ -613,13 +613,15 @@ export const AUDIO_SPEECH_PROVIDERS: Record<string, AudioProvider> = {
   // `format: "uc-tts"` branch in audioSpeech.ts drives the socket. The baseUrl is
   // a synthetic marker (the real transport is wss://tts-stream.chatuncensored.ai)
   // and is never fetched.
-  uc: {
-    id: "uc",
+  "uc-persona": {
+    id: "uc-persona",
     baseUrl: "wss://tts-stream.chatuncensored.ai",
     authType: "web-cookie",
     authHeader: "none",
     format: "uc-tts",
-    models: [{ id: "jade", name: "UC Voice (Jade)" }],
+    // `model` and `voice` are distinct on the wire: captured model is "default",
+    // while the captured voice selection is "jade" (the OpenAI `voice` field).
+    models: [{ id: "default", name: "UC TTS (Jade voice)" }],
   },
 };
 

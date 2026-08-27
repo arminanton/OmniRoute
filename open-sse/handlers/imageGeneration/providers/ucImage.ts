@@ -1,10 +1,11 @@
 // UC (uncensored.com) image-generation handler.
-// Family: uc-image | Provider: uc
+// Family: uc-image | Providers: uc-persona, uc-direct
 //
-// UC exposes image generation on TWO surfaces, and this handler serves both,
-// picking by which credential is present:
+// UC exposes image generation on two separately registered surfaces. This
+// shared handler selects by provider id; key-prefix detection remains only for
+// backward compatibility with callers that previously routed persona through `uc`.
 //
-//   (A) PERSONA WEB path (un-metered, Clerk-authenticated). No API key: the
+//   (A) PERSONA WEB path (subscription-backed, daily account limits, Clerk-authenticated). No API key: the
 //       durable Clerk `__client` cookie lives in the connection's
 //       providerSpecificData, from which we mint a short-lived `__session` JWT
 //       (mintUcSessionToken) and call:
@@ -25,14 +26,14 @@
 //           body {model, prompt, n, size}
 //       The response is already OpenAI-shaped ({created, data:[{url}|{b64_json}]}).
 //
-// Residential egress / TLS (if any) is applied transparently at the infra layer;
-// nothing egress-specific lives here. The handler is pure and testable: fetch and
-// sleep are injectable so unit tests drive the pending→poll→200 sequence with no
-// live network.
+// Network policy is supplied by shared transport. This handler contains no
+// provider-specific routing or TLS requirement. Fetch and sleep are injectable,
+// so unit tests drive the pending-to-ready sequence with no live network.
 
 import { resolveUcCredential } from "../../../executors/uc/credentials.ts";
 import { mintUcSessionToken } from "../../../executors/uc/clerkAuth.ts";
 import { UC_ORIGIN } from "../../../executors/uc/constants.ts";
+import { validateUcRemoteUrl } from "../../../executors/uc/urlSafety.ts";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
 import { saveImageErrorResult, saveImageSuccessResult } from "../../imageGeneration.ts";
 
@@ -57,12 +58,13 @@ const UC_ASPECT_SIZES: Record<string, { imageWidth: string; imageHeight: string 
 const UC_DEFAULT_ASPECT = "1:1";
 
 /**
- * Strip a routing prefix (`uc/` or `uc-direct/`) and return the canonical UC
+ * Strip a routing prefix (`uc-persona/`, legacy `uc/`, or `uc-direct/`) and return the canonical UC
  * image model id (the web picker's `model_version` shortname / the REST `model`).
  */
 export function resolveUcImageModel(model: unknown): string {
   let m = typeof model === "string" ? model.trim() : "";
   if (m.startsWith("uc-direct/")) m = m.slice("uc-direct/".length);
+  else if (m.startsWith("uc-persona/")) m = m.slice("uc-persona/".length);
   else if (m.startsWith("uc/")) m = m.slice("uc/".length);
   return m;
 }
@@ -293,17 +295,31 @@ async function handleUcPersonaImage(
     });
   }
 
-  const resultUrl =
+  const rawResultUrl =
     json && typeof json === "object" && typeof (json as Record<string, unknown>).url === "string"
       ? ((json as Record<string, unknown>).url as string)
       : "";
-  if (!resultUrl) {
+  if (!rawResultUrl) {
     return saveImageErrorResult({
       provider,
       model,
       status: 502,
       startTime,
       error: "UC persona image response carried no result url",
+      requestBody,
+    });
+  }
+
+  let resultUrl: string;
+  try {
+    resultUrl = validateUcRemoteUrl(rawResultUrl, "image-result").toString();
+  } catch (err) {
+    return saveImageErrorResult({
+      provider,
+      model,
+      status: 502,
+      startTime,
+      error: sanitizeErrorMessage(err instanceof Error ? err.message : err),
       requestBody,
     });
   }
@@ -530,7 +546,7 @@ export async function handleUcImageGeneration({
     });
   }
 
-  if (isUcDirectCredential(credentials)) {
+  if (provider === "uc-direct" || isUcDirectCredential(credentials)) {
     return handleUcDirectImage({
       model,
       provider,

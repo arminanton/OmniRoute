@@ -9,7 +9,6 @@ import {
   handleUcVideoGeneration,
   UC_PERSONA_SIGNED_URL,
   UC_PERSONA_IMAGE_TO_VIDEO_URL,
-  UC_PERSONA_TEXT_TO_VIDEO_URL,
   UC_DIRECT_VIDEO_URL,
 } from "../../open-sse/handlers/videoGeneration/providers/ucVideo.ts";
 import { VIDEO_PROVIDERS } from "../../open-sse/config/videoRegistry.ts";
@@ -45,26 +44,36 @@ const noSleep = async () => {};
 
 // --- Registry ------------------------------------------------------------
 
-test("uc is registered in VIDEO_PROVIDERS with the uc-video format", () => {
+test("uc-persona and uc-direct own separate video registry entries", () => {
   const entry = (
     VIDEO_PROVIDERS as Record<string, { format?: string; baseUrl?: string; models?: unknown[] }>
-  )["uc"];
-  assert.ok(entry, "uc must exist in VIDEO_PROVIDERS");
+  )["uc-persona"];
+  assert.ok(entry, "uc-persona must exist in VIDEO_PROVIDERS");
   assert.equal(entry.format, "uc-video");
   assert.match(String(entry.baseUrl), /chatuncensored\.ai/);
   assert.ok((entry.models ?? []).some((m) => (m as { id?: string }).id === "wan-2.2-spicy"));
-  assert.ok((entry.models ?? []).some((m) => (m as { id?: string }).id === "seedance-2.0"));
+  assert.equal((entry.models ?? []).length, 1, "persona must advertise only captured video model");
+  const direct = VIDEO_PROVIDERS["uc-direct"];
+  assert.ok(direct, "uc-direct must exist in VIDEO_PROVIDERS");
+  assert.equal(direct.format, "uc-video");
+  assert.equal(direct.authHeader, "x-api-key");
+  assert.ok(direct.models.some((m) => m.id === "seedance-2.0"));
+  assert.equal(
+    direct.models.some((m) => m.id === "wan-2.2-spicy"),
+    false
+  );
 });
 
 // --- Pure helpers --------------------------------------------------------
 
-test("resolveUcVideoModel strips uc/ and uc-direct/ prefixes and defaults", () => {
+test("resolveUcVideoModel strips canonical, legacy, and direct prefixes and defaults", () => {
+  assert.equal(resolveUcVideoModel("uc-persona/wan-2.2-spicy"), "wan-2.2-spicy");
   assert.equal(resolveUcVideoModel("uc/wan-2.2-spicy"), "wan-2.2-spicy");
   assert.equal(resolveUcVideoModel("uc-direct/t2v-turbo"), "t2v-turbo");
   assert.equal(resolveUcVideoModel("seedance-2.0"), "seedance-2.0");
   // Empty / absent -> persona default.
   assert.equal(resolveUcVideoModel(undefined), "wan-2.2-spicy");
-  assert.equal(resolveUcVideoModel("uc/"), "wan-2.2-spicy");
+  assert.equal(resolveUcVideoModel("uc-persona/"), "wan-2.2-spicy");
 });
 
 test("isUcDirectVideoCredential is true only for uai_ keys", () => {
@@ -127,7 +136,7 @@ test("extractUcDirectVideo tolerates several async shapes", () => {
   assert.deepEqual(extractUcDirectVideo(null), {});
 });
 
-// --- Persona text-to-video (mint -> generate -> HEAD poll) ----------------
+// --- Persona image-to-video (mint -> upload -> generate -> HEAD poll) -------
 
 // Builds a fetch that mints a JWT, accepts the generate POST (returns the
 // pre-determined result URL), then serves the result URL as 403 (pending) N
@@ -183,8 +192,8 @@ function personaFetch(opts: {
         },
       } as unknown as Response;
     }
-    // generate POST (text_to_video or image_to_video)
-    if (url === UC_PERSONA_TEXT_TO_VIDEO_URL || url === UC_PERSONA_IMAGE_TO_VIDEO_URL) {
+    // capture-proven image-to-video generate POST
+    if (url === UC_PERSONA_IMAGE_TO_VIDEO_URL) {
       opts.onGenerate?.(url, JSON.parse(String(init.body)), init.headers as Record<string, string>);
       return {
         ok: true,
@@ -220,41 +229,26 @@ function personaFetch(opts: {
   }) as unknown as typeof fetch;
 }
 
-test("handleUcVideoGeneration (persona t2v) mints, posts text_to_video, polls to 200", async () => {
-  const resultUrl = "https://videogen.moveinwater.com/uid_ts_uuid";
-  let genUrl = "";
-  let genBody: Record<string, unknown> = {};
-  let genHeaders: Record<string, string> = {};
-  const fetchImpl = personaFetch({
-    pendingPolls: 2, // 403, 403, then 200
-    resultUrl,
-    jwt: fakeJwt("b03dd963-d0c1-4193-99c9-f5a9d0c66b7f", FUTURE_EXP),
-    onGenerate: (u, b, h) => {
-      genUrl = u;
-      genBody = b;
-      genHeaders = h;
-    },
-  });
-
+test("handleUcVideoGeneration rejects uncaptured persona text-to-video", async () => {
   const result = (await handleUcVideoGeneration({
-    model: "uc/wan-2.2-spicy",
-    provider: "uc",
-    body: { prompt: "generate an animated logo", poll_interval_ms: 1 },
+    model: "uc-persona/wan-2.2-spicy",
+    provider: "uc-persona",
+    body: { prompt: "generate an animated logo" },
     credentials: PERSONA_CRED,
-    fetchImpl,
-    sleepImpl: noSleep,
-  })) as { success: boolean; data?: { data: Array<{ url: string; format: string }> } };
+    fetchImpl: (async (url: string) => {
+      if (url.includes("clerk.uncensored.com")) {
+        return new Response(
+          JSON.stringify({ jwt: fakeJwt("b03dd963-d0c1-4193-99c9-f5a9d0c66b7f", FUTURE_EXP) }),
+          { status: 200 }
+        );
+      }
+      throw new Error(`unexpected generation fetch: ${url}`);
+    }) as unknown as typeof fetch,
+  })) as { success: boolean; status?: number; error?: string };
 
-  assert.equal(result.success, true);
-  assert.equal(result.data?.data[0].url, resultUrl);
-  assert.equal(result.data?.data[0].format, "mp4");
-  // Took the text_to_video path (no input image).
-  assert.equal(genUrl, UC_PERSONA_TEXT_TO_VIDEO_URL);
-  assert.equal(genBody.model, "wan-2.2-spicy");
-  assert.equal(genBody.media_blob_name, null);
-  assert.equal(genBody.num_frames, 81);
-  assert.match(String(genHeaders.Authorization), /^Bearer /);
-  assert.equal(genHeaders.Origin, "https://uncensored.com");
+  assert.equal(result.success, false);
+  assert.equal(result.status, 400);
+  assert.match(result.error ?? "", /requires an input image/i);
 });
 
 test("handleUcVideoGeneration (persona i2v) uploads then posts image_to_video", async () => {
@@ -280,8 +274,8 @@ test("handleUcVideoGeneration (persona i2v) uploads then posts image_to_video", 
   });
 
   const result = (await handleUcVideoGeneration({
-    model: "uc/wan-2.2-spicy",
-    provider: "uc",
+    model: "uc-persona/wan-2.2-spicy",
+    provider: "uc-persona",
     body: {
       prompt: "animate this",
       image: "data:image/png;base64,iVBORw0KGgo=",
@@ -304,8 +298,8 @@ test("handleUcVideoGeneration (persona i2v) uploads then posts image_to_video", 
 
 test("handleUcVideoGeneration (persona) 401s (retryable) when credential missing", async () => {
   const result = (await handleUcVideoGeneration({
-    model: "uc/wan-2.2-spicy",
-    provider: "uc",
+    model: "uc-persona/wan-2.2-spicy",
+    provider: "uc-persona",
     body: { prompt: "x" },
     credentials: {}, // no psd, no api key
     fetchImpl: (async () => {
@@ -326,9 +320,14 @@ test("handleUcVideoGeneration (persona) times out with 504 when never ready", as
     jwt: fakeJwt("uid", FUTURE_EXP),
   });
   const result = (await handleUcVideoGeneration({
-    model: "uc/wan-2.2-spicy",
-    provider: "uc",
-    body: { prompt: "x", timeout_ms: 5, poll_interval_ms: 1 },
+    model: "uc-persona/wan-2.2-spicy",
+    provider: "uc-persona",
+    body: {
+      prompt: "x",
+      image: "data:image/png;base64,iVBORw0KGgo=",
+      timeout_ms: 5,
+      poll_interval_ms: 1,
+    },
     credentials: PERSONA_CRED,
     fetchImpl,
     sleepImpl: noSleep,
@@ -353,8 +352,8 @@ test("handleUcVideoGeneration (persona) surfaces a Clerk mint failure", async ()
   }) as unknown as typeof fetch;
 
   const result = (await handleUcVideoGeneration({
-    model: "uc/wan-2.2-spicy",
-    provider: "uc",
+    model: "uc-persona/wan-2.2-spicy",
+    provider: "uc-persona",
     body: { prompt: "x" },
     credentials: PERSONA_CRED,
     fetchImpl,
@@ -389,7 +388,7 @@ test("handleUcVideoGeneration (direct) returns the url when the submit is comple
 
   const result = (await handleUcVideoGeneration({
     model: "uc-direct/seedance-2.0",
-    provider: "uc",
+    provider: "uc-direct",
     body: { prompt: "a blue sphere spinning", resolution: "480p", duration: 5 },
     credentials: DIRECT_CRED,
     fetchImpl,
@@ -450,7 +449,7 @@ test("handleUcVideoGeneration (direct) polls status_url until complete", async (
 
   const result = (await handleUcVideoGeneration({
     model: "uc-direct/t2v-standard",
-    provider: "uc",
+    provider: "uc-direct",
     body: { prompt: "x", poll_interval_ms: 1, timeout_ms: 60000 },
     credentials: DIRECT_CRED,
     fetchImpl,
@@ -478,7 +477,7 @@ test("handleUcVideoGeneration (direct) returns a job id when callback-only", asy
 
   const result = (await handleUcVideoGeneration({
     model: "uc-direct/i2v-pro",
-    provider: "uc",
+    provider: "uc-direct",
     body: { prompt: "x" },
     credentials: DIRECT_CRED,
     fetchImpl,
@@ -504,7 +503,7 @@ test("handleUcVideoGeneration (direct) 429 retryable, 402/403 not", async () => 
 
   const rate = (await handleUcVideoGeneration({
     model: "uc-direct/t2v-turbo",
-    provider: "uc",
+    provider: "uc-direct",
     body: { prompt: "x" },
     credentials: DIRECT_CRED,
     fetchImpl: directErr(429),
@@ -516,7 +515,7 @@ test("handleUcVideoGeneration (direct) 429 retryable, 402/403 not", async () => 
 
   const funds = (await handleUcVideoGeneration({
     model: "uc-direct/t2v-turbo",
-    provider: "uc",
+    provider: "uc-direct",
     body: { prompt: "x" },
     credentials: DIRECT_CRED,
     fetchImpl: directErr(402),
@@ -529,8 +528,8 @@ test("handleUcVideoGeneration (direct) 429 retryable, 402/403 not", async () => 
 
 test("handleUcVideoGeneration rejects an empty prompt with 400 (both surfaces)", async () => {
   const result = (await handleUcVideoGeneration({
-    model: "uc/wan-2.2-spicy",
-    provider: "uc",
+    model: "uc-persona/wan-2.2-spicy",
+    provider: "uc-persona",
     body: { prompt: "   " },
     credentials: DIRECT_CRED,
     fetchImpl: (async () => {

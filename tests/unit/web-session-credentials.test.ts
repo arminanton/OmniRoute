@@ -127,10 +127,33 @@ test("web session credential validator requires provider-specific non-empty valu
     webSessionCredentials.hasUsableWebSessionCredential("chatgpt-web", { unrelated: "value" }),
     false
   );
+  assert.equal(
+    webSessionCredentials.hasUsableWebSessionCredential("uc-persona", {
+      ucCookies: { __client: "durable" },
+      ucSid: "sess_123",
+      ucUid: "b03dd963-d0c1-4193-99c9-f5a9d0c66b7f",
+    }),
+    true
+  );
+  assert.equal(
+    webSessionCredentials.hasUsableWebSessionCredential("uc-persona", {
+      ucClientCookie: "durable",
+      ucSid: "sess_123",
+    }),
+    false,
+    "UC must not look usable until the WebSocket uid is present"
+  );
+  assert.deepEqual(
+    webSessionCredentials.getWebSessionCredentialRequirement("uc"),
+    webSessionCredentials.getWebSessionCredentialRequirement("uc-persona"),
+    "legacy uc rows must resolve the canonical persona requirement"
+  );
 });
 
 test("no-auth web providers can be saved without an API key", () => {
   assert.equal(providers.providerAllowsOptionalApiKey("veoaifree-web"), true);
+  assert.equal(providers.providerAllowsOptionalApiKey("uc-persona"), true);
+  assert.equal(providers.providerAllowsOptionalApiKey("uc"), true);
   assert.equal(webSessionCredentials.requiresWebSessionCredential("veoaifree-web"), false);
   assert.equal(webSessionCredentials.requiresWebSessionCredential("chatgpt-web"), true);
 });

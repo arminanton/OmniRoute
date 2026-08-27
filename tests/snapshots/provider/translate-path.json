@@ -5751,7 +5751,30 @@
       "stream": "https://api.opentyphoon.ai/v1/chat/completions"
     }
   },
-  "uc": {
+  "uc-direct": {
+    "format": "openai",
+    "headers": {
+      "apiKey": {
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+        "x-api-key": "<CRED>"
+      },
+      "nonStream": {
+        "Content-Type": "application/json",
+        "x-api-key": "<CRED>"
+      },
+      "oauth": {
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+        "x-api-key": "<CRED>"
+      }
+    },
+    "url": {
+      "nonStream": "https://api.uncensored.com/api/v1/chat/completions",
+      "stream": "https://api.uncensored.com/api/v1/chat/completions"
+    }
+  },
+  "uc-persona": {
     "format": "openai",
     "headers": {
       "apiKey": {
@@ -5772,29 +5795,6 @@
     "url": {
       "nonStream": "https://internal-6.pubyar.com",
       "stream": "https://internal-6.pubyar.com"
-    }
-  },
-  "uc-direct": {
-    "format": "openai",
-    "headers": {
-      "apiKey": {
-        "Accept": "text/event-stream",
-        "Content-Type": "application/json",
-        "x-api-key": "<CRED>"
-      },
-      "nonStream": {
-        "Content-Type": "application/json",
-        "x-api-key": "<CRED>"
-      },
-      "oauth": {
-        "Accept": "text/event-stream",
-        "Content-Type": "application/json",
-        "x-api-key": "<CRED>"
-      }
-    },
-    "url": {
-      "nonStream": "https://api.uncensored.com/api/v1",
-      "stream": "https://api.uncensored.com/api/v1"
     }
   },
   "udio": {

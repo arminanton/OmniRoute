@@ -1,8 +1,8 @@
 /**
  * UC (uncensored.com) PERSONA path — wire constants.
  *
- * UC is a consumer subscription app (uncensored.com) whose un-metered "persona"
- * chat runs over a WebSocket to its inference backend. There is no public API on
+ * UC is a consumer subscription app (uncensored.com) whose persona chat runs over
+ * a WebSocket to its inference backend and is subject to daily account limits. There is no public API on
  * this path: auth is a short-lived Clerk `__session` JWT minted from a durable
  * `__client` cookie, passed as the `?token=` query param on the socket URL.
  *

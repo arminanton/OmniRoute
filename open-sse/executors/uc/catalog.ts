@@ -13,7 +13,7 @@
  * publish no separate output cap (bounded by the context window).
  *
  * The ⭐ `-uncensored` / persona variants are the differentiator (unlocked
- * behavior) — the whole reason this un-metered surface is worth porting.
+ * behavior) — the whole reason this subscription persona surface is worth porting.
  */
 import type { RegistryModel } from "../../config/providers/shared.ts";
 
@@ -32,7 +32,7 @@ interface UcModelSpec {
   supportsVision?: boolean;
 }
 
-/** The 19 offered persona (un-metered) chat models. */
+/** The 19 offered persona chat models (daily account limits apply). */
 export const UC_MODELS: UcModelSpec[] = [
   // Anthropic (persona: 4.8 is uncensored-only, so we expose the -uncensored id)
   {

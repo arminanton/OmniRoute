@@ -100,7 +100,8 @@ const executors = {
   bedrock: new BedrockExecutor(),
   codex: new CodexExecutor(),
   "codex-app-server": new CodexAppServerExecutor({}, "codex-app-server"),
-  uc: new UcExecutor(),
+  "uc-persona": new UcExecutor(),
+  uc: new UcExecutor(), // Legacy alias
   "chatgpt-web-codex": new ChatGptWebCodexExecutor(),
   "cgpt-codex": new ChatGptWebCodexExecutor(),
   cursor: new CursorExecutor(),

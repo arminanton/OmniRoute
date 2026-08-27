@@ -1,5 +1,5 @@
 /**
- * UcExecutor — UC (uncensored.com) un-metered "persona" chat as an
+ * UcExecutor — UC (uncensored.com) subscription-backed persona chat as an
  * OpenAI-compatible OmniRoute provider.
  *
  * UC is a consumer subscription app with no public API on the persona path. This
@@ -19,11 +19,9 @@
  * as a prompted `<tool>` contract (the same shared shim the web-cookie providers
  * use, translator/webTools.ts) and parsed back into tool_calls.
  *
- * Egress + TLS: this executor opens no raw socket of its own beyond the `ws`
- * client and the ambient patched `fetch` (token mint); OmniRoute's per-connection
- * proxy + TLS overlay therefore apply automatically. UC does not require a
- * special TLS fingerprint, but the deployment routes it through the same egress
- * chokepoint as every other provider.
+ * Transport: this executor uses the `ws` client and the ambient patched `fetch`.
+ * Operator-configured per-connection proxying applies automatically. UC has no
+ * provider-specific TLS impersonation requirement.
  *
  * Auth refresh: the 60s JWT is minted on demand; when the mint 401/403s the
  * durable ~30-day Clerk window has lapsed and the caller is prompted to re-run the
@@ -44,9 +42,14 @@ import {
   ucUsesCodestyle,
   ucLooksLikeRefusal,
   parseUcExtraDialects,
-  UC_CODESTYLE_HEADER,
+  buildUcCodestylePreamble,
 } from "./uc/toolDialect.ts";
-import { extractCurrentTurnMedia, uploadUcTurnMedia, type UcMediaBlob } from "./uc/media.ts";
+import {
+  extractCurrentTurnMedia,
+  resolveUcRemoteImages,
+  uploadUcTurnMedia,
+  type UcMediaBlob,
+} from "./uc/media.ts";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const SSE_HEADERS = {
@@ -63,9 +66,15 @@ interface OpenAiChatBody {
     tool_call_id?: string;
   }>;
   model?: string;
+  tools?: unknown;
 }
 
-function errorResponse(status: number, message: string, code: string): Response {
+function errorResponse(
+  status: number,
+  message: string,
+  code: string,
+  extraHeaders: Record<string, string> = {}
+): Response {
   return new Response(
     JSON.stringify({
       error: {
@@ -74,23 +83,17 @@ function errorResponse(status: number, message: string, code: string): Response 
         type: status >= 500 ? "provider_error" : "invalid_request_error",
       },
     }),
-    { status, headers: JSON_HEADERS }
+    { status, headers: { ...JSON_HEADERS, ...extraHeaders } }
   );
 }
 
 /**
- * Replace the standard `<tool>` contract that prepareToolMessages folded into the
- * assembled text with UC's natural code-style header for guardrailed models. The
- * shared shim always appends its `<tool>` block as the tail; we strip a trailing
- * "Available tools:"-style block only when present and re-lead with the code-style
- * header. Falls back to appending the code-style header when no block is found.
+ * Add UC's natural code-style contract to text assembled from the RAW messages.
+ * Callers must not pass prepareToolMessages output here: guardrailed models refuse
+ * the formal markup even when a natural instruction is also present.
  */
-function applyCodestylePreamble(text: string): string {
-  // The shared prepareToolMessages injects the tool contract as a system-message
-  // that assembleUcTurn folds into `text`. We can't reliably surgically remove it,
-  // so we PREPEND the code-style header — it re-frames tool use as prose, and the
-  // model prefers the last/clearest instruction. Cheap and safe.
-  return `${UC_CODESTYLE_HEADER}\n\n${text}`;
+function applyCodestylePreamble(text: string, tools: unknown): string {
+  return `${buildUcCodestylePreamble(tools)}\n\n${text}`;
 }
 
 /**
@@ -165,12 +168,62 @@ function classifyTurnError(error: string): { status: number; code: string } {
   }
   if (low.includes("timed out")) return { status: 504, code: "uc_timeout" };
   if (low.includes("generation_failed")) return { status: 502, code: "uc_generation_failed" };
+  if (low.includes("incomplete_response")) return { status: 502, code: "uc_incomplete_response" };
   return { status: 502, code: "uc_upstream_error" };
+}
+
+const UC_QUOTA_ERROR_CODES = new Set([
+  "message_limit_exceeded",
+  "paywall_exceeded",
+  "rate_limit_exceeded",
+]);
+const ucQuotaCooldowns = new Map<string, number>();
+
+/** Test seam; production cooldowns expire naturally at the captured reset time. */
+export function __resetUcQuotaCooldownsForTesting(): void {
+  ucQuotaCooldowns.clear();
+}
+
+function parseUcResetAtMs(value: string | undefined): number | null {
+  if (!value) return null;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function activeUcCooldown(sid: string, now = Date.now()): number | null {
+  const resetAt = ucQuotaCooldowns.get(sid);
+  if (!resetAt) return null;
+  if (resetAt <= now) {
+    ucQuotaCooldowns.delete(sid);
+    return null;
+  }
+  return resetAt;
+}
+
+function rememberUcCooldown(sid: string, turn: UcTurnResult): number | null {
+  if (!turn.errorCode || !UC_QUOTA_ERROR_CODES.has(turn.errorCode)) return null;
+  const resetAt = parseUcResetAtMs(turn.nextReset);
+  if (!resetAt || resetAt <= Date.now()) return null;
+  ucQuotaCooldowns.set(sid, resetAt);
+  return resetAt;
+}
+
+function retryAfterHeaders(resetAt: number): Record<string, string> {
+  const remainingMs = resetAt - Date.now();
+  const seconds = Math.max(1, Math.ceil(remainingMs / 1000));
+  return {
+    "Retry-After": String(seconds),
+    "X-RateLimit-Reset": String(Math.ceil(resetAt / 1000)),
+  };
 }
 
 export class UcExecutor extends BaseExecutor {
   constructor() {
-    super("uc", PROVIDERS.uc ?? { id: "uc", baseUrl: UC_BASE_URL });
+    super("uc-persona", PROVIDERS["uc-persona"] ?? { id: "uc-persona", baseUrl: UC_BASE_URL });
   }
 
   override async execute(input: ExecuteInput): Promise<ExecutorExecuteResult> {
@@ -184,6 +237,19 @@ export class UcExecutor extends BaseExecutor {
           401,
           "UC connection is not configured (missing __client cookie, session id, or uid). Run the email login to bootstrap credentials.",
           "uc_unconfigured"
+        ),
+        url
+      );
+    }
+
+    const cooldownReset = activeUcCooldown(cred.sid);
+    if (cooldownReset) {
+      return wrap(
+        errorResponse(
+          429,
+          `UC persona daily limit is active until ${new Date(cooldownReset).toISOString()}.`,
+          "uc_quota_cooldown",
+          retryAfterHeaders(cooldownReset)
         ),
         url
       );
@@ -212,37 +278,90 @@ export class UcExecutor extends BaseExecutor {
     // Vision + doc input (persona blob layer): extract inline images/docs from the
     // current turn, upload each via the presigned-URL flow, and carry the blob
     // refs in the frame. UC parses the blob server-side (image vision, PDF text).
-    // Best-effort: upload failures are skipped and the chat proceeds text-only.
+    // The captured persona frame supports exactly one blob. Never silently turn
+    // an attachment request into text-only chat: that can produce a plausible but
+    // ungrounded answer from a model that never received the image/document.
     let media: UcMediaBlob[] = [];
-    try {
-      const { inline } = extractCurrentTurnMedia(originalMessages);
-      if (inline.length) {
-        media = await uploadUcTurnMedia(inline, {
+    const extractedMedia = extractCurrentTurnMedia(originalMessages);
+    if (extractedMedia.requestedMediaCount > 1) {
+      return wrap(
+        errorResponse(
+          400,
+          "UC persona currently supports one image or document per turn.",
+          "uc_too_many_attachments"
+        ),
+        url
+      );
+    }
+    if (extractedMedia.requestedMediaCount === 1) {
+      let uploadCandidates = extractedMedia.inline;
+      try {
+        if (extractedMedia.remoteImageUrls.length) {
+          uploadCandidates = await resolveUcRemoteImages(extractedMedia.remoteImageUrls);
+        }
+      } catch (err) {
+        return wrap(
+          errorResponse(
+            400,
+            `UC could not safely fetch the remote image: ${sanitizeErrorMessage(
+              err instanceof Error ? err.message : err
+            )}`,
+            "uc_invalid_remote_image"
+          ),
+          url
+        );
+      }
+      if (uploadCandidates.length !== 1) {
+        return wrap(
+          errorResponse(400, "UC attachment is missing or malformed.", "uc_invalid_attachment"),
+          url
+        );
+      }
+      try {
+        media = await uploadUcTurnMedia(uploadCandidates, {
           jwt,
           uid: cred.uid,
           signal: input.signal,
           log: input.log ?? undefined,
         });
+      } catch {
+        media = [];
       }
-    } catch {
-      media = [];
+      if (media.length !== 1) {
+        return wrap(
+          errorResponse(
+            502,
+            "UC could not upload the requested attachment.",
+            "uc_attachment_upload_failed"
+          ),
+          url
+        );
+      }
     }
 
-    // Tool-calling (prompted protocol): inject the <tool> contract into the
-    // messages so the model learns the client tools; response side parses the
-    // <tool> blocks back into tool_calls. Same shim the web-cookie providers use.
-    // For models UC wraps in a hard guardrail that refuses the <tool_call> markup
-    // (e.g. gpt-5.5), swap to the natural code-style dialect that slips past it.
+    // Tool-calling (prompted protocol). Most models use the shared formal
+    // contract. Guardrailed models (currently gpt-5.5) must never see that markup:
+    // render their natural code-style contract directly from the raw schemas.
     const codestyle = ucUsesCodestyle(input.model);
-    const { hasTools, requestedTools, effectiveMessages } = prepareToolMessages(
-      body as Record<string, unknown>,
-      originalMessages as Array<{ role: string; content: unknown }>
-    );
+    const prepared = codestyle
+      ? {
+          hasTools: Array.isArray(body.tools) && body.tools.length > 0,
+          requestedTools: Array.isArray(body.tools) ? body.tools : [],
+          effectiveMessages: originalMessages,
+        }
+      : prepareToolMessages(
+          body as Record<string, unknown>,
+          originalMessages as Array<{ role: string; content: unknown }>
+        );
+    const { hasTools, requestedTools, effectiveMessages } = prepared;
 
     const assembled = assembleUcTurn(
       effectiveMessages as Array<{ role?: string; content?: unknown; name?: string }>
     );
-    let text = codestyle ? applyCodestylePreamble(assembled.text) : assembled.text;
+    let text =
+      codestyle && hasTools
+        ? applyCodestylePreamble(assembled.text, requestedTools)
+        : assembled.text;
     const history = assembled.history;
     if (!text) {
       return wrap(errorResponse(400, "No user message to send to UC.", "uc_empty_request"), url);
@@ -275,7 +394,7 @@ export class UcExecutor extends BaseExecutor {
         media,
         signal: input.signal,
       });
-      const errResp = this.turnErrorResponse(turn, url);
+      const errResp = this.turnErrorResponse(turn, url, cred.sid);
       if (errResp) return errResp;
 
       let answer = turn.content;
@@ -289,16 +408,21 @@ export class UcExecutor extends BaseExecutor {
         !!parseToolCallsFromText(answer, "probe", requestedTools).toolCalls ||
         parseUcExtraDialects(answer, requestedTools, input.model).length > 0;
       if (!firstHasCall && !codestyle && ucLooksLikeRefusal(answer)) {
-        const curedText = applyCodestylePreamble(assembled.text);
+        // Reassemble from the RAW messages so the retry contains no formal
+        // `<tool>` system block from prepareToolMessages.
+        const curedBase = assembleUcTurn(originalMessages);
+        const curedText = applyCodestylePreamble(curedBase.text, requestedTools);
         const retry = await runUcTurn({
           jwt,
           uid: cred.uid,
           model: input.model,
           text: curedText,
-          history,
+          history: curedBase.history,
           media,
           signal: input.signal,
         });
+        const retryErrorResponse = this.turnErrorResponse(retry, url, cred.sid);
+        if (retryErrorResponse) return retryErrorResponse;
         if (!retry.error && retry.content) {
           const retryHasCall =
             !!parseToolCallsFromText(retry.content, "probe", requestedTools).toolCalls ||
@@ -367,7 +491,7 @@ export class UcExecutor extends BaseExecutor {
       media,
       signal: input.signal,
     });
-    const errResp = this.turnErrorResponse(turn, url);
+    const errResp = this.turnErrorResponse(turn, url, cred.sid);
     if (errResp) return errResp;
 
     const answer = turn.content;
@@ -408,10 +532,23 @@ export class UcExecutor extends BaseExecutor {
    * message returned AS the answer) is surfaced as a retryable 502 so OmniRoute
    * can fall back instead of handing the user a bogus reply.
    */
-  private turnErrorResponse(turn: UcTurnResult, url: string): ReturnType<typeof wrap> | null {
+  private turnErrorResponse(
+    turn: UcTurnResult,
+    url: string,
+    sid: string
+  ): ReturnType<typeof wrap> | null {
     if (turn.error) {
       const { status, code } = classifyTurnError(turn.error);
-      return wrap(errorResponse(status, `UC persona turn failed: ${turn.error}`, code), url);
+      const resetAt = rememberUcCooldown(sid, turn);
+      return wrap(
+        errorResponse(
+          status,
+          `UC persona turn failed: ${turn.error}`,
+          code,
+          resetAt ? retryAfterHeaders(resetAt) : undefined
+        ),
+        url
+      );
     }
     const soft = detectUcSoftError(turn.content);
     if (soft) {
@@ -469,11 +606,12 @@ export class UcExecutor extends BaseExecutor {
           },
         });
 
+        if (turn.error) rememberUcCooldown(cred.sid, turn);
         const err = turn.error ?? sawError;
         // A soft-error apology returned AS the answer is not a real reply — treat
         // it as an error when nothing streamed.
         const soft = !err && !streamed ? detectUcSoftError(turn.content) : null;
-        if ((err || soft) && !streamed) {
+        if (err || soft) {
           const reason = err ?? `transient soft-error: ${soft}`;
           const { code } = classifyTurnError(String(reason));
           controller.enqueue(

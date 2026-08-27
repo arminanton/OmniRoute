@@ -27,7 +27,7 @@ export type UcEvent =
   | { kind: "reasoning"; text: string }
   | { kind: "delta"; text: string }
   | { kind: "done"; text: string }
-  | { kind: "error"; text: string };
+  | { kind: "error"; text: string; code?: string; nextReset?: string };
 
 /** Error codes that arrive as a top-level frame and must be surfaced immediately. */
 const UC_TOP_LEVEL_ERROR_CODES = new Set([
@@ -107,7 +107,12 @@ export class UcFrameParser {
         const reset = m.next_reset;
         const detail =
           `${msg} (code=${effCode}` + (reset ? `, next_reset=${String(reset)}` : "") + ")";
-        events.push({ kind: "error", text: `uc_${effCode}: ${detail}`.slice(0, 300) });
+        events.push({
+          kind: "error",
+          text: `uc_${effCode}: ${detail}`.slice(0, 300),
+          code: effCode,
+          ...(reset ? { nextReset: String(reset) } : {}),
+        });
         this.finished = true;
         break;
       }

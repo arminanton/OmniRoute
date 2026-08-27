@@ -814,4 +814,13 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     authPrefix: "Bearer ",
     parseResponse: (data) => data.data || data.models || [],
   },
+  "uc-direct": {
+    // uncensored.com's model catalog is intentionally public. Do not attach the
+    // developer key as Bearer auth: chat/media use X-api-key, while this GET needs
+    // no credential at all.
+    url: "https://api.uncensored.com/api/v1/models",
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    parseResponse: (data) => data.data || data.models || [],
+  },
 };

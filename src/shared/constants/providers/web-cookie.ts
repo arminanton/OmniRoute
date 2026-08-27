@@ -505,10 +505,10 @@ export const WEB_COOKIE_PROVIDERS = {
     authHint:
       "Use browser sign-in, or paste the full Cookie header from conol.ai. The __Secure-better-auth.session_token cookie is required.",
   },
-  uc: {
-    id: "uc",
-    alias: "ucn",
-    name: "UC (uncensored.com)",
+  "uc-persona": {
+    id: "uc-persona",
+    alias: "uc",
+    name: "UC Persona / Emotional",
     icon: "auto_awesome",
     color: "#111827",
     textIcon: "UC",
@@ -516,12 +516,12 @@ export const WEB_COOKIE_PROVIDERS = {
     // No subscriptionRisk / riskNoticeVariant / notice: UC is TOKEN-authenticated
     // — a durable Clerk credential from which OmniRoute mints a fresh short-lived
     // session token per request, browserlessly. It is not a fragile browser-cookie
-    // session, so the "webCookie" caveat is inaccurate. The un-metered subscription
-    // session renews automatically within its window; only the periodic re-login
-    // (email code) needs an operator, and the authHint covers that.
+    // session, so the "webCookie" caveat is inaccurate. The subscription session
+    // renews automatically within its window; daily message limits still apply.
+    // Only the periodic re-login (email code) needs an operator.
     toolCalling: "emulated",
     authHint:
-      "Sign in once with an email code to bootstrap a UC (uncensored.com) subscription session. OmniRoute mints a fresh short-lived token per request browserlessly, so the connection renews on its own; you only re-run the email login about once a month when the subscription session rolls over.",
+      "Sign in with an email code to bootstrap UC Persona / Emotional. OmniRoute mints a fresh short-lived token per request browserlessly; daily account message limits still apply, and you re-run email login about once a month when the Clerk session rolls over.",
   },
 };
 

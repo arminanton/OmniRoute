@@ -15,9 +15,11 @@ import {
   buildUcTtsStartFrame,
   buildUcTtsWsUrl,
   handleUcTextToSpeech,
+  normalizeUcTtsModel,
   runUcTtsSocket,
   __setUcTtsWebSocketForTesting,
 } from "../../open-sse/handlers/uc/ucTts.ts";
+import { AUDIO_SPEECH_PROVIDERS } from "../../open-sse/config/audioRegistry.ts";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -72,7 +74,10 @@ function b64(bytes: number[]): string {
  * onmessage / onerror / onclose + send/close. On `send` it replays a scripted set
  * of server frames (each an already-JSON-stringified string) then closes.
  */
-function makeFakeWs(frames: string[], opts: { failConnect?: boolean } = {}) {
+function makeFakeWs(
+  frames: string[],
+  opts: { failConnect?: boolean; failAfterFrames?: boolean } = {}
+) {
   return class FakeWS {
     onopen: (() => void) | null = null;
     onmessage: ((e: { data: unknown }) => void) | null = null;
@@ -89,7 +94,8 @@ function makeFakeWs(frames: string[], opts: { failConnect?: boolean } = {}) {
     send(_data: string) {
       setTimeout(() => {
         for (const f of frames) this.onmessage?.({ data: f });
-        this.onclose?.();
+        if (opts.failAfterFrames) this.onerror?.();
+        else this.onclose?.();
       }, 0);
     }
     close() {
@@ -113,6 +119,15 @@ test("buildUcTtsStartFrame carries the text, voice, and jwt with fresh uuids", (
   assert.equal(frame.thread_id, frame.threadId);
   assert.match(frame.message_id, /^[0-9a-f-]{36}$/);
   assert.notEqual(frame.message_id, frame.turn_anchor_message_id);
+});
+
+test("UC TTS advertises model default, keeps jade as the voice, and normalizes the legacy model", () => {
+  assert.deepEqual(AUDIO_SPEECH_PROVIDERS["uc-persona"].models, [
+    { id: "default", name: "UC TTS (Jade voice)" },
+  ]);
+  assert.equal(normalizeUcTtsModel(undefined), "default");
+  assert.equal(normalizeUcTtsModel("jade"), "default");
+  assert.equal(normalizeUcTtsModel("future-tier"), "future-tier");
 });
 
 test("buildUcTtsWsUrl targets the tts-stream host with token in query", () => {
@@ -185,6 +200,25 @@ test("handleUcTextToSpeech mints a token then returns decoded MP3 bytes", async 
   assert.equal(result.contentType, "audio/mpeg");
   assert.ok(result.audio);
   assert.deepEqual(Array.from(result.audio as Uint8Array), [0x49, 0x44, 0x33, 0x01, 0x02, 0x03]);
+});
+
+test("handleUcTextToSpeech rejects partial audio after a socket error", async (t) => {
+  const restore = __setUcTtsWebSocketForTesting(
+    makeFakeWs([JSON.stringify({ data: b64([0x49, 0x44, 0x33]) })], {
+      failAfterFrames: true,
+    })
+  );
+  t.after(restore);
+
+  const result = await handleUcTextToSpeech({
+    text: "read this aloud",
+    voice: "jade",
+    credentials: { providerSpecificData: psd() },
+    fetchImpl: tokenFetch(),
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 502);
+  assert.equal(result.audio, undefined);
 });
 
 test("handleUcTextToSpeech defaults an empty voice to jade", async (t) => {
