@@ -8,6 +8,16 @@ const FINGERPRINT_KEY = "omniroute-admission-fingerprint-v1";
 export const ADMISSION_BYPASS_HEADER = "x-omniroute-admission-bypass";
 
 export function resolveSessionId(request: Request): string {
+  const explicitSession =
+    request.headers.get("x-session-id") ||
+    request.headers.get("x-conversation-id") ||
+    request.headers.get("session-id") ||
+    request.headers.get("conversation-id") ||
+    request.headers.get("x-request-id");
+  if (explicitSession?.trim()) {
+    return `sess_${fingerprint(explicitSession.trim())}`;
+  }
+
   const authHeader = request.headers.get("authorization") || "";
   const bearerMatch = /^bearer\s+(\S+)$/i.exec(authHeader.trim());
   if (bearerMatch) return fingerprint(bearerMatch[1]);
