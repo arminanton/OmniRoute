@@ -173,6 +173,13 @@ function ensureByAliasPopulated(): void {
     if (entry.alias && entry.alias !== entry.id) {
       _byAlias.set(entry.alias, entry);
     }
+    if (entry.additionalAliases) {
+      for (const extra of entry.additionalAliases) {
+        if (extra && extra !== entry.id && !_byAlias.has(extra)) {
+          _byAlias.set(extra, entry);
+        }
+      }
+    }
   }
 }
 /** Get registry entry by provider ID or alias */

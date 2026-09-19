@@ -36,7 +36,12 @@ export function getToolNonce(tools: unknown): string {
   if (!Array.isArray(tools) || tools.length === 0) return "";
   let nonce = toolNonceMap.get(tools);
   if (!nonce) {
-    nonce = Math.random().toString(36).slice(2, 10);
+    try {
+      const { randomBytes } = require("node:crypto");
+      nonce = randomBytes(8).toString("hex");
+    } catch {
+      nonce = Math.random().toString(36).slice(2, 10);
+    }
     toolNonceMap.set(tools, nonce);
   }
   return nonce;

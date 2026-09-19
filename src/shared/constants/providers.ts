@@ -352,6 +352,11 @@ function getOrCreateAliasToId(): Record<string, string> {
     for (const section of _PROVIDER_SECTIONS) {
       for (const p of Object.values(section)) {
         if ((p as any).alias) _ALIAS_TO_ID[(p as any).alias] = (p as any).id;
+        if ((p as any).additionalAliases) {
+          for (const extra of (p as any).additionalAliases) {
+            _ALIAS_TO_ID[extra] = (p as any).id;
+          }
+        }
       }
     }
   }
@@ -429,7 +434,11 @@ export const AUTH_METHODS = {
 export function getProviderByAlias(alias: string): AiProviderDefinition | null {
   for (const section of _PROVIDER_SECTIONS) {
     for (const provider of Object.values(section)) {
-      if (provider.alias === alias || provider.id === alias) {
+      if (
+        provider.alias === alias ||
+        provider.id === alias ||
+        (provider as any).additionalAliases?.includes(alias)
+      ) {
         return provider as AiProviderDefinition;
       }
     }

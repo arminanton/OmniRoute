@@ -512,11 +512,12 @@ export const WEB_COOKIE_PROVIDERS = {
     authHint:
       "Sign in once (email code or browser) to mint a MaxAI access token. OmniRoute signs each request, routes it through residential egress, and refreshes the token browserlessly, so a connection stays valid for about a year without re-login.",
   },
-  uc: {
-    id: "uc",
+  "uc-persona": {
+    id: "uc-persona",
     serviceKinds: ["llm"],
-    alias: "ucn",
-    name: "UC (uncensored.com)",
+    alias: "uc",
+    additionalAliases: ["ucn"],
+    name: "UC Persona / Emotional",
     icon: "auto_awesome",
     color: "#111827",
     textIcon: "UC",

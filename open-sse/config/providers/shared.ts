@@ -126,6 +126,7 @@ export type ReasoningTransport = "plaintext" | "opaque" | "none";
 export interface RegistryEntry {
   id: string;
   alias?: string;
+  additionalAliases?: readonly string[];
   format: string;
   executor: string;
   baseUrl?: string;

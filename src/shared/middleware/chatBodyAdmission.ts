@@ -64,7 +64,7 @@ export const CHAT_HARD_MAX_BODY_BYTES = parsePositiveInt(
 
 export const CHAT_MAX_HEAVY_IN_FLIGHT = parsePositiveInt(
   process.env.OMNIROUTE_CHAT_MAX_HEAVY_IN_FLIGHT,
-  1
+  50
 );
 
 /**
@@ -76,7 +76,7 @@ export const CHAT_MAX_HEAVY_IN_FLIGHT = parsePositiveInt(
  */
 export const CHAT_ADMISSION_QUEUE_MAX_MS = parseNonNegativeInt(
   process.env.OMNIROUTE_CHAT_ADMISSION_QUEUE_MS,
-  2000
+  30000
 );
 
 /**
@@ -89,7 +89,7 @@ export const CHAT_ADMISSION_QUEUE_MAX_MS = parseNonNegativeInt(
  */
 export const CHAT_ADMISSION_MAX_QUEUED_BYTES = parsePositiveInt(
   process.env.OMNIROUTE_CHAT_ADMISSION_MAX_QUEUED_BYTES,
-  4 * 1024 * 1024
+  64 * 1024 * 1024
 );
 
 /**

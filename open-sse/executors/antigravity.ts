@@ -1619,6 +1619,10 @@ export class AntigravityExecutor extends BaseExecutor {
           updateAntigravityRemainingCredits
         );
         if (creditsResult) return { kind: "return", result: creditsResult };
+        if (retryMs && (decision.kind === "full_quota_exhausted" || decision.kind === "short_cooldown_switch_auth")) {
+          markConnectionQuotaExhausted(accountId, retryMs, ctx.model);
+        }
+      } else if (decision.kind === "full_quota_exhausted" || decision.kind === "short_cooldown_switch_auth") {
         if (retryMs) markConnectionQuotaExhausted(accountId, retryMs, ctx.model);
       }
 

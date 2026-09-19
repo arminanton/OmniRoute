@@ -285,6 +285,12 @@ export interface HandleUcTextToSpeechResult {
 export async function handleUcTextToSpeech(
   input: HandleUcTextToSpeechInput
 ): Promise<HandleUcTextToSpeechResult> {
+  // Owner Directive D3: UC speech is policy-disabled to conserve AI credits
+  return {
+    ok: false,
+    status: 400,
+    error: "UC text-to-speech is disabled by policy to conserve AI credits.",
+  };
   const text = typeof input.text === "string" ? input.text : "";
   if (!text.trim()) {
     return { ok: false, status: 400, error: "input text is required" };
