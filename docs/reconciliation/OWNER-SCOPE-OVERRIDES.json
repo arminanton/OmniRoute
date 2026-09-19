@@ -1,0 +1,34 @@
+{
+  "authority": "direct owner instruction after initial audit",
+  "check_overrides": {
+    "G0-03": "UC TTS cap selection is deferred; retain attachment/video/reset controls and MaxAI resource controls.",
+    "G3-01": "UC core excludes TTS and STT.",
+    "G3-02": "Replace TTS port proof with negative proof that UC TTS is disabled before transport.",
+    "G3-04": "UC suite includes negative speech route tests only.",
+    "G3-06": "TTS gate is permanently OFF for this release.",
+    "G3-07": "Replace TTS decoder tests with zero-transport disabled-route tests; recovered TTS artifacts remain provenance only.",
+    "G3-15": "No TTS error mapping implementation is required while route is disabled; test disabled fail-close.",
+    "G9": "No UC TTS/STT request is eligible for a live envelope."
+  },
+  "decisions": [
+    {
+      "decision": "Keep three boundaries separate: saved native extension layouts 1/2/3/4/6; a distinct recovered host-shim council with a seven-seat parallel=7 outer trace, committed twelve-seat aggregate/real-ChatService driver, and configurable local ceiling 30; and the owner's exact 30/32 episode, whose request-level trace and completion set remain missing. None establishes provider capacity or authorizes concurrency. Do not treat greater-than-six behavior as disproven.",
+      "id": "D1",
+      "topic": "maxai_parallel_history"
+    },
+    {
+      "decision": "Each future lane must reuse one ordinary single-chat request, private stream accumulator, and hardened provider-exposed reasoning parser. It owns unique run/lane/turn/attempt IDs plus mode-correct conversation/message/parent/tool/cancel/continuation state; provider-returned IDs are recorded only when supplied.",
+      "id": "D2",
+      "topic": "maxai_multilane_protocol"
+    },
+    {
+      "decision": "UC TTS and UC STT are excluded from core and live validation because they consume AI credits. Keep disabled/OFF; reopening requires a new explicit owner decision and credit budget.",
+      "id": "D3",
+      "topic": "uc_speech_scope"
+    }
+  ],
+  "effect": "Project roadmap/acceptance overrides the initial audit planning scope. Forensic audit-source remains unchanged as historical evidence.",
+  "recorded_at_utc": "2026-09-10T10:28:58.212080+00:00",
+  "schema": "uc-maxai-project-scope-overrides/v1",
+  "updated_at_utc": "2026-09-10T11:29:12.399271+00:00"
+}

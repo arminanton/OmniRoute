@@ -1,0 +1,220 @@
+{
+  "files": [
+    {
+      "bytes": 10517,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/MASTER-PLAN.md",
+      "sha256": "efaef503937539cce1ea202af613eb3732acd337928273760ceefa46db55d650",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/MASTER-PLAN.md"
+    },
+    {
+      "bytes": 1214,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/DECISIONS.md",
+      "sha256": "c40738b1f726e56dc8d295b66bd3131d83d68a95a497cdbef07610922bbdc591",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/DECISIONS.md"
+    },
+    {
+      "bytes": 2362,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/OWNER-SCOPE-OVERRIDES.json",
+      "sha256": "902d97bafc22eda9a8a933add71040744ed99592db68cda20e153e9d7f9054d0",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/plans/OWNER-SCOPE-OVERRIDES.json"
+    },
+    {
+      "bytes": 4358,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/LOCAL-NEXT-BASELINE.json",
+      "sha256": "49021ee639d04963d2e31c3b11e99e4e2737ed2e8d756d746977a8abdb83c7b8",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/evidence-index/LOCAL-NEXT-BASELINE.json"
+    },
+    {
+      "bytes": 3545,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/MAXAI-WIDE-LANE-EVIDENCE.json",
+      "sha256": "92b998973ff1b71bf6c905d3cb75fc65cdd43f343efb3ec66c24801aa4f572b0",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/evidence-index/MAXAI-WIDE-LANE-EVIDENCE.json"
+    },
+    {
+      "bytes": 4640,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/00-executive-guide.md",
+      "sha256": "36735bf55ade8d7452bc29e815628d6ae4e59a8a049154e74ba733f2df6cf20a",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/00-executive-guide.md"
+    },
+    {
+      "bytes": 5766,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/01-what-is-pending.md",
+      "sha256": "e3a90cd75b23543a8d9b8b0736affc6f699339862608978d3726b2051efc4b63",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/01-what-is-pending.md"
+    },
+    {
+      "bytes": 9199,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/02-inputs-files-and-media.md",
+      "sha256": "e23a7956d5c947a7386b654d613d1cb31b494f2e89b3f4848ee5825688c19d1e",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/02-inputs-files-and-media.md"
+    },
+    {
+      "bytes": 10867,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/03-maxai-parallel-lanes.md",
+      "sha256": "f2d155da93e5914968f24882161f32fe67e7b7a7ec428d7413614c1903d2e21c",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/03-maxai-parallel-lanes.md"
+    },
+    {
+      "bytes": 4457,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/04-uc-model-discovery.md",
+      "sha256": "038fde6a9c3cc4f9533be3375b9aed4a7d5572df341e1a90eb42da2ef01d7df7",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/04-uc-model-discovery.md"
+    },
+    {
+      "bytes": 4980,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/05-residential-operations.md",
+      "sha256": "132bfc06cfbdd8c5f2411a84383e399f48f1722b52fdefe362977d461703a0b7",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/05-residential-operations.md"
+    },
+    {
+      "bytes": 11710,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/06-implementation-roadmap.md",
+      "sha256": "80c73fd1e8dbff6d4956f0ce4c6c7b67e8acba6d90f2462853d26b9f19f29ff6",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/06-implementation-roadmap.md"
+    },
+    {
+      "bytes": 8936,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/07-validation-matrix.md",
+      "sha256": "033cdc80d48901ea6e3d93a86bdd9f768113c074d22ef505952f43e9b1c32f55",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/07-validation-matrix.md"
+    },
+    {
+      "bytes": 4282,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/08-decisions-and-defaults.md",
+      "sha256": "1680029601f52c3f41333685024601cf6c5c80328b76e9cad873865fd4838073",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/08-decisions-and-defaults.md"
+    },
+    {
+      "bytes": 3742,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/09-owner-scope-update.md",
+      "sha256": "4bc786de879a5af707f30c88ffb73ca144fb3204b3a7268cdadcb1dbe696ab95",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/09-owner-scope-update.md"
+    },
+    {
+      "bytes": 4757,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/10-maxai-extension-findings.md",
+      "sha256": "630015ce93ac20c08b1ce66b7173d2cecbdcfc2f62303c664008c84f0346c286",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/10-maxai-extension-findings.md"
+    },
+    {
+      "bytes": 3467,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/11-concurrency-and-email-auth.md",
+      "sha256": "9c238891eac1884423921d58892170e9959652c28f7d22a7f00983383203d4aa",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/11-concurrency-and-email-auth.md"
+    },
+    {
+      "bytes": 2948,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/12-blue-green-deployment.md",
+      "sha256": "9061020c9facd3721c78f29fdafcb89558c1fb9c7f9a13645f9f7b8a5d2c25bb",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/12-blue-green-deployment.md"
+    },
+    {
+      "bytes": 2234,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/13-prime-style-blue-green-architecture.md",
+      "sha256": "b1838b3c860c4f02fdad726042adbb58383f943b4ba7a52c57addf9ffa1452a0",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/13-prime-style-blue-green-architecture.md"
+    },
+    {
+      "bytes": 4713,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/14-container-build-optimization.md",
+      "sha256": "5814823e457956aa40f0c488f09ce98c57f9ef18aa44e2f69810b8c3b92ca526",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/14-container-build-optimization.md"
+    },
+    {
+      "bytes": 10517,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/15-master-reconciliation-and-build-plan.md",
+      "sha256": "efaef503937539cce1ea202af613eb3732acd337928273760ceefa46db55d650",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/docs/15-master-reconciliation-and-build-plan.md"
+    },
+    {
+      "bytes": 79165,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/gates-and-pending.md",
+      "sha256": "1ffd69b30638099fdcfa2a44e2876182296b06da9665e7871ad1c971a9e830c4",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/gates-and-pending.md"
+    },
+    {
+      "bytes": 54803,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/implementation-roadmap.md",
+      "sha256": "c2f18c22f94b2208ee014239f09c9e1d104b9d9d07dc6bace9ad496aeeac6cfb",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/implementation-roadmap.md"
+    },
+    {
+      "bytes": 41168,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/input-upload-media.md",
+      "sha256": "665a3dd67480b1b916ad0c39d3e9a5f43f6956b8632f676894576c5c5e918b99",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/input-upload-media.md"
+    },
+    {
+      "bytes": 30836,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/maxai-parallel-lanes.md",
+      "sha256": "2735e4c258a2b5136912b814aab39882e29ab98d9e8563b878245cc22379c713",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/maxai-parallel-lanes.md"
+    },
+    {
+      "bytes": 27102,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/maxai-extension-archaeology.md",
+      "sha256": "24391b6da1cdc2610f212cfeb59ff6828eb867444d69eac96cd9a6bb4bf72424",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/maxai-extension-archaeology.md"
+    },
+    {
+      "bytes": 34188,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/maxai-legacy-lane-recovery.md",
+      "sha256": "a94925a09a858862b5217c88307bb1ee9a1e4da019c3794bae76afe4c51ef86a",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/maxai-legacy-lane-recovery.md"
+    },
+    {
+      "bytes": 56156,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/maxai-multilane-protocol-design.md",
+      "sha256": "37e74edae1eb7d2367c6a0cb8c2f4cbbda2fb0d2d100270126e55cc8f1bbcb9a",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/maxai-multilane-protocol-design.md"
+    },
+    {
+      "bytes": 42800,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/residential-operations.md",
+      "sha256": "f80391a732989acc57d3ca01ad53afc0574e6b08b40f641c71f1c81de0477796",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/residential-operations.md"
+    },
+    {
+      "bytes": 3531,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/BRANCH-CONTINUITY-REVIEW.md",
+      "sha256": "6583955287c34b2fa8d56d273decc770eb1bc815f1687e6dc8ffa042841d61e4",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/BRANCH-CONTINUITY-REVIEW.md"
+    },
+    {
+      "bytes": 7597,
+      "destination": "/home/ndsadmin/_/omnirouter/docs/reconciliation/evidence/FOLLOWUP-COLD-READ.md",
+      "sha256": "8e98ce9c850ca3d60d29dbce51b9dc8b952f1d7de1a46348553fcaed6d34b422",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/workers/FOLLOWUP-COLD-READ.md"
+    },
+    {
+      "bytes": 3927,
+      "destination": "/home/ndsadmin/_/omnirouter/bin/auto-email-login.py",
+      "sha256": "e1f2122d7a755e7a8cd1cf9a6e768be980bef98e548923c9d4a3d13cd1efb7ef",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/scripts/auth/auto_email_login.py"
+    },
+    {
+      "bytes": 3103,
+      "destination": "/home/ndsadmin/_/omnirouter/bin/deploy-reconciled.sh",
+      "sha256": "748d8454fcd9109156fd60c90f2d3f2c262119f34aca2de031309caf9eaaf52a",
+      "source": "/home/ndsadmin/_/uc-maxai-recon/scripts/deploy-reconciled.sh"
+    }
+  ],
+  "global_skill": {
+    "path": "/home/ndsadmin/.prime/agent/skills/omniroute-deploy/SKILL.md",
+    "sha256": "d93dfdff32b6d355da45e4baea95b6b278601a20fe6bb295ea57f9cae2a786dc"
+  },
+  "migrated_at_utc": "2026-09-19T21:12:51.256485+00:00",
+  "operational_docs_root": "/home/ndsadmin/_/omnirouter/docs/reconciliation",
+  "permanent_root": "/home/ndsadmin/_/omnirouter",
+  "policy": {
+    "active_source": "/home/ndsadmin/_/omnirouter/src",
+    "development_branch": "next",
+    "host_specific_branch": "local-overrides",
+    "production_marker": "local",
+    "provider_calls": 0,
+    "runtime_mutations": 0,
+    "temporary_repo_status": "historical/read-only"
+  },
+  "schema": "omnirouter-reconciliation-migration/v1",
+  "temporary_archive": "/home/ndsadmin/_/uc-maxai-recon"
+}

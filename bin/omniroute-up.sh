@@ -27,6 +27,7 @@ APP="omniroute"
 REDIS="omniroute-redis"
 TS_EGRESS="omni-ts-egress"
 PROFILE="base"
+COMPOSE_PROVIDER="${PODMAN_COMPOSE_PROVIDER:-${HOME:-/home/ndsadmin}/.local/bin/podman-compose}"
 
 log() { echo "[omniroute-up] $*"; }
 
@@ -69,7 +70,7 @@ recreate_fresh() {
   # The bind-mounted workspace on persistent storage is untouched, so no data
   # is lost, only the container instances are rebuilt around the same volume.
   log "clearing any stale container records before fresh create"
-  podman rm -f "$APP" "$REDIS" >/dev/null 2>&1 || true
+  podman rm -f "$APP" "$REDIS" "$TS_EGRESS" >/dev/null 2>&1 || true
   compose_up
 }
 
@@ -81,7 +82,11 @@ compose_up() {
   # together with --pod, and the override uses keep-id userns so the workspace
   # is owned by host ndsadmin (uid/gid 400). Without this the create fails with
   # "--userns and --pod cannot be set together".
-  podman compose --in-pod=false --profile "$PROFILE" up -d
+  if [ -x "$COMPOSE_PROVIDER" ]; then
+    "$COMPOSE_PROVIDER" --in-pod=false --profile "$PROFILE" up -d
+  else
+    podman compose --in-pod=false --profile "$PROFILE" up -d
+  fi
 }
 
 if start_existing; then

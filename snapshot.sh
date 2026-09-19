@@ -27,6 +27,14 @@ done
 echo "[snapshot] copying gitignored docker-compose.override.yml ..."
 cp -a "$ROOT/src/docker-compose.override.yml" "$HERE/" 2>/dev/null || true
 
+echo "[snapshot] copying reconciliation/operations docs ..."
+mkdir -p "$HERE/docs/reconciliation"
+cp -a "$ROOT/docs/reconciliation/." "$HERE/docs/reconciliation/" 2>/dev/null || true
+
+echo "[snapshot] copying installed OmniRoute deploy skill ..."
+mkdir -p "$HERE/skills/omniroute-deploy"
+cp -a "$HOME/.prime/agent/skills/omniroute-deploy/SKILL.md" "$HERE/skills/omniroute-deploy/" 2>/dev/null || true
+
 echo "[snapshot] done. Review with 'git status' then commit."
 
 if [ "${1:-}" = "--commit" ]; then

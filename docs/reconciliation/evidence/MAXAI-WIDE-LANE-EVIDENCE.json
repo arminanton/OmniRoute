@@ -1,0 +1,86 @@
+{
+  "generated_at_utc": "2026-09-10T11:10:18.153273+00:00",
+  "original_git": {
+    "backup_path": "/mnt/devvm/custom/MaxAI/tools/shim-dotgit-backup.tgz",
+    "backup_sha256": "8e33653d0c7b2604325f2d4bf4c15c32a3e2370457d4a58fe4fb5e318b2634b2",
+    "branch": "feat/cc-port-phases-a-d",
+    "fsck": "clean",
+    "live_harness_commit": "dec963ab51a191c5d3679c9733dab5b1aa2f4804",
+    "roster_commit": "51477e8dc7a9fc9b5b054e9d315188cbcfb5a52d",
+    "tip": "e4ad9652ba045da6465d0e22339be3ed84d7a65f"
+  },
+  "owner_attestation": {
+    "claim": "Historically more than six, potentially 30/32, MaxAI lanes ran successfully.",
+    "status": "attested; exact 30/32 trace not recovered; not disproven."
+  },
+  "privacy": "No raw prompt, token, cookie, account identifier, provider authorization header, or raw trace content is copied here.",
+  "reasoning": {
+    "aggregate_council_events_recovered": true,
+    "per_seat_payloads_recovered": false,
+    "policy": "Each future lane uses the same single-chat parser and stores only provider-exposed reasoning."
+  },
+  "schema": "maxai-legacy-wide-lane-evidence/v1",
+  "seven_seat_trace": {
+    "evidence_lines": [
+      {
+        "line": 11,
+        "line_sha256": "e1115efa2ae474b815f7060c886b48f186cf79ddd447e8562cc381b7b23fa84b",
+        "outcome": "ACCEPT",
+        "parallel": 7,
+        "seats": 7
+      },
+      {
+        "line": 12,
+        "line_sha256": "9ff9bf1cc717baf1ada00753f7e360bbd565d4ebc3bc5871ad639d0f0612c378",
+        "outcome": "ACCEPT",
+        "parallel": 7,
+        "seats": 7
+      },
+      {
+        "line": 13,
+        "line_sha256": "c14707844afd55966e04abc3f97510177f9d730bc03b9f3976d4021938596bb4",
+        "outcome": "REVISE then budget exhausted",
+        "parallel": 7,
+        "seats": 7
+      },
+      {
+        "line": 14,
+        "line_sha256": "b18ffddacdaf605bf2d70ab27354ef28e78aa3f25f7d9a1defa3802da3a85e1c",
+        "outcome": "ACCEPT",
+        "parallel": 7,
+        "seats": 7
+      },
+      {
+        "duration_seconds": 36.9342,
+        "line": 15,
+        "line_sha256": "64b8c358ffcfb9427b1f7b7de0c949abfbc4698b55791fe0cc787aff5b58a948",
+        "parallel": 7,
+        "rounds": [
+          "REVISE",
+          "REVISE",
+          "ACCEPT"
+        ],
+        "seats": 7
+      }
+    ],
+    "limitation": "Host scheduling and aggregate completion proof; no seven per-provider request IDs/timestamps or per-seat reasoning survived.",
+    "records": 58,
+    "source_path": "/mnt/devvm/custom/tmp/maxai-live-trace.jsonl",
+    "source_sha256": "adc427b7dad5eee57a8e87029b322f54e5e3b4b842d582034c85c0936915c12f"
+  },
+  "thirty_ceiling": {
+    "basis": "original numeric justification used an unrelated search-result setting and is invalid",
+    "disposition": "configurable historical ceiling, not provider maximum or current authorization",
+    "exact_30_live_trace": "not recovered",
+    "implementation": "MAXAI_COUNCIL_FANOUT_CEILING default 30 survives in source/tests"
+  },
+  "twelve_seat_harness": {
+    "completed_aggregate_cases": 5,
+    "configured_wide_seats": 12,
+    "driver_sha256": "fd9434f544b3254b33bb1f9715401cb30d258d87cc8752426df77b33f4bfc4ba",
+    "driver_source": "/mnt/devvm/custom/MaxAI/shim/tools/wide_vs_narrow_council.py",
+    "limitation": "Real ChatService aggregate execution; no twelve provider request receipts or per-seat reasoning.",
+    "result_sha256": "e837f457e345096504431b1cb24fcaa0ba2cd489a22a365b7b51d52a2bff8dee",
+    "result_source": "/mnt/devvm/custom/MaxAI/shim/analysis/live-proofs/wide-vs-narrow-council.json"
+  }
+}

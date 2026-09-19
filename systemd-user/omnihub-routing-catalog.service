@@ -1,0 +1,28 @@
+[Unit]
+Description=OmniHub sanitized native routing observations
+StartLimitIntervalSec=600
+StartLimitBurst=2
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/devvm/custom/omnirouter/hub
+Environment="PATH=/home/ndsadmin/.nvm/versions/node/v22.22.3/bin:/usr/bin:/bin"
+Environment="OMNIHUB_STATE_ROOT=/mnt/devvm/custom/omnirouter/workspace/omnihub"
+Environment="GOMAXPROCS=1"
+Environment="UV_THREADPOOL_SIZE=1"
+Environment="OMNIHUB_ROUTING_OBSERVER_CPU=0"
+ExecStart=/home/ndsadmin/.nvm/versions/node/v22.22.3/bin/node --v8-pool-size=1 --import tsx scripts/runtime/export-routing-catalog.mts --watch
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=20
+MemoryMax=256M
+CPUQuota=20%
+CPUAffinity=0
+TasksMax=48
+LimitCORE=0
+Nice=10
+IOWeight=10
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -100,6 +100,10 @@ services:
       # working while internet DNS resolves through the tunnel's upstream.
       - APP_EGRESS_EXIT_NODE=100.100.95.35
       - APP_EGRESS_HOSTNAME=omni-app-egress
+      # Local M4 Q38 needs ~160s to prefill Hermes' 16K-token tool schema.
+      # Keep the first useful SSE event gate above that cold/wide-prompt cost.
+      - STREAM_READINESS_TIMEOUT_MS=300000
+      - STREAM_READINESS_MAX_TIMEOUT_MS=300000
 
   redis:
     userns_mode: "keep-id:uid=0,gid=0"
@@ -145,6 +149,10 @@ services:
     environment:
       - TS_USERSPACE=false
       - TS_STATE_DIR=/var/lib/tailscale
+      # Persisted sidecar state is already authenticated. Avoid forcing
+      # `tailscale up` before the fresh daemon has received its peer netmap;
+      # the failover watcher selects the first online exit node after startup.
+      - TS_AUTH_ONCE=true
       - TS_AUTHKEY=file:/run/ts-authkey
       # Primary exit = NUC (100.100.95.35). The failover watcher (bin/
       # ts-egress-failover.sh) flips this to the laptop (100.76.165.46) if NUC

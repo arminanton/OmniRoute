@@ -37,3 +37,16 @@ recoverable, without ever being a merge candidate for `main`/release.
 - **Do NOT merge this into any `feat/*`, `main`, or release branch.**
 - It is intentionally disjoint history; `git merge` would drag infra into a PR.
 - Update it by re-snapshotting the on-box files (see `snapshot.sh`).
+
+
+## 2026-09 permanent project layout
+
+- Canonical source: `/home/ndsadmin/_/omnirouter/src`
+- Active development branch: `next`
+- Deployed-source marker: `local`
+- Host helpers: `/home/ndsadmin/_/omnirouter/bin`
+- Local operations/reconciliation docs: `/home/ndsadmin/_/omnirouter/docs/reconciliation`
+- Installed Prime skill: `~/.prime/agent/skills/omniroute-deploy/SKILL.md`
+- Historical forensic archive: `/home/ndsadmin/_/uc-maxai-recon`
+
+This orphan branch now also snapshots `docs/reconciliation/` and `skills/omniroute-deploy/`. They remain host-specific and must not be merged into upstream product branches.

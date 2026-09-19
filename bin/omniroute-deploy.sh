@@ -22,6 +22,7 @@ SRC_DIR="$ROOT/src"
 BIN_DIR="$ROOT/bin"
 WORKSPACE="$ROOT/workspace"
 PROFILE="base"
+BUILD_NOFILE_LIMIT="${OMNIROUTE_BUILD_NOFILE_LIMIT:-65536:65536}"
 
 log() { echo "[omniroute-deploy] $*"; }
 
@@ -29,11 +30,20 @@ cd "$SRC_DIR" || { echo "[omniroute-deploy] FATAL: $SRC_DIR missing" >&2; exit 1
 
 # ── 1. Raw image from the fork (heavy multi-stage build) ──────────────
 log "building omniroute:raw from fork Dockerfile (target=runner-base)..."
-podman build --target runner-base -t localhost/omniroute:raw . 
+log "using build nofile limit: $BUILD_NOFILE_LIMIT"
+podman build \
+  --ulimit "nofile=$BUILD_NOFILE_LIMIT" \
+  --target runner-base \
+  -t localhost/omniroute:raw \
+  .
 
 # ── 2. Apply local ESM fix layer -> omniroute:base ────────────────────
 log "applying ESM fix layer -> omniroute:base"
-podman build -f "$BIN_DIR/omniroute-fix.Containerfile" -t localhost/omniroute:base "$BIN_DIR"
+podman build \
+  --ulimit "nofile=$BUILD_NOFILE_LIMIT" \
+  -f "$BIN_DIR/omniroute-fix.Containerfile" \
+  -t localhost/omniroute:base \
+  "$BIN_DIR"
 
 # ── 3. Workspace ownership: host ndsadmin (uid/gid 400) ───────────────
 # The override runs both containers with keep-id userns, mapping the app's

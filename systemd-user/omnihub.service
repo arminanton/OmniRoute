@@ -1,0 +1,17 @@
+[Unit]
+Description=OmniHub isolated companion stack
+After=network-online.target omniroute.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=OMNIHUB_SOURCE_DIR=/mnt/devvm/custom/omnirouter/hub
+Environment=OMNIHUB_STATE_ROOT=/mnt/devvm/custom/omnirouter/workspace/omnihub
+ExecStart=/mnt/devvm/custom/omnirouter/bin/omnihub-up.sh
+ExecStop=/mnt/devvm/custom/omnirouter/bin/omnihub-down.sh
+TimeoutStartSec=600
+TimeoutStopSec=180
+
+[Install]
+WantedBy=default.target

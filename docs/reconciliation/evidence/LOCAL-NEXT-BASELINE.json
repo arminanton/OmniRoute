@@ -1,0 +1,97 @@
+{
+  "active_development_branch": "next",
+  "active_development_commit": "3111f1929d702c3cb23f9ca8e914f6a439d46c2f",
+  "active_development_upstream": "origin/next",
+  "live_container": {
+    "base_image_inspect": "2026-09-19 17:43:56.8599978 +0000 UTC d3fec53ad1e9bd1ee8135a8791ee80414473f88641d3e4af9e8f50b6631ea249",
+    "health": "healthy",
+    "image_id": "d3fec53ad1e9bd1ee8135a8791ee80414473f88641d3e4af9e8f50b6631ea249",
+    "name": "omniroute"
+  },
+  "live_source_proof": {
+    "all_hashes_match": true,
+    "critical_file_count": 10,
+    "files": {
+      "open-sse/config/providerRegistry.ts": {
+        "host": "bfaa9c3008caa0fff0b14625b096e503a3a0406211379020214893e75495d7f3",
+        "live": "bfaa9c3008caa0fff0b14625b096e503a3a0406211379020214893e75495d7f3",
+        "match": true
+      },
+      "open-sse/config/providers/registry/uc/index.ts": {
+        "host": "5a0b8f9f8cb51f0756e0077be1db5ffa9d6c362b8480d57ed610d53cec9caa65",
+        "live": "5a0b8f9f8cb51f0756e0077be1db5ffa9d6c362b8480d57ed610d53cec9caa65",
+        "match": true
+      },
+      "open-sse/config/providers/shared.ts": {
+        "host": "df85e23fbdd5a5713093109a65ab22084aa0d9cd8320594fe82e4e21b12e93df",
+        "live": "df85e23fbdd5a5713093109a65ab22084aa0d9cd8320594fe82e4e21b12e93df",
+        "match": true
+      },
+      "open-sse/executors/antigravity.ts": {
+        "host": "316399859646b8f2e1b7b3c89390cff1bf33ac2020e25adab1d8ca8f70cfaa8d",
+        "live": "316399859646b8f2e1b7b3c89390cff1bf33ac2020e25adab1d8ca8f70cfaa8d",
+        "match": true
+      },
+      "open-sse/handlers/uc/ucTts.ts": {
+        "host": "5b6a6a18dd0fe5fdcd3b9a9937c86cd0ef2e51ba4fb7369e33d9c0d857556a3d",
+        "live": "5b6a6a18dd0fe5fdcd3b9a9937c86cd0ef2e51ba4fb7369e33d9c0d857556a3d",
+        "match": true
+      },
+      "open-sse/translator/webTools.ts": {
+        "host": "cc28aba8fec157817d6897defbe794545639f02ffc41e19d8d64d3e15ca4b37e",
+        "live": "cc28aba8fec157817d6897defbe794545639f02ffc41e19d8d64d3e15ca4b37e",
+        "match": true
+      },
+      "src/shared/constants/providers.ts": {
+        "host": "2e6a956779de46bebf4d6628208c2c81e1c581d03866eeb53249ce4b76715f41",
+        "live": "2e6a956779de46bebf4d6628208c2c81e1c581d03866eeb53249ce4b76715f41",
+        "match": true
+      },
+      "src/shared/constants/providers/web-cookie.ts": {
+        "host": "5e338ec5bb7e06272ecac32e65e1be00e031643b740eb0dcc6ed9a05c34c4545",
+        "live": "5e338ec5bb7e06272ecac32e65e1be00e031643b740eb0dcc6ed9a05c34c4545",
+        "match": true
+      },
+      "src/shared/middleware/chatAdmissionIdentity.ts": {
+        "host": "a0abc58e6d11a7ecfba3c06b634ee66d1630cdb653f05943fbc4bcbdd4bb2c0b",
+        "live": "a0abc58e6d11a7ecfba3c06b634ee66d1630cdb653f05943fbc4bcbdd4bb2c0b",
+        "match": true
+      },
+      "src/shared/middleware/chatBodyAdmission.ts": {
+        "host": "0d1406549d6e9752041abd812c3f1ac7dd8a38f130753b0496ed94f6e63b6810",
+        "live": "0d1406549d6e9752041abd812c3f1ac7dd8a38f130753b0496ed94f6e63b6810",
+        "match": true
+      }
+    }
+  },
+  "main_repo": "/home/ndsadmin/_/omnirouter/src",
+  "next_action": "Create feature branches from next. Merge tested slices into next. Deploy candidate; move local only after verified cutover.",
+  "preserved_work": [
+    {
+      "bytes": 15500,
+      "kind": "stash",
+      "message": "preserve untracked tailscale stop-owned test before local-next workflow",
+      "path": "tests/unit/tailscaleTunnel-stop-owned.test.ts",
+      "ref": "stash@{0}",
+      "sha256": "aaf3b39df6badb135417f5f41a0e3785641c03974ec253a78e7a23b487ea30e7",
+      "untracked_commit": "69b61695b211e7e7d079a96f8afb492d6009a23b"
+    },
+    {
+      "kind": "stash",
+      "message": "WIP on uc-improvements",
+      "ref": "stash@{1}"
+    }
+  ],
+  "production_marker_branch": "local",
+  "production_marker_commit": "3111f1929d702c3cb23f9ca8e914f6a439d46c2f",
+  "production_marker_upstream": "origin/local",
+  "provider_calls": 0,
+  "reconcile_branch": "reconcile/uc-maxai-20260910",
+  "reconcile_commit": "3111f1929d702c3cb23f9ca8e914f6a439d46c2f",
+  "reconcile_upstream": "origin/reconcile/uc-maxai-20260910",
+  "recorded_at_utc": "2026-09-19T20:24:55.168471+00:00",
+  "refs_and_remotes_equal": true,
+  "runtime_mutated": false,
+  "schema": "omniroute-local-next-baseline/v1",
+  "tree_oid": "7b50274f4093bb6ade72010dffa59a949480d9d6"
+}
