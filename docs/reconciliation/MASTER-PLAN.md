@@ -87,7 +87,7 @@ This master plan unifies all forensic audit discoveries, high-concurrency gatewa
 ---
 
 ### Track 3: Personal Automated Email Login Helper
-* **File**: `~/_/uc-maxai-recon/scripts/auth/auto_email_login.py`
+* **File**: `~/_/omnirouter/bin/auto-email-login.py`
 * **Execution**: Invokes `/home/ndsadmin/.local/bin/codex` with `gpt-5.6-luna` (reasoning: `medium`) + `gmail@openai-curated-remote` plugin.
 * **Behavior**: Queries Gmail inbox for verification passcodes from MaxAI or UC/Clerk received in the last 2 minutes and submits them browserlessly.
 * **Privacy**: Stored in personal private repository `https://github.com/arminanton/uc-maxai-recon` and never published upstream.

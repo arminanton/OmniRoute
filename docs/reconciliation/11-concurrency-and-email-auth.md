@@ -41,7 +41,7 @@ In `open-sse/executors/antigravity.ts` (lines 1622–1630):
 Both MaxAI and UC Persona authenticate via one-time email passcodes.
 
 ### Implementation: `scripts/auth/auto_email_login.py`
-Located at `~/_/uc-maxai-recon/scripts/auth/auto_email_login.py`:
+Located at `~/_/omnirouter/bin/auto-email-login.py`:
 * Uses local `/home/ndsadmin/.local/bin/codex` with model `gpt-5.6-luna` (reasoning: `medium`).
 * Leverages the active `gmail@openai-curated-remote` plugin to search Gmail inbox for verification emails received in the last 2 minutes.
 * Extracts the numerical passcode and submits it to complete login browserlessly.
