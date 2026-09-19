@@ -9,7 +9,7 @@ OmniRoute does not need Prime Agent's two physical source clones. The running se
 | `local` | Frozen marker for the exact source commit deployed in production. It tracks `origin/local` and is not used for development. |
 | `next` | Active integration/development branch checked out at `~/_/omnirouter/src`. New feature branches start here and return here after review. It tracks `origin/next`. |
 
-Current verified baseline is recorded in `../evidence-index/LOCAL-NEXT-BASELINE.json`.
+Current verified baseline is recorded in `evidence/LOCAL-NEXT-BASELINE.json`.
 
 ## Candidate-image workflow
 

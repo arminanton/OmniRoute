@@ -1,27 +1,46 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────
 #  OmniRoute Reconciled Build & Deploy Script
-#  Builds from the reconciled clean repository at:
-#  /mnt/devvm/custom/omniroute-uc-maxai-reconcile-9492357/repo
+#  Builds from the canonical OmniRoute checkout at:
+#  /mnt/devvm/custom/omnirouter/src
+#  The checkout must be clean and on branch `next` unless an explicit ref is supplied.
 #
-#  Applies high ulimits (nofile=1048576, nproc=247058)
+#  LEGACY CONTROLLED-RECREATE HELPER: this has brief downtime and is not true hot-swap.
+#  Applies high nofile ulimit (1048576)
 #  Builds omniroute:raw -> omniroute:base -> restarts omniroute container
 # ──────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
 ROOT="/mnt/devvm/custom/omnirouter"
-RECONCILE_SRC="/mnt/devvm/custom/omniroute-uc-maxai-reconcile-9492357/repo"
+SRC_DIR="$ROOT/src"
+TARGET_REF="${1:-next}"
 BIN_DIR="$ROOT/bin"
 WORKSPACE="$ROOT/workspace"
 BUILD_NOFILE_LIMIT="${OMNIROUTE_BUILD_NOFILE_LIMIT:-1048576:1048576}"
 
 log() { echo "[deploy-reconciled] $*"; }
 
-log "Checking source directory: $RECONCILE_SRC"
-cd "$RECONCILE_SRC" || { echo "[deploy-reconciled] FATAL: $RECONCILE_SRC missing" >&2; exit 1; }
+log "Checking canonical source directory: $SRC_DIR"
+cd "$SRC_DIR" || { echo "[deploy-reconciled] FATAL: $SRC_DIR missing" >&2; exit 1; }
+CURRENT_BRANCH="$(git branch --show-current)"
+CURRENT_HEAD="$(git rev-parse HEAD)"
+TARGET_SHA="$(git rev-parse "$TARGET_REF")"
+if [ -n "$(git status --porcelain)" ]; then
+  echo "[deploy-reconciled] FATAL: source tree is dirty" >&2
+  exit 1
+fi
+if [ "$TARGET_REF" = "next" ] && [ "$CURRENT_BRANCH" != "next" ]; then
+  echo "[deploy-reconciled] FATAL: default deployment requires checked-out branch next (current=$CURRENT_BRANCH)" >&2
+  exit 1
+fi
+if [ "$CURRENT_HEAD" != "$TARGET_SHA" ]; then
+  echo "[deploy-reconciled] FATAL: explicit target $TARGET_REF is not checked out; use a dedicated worktree/candidate builder" >&2
+  exit 1
+fi
+log "Building source $TARGET_REF at $TARGET_SHA"
 
-# ── 1. Build raw image from reconciled fork ────────────────────────────
-log "Building omniroute:raw from reconciled repository..."
+# ── 1. Build raw image from canonical next ─────────────────────────────
+log "Building omniroute:raw from canonical source..."
 podman build \
   --ulimit "nofile=$BUILD_NOFILE_LIMIT" \
   --target runner-base \
