@@ -1,0 +1,238 @@
+{
+  "candidate": {
+    "branch": "integrate/codex-ready",
+    "deployment_planned": false,
+    "head": "60528efab",
+    "session_id": "01a0bdc5-1711-75d2-85ee-3f495ecabce0",
+    "session_name": "omni-models",
+    "uc_changes": false,
+    "worktree": "/home/ndsadmin/_/omnirouter/integration-codex-ready"
+  },
+  "db_safe_metadata": {
+    "connection_count": 1,
+    "contains_required_clerk_fields": true,
+    "provider_specific_data_keys": [
+      "apiKeyHealth",
+      "signedInAt",
+      "ucClientCookie",
+      "ucCookies",
+      "ucLoginEmail",
+      "ucSid",
+      "ucUid"
+    ],
+    "rows": [
+      {
+        "api_key_bytes": 107,
+        "auth_type": "apikey",
+        "is_active": true,
+        "name": "UC (uncensored.com) \u2014 subscription",
+        "provider": "uc",
+        "provider_specific_data_bytes": 1735,
+        "test_status": "active"
+      }
+    ],
+    "uc_direct_connection_count": 0
+  },
+  "findings": [
+    {
+      "finding": "Registry/executor correctly define UC Persona as no API key with durable Clerk credentials, but provider catalog groups all web-cookie providers as toggleAuthType=apikey and no UC-specific email-login modal exists. The generic modal therefore presents an API-key/cookie-style add flow.",
+      "id": "UC-AUTH-UI-01",
+      "severity": "blocking"
+    },
+    {
+      "finding": "UC emailLogin.ts is fully implemented and offline-tested but has no production caller. POST /api/providers/[id]/login only dispatches MaxAI, Adobe, Conol, then generic browser login; it never dispatches UC request/verify steps.",
+      "id": "UC-AUTH-API-01",
+      "severity": "blocking"
+    },
+    {
+      "finding": "Canonical provider is uc-persona with uc/ucn aliases, but WEB_SESSION_CREDENTIAL_REQUIREMENTS is keyed only as uc. uc-persona therefore has no web-session requirement. Generic connection POST also hardcodes authType=apikey.",
+      "id": "UC-AUTH-CANON-01",
+      "severity": "blocking"
+    },
+    {
+      "finding": "Personal Codex/Gmail helper only retrieves and prints an OTP in --test-fetch-only mode. It does not request a code, call OmniRoute login request/verify endpoints, or persist credentials. It is not integrated with portal/UI.",
+      "id": "UC-AUTH-PERSONAL-01",
+      "severity": "blocking"
+    },
+    {
+      "finding": "UC Direct is correctly modeled as a separate metered X-API-Key surface and has no configured connection, but it remains registered/routing-capable in code. The audit-required policy-disabled/ineligible state is documented intent, not enforced by an explicit product gate.",
+      "id": "UC-DIRECT-01",
+      "severity": "policy-gap"
+    },
+    {
+      "finding": "Live/local/next/candidate all contain identical 19-model static Persona catalog. Dynamic upstream Persona roster discovery remains optional and not implemented.",
+      "id": "UC-MODELS-01",
+      "severity": "ready-static"
+    },
+    {
+      "finding": "Existing active Persona connection remains provider=uc and auth_type=apikey despite containing the correct Clerk providerSpecificData. Aliases let routing work, but portal metadata remains misleading until transactional canonical migration to uc-persona/cookie or dedicated auth type.",
+      "id": "UC-DB-01",
+      "severity": "migration-needed"
+    },
+    {
+      "finding": "Before release, add an explicit negative policy gate proving UC Direct cannot be onboarded, credentialed, routed, or used as fallback. Merely having zero current connections is insufficient.",
+      "id": "UC-DIRECT-POLICY-02",
+      "severity": "blocking-policy"
+    }
+  ],
+  "generated_at_utc": "2026-09-20T13:54:32.826362+00:00",
+  "live": {
+    "health": "healthy",
+    "image_id": "2da177b31fa307b5208179e19aed49a1d9f4df086eccc586aff620ce260804e4",
+    "persona_catalog_count": 19,
+    "persona_models": [
+      "claude-opus-45",
+      "claude-opus-46",
+      "claude-opus-46-v2",
+      "claude-opus-47",
+      "claude-opus-47-v2",
+      "claude-opus-48-uncensored",
+      "deepseek-r1",
+      "glm-5.1",
+      "gpt-5.5",
+      "gemini-3-flash",
+      "gemini-31-uncensored",
+      "gemini-emotional",
+      "gemini-3-uncensored",
+      "grok-4",
+      "grok-4-20",
+      "grok-4-3",
+      "kimi-k2-thinking",
+      "kimi-k2.5",
+      "minimax-m2-her"
+    ],
+    "source_matches_next_ui_auth_files": true,
+    "uc_direct_auth_type": "api_key",
+    "uc_registry_auth_header": "none",
+    "uc_registry_auth_type": "none"
+  },
+  "model_discovery": {
+    "later_observed_examples": [
+      "GLM 5.2",
+      "GPT 5.6 Sol Pro",
+      "Grok 4.5",
+      "Fable variants",
+      "Gemini 3.6/3.7 Flash",
+      "Kimi K3 variants"
+    ],
+    "observed_dynamic_roster_counts": [
+      22,
+      27,
+      32
+    ],
+    "static_reviewed_count": 19,
+    "status": "not in static catalog; metadata-only discovery/quarantine future; no auto-route"
+  },
+  "refs": {
+    "candidate": {
+      "catalog_ids": [
+        "claude-opus-45",
+        "claude-opus-46",
+        "claude-opus-46-v2",
+        "claude-opus-47",
+        "claude-opus-47-v2",
+        "claude-opus-48-uncensored",
+        "deepseek-r1",
+        "glm-5.1",
+        "gpt-5.5",
+        "gemini-3-flash",
+        "gemini-31-uncensored",
+        "gemini-emotional",
+        "gemini-3-uncensored",
+        "grok-4",
+        "grok-4-20",
+        "grok-4-3",
+        "kimi-k2-thinking",
+        "kimi-k2.5",
+        "minimax-m2-her"
+      ],
+      "ref": "integrate/codex-ready",
+      "uc_direct_blob": "8e56c4dfeb072b64fa163e05c960d624d6dbbdbf",
+      "uc_registry_blob": "ecc14e21ee6a5d1f02cfb78cd2428f49a7fd92bd"
+    },
+    "local": {
+      "catalog_ids": [
+        "claude-opus-45",
+        "claude-opus-46",
+        "claude-opus-46-v2",
+        "claude-opus-47",
+        "claude-opus-47-v2",
+        "claude-opus-48-uncensored",
+        "deepseek-r1",
+        "glm-5.1",
+        "gpt-5.5",
+        "gemini-3-flash",
+        "gemini-31-uncensored",
+        "gemini-emotional",
+        "gemini-3-uncensored",
+        "grok-4",
+        "grok-4-20",
+        "grok-4-3",
+        "kimi-k2-thinking",
+        "kimi-k2.5",
+        "minimax-m2-her"
+      ],
+      "ref": "local",
+      "uc_direct_blob": "8e56c4dfeb072b64fa163e05c960d624d6dbbdbf",
+      "uc_registry_blob": "ecc14e21ee6a5d1f02cfb78cd2428f49a7fd92bd"
+    },
+    "next": {
+      "catalog_ids": [
+        "claude-opus-45",
+        "claude-opus-46",
+        "claude-opus-46-v2",
+        "claude-opus-47",
+        "claude-opus-47-v2",
+        "claude-opus-48-uncensored",
+        "deepseek-r1",
+        "glm-5.1",
+        "gpt-5.5",
+        "gemini-3-flash",
+        "gemini-31-uncensored",
+        "gemini-emotional",
+        "gemini-3-uncensored",
+        "grok-4",
+        "grok-4-20",
+        "grok-4-3",
+        "kimi-k2-thinking",
+        "kimi-k2.5",
+        "minimax-m2-her"
+      ],
+      "ref": "next",
+      "uc_direct_blob": "8e56c4dfeb072b64fa163e05c960d624d6dbbdbf",
+      "uc_registry_blob": "ecc14e21ee6a5d1f02cfb78cd2428f49a7fd92bd"
+    },
+    "reconcile": {
+      "catalog_ids": [
+        "claude-opus-45",
+        "claude-opus-46",
+        "claude-opus-46-v2",
+        "claude-opus-47",
+        "claude-opus-47-v2",
+        "claude-opus-48-uncensored",
+        "deepseek-r1",
+        "glm-5.1",
+        "gpt-5.5",
+        "gemini-3-flash",
+        "gemini-31-uncensored",
+        "gemini-emotional",
+        "gemini-3-uncensored",
+        "grok-4",
+        "grok-4-20",
+        "grok-4-3",
+        "kimi-k2-thinking",
+        "kimi-k2.5",
+        "minimax-m2-her"
+      ],
+      "ref": "reconcile/uc-maxai-20260910",
+      "uc_direct_blob": "8e56c4dfeb072b64fa163e05c960d624d6dbbdbf",
+      "uc_registry_blob": "ecc14e21ee6a5d1f02cfb78cd2428f49a7fd92bd"
+    }
+  },
+  "safety": {
+    "provider_calls": 0,
+    "runtime_mutations": 0,
+    "source_edits": 0
+  },
+  "schema": "uc-auth-model-integration-audit/v1"
+}
