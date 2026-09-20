@@ -13,18 +13,18 @@
  *   - Dispatch is fully parallel. A slow/hung model is bounded by
  *     `panelHardTimeoutMs` and, crucially, its underlying request is *aborted* on
  *     timeout (not merely resolved-to-fallback) so the connection is released.
- *   - Broadcast is PROGRESSIVE: each panel model's answer is enqueued onto the
- *     SSE stream the moment that model lands — the client does not wait for the
- *     whole panel to finish before receiving the first part. Each part is wrapped
- *     in an SSE `omni-chaos-part` event carrying its own model id. IDEs that
- *     understand the protocol can render several panels; IDEs that don't just see
- *     the canonical final block (the highest-scoring model's answer is used as the
- *     final response chunk).
+ *   - Panel results are buffered until transport classification completes. This
+ *     lets an exhausted local-network response propagate unchanged before an SSE
+ *     success envelope is committed. Each ordinary part is then wrapped in an SSE
+ *     `omni-chaos-part` event carrying its own model id. IDEs that understand the
+ *     protocol can render several panels; other clients see the canonical final
+ *     block from the highest-scoring successful model.
  *   - Unlike fusion, chaos does NOT run a separate judge synthesis call — it
  *     surfaces raw per-model outputs.
  */
 
 import { errorResponse } from "../../utils/error.ts";
+import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
 import type { PerTargetAdmissionHook } from "../admission/types.ts";
 import type { ComboLogger, HandleSingleModel } from "../combo/types.ts";
 
@@ -42,9 +42,6 @@ export type ChaosTuning = {
 
 type Body = Record<string, unknown>;
 
-/** Minimal shape of the downstream single-model dispatch target (carries an abort signal). */
-type ChaosTarget = { modelAbortSignal?: AbortSignal };
-
 export type ChaosPart = {
   model: string;
   index: number;
@@ -52,6 +49,9 @@ export type ChaosPart = {
   text: string;
   error?: string;
 };
+
+type ChaosDispatchOutcome =
+  { part: ChaosPart; terminalResponse: null } | { part: null; terminalResponse: Response };
 
 /**
  * Build the SSE wrapper for one chaos panel part.
@@ -165,17 +165,21 @@ function dispatchOnePanelModel(opts: {
   ctrl: AbortController;
   hardTimeout: number;
   log?: { info?: (...a: unknown[]) => void; warn?: (...a: unknown[]) => void };
-  /** Optional callback invoked per-result so callers (handleChaosChat) can
-   *  enqueue progressive SSE events without duplicating dispatch logic. */
-  onResult?: (part: ChaosPart) => Promise<void>;
-}): Promise<ChaosPart> {
-  const { body, model, index, handleSingleModel, ctrl, hardTimeout, log, onResult } = opts;
+  /** Optional callback invoked before a terminal response is returned. */
+  onTerminalResponse?: (response: Response) => void;
+}): Promise<ChaosDispatchOutcome> {
+  const { body, model, index, handleSingleModel, ctrl, hardTimeout, log, onTerminalResponse } =
+    opts;
   return withTimeout(
-    (async (): Promise<ChaosPart> => {
+    (async (): Promise<ChaosDispatchOutcome> => {
       try {
         const res = await handleSingleModel(body, model, {
           modelAbortSignal: ctrl.signal,
         });
+        if (isExhaustedNetworkResponse(res)) {
+          onTerminalResponse?.(res);
+          return { part: null, terminalResponse: res };
+        }
         const text = await extractText(res);
         log?.info?.(
           `CHAOS panel ${index} (${model}) ok=${res.ok} status=${res.status} textLen=${text.length}`
@@ -186,8 +190,7 @@ function dispatchOnePanelModel(opts: {
         // if it were a successful answer).
         if (res.ok) {
           const part: ChaosPart = { model, index, ok: true, text };
-          await onResult?.(part);
-          return part;
+          return { part, terminalResponse: null };
         }
         const part: ChaosPart = {
           model,
@@ -196,18 +199,19 @@ function dispatchOnePanelModel(opts: {
           text: "",
           error: `upstream ${res.status}: ${text.slice(0, 200) || res.statusText || "error"}`,
         };
-        await onResult?.(part);
-        return part;
+        return { part, terminalResponse: null };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         log?.warn?.(`CHAOS panel ${index} (${model}) failed:`, msg);
         const part: ChaosPart = { model, index, ok: false, text: "", error: msg };
-        await onResult?.(part);
-        return part;
+        return { part, terminalResponse: null };
       }
     })(),
     hardTimeout,
-    { model, index, ok: false, text: "", error: "chaos-panel-timeout" } as ChaosPart,
+    {
+      part: { model, index, ok: false, text: "", error: "chaos-panel-timeout" },
+      terminalResponse: null,
+    } as ChaosDispatchOutcome,
     () => ctrl.abort()
   );
 }
@@ -218,16 +222,24 @@ export async function runChaosPanel(opts: {
   handleSingleModel: HandleSingleModel;
   log?: { info?: (...a: unknown[]) => void; warn?: (...a: unknown[]) => void };
   tuning?: ChaosTuning | null;
-}): Promise<{ parts: ChaosPart[]; primary: ChaosPart | null }> {
+}): Promise<{
+  parts: ChaosPart[];
+  primary: ChaosPart | null;
+  terminalResponse: Response | null;
+}> {
   const { body, models, handleSingleModel, log, tuning } = opts;
   const panel = Array.isArray(models) ? models.filter(Boolean) : [];
   const hardTimeout = tuning?.panelHardTimeoutMs ?? CHAOS_DEFAULTS.panelHardTimeoutMs;
 
   if (panel.length === 0) {
-    return { parts: [], primary: null };
+    return { parts: [], primary: null, terminalResponse: null };
   }
 
   const controllers = panel.map(() => new AbortController());
+  let resolveTerminal!: (response: Response) => void;
+  const terminalPromise = new Promise<Response>((resolve) => {
+    resolveTerminal = resolve;
+  });
   const calls = panel.map((model, index) =>
     dispatchOnePanelModel({
       body,
@@ -237,20 +249,40 @@ export async function runChaosPanel(opts: {
       ctrl: controllers[index],
       hardTimeout,
       log,
+      onTerminalResponse: resolveTerminal,
     })
   );
+  const allOutcomesPromise = Promise.all(calls);
+  const settled = await Promise.race([
+    allOutcomesPromise.then((outcomes) => ({ kind: "complete" as const, outcomes })),
+    terminalPromise.then((response) => ({ kind: "terminal" as const, response })),
+  ]);
 
-  const parts = await Promise.all(calls);
-  // Release all abort controllers (those not already aborted by timeout).
+  // Release all abort controllers, including still-running siblings after a
+  // terminal local-network result wins the race.
   for (const ac of controllers) {
     if (!ac.signal.aborted) ac.abort();
   }
 
-  const successes = parts.filter((p) => p.ok);
+  if (settled.kind === "terminal") {
+    return { parts: [], primary: null, terminalResponse: settled.response };
+  }
+
+  const parts = settled.outcomes
+    .map((outcome) => outcome.part)
+    .filter((part): part is ChaosPart => part !== null);
+  const terminalResponse = settled.outcomes.find(
+    (outcome) => outcome.terminalResponse
+  )?.terminalResponse;
+  if (terminalResponse) {
+    return { parts: [], primary: null, terminalResponse };
+  }
+
+  const successes = parts.filter((part) => part.ok);
   const primary = successes.length > 0 ? successes[successes.length - 1] : null;
 
   log?.info?.(`CHAOS panel complete: ${successes.length}/${parts.length} succeeded`);
-  return { parts, primary };
+  return { parts, primary, terminalResponse: null };
 }
 
 /**
@@ -358,9 +390,9 @@ function concatSseText(sse: string): string {
  * `config.chaos.enabled` flag is set (the `auto/chaos` virtual combo).
  *
  * Returns a single Response whose body is an SSE stream:
- *   - one SSE comment (`: chaos N ...`) per panel model, enqueued
- *     PROGRESSIVELY as each model lands (comments are ignored by every SSE
- *     parser, so OpenAI-compatible clients see only the final chunk)
+ *   - one SSE comment (`: chaos N ...`) per panel model after terminal transport
+ *     classification (comments are ignored by every SSE parser, so
+ *     OpenAI-compatible clients see only the final chunk)
  *   - when `stream_options.include_chaos_parts: true` is set, the per-panel
  *     `omni-chaos-part` custom event is emitted instead of the bare comment
  *   - a final `data:` OpenAI-style chunk carrying the primary model's answer
@@ -393,8 +425,6 @@ export async function handleChaosChat(opts: {
     perTargetAdmission,
   } = opts;
   const panel = Array.isArray(models) ? models.filter(Boolean) : [];
-  const hardTimeout = tuning?.panelHardTimeoutMs ?? CHAOS_DEFAULTS.panelHardTimeoutMs;
-  const minPanel = tuning?.minPanel ?? CHAOS_DEFAULTS.minPanel;
   // Opt-in gate: only protocol-aware clients request the custom event. OpenAI
   // SDK validators choke on any `data:` payload without `choices`/`error`, so
   // the default MUST be comment-only output.
@@ -407,118 +437,71 @@ export async function handleChaosChat(opts: {
     return errorResponse(400, "Chaos combo has no models");
   }
 
-  // Single-model chaos degrades to a direct answer.
+  // Single-model chaos degrades to a direct answer. Returning the promise
+  // unchanged also preserves any terminal response marker for the outer guard.
   if (panel.length === 1) {
     return handleSingleModel(body, panel[0]);
   }
 
-  const chunkId = `chaos-${comboName ?? "panel"}`;
-
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const enc = new TextEncoder();
-      let closed = false;
-      let enqueueChain: Promise<void> = Promise.resolve();
-      const safeEnqueue = (s: string): Promise<void> => {
-        enqueueChain = enqueueChain.then(() => {
-          if (closed) return;
-          try {
-            controller.enqueue(enc.encode(s));
-          } catch {
-            /* stream already errored/closed */
-          }
-        });
-        return enqueueChain;
-      };
-
-      const abortControllers: AbortController[] = [];
-
-      // #9654 Wave 2: per-target lane-aware admission probe — drop lane-full
-      // panel members before fan-out (strictly non-blocking; no-op when off).
-      let panelToDispatch = panel;
-      if (perTargetAdmission) {
-        const gates = await Promise.all(
-          panel.map(async (model) => ({
-            model,
-            ok: await perTargetAdmission({ modelStr: model, executionKey: model, body }),
-          }))
-        );
-        const dropped = gates.filter((g) => !g.ok);
-        if (dropped.length > 0) {
-          log?.info?.(
-            "CHAOS",
-            `Skipping ${dropped.length} panel member(s) — admission lane full: ${dropped
-              .map((g) => g.model)
-              .join(", ")}`
-          );
-        }
-        panelToDispatch = gates.filter((g) => g.ok).map((g) => g.model);
-      }
-
-      const modelPromises = panelToDispatch.map((model, index) => {
-        const ctrl = new AbortController();
-        abortControllers.push(ctrl);
-        return dispatchOnePanelModel({
-          body,
-          model,
-          index,
-          handleSingleModel,
-          ctrl,
-          hardTimeout,
-          log,
-          onResult: async (part) => {
-            await safeEnqueue(serializeChaosPart(part, false, emitCustomEvent));
-          },
-        });
-      });
-
-      const allParts = await Promise.all(modelPromises);
-      const successes = allParts.filter((p) => p.ok);
-
-      // Clean up all abort controllers to release references.
-      for (const ac of abortControllers) {
-        if (!ac.signal.aborted) ac.abort();
-      }
-
-      if (successes.length === 0) {
-        // G5 (silent-stop fix): make an all-panel failure visible server-side.
-        // The status stays 200 (SSE envelope must stay well-formed), but the
-        // failure is now logged with the per-model errors so operators can see
-        // why the chaos panel produced nothing.
-        const modelErrors = allParts.map((p) => `${p.model}: ${p.error ?? "unknown"}`).join(" | ");
-        log?.warn?.(
-          "CHAOS",
-          `All chaos panel models failed for ${comboName ?? "panel"}: ${modelErrors}`
-        );
-        const errText = `All chaos panel models failed — ${modelErrors}`;
-        await safeEnqueue(chatChunk(chunkId, panelToDispatch[0] ?? panel[0] ?? "", errText));
-        await safeEnqueue(SSE_DONE);
-        await enqueueChain;
-        closed = true;
-        controller.close();
-        return;
-      }
-
-      // If fewer than minPanel succeeded, still return the best we have.
-      // The primary is the explicit primaryModel if it succeeded, else the
-      // last successful part (by construction that's the top-scored stable model).
-      const primaryPart =
-        (primaryModel && allParts.find((p) => p.model === primaryModel && p.ok)) ||
-        allParts.filter((p) => p.ok).slice(-1)[0] ||
-        successes[0];
-
-      // Final canonical answer (non-aware clients consume this).
-      await safeEnqueue(
-        chatChunk(chunkId, primaryPart?.model ?? panel[0], primaryPart?.text ?? "")
+  // #9654 Wave 2: per-target lane-aware admission probe. This must run before
+  // fan-out so a rejected lane never starts provider work.
+  let panelToDispatch = panel;
+  if (perTargetAdmission) {
+    const gates = await Promise.all(
+      panel.map(async (model) => ({
+        model,
+        ok: await perTargetAdmission({ modelStr: model, executionKey: model, body }),
+      }))
+    );
+    const dropped = gates.filter((gate) => !gate.ok);
+    if (dropped.length > 0) {
+      log?.info?.(
+        "CHAOS",
+        `Skipping ${dropped.length} panel member(s) - admission lane full: ${dropped
+          .map((gate) => gate.model)
+          .join(", ")}`
       );
-      await safeEnqueue(SSE_DONE);
-      await enqueueChain;
-      closed = true;
-      controller.close();
-    },
-  });
+    }
+    panelToDispatch = gates.filter((gate) => gate.ok).map((gate) => gate.model);
+  }
 
-  return new Response(stream, {
+  // Buffer panel metadata until dispatch classification is complete. A Response
+  // cannot be replaced after its SSE headers are returned, so this is required
+  // to propagate an exhausted-local-network response unchanged and terminally.
+  const { parts: allParts, terminalResponse } = await runChaosPanel({
+    body,
+    models: panelToDispatch,
+    handleSingleModel,
+    log,
+    tuning,
+  });
+  if (terminalResponse) return terminalResponse;
+
+  const chunkId = `chaos-${comboName ?? "panel"}`;
+  const successes = allParts.filter((part) => part.ok);
+  let responseBody = allParts
+    .map((part) => serializeChaosPart(part, false, emitCustomEvent))
+    .join("");
+
+  if (successes.length === 0) {
+    const modelErrors = allParts
+      .map((part) => `${part.model}: ${part.error ?? "unknown"}`)
+      .join(" | ");
+    log?.warn?.(
+      "CHAOS",
+      `All chaos panel models failed for ${comboName ?? "panel"}: ${modelErrors}`
+    );
+    const errText = `All chaos panel models failed - ${modelErrors}`;
+    responseBody += chatChunk(chunkId, panelToDispatch[0] ?? panel[0] ?? "", errText);
+  } else {
+    const primaryPart =
+      (primaryModel && allParts.find((part) => part.model === primaryModel && part.ok)) ||
+      successes[successes.length - 1];
+    responseBody += chatChunk(chunkId, primaryPart?.model ?? panel[0], primaryPart?.text ?? "");
+  }
+  responseBody += SSE_DONE;
+
+  return new Response(responseBody, {
     status: 200,
     headers: {
       "Content-Type": "text/event-stream; charset=utf-8",

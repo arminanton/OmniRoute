@@ -9,6 +9,10 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "terminal-network-test-secret";
 
 const { handleComboChat } = await import("../../open-sse/services/combo.ts");
+const { handleChaosChat } = await import("../../open-sse/services/autoCombo/chaosEngine.ts");
+const { handleFusionChat } = await import("../../open-sse/services/fusion.ts");
+const { handlePipelineChat } = await import("../../open-sse/services/pipeline.ts");
+const { scheduleShadowRouting } = await import("../../open-sse/services/combo/shadowRouting.ts");
 const { isExhaustedNetworkResponse, markExhaustedNetworkResponse } =
   await import("../../open-sse/services/exhaustedNetworkResponse.ts");
 
@@ -64,6 +68,113 @@ for (const strategy of ["priority", "round-robin"]) {
     assert.deepEqual(calls, ["openai/first"]);
   });
 }
+
+test("multi-model chaos returns an exhausted-network response before parsing", async () => {
+  const terminal = markExhaustedNetworkResponse(makeFailure("text/event-stream"));
+  let cloneCalls = 0;
+  Object.defineProperty(terminal, "clone", {
+    configurable: true,
+    value: () => {
+      cloneCalls += 1;
+      return makeFailure("text/event-stream");
+    },
+  });
+
+  let siblingAborted = false;
+  const result = await handleChaosChat({
+    body: { messages: [] },
+    models: ["openai/first", "anthropic/second"],
+    handleSingleModel: async (
+      _body: unknown,
+      modelStr: string,
+      target?: { modelAbortSignal?: AbortSignal }
+    ) => {
+      if (modelStr === "openai/first") return terminal;
+      await new Promise<void>((resolve) => {
+        target?.modelAbortSignal?.addEventListener(
+          "abort",
+          () => {
+            siblingAborted = true;
+            resolve();
+          },
+          { once: true }
+        );
+      });
+      return new Response("aborted sibling", { status: 499 });
+    },
+    log,
+  });
+
+  assert.equal(result, terminal);
+  assert.equal(cloneCalls, 0, "terminal response body must not be parsed");
+  assert.equal(result.bodyUsed, false);
+  assert.equal(siblingAborted, true, "terminal result must abort an in-flight sibling");
+});
+
+test("fusion direct dispatch preserves the terminal marker and response identity", async () => {
+  const terminal = markExhaustedNetworkResponse(makeFailure("application/json"));
+  const result = await handleFusionChat({
+    body: { messages: [] },
+    models: ["openai/only"],
+    handleSingleModel: async () => terminal,
+    log,
+  });
+
+  assert.equal(result, terminal);
+  assert.equal(isExhaustedNetworkResponse(result), true);
+});
+
+test("pipeline direct dispatch preserves the terminal marker and response identity", async () => {
+  const terminal = markExhaustedNetworkResponse(makeFailure("text/event-stream"));
+  const result = await handlePipelineChat({
+    body: { messages: [] },
+    steps: [{ model: "openai/only" }],
+    handleSingleModel: async () => terminal,
+    log,
+  });
+
+  assert.equal(result, terminal);
+  assert.equal(isExhaustedNetworkResponse(result), true);
+});
+
+test("detached shadow routing stops before consuming a terminal response", async () => {
+  const terminal = markExhaustedNetworkResponse(makeFailure("application/json"));
+  let cloneCalls = 0;
+  Object.defineProperty(terminal, "clone", {
+    configurable: true,
+    value: () => {
+      cloneCalls += 1;
+      return makeFailure("application/json");
+    },
+  });
+
+  scheduleShadowRouting(
+    { name: "shadow-terminal", strategy: "priority", models: [] },
+    { shadowRouting: { enabled: true, timeoutMs: 100 } },
+    { messages: [] },
+    [
+      {
+        kind: "model",
+        stepId: "shadow-step",
+        executionKey: "shadow-step",
+        modelStr: "openai/shadow",
+        provider: "openai",
+        providerId: "openai",
+        connectionId: null,
+        weight: 1,
+        label: null,
+      },
+    ],
+    async () => terminal,
+    undefined,
+    "priority",
+    log
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(cloneCalls, 0, "detached shadow path must not clone or drain terminal bodies");
+  assert.equal(terminal.bodyUsed, false);
+});
 
 test("direct and global fallback guards run before redispatch", () => {
   const chatSource = fs.readFileSync(path.join(process.cwd(), "src/sse/handlers/chat.ts"), "utf8");
