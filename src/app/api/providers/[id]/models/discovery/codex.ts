@@ -29,6 +29,7 @@ export type CodexDiscoveryModel = {
   description?: string;
   supportsThinking?: boolean;
   supportsVision?: boolean;
+  supportedThinkingEfforts?: string[];
 };
 
 export type CodexModelsFetch = (
@@ -197,7 +198,12 @@ function buildCodexDiscoveryModel(record: JsonRecord): CodexDiscoveryModel | nul
   if (typeof inputTokenLimit === "number") model.inputTokenLimit = inputTokenLimit;
   if (typeof outputTokenLimit === "number") model.outputTokenLimit = outputTokenLimit;
   if (description) model.description = description;
-  if (recordSupportsThinking(record)) model.supportsThinking = true;
+  if (recordSupportsThinking(record)) {
+    model.supportsThinking = true;
+    model.supportedThinkingEfforts = (record.supported_reasoning_levels as unknown[]).filter(
+      (effort): effort is string => typeof effort === "string" && effort.length > 0
+    );
+  }
   if (recordSupportsVision(record)) model.supportsVision = true;
 
   return model;
@@ -403,10 +409,21 @@ export function buildCodexDiscoveryCatalog(
   localCatalogModels: CodexLocalCatalogModel[],
   extraFilters: readonly CodexDiscoveryModelFilter[] = []
 ): CodexDiscoveryModel[] {
-  return applyCodexDiscoveryFilters(
+  const models = applyCodexDiscoveryFilters(
     mergeCodexLiveModelsWithLocalCatalog(remoteModels, localCatalogModels),
     extraFilters
   );
+  const ids = new Set(models.map((model) => model.id));
+  const variants: CodexDiscoveryModel[] = [];
+  for (const model of models) {
+    for (const effort of model.supportedThinkingEfforts ?? []) {
+      const id = `${model.id}-${effort}`;
+      if (ids.has(id)) continue;
+      ids.add(id);
+      variants.push({ ...model, id, name: `${model.name} (${effort})` });
+    }
+  }
+  return [...models, ...variants];
 }
 
 export type CuratedCodexCatalogResult = {
