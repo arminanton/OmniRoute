@@ -28,6 +28,7 @@ import {
   protectPayloadForLog,
 } from "../logPayloads";
 import { pickDisplayValue } from "@/shared/utils/maskEmail";
+import { buildCallLogAttemptLookupPattern } from "@/shared/utils/callLogAttemptId";
 import {
   CALL_LOGS_DIR,
   readCallArtifact,
@@ -773,20 +774,27 @@ export async function getCallLogs(filter: any = {}) {
 
 export async function getCallLogById(id: string) {
   const db = getDbInstance();
-  const row = db
-    .prepare(
-      `SELECT cl.*,
+  const detailSelect = `SELECT cl.*,
         pn.name AS provider_node_name,
         pn.prefix AS provider_node_prefix,
         ${RESOLVED_ACCOUNT_SQL} AS resolved_account
        FROM call_logs cl
        LEFT JOIN provider_nodes pn ON pn.id = cl.provider
-       LEFT JOIN provider_connections pc ON pc.id = cl.connection_id
-       WHERE cl.id = ?`
-    )
-    .get(id) as CallLogSummaryRow | undefined;
+       LEFT JOIN provider_connections pc ON pc.id = cl.connection_id`;
+  let row = db.prepare(`${detailSelect} WHERE cl.id = ?`).get(id) as CallLogSummaryRow | undefined;
+  if (!row) {
+    row = db
+      .prepare(
+        `${detailSelect}
+         WHERE cl.id LIKE ? ESCAPE '\\'
+         ORDER BY cl.timestamp DESC, cl.id DESC
+         LIMIT 1`
+      )
+      .get(buildCallLogAttemptLookupPattern(id)) as CallLogSummaryRow | undefined;
+  }
   if (!row) return null;
 
+  const resolvedId = String(row.id);
   const entry = mapSummaryRow(row);
   let detailState = entry.detailState;
   let artifactRelPath = entry.artifactRelPath;
@@ -800,7 +808,8 @@ export async function getCallLogById(id: string) {
         requestBody: artifactResult.artifact.requestBody ?? null,
         responseBody: artifactResult.artifact.responseBody ?? null,
         error: artifactResult.artifact.error ?? entry.error,
-        pipelinePayloads: artifactResult.artifact.pipeline ?? buildLegacyPipelinePayloads(id),
+        pipelinePayloads:
+          artifactResult.artifact.pipeline ?? buildLegacyPipelinePayloads(resolvedId),
         hasPipelineDetails: Boolean(artifactResult.artifact.pipeline) || entry.hasPipelineDetails,
         active: false,
       };
@@ -811,14 +820,14 @@ export async function getCallLogById(id: string) {
       clearArtifactReference(artifactRelPath, "missing");
       artifactRelPath = null;
     } else {
-      db.prepare("UPDATE call_logs SET detail_state = ? WHERE id = ?").run("corrupt", id);
+      db.prepare("UPDATE call_logs SET detail_state = ? WHERE id = ?").run("corrupt", resolvedId);
     }
   }
 
   if (detailState === "legacy-inline") {
-    const legacyInline = getLegacyInlineDetail(id);
+    const legacyInline = getLegacyInlineDetail(resolvedId);
     if (legacyInline) {
-      const legacyPipeline = buildLegacyPipelinePayloads(id);
+      const legacyPipeline = buildLegacyPipelinePayloads(resolvedId);
       return {
         ...entry,
         detailState,
@@ -833,7 +842,7 @@ export async function getCallLogById(id: string) {
 
   const legacyDisk = readLegacyLogFromDisk(entry);
   if (legacyDisk) {
-    const legacyPipeline = buildLegacyPipelinePayloads(id);
+    const legacyPipeline = buildLegacyPipelinePayloads(resolvedId);
     return {
       ...entry,
       detailState,
@@ -847,7 +856,7 @@ export async function getCallLogById(id: string) {
     };
   }
 
-  const legacyPipeline = buildLegacyPipelinePayloads(id);
+  const legacyPipeline = buildLegacyPipelinePayloads(resolvedId);
   return {
     ...entry,
     detailState,

@@ -19,6 +19,7 @@ process.env.DATA_DIR = testDataDir;
 const coreDb = await import("../../src/lib/db/core.ts");
 const { getCallLogById } = await import("../../src/lib/usage/callLogs.ts");
 const { persistAttemptLogs } = await import("../../open-sse/handlers/chatCore/attemptLogging.ts");
+const { buildCallLogAttemptId } = await import("../../src/shared/utils/callLogAttemptId.ts");
 const { recordEarlyKeepaliveBytes, takeEarlyKeepaliveBytes } =
   await import("../../open-sse/utils/earlyKeepaliveByteBuffer.ts");
 
@@ -155,10 +156,10 @@ test("detailedLoggingEnabled=false skips the merge even when early bytes are buf
   assert.equal(takeEarlyKeepaliveBytes(correlationId).length, 1);
 });
 
-test("retry attempts with one logical pending id persist as distinct call-log rows", async () => {
+test("retry attempts remain distinct and the logical request id resolves to the latest row", async () => {
   const pendingRequestId = "logical-request-shared";
-  const firstCallLogId = "logical-request-shared-attempt-1";
-  const secondCallLogId = "logical-request-shared-attempt-2";
+  const firstCallLogId = buildCallLogAttemptId(pendingRequestId, "attempt-1");
+  const secondCallLogId = buildCallLogAttemptId(pendingRequestId, "attempt-2");
 
   persistAttemptLogs(
     { status: 502, error: "first transport failure" },
@@ -175,4 +176,8 @@ test("retry attempts with one logical pending id persist as distinct call-log ro
   ]);
   assert.ok(first, "first retry attempt must not be overwritten");
   assert.ok(second, "second retry attempt must not hit the call_logs.id uniqueness constraint");
+
+  const logical = await pollForCallLog(pendingRequestId);
+  assert.ok(logical, "the client-visible logical request id must remain durable");
+  assert.equal(logical.id, secondCallLogId, "the logical id must resolve to the latest attempt");
 });

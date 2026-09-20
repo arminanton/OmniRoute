@@ -1,1 +1,1 @@
-- **fix(resilience):** stop exhausted DNS and transport failures from re-running large-request compression, give each retry attempt a unique call-log row, and bound local test concurrency
+- **fix(resilience):** stop exhausted DNS and transport failures from re-running large-request compression, give each retry attempt a unique durable call-log row, and gate Copilot sub-token refreshes by interval or imminent expiry

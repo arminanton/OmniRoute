@@ -282,6 +282,7 @@ import {
   persistAttemptLogs as persistAttemptLogsFor,
   type PersistAttemptLogsArgs,
 } from "./chatCore/attemptLogging.ts";
+import { buildCallLogAttemptId } from "@/shared/utils/callLogAttemptId";
 import { stageTrace } from "./chatCore/stageTrace.ts";
 import { attachCompressionUsageReceiptAfterAnalytics as attachCompressionUsageReceiptAfterAnalyticsFor } from "./chatCore/compressionUsageReceipt.ts";
 import { prepareUpstreamBody } from "./chatCore/upstreamBody.ts";
@@ -1069,7 +1070,7 @@ export async function handleChatCore({
       detailedLoggingEnabled,
       reqLogger,
       pendingRequestId,
-      callLogId: skillRequestId,
+      callLogId: buildCallLogAttemptId(pendingRequestId, skillRequestId),
       clientRawRequest,
       requestedModel,
       credentials,
