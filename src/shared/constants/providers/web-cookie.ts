@@ -20,7 +20,8 @@ export const WEB_COOKIE_PROVIDERS = {
   "chatgpt-web-codex": {
     id: "chatgpt-web-codex",
     serviceKinds: ["llm"],
-    alias: "cgpt-codex",
+    alias: "cgpt",
+    additionalAliases: ["cgpt-codex"],
     name: "ChatGPT Web (Codex)",
     icon: "terminal",
     color: "#10A37F",

@@ -10,7 +10,8 @@ const NATIVE_CAPABILITIES = {
 
 export const chatgpt_web_codexProvider: RegistryEntry = {
   id: "chatgpt-web-codex",
-  alias: "cgpt-codex",
+  alias: "cgpt",
+  additionalAliases: ["cgpt-codex"],
   format: "openai-responses",
   executor: "chatgpt-web-codex",
   baseUrl: "https://chatgpt.com",

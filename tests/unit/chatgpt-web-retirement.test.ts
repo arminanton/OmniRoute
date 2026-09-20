@@ -26,7 +26,9 @@ test("clean-room ChatGPT Web is restored while the legacy alias remains retired"
   );
 
   assert.ok(getRegistryEntry("chatgpt-web-codex"));
+  assert.ok(getRegistryEntry("cgpt"));
   assert.ok(getRegistryEntry("cgpt-codex"));
   assert.equal(hasSpecializedExecutor("chatgpt-web-codex"), true);
+  assert.equal(hasSpecializedExecutor("cgpt"), true);
   assert.equal(hasSpecializedExecutor("cgpt-codex"), true);
 });
