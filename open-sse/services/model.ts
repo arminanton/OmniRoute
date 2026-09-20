@@ -1,6 +1,7 @@
 import { PROVIDER_ID_TO_ALIAS, PROVIDER_MODELS } from "../config/providerModels.ts";
 import { resolveWildcardAlias } from "./wildcardRouter.ts";
 import { getRegisteredProviderEffortBaseModelId } from "../utils/registeredEffortVariants.ts";
+import { ANTIGRAVITY_MODEL_ALIASES } from "../config/antigravityModelAliases.ts";
 
 type ProviderModelAliasMap = Record<string, Record<string, string>>;
 type ModelAliasValue = string | { provider?: string; model?: string };
@@ -92,9 +93,12 @@ const PROVIDER_MODEL_ALIASES: ProviderModelAliasMap = {
     "syn:small:text": "hf:zai-org/GLM-4.7-Flash",
     "syn:nemotron-3-super": "hf:nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4",
   },
-  // Antigravity public model ids already match the upstream wire ids. Keep this map
-  // empty so the global resolver cannot rewrite them before routing or logging.
-  antigravity: {},
+  antigravity: {
+    ...ANTIGRAVITY_MODEL_ALIASES,
+  },
+  agy: {
+    ...ANTIGRAVITY_MODEL_ALIASES,
+  },
   kiro: {
     "claude-opus-4-7": "claude-opus-4.7",
     "claude-opus-4-6": "claude-opus-4.6",
