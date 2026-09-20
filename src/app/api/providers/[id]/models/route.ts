@@ -615,9 +615,7 @@ export async function GET(
       try {
         const discovery = await discoverMaxaiModels({
           providerSpecificData: connection.providerSpecificData as
-            | Record<string, unknown>
-            | null
-            | undefined,
+            Record<string, unknown> | null | undefined,
           accessToken: apiKey || accessToken,
           fetchImpl: (url, init) =>
             safeOutboundFetch(url, {
@@ -1845,7 +1843,7 @@ export async function GET(
         );
       }
 
-      const baseUrl = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
+      const baseUrl = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=300";
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
 
