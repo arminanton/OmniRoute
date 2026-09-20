@@ -85,6 +85,11 @@
       "configSource": "<custom-config>",
       "provider": "cloudflare-playground"
     },
+    "cgpt": {
+      "className": "ChatGptWebCodexExecutor",
+      "configSource": "<custom-config>",
+      "provider": "chatgpt-web-codex"
+    },
     "cgpt-codex": {
       "className": "ChatGptWebCodexExecutor",
       "configSource": "<custom-config>",
@@ -676,6 +681,6 @@
       "provider": "zai-web"
     }
   },
-  "keyCount": 135,
+  "keyCount": 136,
   "sharedInstances": []
 }
