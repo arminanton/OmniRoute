@@ -1,5 +1,6 @@
 import { formatRetryAfter } from "@omniroute/open-sse/services/accountFallback.ts";
 import { resolveResilienceSettings } from "@/lib/resilience/settings";
+import { isExhaustedNetworkFailure } from "./networkFailure";
 
 const MAX_REQUEST_RETRY = 10;
 const MAX_RETRY_INTERVAL_SEC = 300;
@@ -109,10 +110,16 @@ export function getCooldownAwareRetryDecision({
   settings,
   attempt,
   budgetLeftMs,
+  failureCode,
+  failureText,
 }: {
   retryAfter: unknown;
   settings: CooldownAwareRetrySettings;
   attempt: number;
+  /** Stable transport classification from the failed dispatch, when available. */
+  failureCode?: unknown;
+  /** Sanitized failure text fallback for older persisted cooldown records. */
+  failureText?: unknown;
   /**
    * Remaining cumulative wait budget (ms) for this request. Defaults to
    * settings.budgetMs when omitted (single-call-site backward compat) —
@@ -129,6 +136,7 @@ export function getCooldownAwareRetryDecision({
   const closest = computeClosestRetryAfter(retryAfter);
   const effectiveBudgetLeftMs = budgetLeftMs ?? settings.budgetMs;
   if (
+    isExhaustedNetworkFailure(failureCode, failureText) ||
     !settings.enabled ||
     settings.maxRetries <= 0 ||
     settings.maxRetryWaitMs <= 0 ||

@@ -109,9 +109,10 @@ const TLS_PROVIDER_PROFILE: Record<string, { browser: string; os: string }> = {
   maxai: { browser: "firefox_150", os: "windows" },
 };
 
-function tlsProfileForProvider(
-  provider: string | null | undefined
-): { browserProfile?: string; os?: string } {
+function tlsProfileForProvider(provider: string | null | undefined): {
+  browserProfile?: string;
+  os?: string;
+} {
   if (!provider) return {};
   const p = TLS_PROVIDER_PROFILE[provider.trim().toLowerCase()];
   return p ? { browserProfile: p.browser, os: p.os } : {};
@@ -134,6 +135,8 @@ export function setTlsClientForTest(client: TlsClientLike | null): void {
 // versions); native fetch wraps the real socket error in `.cause`, so fall back to
 // `.cause.code` when the top-level error is a bare "fetch failed" TypeError.
 const PROXY_UNREACHABLE_ERROR_CODES = new Set([
+  "EAI_AGAIN",
+  "ENOTFOUND",
   "ECONNREFUSED",
   "ECONNRESET",
   "ETIMEDOUT",

@@ -686,7 +686,8 @@ export async function checkConnection(conn) {
 
   if (!conn.refreshToken || typeof conn.refreshToken !== "string") {
     if (isGitHubAccessTokenOnlyConnection(conn)) {
-      const now = new Date().toISOString();
+      const nowMs = Date.now();
+      const now = new Date(nowMs).toISOString();
       const providerSpecificData = conn.providerSpecificData || {};
       const hasCopilotToken =
         typeof providerSpecificData.copilotToken === "string" &&
@@ -697,7 +698,19 @@ export async function checkConnection(conn) {
       const copilotAboutToExpire =
         !hasCopilotToken ||
         !copilotExpiresAtMs ||
-        copilotExpiresAtMs - Date.now() < TOKEN_EXPIRY_BUFFER;
+        copilotExpiresAtMs - nowMs < TOKEN_EXPIRY_BUFFER;
+      const lastCheckMs = conn.lastHealthCheckAt
+        ? new Date(conn.lastHealthCheckAt).getTime()
+        : 0;
+      const intervalMs = intervalMin * 60 * 1000;
+      const dueByInterval =
+        !Number.isFinite(lastCheckMs) || !lastCheckMs || nowMs - lastCheckMs >= intervalMs;
+
+      // The scheduler wakes every 60 seconds, but a healthy GitHub connection
+      // should contact the token endpoint only when its configured check is due
+      // or its Copilot sub-token is close to expiry. Without this guard, every
+      // tick minted and discarded a fresh upstream token.
+      if (!copilotAboutToExpire && !dueByInterval) return;
 
       let refreshedProviderSpecificData: Record<string, unknown> | null = null;
       const hideLogs = await shouldHideLogs();
@@ -771,11 +784,9 @@ export async function checkConnection(conn) {
         });
       }
 
-      // Steady-state ticks stay silent: this path runs once per TICK_MS (60s) for
-      // EVERY github/ghe-copilot connection, so an unconditional line here emits
-      // ~1440 entries/day per connection all saying the same nothing-changed thing.
-      // Only report when the sweep actually did work — a Copilot sub-token refresh
-      // attempt — so a genuine refresh failure still surfaces in the log.
+      // Only report when the sweep attempted a Copilot sub-token refresh.
+      // Healthy connections return above between their configured checks, so
+      // the 60-second scheduler tick stays silent and does not contact GitHub.
       if (copilotAboutToExpire) {
         log(
           `${LOG_PREFIX} ${conn.provider}/${getConnectionLogLabel(conn)} Copilot token ${

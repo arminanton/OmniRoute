@@ -263,6 +263,33 @@ test("#8788 tagProxyUnreachable tags UND_ERR_SOCKET errors as PROXY_UNREACHABLE"
   );
 });
 
+for (const dnsCode of ["EAI_AGAIN", "ENOTFOUND"]) {
+  test(`DNS failure ${dnsCode} is tagged as proxy_unreachable after proxyFetch exhausts its own retries`, async () => {
+    const makeDnsError = () =>
+      Object.assign(new Error(`getaddrinfo ${dnsCode} chatgpt.com`), { code: dnsCode });
+
+    await assert.rejects(
+      proxyFetch(
+        "https://chatgpt.com/backend-api/codex/responses",
+        { method: "GET" },
+        {
+          undiciFetch: async () => {
+            throw makeDnsError();
+          },
+          nativeFetch: async () => {
+            throw makeDnsError();
+          },
+        }
+      ),
+      (err: Error & { code?: string; errorCode?: string }) => {
+        assert.equal(err.code, "PROXY_UNREACHABLE");
+        assert.equal(err.errorCode, "proxy_unreachable");
+        return true;
+      }
+    );
+  });
+}
+
 test("#4252 both undici AND native fetch fail → rejects fast with cause detail attached", async () => {
   const dispErr = Object.assign(new Error("fetch failed"), {
     code: "UND_ERR_SOCKET",

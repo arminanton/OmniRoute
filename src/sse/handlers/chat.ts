@@ -196,6 +196,10 @@ import {
   shouldRetrySameAccountTransport,
   sameAccountTransportRetryDelayMs,
 } from "../services/sameAccountTransportRetry";
+import {
+  isExhaustedNetworkFailure,
+  isProxyFetchExhaustedFailure,
+} from "../services/networkFailure";
 import { constrainConnectionsToQuota, resolveQuotaKeyScope } from "../../lib/quota/quotaKey";
 import { checkConnectionCapacity } from "../utils/backpressure";
 import {
@@ -1013,7 +1017,15 @@ async function handleChatImplementation(
       if (isComboLiveTest) return true;
       // #12886: combo-name allow-list must not skip inner targets (#9057 still
       // checks auto/* / disableNonPublic via comboTargetPassesKeyModelPolicy).
-      if (!(await comboTargetPassesKeyModelPolicy({ apiKey, apiKeyInfo, requestedModelStr: resolvedModelStr, targetModelStr: modelString, isModelAllowedForKey }))) {
+      if (
+        !(await comboTargetPassesKeyModelPolicy({
+          apiKey,
+          apiKeyInfo,
+          requestedModelStr: resolvedModelStr,
+          targetModelStr: modelString,
+          isModelAllowedForKey,
+        }))
+      ) {
         return false;
       }
 
@@ -1625,6 +1637,7 @@ async function handleSingleModelChat(
   // 3. Credential retry loop
   let requestRetryAttempt = 0;
   let requestRetryLastError = null;
+  let requestRetryLastErrorCode: unknown = null;
   let requestRetryLastStatus = null;
   let requestRetryLastCooldownMs = 0;
   // Bug #3758: per-request counter bounding the early-close (STREAM_EARLY_EOF)
@@ -1639,6 +1652,7 @@ async function handleSingleModelChat(
   requestAttemptLoop: while (true) {
     const excludedConnectionIds = new Set<string>();
     let lastError = requestRetryLastError;
+    let lastErrorCode: unknown = requestRetryLastErrorCode;
     let lastStatus = requestRetryLastStatus;
     let lastCooldownMs = requestRetryLastCooldownMs;
     let preselectedCredentials = initialPreselectedCredentials;
@@ -1703,12 +1717,16 @@ async function handleSingleModelChat(
         "allExpired" in credentials ||
         !credentials.connectionId
       ) {
+        const retryFailureCode = lastErrorCode ?? credentials?.lastErrorCode;
+        const retryFailureText = lastError ?? credentials?.lastError;
         if (credentials?.allRateLimited) {
           const retryDecision = getCooldownAwareRetryDecision({
             retryAfter: credentials.retryAfter,
             settings: retrySettings,
             attempt: requestRetryAttempt,
             budgetLeftMs: requestRetryBudgetLeftMs,
+            failureCode: retryFailureCode,
+            failureText: retryFailureText,
           });
 
           if (retryDecision.shouldRetry) {
@@ -1731,19 +1749,15 @@ async function handleSingleModelChat(
             requestRetryBudgetLeftMs = Math.max(0, requestRetryBudgetLeftMs - retryDecision.waitMs);
             log.info(
               "COOLDOWN_RETRY",
-              `${provider}/${model} cooldown elapsed — restarting request attempt ${requestRetryAttempt + 1}/${retrySettings.maxRetries}`
+              `${provider}/${model} cooldown elapsed - restarting after retry ${requestRetryAttempt}/${retrySettings.maxRetries}`
             );
             continue requestAttemptLoop;
           }
         }
 
         const breakerFailureStatus = Number(lastStatus ?? credentials?.lastErrorCode);
-        // lastError is a string here — check for the proxy_unreachable tag embedded by
-        // tagProxyUnreachable (proxyFetch.ts) and OmniRoute's own queue timeouts. Both mean
-        // we never reached the provider, so they must not trip the provider breaker.
-        const isNetworkError =
-          typeof lastError === "string" &&
-          (lastError.includes("proxy_unreachable") || lastError.includes("PROXY_UNREACHABLE"));
+        // Network failures never reached the provider and must not trip its breaker.
+        const isNetworkError = isExhaustedNetworkFailure(retryFailureCode, retryFailureText);
         const isQueueTimeout =
           typeof lastError === "string" &&
           (lastError.includes("RATE_LIMIT_QUEUE_TIMEOUT") ||
@@ -2329,6 +2343,17 @@ async function handleSingleModelChat(
         }
       }
 
+      // proxyFetch has already tried a fresh dispatcher and its allowed fallback path.
+      // This is host/proxy reachability, not account health. Do not repeat request
+      // parsing/compression, rotate accounts, write cooldowns, or trip provider breakers.
+      if (isProxyFetchExhaustedFailure(result.errorCode)) {
+        log.warn(
+          "NETWORK",
+          `${provider}/${model} exhausted local transport paths; returning without account redispatch`
+        );
+        return withSelectedConnectionHeader(result.response, credentials.connectionId);
+      }
+
       // #9708: retry a retryable pre-output transport failure once on the same
       // account (jittered 2-3s) before cooling the connection. A first 503/507
       // must not rotate away from a still-healthy Codex prompt-cache partition.
@@ -2428,8 +2453,10 @@ async function handleSingleModelChat(
         }
         excludedConnectionIds.add(credentials.connectionId);
         lastError = result.error;
+        lastErrorCode = result.errorCode;
         lastStatus = result.status;
         requestRetryLastError = result.error;
+        requestRetryLastErrorCode = result.errorCode;
         requestRetryLastStatus = result.status;
         continue;
       }

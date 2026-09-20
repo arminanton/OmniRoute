@@ -1069,6 +1069,7 @@ export async function handleChatCore({
       detailedLoggingEnabled,
       reqLogger,
       pendingRequestId,
+      callLogId: skillRequestId,
       clientRawRequest,
       requestedModel,
       credentials,

@@ -333,7 +333,7 @@ async function resetStorage() {
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 }
 
-// 30s ceiling: c8 instrumentation plus --test-concurrency=8 can stall CI workers
+// 30s ceiling: c8 instrumentation can stall busy workers
 // well past the upstream timeout budget. Green runs return as soon as the condition
 // holds, so the ceiling only bounds the failure case.
 async function waitFor(fn, timeoutMs = 30000) {

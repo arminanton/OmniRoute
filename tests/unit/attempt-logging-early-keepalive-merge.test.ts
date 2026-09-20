@@ -154,3 +154,25 @@ test("detailedLoggingEnabled=false skips the merge even when early bytes are buf
   // buffered bytes out from under it.
   assert.equal(takeEarlyKeepaliveBytes(correlationId).length, 1);
 });
+
+test("retry attempts with one logical pending id persist as distinct call-log rows", async () => {
+  const pendingRequestId = "logical-request-shared";
+  const firstCallLogId = "logical-request-shared-attempt-1";
+  const secondCallLogId = "logical-request-shared-attempt-2";
+
+  persistAttemptLogs(
+    { status: 502, error: "first transport failure" },
+    baseCtx({ pendingRequestId, callLogId: firstCallLogId, correlationId: "corr-retry-shared" })
+  );
+  persistAttemptLogs(
+    { status: 502, error: "second transport failure" },
+    baseCtx({ pendingRequestId, callLogId: secondCallLogId, correlationId: "corr-retry-shared" })
+  );
+
+  const [first, second] = await Promise.all([
+    pollForCallLog(firstCallLogId),
+    pollForCallLog(secondCallLogId),
+  ]);
+  assert.ok(first, "first retry attempt must not be overwritten");
+  assert.ok(second, "second retry attempt must not hit the call_logs.id uniqueness constraint");
+});

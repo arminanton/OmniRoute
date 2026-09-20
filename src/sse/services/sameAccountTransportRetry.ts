@@ -1,3 +1,5 @@
+import { isProxyFetchExhaustedFailure } from "./networkFailure";
+
 /**
  * Same-account retry for retryable pre-output transport failures (#9708).
  *
@@ -40,6 +42,9 @@ export function isRetryablePreOutputTransportError(
 ): boolean {
   if (errorType && NON_RETRYABLE_ERROR_TYPES.has(errorType)) return false;
   if (errorCode && String(errorCode).startsWith("LEASE_")) return false;
+  // proxyFetch already exhausted its fresh-dispatcher and native fallback paths.
+  // Repeating the whole chat pipeline would only redo parsing and compression.
+  if (isProxyFetchExhaustedFailure(errorCode)) return false;
 
   const text = String(errorText || "");
   const numericStatus = Number(status);
@@ -51,10 +56,7 @@ export function isRetryablePreOutputTransportError(
 
   const statusRetryable = isRetryableTransportStatus(status);
   const textRetryable = RETRYABLE_TRANSPORT_TEXT.some((pattern) => pattern.test(text));
-  const codeRetryable =
-    errorCode === "STREAM_EARLY_EOF" ||
-    errorCode === "proxy_unreachable" ||
-    errorCode === "PROXY_UNREACHABLE";
+  const codeRetryable = errorCode === "STREAM_EARLY_EOF";
 
   return statusRetryable || textRetryable || codeRetryable;
 }

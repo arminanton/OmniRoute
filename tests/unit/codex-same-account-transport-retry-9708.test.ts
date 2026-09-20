@@ -107,6 +107,26 @@ test("#9708: quota, auth, and deterministic 400s never enter the same-account re
   );
 });
 
+test("exhausted proxyFetch failures return before account cooldown or redispatch", () => {
+  const chatSource = fs.readFileSync(
+    path.resolve(import.meta.dirname, "../../src/sse/handlers/chat.ts"),
+    "utf8"
+  );
+  const guardOffset = chatSource.indexOf("if (isProxyFetchExhaustedFailure(result.errorCode))");
+  assert.notEqual(guardOffset, -1, "missing exhausted-network terminal guard");
+  const guardedTail = chatSource.slice(guardOffset);
+  assert.ok(
+    guardedTail.indexOf("return withSelectedConnectionHeader(result.response") <
+      guardedTail.indexOf("shouldRetrySameAccountTransport({"),
+    "network failure must return before same-account retry"
+  );
+  assert.ok(
+    guardedTail.indexOf("return withSelectedConnectionHeader(result.response") <
+      guardedTail.indexOf("await markAccountUnavailable("),
+    "network failure must return before account cooldown and fallback"
+  );
+});
+
 test("#9708: same-account retry is bounded to exactly one attempt", () => {
   assert.equal(
     shouldRetrySameAccountTransport({
@@ -123,6 +143,27 @@ test("#9708: same-account retry is bounded to exactly one attempt", () => {
       attempt: SAME_ACCOUNT_TRANSPORT_RETRY_MAX,
     }),
     false
+  );
+});
+
+test("exhausted local-network failures do not enter a second chat-layer retry", () => {
+  assert.equal(
+    shouldRetrySameAccountTransport({
+      status: 502,
+      errorText: "fetch failed (cause: UND_ERR_CONNECT_TIMEOUT)",
+      errorCode: "proxy_unreachable",
+      attempt: 0,
+    }),
+    false
+  );
+  assert.equal(
+    shouldRetrySameAccountTransport({
+      status: 502,
+      errorText: "connection reset before headers",
+      attempt: 0,
+    }),
+    true,
+    "an untagged upstream reset still receives the one retry promised by #9708"
   );
 });
 

@@ -222,6 +222,8 @@ export type PersistAttemptLogsContext = {
   detailedLoggingEnabled: boolean;
   reqLogger: { getPipelinePayloads?: () => Record<string, unknown> | undefined } | null | undefined;
   pendingRequestId: unknown;
+  /** Unique call_logs row id for this dispatch; pendingRequestId remains the logical request id. */
+  callLogId?: string;
   clientRawRequest: { endpoint?: string } | null | undefined;
   requestedModel: unknown;
   credentials: { connectionId?: string } | null | undefined;
@@ -360,6 +362,7 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     detailedLoggingEnabled,
     reqLogger,
     pendingRequestId,
+    callLogId,
     clientRawRequest,
     requestedModel,
     credentials,
@@ -459,7 +462,7 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
   }
 
   saveCallLog({
-    id: pendingRequestId,
+    id: callLogId || pendingRequestId,
     method: "POST",
     path: clientRawRequest?.endpoint || "/v1/chat/completions",
     status,

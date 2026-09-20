@@ -96,6 +96,49 @@ test("GitHub access-token health demotes only a verified 401 and stores no secre
   }
 });
 
+test("GitHub access-token health skips upstream token issuance between configured checks", async () => {
+  await resetStorage();
+  const originalFetch = globalThis.fetch;
+  let refreshRequests = 0;
+  globalThis.fetch = (async () => {
+    refreshRequests += 1;
+    return new Response(
+      JSON.stringify({
+        token: "unexpected-copilot-token",
+        expires_at: Math.floor(Date.now() / 1000) + 1800,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof fetch;
+
+  try {
+    const lastHealthCheckAt = new Date().toISOString();
+    const connection = await providersDb.createProviderConnection({
+      provider: "github",
+      authType: "oauth",
+      name: "GitHub Fresh Health Check",
+      accessToken: "ghp_fresh_health_check_secret",
+      healthCheckInterval: 60,
+      isActive: true,
+      testStatus: "active",
+      providerSpecificData: {
+        copilotToken: "existing-copilot-secret",
+        copilotTokenExpiresAt: Math.floor(Date.now() / 1000) + 3600,
+      },
+    });
+    await providersDb.updateProviderConnection(connection.id, { lastHealthCheckAt });
+
+    const latest = await providersDb.getProviderConnectionById(connection.id);
+    await tokenHealthCheck.checkConnection(latest);
+
+    const updated = await providersDb.getProviderConnectionById(connection.id);
+    assert.equal(refreshRequests, 0, "the 60-second scheduler tick must not issue a new token");
+    assert.equal(updated?.lastHealthCheckAt, lastHealthCheckAt);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("GitHub access-token health keeps network failures active", async () => {
   await resetStorage();
   const originalFetch = globalThis.fetch;
