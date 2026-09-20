@@ -698,3 +698,36 @@ test("route.ts imports the discovery leaves and no longer declares the moved con
     "NAMED_OPENAI_STYLE_PROVIDERS must live in the leaf, not route.ts"
   );
 });
+
+test("codex discovery preserves upstream reasoning efforts and exposes Astra variants", () => {
+  const remote = normalizeCodexModelsResponse({
+    models: [
+      {
+        slug: "gpt-6-astra",
+        display_name: "GPT-6-Astra",
+        supported_reasoning_levels: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
+    ],
+  });
+
+  assert.deepEqual(remote[0]?.supportedThinkingEfforts, [
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+  ]);
+  assert.deepEqual(
+    buildCodexDiscoveryCatalog(remote, []).map((model) => model.id),
+    [
+      "gpt-6-astra",
+      "gpt-6-astra-low",
+      "gpt-6-astra-medium",
+      "gpt-6-astra-high",
+      "gpt-6-astra-xhigh",
+      "gpt-6-astra-max",
+      "gpt-6-astra-ultra",
+    ]
+  );
+});
