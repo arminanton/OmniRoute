@@ -85,6 +85,7 @@ export const AGY_PUBLIC_MODELS = Object.freeze([
     supportsReasoning: true,
     supportsVision: true,
     toolCalling: true,
+    supportedThinkingEfforts: ["low", "medium", "high", "max"],
   },
   {
     id: "claude-opus-4-6-thinking-high",
@@ -134,6 +135,7 @@ export const AGY_PUBLIC_MODELS = Object.freeze([
     supportsReasoning: true,
     supportsVision: true,
     toolCalling: true,
+    supportedThinkingEfforts: ["low", "medium", "high", "max"],
   },
   {
     id: "claude-sonnet-4-6-high",

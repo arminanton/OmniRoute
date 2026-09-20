@@ -16,23 +16,38 @@ export function getRegisteredProviderEffortBaseModelId(
   const providerModels = getProviderModels(providerId);
   const registeredVariant = providerModels.find((candidate) => candidate.id === modelId);
 
-  if (!registeredVariant) return null;
+  if (registeredVariant) {
+    for (const effort of REGISTERED_EFFORT_SUFFIXES) {
+      const suffix = `-${effort}`;
+      if (!modelId.endsWith(suffix)) continue;
+
+      const baseModelId = modelId.slice(0, -suffix.length);
+
+      if (providerModels.some((candidate) => candidate.id === baseModelId)) return baseModelId;
+
+      // Curated providers may intentionally expose only useful variants while the
+      // authoritative live catalog exposes their unsuffixed wire model. The registry
+      // declaration is the proof; never infer this relationship from spelling alone.
+      const declaredLiveBase = registeredVariant.liveCatalogIds?.find(
+        (candidate) => candidate === baseModelId || !candidate.endsWith(`-${effort}`)
+      );
+      return declaredLiveBase ?? null;
+    }
+  }
 
   for (const effort of REGISTERED_EFFORT_SUFFIXES) {
     const suffix = `-${effort}`;
     if (!modelId.endsWith(suffix)) continue;
 
     const baseModelId = modelId.slice(0, -suffix.length);
-
-    if (providerModels.some((candidate) => candidate.id === baseModelId)) return baseModelId;
-
-    // Curated providers may intentionally expose only useful variants while the
-    // authoritative live catalog exposes their unsuffixed wire model. The registry
-    // declaration is the proof; never infer this relationship from spelling alone.
-    const declaredLiveBase = registeredVariant.liveCatalogIds?.find(
-      (candidate) => candidate === baseModelId || !candidate.endsWith(`-${effort}`)
-    );
-    return declaredLiveBase ?? null;
+    const baseModel = providerModels.find((candidate) => candidate.id === baseModelId);
+    if (
+      baseModel &&
+      Array.isArray(baseModel.supportedThinkingEfforts) &&
+      baseModel.supportedThinkingEfforts.includes(effort)
+    ) {
+      return baseModelId;
+    }
   }
 
   return null;
