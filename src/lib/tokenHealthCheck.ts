@@ -696,12 +696,8 @@ export async function checkConnection(conn) {
         providerSpecificData.copilotTokenExpiresAt
       );
       const copilotAboutToExpire =
-        !hasCopilotToken ||
-        !copilotExpiresAtMs ||
-        copilotExpiresAtMs - nowMs < TOKEN_EXPIRY_BUFFER;
-      const lastCheckMs = conn.lastHealthCheckAt
-        ? new Date(conn.lastHealthCheckAt).getTime()
-        : 0;
+        !hasCopilotToken || !copilotExpiresAtMs || copilotExpiresAtMs - nowMs < TOKEN_EXPIRY_BUFFER;
+      const lastCheckMs = conn.lastHealthCheckAt ? new Date(conn.lastHealthCheckAt).getTime() : 0;
       const intervalMs = intervalMin * 60 * 1000;
       const dueByInterval =
         !Number.isFinite(lastCheckMs) || !lastCheckMs || nowMs - lastCheckMs >= intervalMs;
