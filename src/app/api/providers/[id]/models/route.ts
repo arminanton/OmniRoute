@@ -1843,7 +1843,9 @@ export async function GET(
         );
       }
 
-      const baseUrl = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=300";
+      const baseUrl = bearerToken
+        ? "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=300"
+        : "https://generativelanguage.googleapis.com/v1beta/models?pageSize=300";
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
 
@@ -1879,7 +1881,19 @@ export async function GET(
           }
 
           const data = await response.json();
-          allModels.push(...parseGeminiModelsList(data));
+          const discoveryData = bearerToken
+            ? {
+                models: (Array.isArray(data.publisherModels) ? data.publisherModels : []).map(
+                  (model: { name?: string; displayName?: string }) => ({
+                    ...model,
+                    name: model.name?.replace("publishers/google/", ""),
+                    displayName: model.displayName ?? model.name?.split("/").pop(),
+                    supportedGenerationMethods: ["generateContent"],
+                  })
+                ),
+              }
+            : data;
+          allModels.push(...parseGeminiModelsList(discoveryData));
 
           const nextPageToken = data.nextPageToken;
           if (!nextPageToken || seenTokens.has(nextPageToken)) break;
