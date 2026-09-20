@@ -19,6 +19,7 @@
  * combo.config.fusionTuning).
  */
 import { errorResponse, sanitizeErrorMessage } from "../utils/error.ts";
+import { isExhaustedNetworkResponse } from "./exhaustedNetworkResponse.ts";
 import { extractTextContent } from "../translator/helpers/geminiHelper.ts";
 import type { PerTargetAdmissionHook } from "./admission/types.ts";
 import type { ComboLogger, HandleSingleModel, ResolvedComboTarget } from "./combo/types.ts";
@@ -392,6 +393,7 @@ export async function handleFusionChat({
       failures.push({ model, reason: "straggler_dropped" });
       continue;
     }
+    if (isExhaustedNetworkResponse(res)) return res;
     const sentinel = res as Sentinel;
     if (sentinel.__timeout) {
       log.warn("FUSION", `Panel ${model} timed out`);

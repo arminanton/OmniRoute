@@ -19,6 +19,7 @@ import {
   selectLockoutCooldownMs,
 } from "../accountFallback.ts";
 import { errorResponse, errorResponseWithComboDiagnostics } from "../../utils/error.ts";
+import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
 import { recordComboFailure, clearComboFailureTracking } from "./failureTracker.ts";
 import { buildRecoveryHint } from "./pinRecovery.ts";
 import { formatExhaustedConnectionKey } from "./comboDiagFormat.ts";
@@ -358,6 +359,12 @@ export async function executeTargetAttempt(opts: {
       effectiveComboStrategy: deps.strategy,
       failoverBeforeRetry: deps.config.failoverBeforeRetry,
     });
+
+    // Local network exhaustion is request-terminal. Preserve the exact response
+    // before body parsing, health accounting, retry, target advance, or compression.
+    if (isExhaustedNetworkResponse(result)) {
+      return { ok: false, response: result };
+    }
 
     // Success — validate response quality before returning
     if (result.ok) {

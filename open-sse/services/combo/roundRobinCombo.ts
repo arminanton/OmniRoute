@@ -14,6 +14,7 @@ import {
   errorResponseWithComboDiagnostics,
 } from "../../utils/error.ts";
 import { buildRecoveryHint } from "./pinRecovery.ts";
+import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
 import { formatExhaustedConnectionKey } from "./comboDiagFormat.ts";
 import { recordComboRequest } from "../comboMetrics.ts";
 import {
@@ -651,6 +652,10 @@ export async function handleRoundRobinCombo({
             rrSafetyPromise,
           ]);
           if (rrExpired) return result; // G4: safety timer won — stop everything
+
+          // Local network exhaustion is request-terminal. Preserve the exact response
+          // before quota, breaker, cooldown, lockout, retry, or target rotation work.
+          if (isExhaustedNetworkResponse(result)) return result;
 
           // Quota-aware scheduling: reserve the estimated budget for this
           // dispatch (opt-in, same env gate as the pre-request check). Best-effort

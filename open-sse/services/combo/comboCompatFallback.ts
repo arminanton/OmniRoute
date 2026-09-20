@@ -1,4 +1,10 @@
-import type { ComboLogger, HandleSingleModel, IsModelAvailable, ResolvedComboTarget } from "./types";
+import type {
+  ComboLogger,
+  HandleSingleModel,
+  IsModelAvailable,
+  ResolvedComboTarget,
+} from "./types";
+import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
 
 /**
  * Last-resort fallback tier for combo routing (#6238).
@@ -68,6 +74,7 @@ export async function attemptCompatRejectedFallback(
       ...target,
       effectiveComboStrategy: ctx.strategy,
     });
+    if (isExhaustedNetworkResponse(result)) return result;
     if (result.ok) {
       ctx.log.info("COMBO", `Last-resort compat fallback succeeded via ${target.modelStr}`);
       return result;

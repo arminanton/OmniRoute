@@ -19,6 +19,7 @@ import { handleFusionChat, type FusionTuning } from "../fusion.ts";
 import { getResolvedModelCapabilities } from "../modelCapabilities.ts";
 import { errorResponseWithComboDiagnostics } from "../../utils/error.ts";
 import { parseModel } from "../model.ts";
+import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
 import { handlePipelineChat, type PipelineStep } from "../pipeline.ts";
 import type { resolveComboSetupConfig } from "../comboConfig.ts";
 import { clampComboDepth, clampGlobalAttempts, resolveDelayMs } from "./comboPredicates.ts";
@@ -348,6 +349,7 @@ export async function tryPinnedModelDispatch(args: {
       );
     }
     if (pinnedResult) {
+      if (isExhaustedNetworkResponse(pinnedResult)) return pinnedResult;
       const accepted = await evaluatePinnedResponse({
         pinnedResult,
         pinnedModel,

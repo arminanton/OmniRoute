@@ -200,6 +200,10 @@ import {
   isExhaustedNetworkFailure,
   isProxyFetchExhaustedFailure,
 } from "../services/networkFailure";
+import {
+  isExhaustedNetworkResponse,
+  markExhaustedNetworkResponse,
+} from "@omniroute/open-sse/services/exhaustedNetworkResponse.ts";
 import { constrainConnectionsToQuota, resolveQuotaKeyScope } from "../../lib/quota/quotaKey";
 import { checkConnectionCapacity } from "../utils/backpressure";
 import {
@@ -1226,6 +1230,7 @@ async function handleChatImplementation(
     // If combo exhausted all models, try the global fallback before giving up.
     if (
       !response.ok &&
+      !isExhaustedNetworkResponse(response) &&
       [502, 503].includes(response.status) &&
       typeof (settings as any)?.globalFallbackModel === "string" &&
       (settings as any).globalFallbackModel.trim()
@@ -2024,6 +2029,19 @@ async function handleSingleModelChat(
         return successResponse;
       }
 
+      // proxyFetch already exhausted its fresh-dispatcher and allowed fallback paths.
+      // Mark and return this exact JSON/SSE response before emergency fallback,
+      // account health, breaker, cooldown, lockout, or combo routing can reclassify it.
+      if (isProxyFetchExhaustedFailure(result.errorCode)) {
+        log.warn(
+          "NETWORK",
+          `${provider}/${model} exhausted local transport paths; returning without redispatch`
+        );
+        return markExhaustedNetworkResponse(
+          withSelectedConnectionHeader(result.response, credentials.connectionId)
+        );
+      }
+
       // A final hard-lease fence rejection is authoritative. It must never mutate
       // connection health/cooldown state or fall through to ordinary account/model
       // fallback, which could turn a stale lifecycle into unmanaged dispatch.
@@ -2341,17 +2359,6 @@ async function handleSingleModelChat(
         ) {
           markAccountExhaustedFrom429(credentials.connectionId, provider);
         }
-      }
-
-      // proxyFetch has already tried a fresh dispatcher and its allowed fallback path.
-      // This is host/proxy reachability, not account health. Do not repeat request
-      // parsing/compression, rotate accounts, write cooldowns, or trip provider breakers.
-      if (isProxyFetchExhaustedFailure(result.errorCode)) {
-        log.warn(
-          "NETWORK",
-          `${provider}/${model} exhausted local transport paths; returning without account redispatch`
-        );
-        return withSelectedConnectionHeader(result.response, credentials.connectionId);
       }
 
       // #9708: retry a retryable pre-output transport failure once on the same
