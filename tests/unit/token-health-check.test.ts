@@ -139,6 +139,52 @@ test("GitHub access-token health skips upstream token issuance between configure
   }
 });
 
+test("GitHub access-token health refreshes an expiring sub-token before the interval is due", async () => {
+  await resetStorage();
+  const originalFetch = globalThis.fetch;
+  let refreshRequests = 0;
+  const refreshedExpiry = Math.floor(Date.now() / 1000) + 3600;
+  globalThis.fetch = (async () => {
+    refreshRequests += 1;
+    return new Response(
+      JSON.stringify({
+        token: "refreshed-copilot-token",
+        expires_at: refreshedExpiry,
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof fetch;
+
+  try {
+    const connection = await providersDb.createProviderConnection({
+      provider: "github",
+      authType: "oauth",
+      name: "GitHub Expiring Sub-token",
+      accessToken: "ghp_expiring_sub_token_secret",
+      healthCheckInterval: 60,
+      isActive: true,
+      testStatus: "active",
+      providerSpecificData: {
+        copilotToken: "expiring-copilot-token",
+        copilotTokenExpiresAt: Math.floor(Date.now() / 1000) + 60,
+      },
+    });
+    await providersDb.updateProviderConnection(connection.id, {
+      lastHealthCheckAt: new Date().toISOString(),
+    });
+
+    const latest = await providersDb.getProviderConnectionById(connection.id);
+    await tokenHealthCheck.checkConnection(latest);
+
+    const updated = await providersDb.getProviderConnectionById(connection.id);
+    assert.equal(refreshRequests, 1, "imminent expiry must override the configured interval");
+    assert.equal(updated?.providerSpecificData?.copilotToken, "refreshed-copilot-token");
+    assert.equal(updated?.providerSpecificData?.copilotTokenExpiresAt, refreshedExpiry);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("GitHub access-token health keeps network failures active", async () => {
   await resetStorage();
   const originalFetch = globalThis.fetch;
