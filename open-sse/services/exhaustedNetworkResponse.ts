@@ -6,22 +6,22 @@
 const EXHAUSTED_NETWORK_RESPONSE = Symbol.for("omniroute.response.exhausted-local-network");
 
 type MarkedResponse = Response & {
-  [EXHAUSTED_NETWORK_RESPONSE]?: true;
+  readonly [EXHAUSTED_NETWORK_RESPONSE]: true;
 };
 
 /** Mark the final JSON or SSE failure Response without reading or replacing its body. */
-export function markExhaustedNetworkResponse<T extends Response>(response: T): T {
+export function markExhaustedNetworkResponse<T extends Response>(response: T): T & MarkedResponse {
   Object.defineProperty(response, EXHAUSTED_NETWORK_RESPONSE, {
     configurable: false,
     enumerable: false,
     value: true,
     writable: false,
   });
-  return response;
+  return response as T & MarkedResponse;
 }
 
 /** True only for an internally marked exhausted-local-network Response. */
-export function isExhaustedNetworkResponse(response: unknown): response is Response {
+export function isExhaustedNetworkResponse(response: unknown): response is MarkedResponse {
   return (
     response instanceof Response &&
     (response as MarkedResponse)[EXHAUSTED_NETWORK_RESPONSE] === true
