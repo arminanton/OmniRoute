@@ -114,12 +114,25 @@ export const ANTIGRAVITY_MODEL_ALIASES = Object.freeze({
   "gemini-3-pro-image-preview": "gemini-3-pro-image",
   // Legacy Claude display ids → current upstream ids. NOTE: an earlier comment here
   // assumed Claude was removed from Antigravity 2.0 and would 404; discussion #3184
-  // disproved that — the Antigravity OAuth backend still serves claude-opus-4-6-thinking
+  // disproved that - the Antigravity OAuth backend still serves claude-opus-4-6-thinking
   // and claude-sonnet-4-6 (now listed in ANTIGRAVITY_PUBLIC_MODELS above). These aliases
   // remap the old gemini-claude-* ids to the live upstream ids.
   "gemini-claude-sonnet-4-5": "claude-sonnet-4-6",
   "gemini-claude-sonnet-4-5-thinking": "claude-sonnet-4-6",
   "gemini-claude-opus-4-5-thinking": "claude-opus-4-6-thinking",
+
+  // Claude thinking tiers and variants requested by clients (e.g. Prime Agent)
+  "claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-high": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-medium": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-low": "claude-sonnet-4-6",
+  "claude-opus-4-6": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-high": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-medium": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-low": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-thinking-high": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-thinking-medium": "claude-opus-4-6-thinking",
+  "claude-opus-4-6-thinking-low": "claude-opus-4-6-thinking",
 });
 
 type AntigravityModelAliasMap = Record<string, string>;
