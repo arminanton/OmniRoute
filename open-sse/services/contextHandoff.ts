@@ -8,7 +8,6 @@ import {
 import { estimateTokens } from "./contextManager.ts";
 import { stripMarkdownCodeFence } from "../utils/aiSdkCompat.ts";
 import { isFeatureFlagEnabled } from "../../src/shared/utils/featureFlags.ts";
-import { isExhaustedNetworkResponse } from "./exhaustedNetworkResponse.ts";
 
 export const HANDOFF_WARNING_THRESHOLD = 0.85;
 export const HANDOFF_EXHAUSTION_THRESHOLD = 0.95;
@@ -425,16 +424,6 @@ async function generateHandoffAsync(options: {
   };
 
   const response = await options.handleSingleModel(summaryBody, summaryModel);
-  // This generator is detached best-effort work, so it has no foreground Response
-  // contract to propagate into. Stop locally before body parsing or another dispatch.
-  if (isExhaustedNetworkResponse(response)) {
-    logUniversalHandoffOutcome(
-      "unavailable",
-      options.comboName,
-      `summary model exhausted local network paths: model=${summaryModel}`
-    );
-    return;
-  }
   if (!response.ok) {
     logUniversalHandoffOutcome(
       "unavailable",
@@ -783,16 +772,6 @@ async function generateUniversalHandoffAsync(options: {
   };
 
   const response = await options.handleSingleModel(summaryBody, summaryModel);
-  // Detached best-effort work cannot replace the already-served foreground
-  // response. Stop locally before body parsing and report it as unavailable.
-  if (isExhaustedNetworkResponse(response)) {
-    logUniversalHandoffOutcome(
-      "unavailable",
-      options.comboName,
-      `summary model exhausted local network paths: model=${summaryModel}`
-    );
-    return "unavailable";
-  }
   if (!response.ok) {
     const detail = `summary model call failed: status=${response.status} model=${summaryModel}`;
     logUniversalHandoffOutcome("unavailable", options.comboName, detail);
@@ -803,20 +782,13 @@ async function generateUniversalHandoffAsync(options: {
   try {
     content = getResponseText((await response.clone().json()) as Record<string, unknown>);
   } catch {
-    content = await response
-      .clone()
-      .text()
-      .catch(() => "");
+    content = await response.clone().text().catch(() => "");
   }
 
   const parsed = parseHandoffJSON(content);
   if (!parsed) {
     const preview = JSON.stringify(content.slice(0, 200));
-    logUniversalHandoffOutcome(
-      "unparseable",
-      options.comboName,
-      `model=${summaryModel} contentPreview=${preview}`
-    );
+    logUniversalHandoffOutcome("unparseable", options.comboName, `model=${summaryModel} contentPreview=${preview}`);
     return "unparseable";
   }
 

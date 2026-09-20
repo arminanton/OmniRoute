@@ -15,7 +15,6 @@
 
 import { secureRandomFloat } from "../../../src/shared/utils/secureRandom";
 import { recordComboShadowRequest } from "../comboMetrics.ts";
-import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
 import { isRecord } from "./comboData.ts";
 import { filterVisibleComboTargets, resolveNestedComboTargets } from "./comboStructure.ts";
 import { toRecordedTarget } from "./comboPredicates.ts";
@@ -157,17 +156,6 @@ export function scheduleShadowRouting(
             }),
             shadowConfig.timeoutMs
           );
-          // Shadow calls are detached and cannot replace the foreground response.
-          // Stop locally before cloning or draining a terminal transport result.
-          if (isExhaustedNetworkResponse(response)) {
-            recordComboShadowRequest(combo.name, target.modelStr, {
-              success: false,
-              latencyMs: Date.now() - startedAt,
-              target: toRecordedTarget(target),
-            });
-            log.warn("COMBO", `Shadow target exhausted local network paths: ${target.modelStr}`);
-            return;
-          }
           await drainShadowResponse(response.clone());
           recordComboShadowRequest(combo.name, target.modelStr, {
             success: response.ok,
