@@ -12,11 +12,40 @@ import { buildTelegramUrl, buildTelegramPayload } from "@/lib/webhooks/integrati
 import { buildDiscordPayload } from "@/lib/webhooks/integrations/discord";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { insertDelivery } from "@/lib/db/webhookDeliveries";
-import { isPrivateHost, OutboundUrlGuardError } from "@/shared/network/outboundUrlGuard";
-import { parseAndValidateWebhookUrl } from "@/shared/network/outboundUrlGuardPolicy";
+import { fetchWebhookUrl } from "@/shared/network/webhookFetch";
 import crypto from "crypto";
 
 const MAX_RESPONSE_BODY = 2048;
+
+/** Never buffer an untrusted webhook response just to show a short diagnostic preview. */
+async function readBoundedResponseBody(response: Response): Promise<string> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let body = "";
+  let bytes = 0;
+  let complete = false;
+  try {
+    while (body.length <= MAX_RESPONSE_BODY && bytes < MAX_RESPONSE_BODY * 4) {
+      const { done, value } = await reader.read();
+      if (done) {
+        complete = true;
+        body += decoder.decode();
+        break;
+      }
+      const remaining = MAX_RESPONSE_BODY * 4 - bytes;
+      // A single untrusted stream chunk can be huge; decode only the bounded prefix.
+      body += decoder.decode(value.subarray(0, remaining), { stream: true });
+      bytes += value.byteLength;
+    }
+    return body.length > MAX_RESPONSE_BODY || !complete
+      ? body.slice(0, MAX_RESPONSE_BODY) + "…"
+      : body;
+  } finally {
+    if (!complete) await reader.cancel();
+    reader.releaseLock();
+  }
+}
 
 async function testFetch(
   url: string,
@@ -30,38 +59,37 @@ async function testFetch(
   error?: string;
 }> {
   const start = Date.now();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10_000);
   try {
-    const parsed = parseAndValidateWebhookUrl(url);
-    // For private (opted-in) targets, return connectivity diagnostics only — never the
-    // upstream response body, so this endpoint can't be used to exfiltrate content from
-    // internal services reachable from the server. (#3269 hardening)
-    const redactBody = isPrivateHost(parsed.hostname);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10_000);
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "OmniRoute-Webhook/1.0",
-        ...headers,
+    const { response, redactBody } = await fetchWebhookUrl(
+      url,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "OmniRoute-Webhook/1.0",
+          ...headers,
+        },
+        body: JSON.stringify(body),
       },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-    const latencyMs = Date.now() - start;
-    let rawBody = "";
+      { signal: controller.signal }
+    );
+    // A private (explicitly approved) target gets connectivity diagnostics only. Never
+    // read its body; a public result is limited before decoding/buffering, under the
+    // same end-to-end 10s timeout as DNS, connection and redirect processing.
+    let responseBody = "<redacted: private target>";
     try {
-      rawBody = await res.text();
-      if (rawBody.length > MAX_RESPONSE_BODY) rawBody = rawBody.slice(0, MAX_RESPONSE_BODY) + "…";
+      if (redactBody) await response.body?.cancel();
+      else responseBody = await readBoundedResponseBody(response);
     } catch {
-      rawBody = "";
+      responseBody = "";
     }
     return {
-      success: res.ok,
-      status: res.status,
-      latencyMs,
-      responseBody: redactBody ? "<redacted: private target>" : rawBody,
+      success: response.ok,
+      status: response.status,
+      latencyMs: Date.now() - start,
+      responseBody,
     };
   } catch (error: any) {
     return {
@@ -71,6 +99,8 @@ async function testFetch(
       responseBody: "",
       error: error.message || "Network error",
     };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
