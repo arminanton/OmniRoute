@@ -19,7 +19,11 @@
  * backing registry (webSearch, webFetch, llm) are still declared explicitly via
  * `serviceKinds` on the provider entry; callers union declared + derived sources.
  */
-import { AUDIO_TRANSCRIPTION_PROVIDERS, AUDIO_SPEECH_PROVIDERS } from "./audioRegistry.ts";
+import {
+  AUDIO_TRANSCRIPTION_PROVIDERS,
+  AUDIO_SPEECH_PROVIDERS,
+  UC_TTS_POLICY_DISABLED,
+} from "./audioRegistry.ts";
 import { VIDEO_PROVIDERS } from "./videoRegistry.ts";
 import { MUSIC_PROVIDERS } from "./musicRegistry.ts";
 import { IMAGE_PROVIDERS } from "./imageRegistry.ts";
@@ -51,6 +55,7 @@ export const REGISTRY_MEDIA_KINDS: readonly RegistryMediaKind[] = Object.freeze(
 export function getRegistryMediaKinds(providerId: string): RegistryMediaKind[] {
   const kinds: RegistryMediaKind[] = [];
   for (const kind of REGISTRY_MEDIA_KINDS) {
+    if (kind === "tts" && providerId === "uc" && UC_TTS_POLICY_DISABLED) continue;
     if (Object.prototype.hasOwnProperty.call(MEDIA_KIND_REGISTRIES[kind], providerId)) {
       kinds.push(kind);
     }

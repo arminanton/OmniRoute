@@ -163,13 +163,18 @@ test("runUcTtsSocket resolves with an error on a connect failure", async (t) => 
 
 // ─── handleUcTextToSpeech full path (mint + socket) ──────────────────────────
 
-test("handleUcTextToSpeech mints a token then returns decoded MP3 bytes", async (t) => {
+// Owner Directive D3 disables UC speech to conserve AI credits. Keep the
+// low-level frame/socket tests above, but the public handler must not mint a
+// session token or open a socket, even when a valid UC connection is present.
+test("handleUcTextToSpeech rejects a configured request before mint or WebSocket", async (t) => {
+  let mintCalls = 0;
+  let socketCalls = 0;
   const restore = __setUcTtsWebSocketForTesting(
-    makeFakeWs([
-      JSON.stringify({ type: "usage_update", usage_percent: 20, threshold_crossed: 10 }),
-      JSON.stringify({ data: b64([0x49, 0x44, 0x33, 0x01]) }),
-      JSON.stringify({ data: b64([0x02, 0x03]) }),
-    ])
+    class {
+      constructor() {
+        socketCalls++;
+      }
+    } as unknown as typeof import("ws").default
   );
   t.after(restore);
 
@@ -177,52 +182,32 @@ test("handleUcTextToSpeech mints a token then returns decoded MP3 bytes", async 
     text: "read this aloud",
     voice: "jade",
     credentials: { providerSpecificData: psd() },
-    fetchImpl: tokenFetch(),
+    fetchImpl: (async (...args: Parameters<typeof fetch>) => {
+      mintCalls++;
+      return tokenFetch()(...args);
+    }) as typeof fetch,
   });
 
-  assert.equal(result.ok, true);
-  assert.equal(result.status, 200);
-  assert.equal(result.contentType, "audio/mpeg");
-  assert.ok(result.audio);
-  assert.deepEqual(Array.from(result.audio as Uint8Array), [0x49, 0x44, 0x33, 0x01, 0x02, 0x03]);
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 400);
+  assert.match(result.error ?? "", /disabled by policy/i);
+  assert.equal(mintCalls, 0);
+  assert.equal(socketCalls, 0);
 });
 
-test("handleUcTextToSpeech defaults an empty voice to jade", async (t) => {
-  let sentFrame: Record<string, unknown> | null = null;
-  const FakeWS = class {
-    onopen: (() => void) | null = null;
-    onmessage: ((e: { data: unknown }) => void) | null = null;
-    onerror: (() => void) | null = null;
-    onclose: (() => void) | null = null;
-    readyState = 1;
-    constructor(_url: string, _opts?: unknown) {
-      setTimeout(() => this.onopen?.(), 0);
-    }
-    send(data: string) {
-      sentFrame = JSON.parse(data) as Record<string, unknown>;
-      setTimeout(() => {
-        this.onmessage?.({ data: JSON.stringify({ data: b64([0x49, 0x44, 0x33]) }) });
-        this.onclose?.();
-      }, 0);
-    }
-    close() {
-      /* no-op */
-    }
-  } as unknown as typeof import("ws").default;
-  const restore = __setUcTtsWebSocketForTesting(FakeWS);
-  t.after(restore);
-
+test("handleUcTextToSpeech rejects an empty voice without starting a socket", async () => {
   const result = await handleUcTextToSpeech({
     text: "hi",
     voice: "   ",
     credentials: { providerSpecificData: psd() },
     fetchImpl: tokenFetch(),
   });
-  assert.equal(result.ok, true);
-  assert.equal((sentFrame as unknown as { voice?: string } | null)?.voice, "jade");
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 400);
+  assert.match(result.error ?? "", /disabled by policy/i);
 });
 
-test("handleUcTextToSpeech rejects an empty input", async () => {
+test("handleUcTextToSpeech rejects an empty input under the same policy", async () => {
   const result = await handleUcTextToSpeech({
     text: "   ",
     credentials: { providerSpecificData: psd() },
@@ -230,24 +215,32 @@ test("handleUcTextToSpeech rejects an empty input", async () => {
   });
   assert.equal(result.ok, false);
   assert.equal(result.status, 400);
+  assert.match(result.error ?? "", /disabled by policy/i);
 });
 
-test("handleUcTextToSpeech returns 401 when no UC credential is configured", async () => {
+test("handleUcTextToSpeech returns policy 400 before checking missing credentials", async () => {
   const result = await handleUcTextToSpeech({
     text: "hi",
     credentials: { providerSpecificData: {} },
     fetchImpl: tokenFetch(),
   });
   assert.equal(result.ok, false);
-  assert.equal(result.status, 401);
+  assert.equal(result.status, 400);
+  assert.match(result.error ?? "", /disabled by policy/i);
 });
 
-test("handleUcTextToSpeech maps a Clerk 401 mint failure to 401", async () => {
+test("handleUcTextToSpeech never mints even when Clerk would reject a request", async () => {
+  let calls = 0;
   const result = await handleUcTextToSpeech({
     text: "hi",
     credentials: { providerSpecificData: psd() },
-    fetchImpl: failingTokenFetch(401),
+    fetchImpl: (async (...args: Parameters<typeof fetch>) => {
+      calls++;
+      return failingTokenFetch(401)(...args);
+    }) as typeof fetch,
   });
   assert.equal(result.ok, false);
-  assert.equal(result.status, 401);
+  assert.equal(result.status, 400);
+  assert.match(result.error ?? "", /disabled by policy/i);
+  assert.equal(calls, 0);
 });

@@ -286,6 +286,10 @@ export const AUDIO_TRANSLATION_PROVIDERS: Record<string, AudioProvider> = {
   },
 };
 
+// Owner Directive D3: UC speech spends AI credits and is disabled at the handler.
+// Keep the explicit route's policy error, but do not advertise a usable TTS model.
+export const UC_TTS_POLICY_DISABLED = true;
+
 export const AUDIO_SPEECH_PROVIDERS: Record<string, AudioProvider> = {
   google: {
     id: "google",
@@ -822,6 +826,7 @@ export function getAllAudioModels() {
   }
 
   for (const [providerId, config] of Object.entries(AUDIO_SPEECH_PROVIDERS)) {
+    if (providerId === "uc" && UC_TTS_POLICY_DISABLED) continue;
     for (const model of config.models) {
       models.push({
         id: model.id.startsWith(`${providerId}/`) ? model.id : `${providerId}/${model.id}`,
