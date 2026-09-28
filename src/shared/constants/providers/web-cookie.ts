@@ -21,6 +21,7 @@ export const WEB_COOKIE_PROVIDERS = {
     id: "chatgpt-web-codex",
     serviceKinds: ["llm"],
     alias: "cgpt-codex",
+    additionalAliases: ["cgpt"],
     name: "ChatGPT Web (Codex)",
     icon: "terminal",
     color: "#10A37F",
@@ -512,11 +513,11 @@ export const WEB_COOKIE_PROVIDERS = {
     authHint:
       "Sign in once (email code or browser) to mint a MaxAI access token. OmniRoute signs each request, routes it through residential egress, and refreshes the token browserlessly, so a connection stays valid for about a year without re-login.",
   },
-  "uc-persona": {
-    id: "uc-persona",
+  uc: {
+    id: "uc",
     serviceKinds: ["llm"],
     alias: "uc",
-    additionalAliases: ["ucn"],
+    additionalAliases: ["ucn", "uc-persona"],
     name: "UC Persona / Emotional",
     icon: "auto_awesome",
     color: "#111827",

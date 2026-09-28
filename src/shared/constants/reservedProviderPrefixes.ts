@@ -39,6 +39,9 @@ function buildReservedProviderPrefixes(): Set<string> {
   for (const entry of Object.values(REGISTRY)) {
     if (entry?.id) reserved.add(entry.id);
     if (entry?.alias) reserved.add(entry.alias);
+    for (const alias of entry?.additionalAliases || []) {
+      if (alias) reserved.add(alias);
+    }
   }
   for (const providerId of RETIRED_MICROSOFT_DESIGNER_WEB_PROVIDER_IDS) {
     reserved.add(providerId);

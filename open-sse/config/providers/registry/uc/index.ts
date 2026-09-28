@@ -17,9 +17,11 @@ import { UC_REGISTRY_MODELS } from "../../../../executors/uc/catalog.ts";
  * The metered OpenAI-compatible Developer API (uc-direct) is a SEPARATE provider.
  */
 export const ucProvider: RegistryEntry = {
-  id: "uc-persona",
+  // Keep the canonical ID aligned with REGISTRY.uc and UcExecutor. The renamed
+  // uc-persona ID appeared in fork builds; accept it only as a legacy alias.
+  id: "uc",
   alias: "uc",
-  additionalAliases: ["ucn"],
+  additionalAliases: ["ucn", "uc-persona"],
   format: "openai",
   executor: "uc",
   baseUrl: "https://internal-6.pubyar.com",

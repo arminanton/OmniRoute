@@ -12,7 +12,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { isCodexAppServerRequired } from "../../open-sse/executors/codex.ts";
+import {
+  __setCodexWebSocketTransportForTesting,
+  isCodexAppServerRequired,
+} from "../../open-sse/executors/codex.ts";
+import { getExecutor } from "../../open-sse/executors/index.ts";
 import { CodexAppServerExecutor } from "../../open-sse/executors/codex-app-server.ts";
 import {
   CodexAppServerClient,
@@ -292,6 +296,98 @@ test("CodexAppServerClient: notifications reach the handler; responses settle re
   // A method-only frame is a notification.
   ctrl.emit({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "x" } });
   assert.ok(seen.includes("item/agentMessage/delta"));
+});
+
+// ── Executor registry: the first-class provider must use the shared WS factory ──
+
+test("getExecutor dispatches first-class and connection-option Codex app-server turns via WS only", async () => {
+  const sockets: FakeSocketController[] = [];
+  const calls: Array<{ url: string; opts?: Record<string, unknown> }> = [];
+  const websocketFn = async (url: string, opts?: Record<string, unknown>) => {
+    const ctrl = makeFakeSocket();
+    sockets.push(ctrl);
+    calls.push({ url, opts });
+    const originalSend = ctrl.socket.send;
+    ctrl.socket.send = (data: string) => {
+      originalSend(data);
+      const frame = JSON.parse(data) as Record<string, unknown>;
+      if (frame.id == null || !frame.method) return;
+      queueMicrotask(() => {
+        if (frame.method === "thread/start") {
+          ctrl.emit({ jsonrpc: "2.0", id: frame.id, result: { thread: { id: "thr_registry" } } });
+        } else if (frame.method === "turn/start") {
+          ctrl.emit({
+            jsonrpc: "2.0",
+            method: "item/agentMessage/delta",
+            params: { delta: "WS-OK" },
+          });
+          ctrl.emit({ jsonrpc: "2.0", method: "turn/completed", params: { turn: {} } });
+          ctrl.emit({ jsonrpc: "2.0", id: frame.id, result: {} });
+        } else {
+          ctrl.emit({ jsonrpc: "2.0", id: frame.id, result: {} });
+        }
+      });
+    };
+    return ctrl.socket;
+  };
+
+  // A first-class executor is lazy and cached: install the override BEFORE its
+  // first getExecutor() call, and ensure a regression never falls back to HTTP.
+  const originalFetch = globalThis.fetch;
+  const httpCalls: unknown[] = [];
+  globalThis.fetch = (async (url: unknown) => {
+    httpCalls.push(url);
+    throw new Error("Unexpected HTTP fallback in Codex app-server test");
+  }) as typeof fetch;
+  __setCodexWebSocketTransportForTesting(websocketFn);
+  try {
+    const firstClass = await getExecutor("codex-app-server");
+    assert.ok(firstClass instanceof CodexAppServerExecutor);
+    const codex = await getExecutor("codex");
+    let expectedConnections = 0;
+    for (const [executor, stream] of [
+      [firstClass, true],
+      [firstClass, false],
+      [codex, false], // legacy codex connection-option path stays separate
+    ] as const) {
+      const result = await executor.execute(makeExecuteInput({ stream }));
+      const response = "response" in result ? result.response : result;
+      expectedConnections++;
+      assert.equal(calls.length, expectedConnections, "exactly one WS connect per request");
+      assert.equal(sockets.length, expectedConnections);
+      assert.equal(calls.at(-1)?.url, APP_SERVER_PSD.codexAppServerUrl);
+      assert.deepEqual(calls.at(-1)?.opts?.headers, { Authorization: "Bearer deadbeef" });
+      assert.equal(response.status, 200);
+      const text = await response.text();
+      if (stream) {
+        assert.match(text, /event: response\.completed/);
+        assert.match(text, /response\.output_text\.delta/);
+      } else {
+        assert.match(response.headers.get("Content-Type") ?? "", /application\/json/);
+        assert.equal((JSON.parse(text) as { status: string }).status, "completed");
+      }
+      assert.match(text, /WS-OK/);
+      const frames = sockets.at(-1)!.sent;
+      assert.deepEqual(
+        frames.filter((f) => typeof f.method === "string" && f.id != null).map((f) => f.method),
+        ["initialize", "thread/start", "turn/start"]
+      );
+      assert.equal(
+        JSON.stringify(frames).includes("deadbeef"),
+        false,
+        "bearer stays in WS auth headers"
+      );
+      assert.equal(httpCalls.length, 0, "no HTTP fallback, even on the first-class route");
+    }
+    assert.equal(sockets.length, 3);
+    assert.ok(
+      sockets.every((socket) => socket.closed),
+      "completed WS turns close their sockets"
+    );
+  } finally {
+    __setCodexWebSocketTransportForTesting(undefined);
+    globalThis.fetch = originalFetch;
+  }
 });
 
 // ── Executor: lifecycle order + streaming SSE Response ───────────────────────

@@ -1,4 +1,5 @@
 import { PROVIDER_ID_TO_ALIAS, PROVIDER_MODELS } from "../config/providerModels.ts";
+import { REGISTRY } from "../config/providerRegistry.ts";
 import { resolveWildcardAlias } from "./wildcardRouter.ts";
 import { getRegisteredProviderEffortBaseModelId } from "../utils/registeredEffortVariants.ts";
 
@@ -37,6 +38,19 @@ for (const [id, alias] of Object.entries(PROVIDER_ID_TO_ALIAS)) {
     );
   }
   ALIAS_TO_PROVIDER_ID[alias] = id;
+}
+// A secondary alias is a real provider prefix too. Keep the public primary
+// ID→alias display map above unchanged, but resolve every registered prefix
+// to the same canonical provider before credential and executor selection.
+for (const entry of Object.values(REGISTRY)) {
+  for (const alias of entry.additionalAliases || []) {
+    if (!alias || alias === entry.id) continue;
+    const existing = ALIAS_TO_PROVIDER_ID[alias];
+    if ((existing && existing !== entry.id) || Object.hasOwn(REGISTRY, alias)) {
+      throw new Error(`Provider alias "${alias}" collides with a different provider`);
+    }
+    ALIAS_TO_PROVIDER_ID[alias] = entry.id;
+  }
 }
 // Manual alias overrides — maps slug-style prefixes to canonical provider IDs.
 // These live outside the registry because they represent multiple providers

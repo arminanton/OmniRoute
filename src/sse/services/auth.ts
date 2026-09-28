@@ -893,6 +893,9 @@ const PROVIDER_SEARCH_PAIRS: string[][] = [
   // The model layer canonicalizes `agy/` to `antigravity`, but the Antigravity
   // CLI card stores its connection under `agy`. Same account, either id serves.
   ["antigravity", "agy"],
+  // UC Persona briefly used uc-persona as its connection ID on fork builds.
+  // Search historical rows without mixing in the separate metered uc-direct API.
+  ["uc", "uc-persona", "ucn"],
   // OpenCode connection card stores under `opencode`, but model alias resolves to `opencode-zen`.
   ["opencode", "opencode-zen"],
   // One Jina token works on api.jina.ai, r.jina.ai, and s.jina.ai.

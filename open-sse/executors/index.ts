@@ -1,4 +1,5 @@
 import { SEARCH_PROVIDERS } from "../config/searchRegistry.ts";
+import { getRegistryEntry } from "../config/providerRegistry.ts";
 import { assertMicrosoftDesignerWebProviderAvailable } from "@/shared/constants/designerWebRetirement";
 import { assertRuntimeProviderAvailable } from "@/shared/constants/providerRetirement";
 import { assertCommonChatGptWebProviderAvailable } from "@/shared/constants/chatgptWebRetirement";
@@ -37,8 +38,12 @@ const lazyExecutors: Record<string, () => Promise<BaseExecutor>> = {
   bedrock: () => import("./bedrock.ts").then((m) => new m.BedrockExecutor()),
   codex: () => import("./codex.ts").then((m) => new m.CodexExecutor()),
   "codex-app-server": () =>
-    import("./codex-app-server.ts").then(
-      (m) => new m.CodexAppServerExecutor({}, "codex-app-server")
+    Promise.all([import("./codex-app-server.ts"), import("./codex.ts")]).then(
+      ([appServer, codex]) =>
+        new appServer.CodexAppServerExecutor(
+          { websocketFn: codex.getCodexAppServerWebsocketTransport() },
+          "codex-app-server"
+        )
     ),
   maxai: () => import("./maxai.ts").then((m) => new m.MaxAiExecutor()),
   uc: () => import("./uc.ts").then((m) => new m.UcExecutor()),
@@ -234,11 +239,23 @@ export async function getExecutor(provider: string): Promise<BaseExecutor> {
     (err as Error & { status?: number }).status = 400;
     throw err;
   }
+  // Additional registry aliases may not have a dedicated lazy-executor key.
+  // Resolve them to the canonical ID before DefaultExecutor is considered:
+  // otherwise a web-session credential can fall back to PROVIDERS.openai.
+  const entry = getRegistryEntry(provider);
+  if (entry && entry.id !== provider) {
+    if (getRegistryEntry(entry.id)?.id !== entry.id) {
+      throw new Error(`Provider "${provider}" has an unregistered canonical ID "${entry.id}"`);
+    }
+    return (await loadRegisteredExecutor(entry.id)) || getDefaultExecutor(entry.id);
+  }
   return getDefaultExecutor(provider);
 }
 
 export function hasSpecializedExecutor(provider: string): boolean {
-  return hasRegisteredExecutor(provider);
+  if (hasRegisteredExecutor(provider)) return true;
+  const entry = getRegistryEntry(provider);
+  return Boolean(entry && hasRegisteredExecutor(entry.id));
 }
 
 export { registerExecutor, registerLazyExecutor, listExecutorAliases } from "./registry.ts";

@@ -66,6 +66,9 @@ export const PROVIDER_CONNECTION_FAMILY_ALIASES: Readonly<Record<string, readonl
   // alias so old URLs and pre-migration connection rows keep working.
   magnific: ["freepik"],
   freepik: ["magnific"],
+  // Old fork builds could store the UC Persona card under uc-persona.
+  uc: ["uc-persona"],
+  "uc-persona": ["uc"],
 };
 
 export function getProviderConnectionFamilyIds(providerId: unknown): readonly string[] {
