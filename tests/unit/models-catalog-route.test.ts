@@ -1091,10 +1091,175 @@ test("v1 models catalog does not duplicate custom Jina specialty models", async 
   );
 
   assert.equal(response.status, 200);
+  // Dual mode uses the short alias as the root and the documented canonical
+  // Jina ID as its child. A custom row overlays that existing identity; it
+  // must not create a second root or rewrite its parent chain.
   assert.equal(visibleJinaEmbeddingRows.length, 1);
-  assert.equal(visibleJinaEmbeddingRows[0].id, "jina-ai/jina-embeddings-v5-text-small");
+  assert.equal(visibleJinaEmbeddingRows[0].id, "jina/jina-embeddings-v5-text-small");
+  assert.equal(visibleJinaEmbeddingRows[0].custom, true);
   assert.equal(visibleJinaRerankRows.length, 1);
-  assert.equal(visibleJinaRerankRows[0].id, "jina-ai/jina-reranker-v3");
+  assert.equal(visibleJinaRerankRows[0].id, "jina/jina-reranker-v3");
+  assert.equal(visibleJinaRerankRows[0].custom, true);
+  for (const [canonicalId, aliasId] of [
+    ["jina-ai/jina-embeddings-v5-text-small", "jina/jina-embeddings-v5-text-small"],
+    ["jina-ai/jina-reranker-v3", "jina/jina-reranker-v3"],
+  ]) {
+    const canonicalRows = body.data.filter((item) => item.id === canonicalId);
+    assert.equal(canonicalRows.length, 1, canonicalId);
+    assert.equal(canonicalRows[0].parent, aliasId);
+  }
+});
+
+test("Jina custom catalog prefix modes dispatch the listed IDs through the Foundation connection", async () => {
+  await seedConnection("jina-ai", {
+    name: "jina-foundation-custom",
+    apiKey: "jina-foundation-test-key",
+  });
+  await modelsDb.addCustomModel(
+    "jina-ai",
+    "jina-embeddings-v5-text-small",
+    "Jina Embeddings v5 Text Small",
+    "imported",
+    "embeddings",
+    ["embeddings"]
+  );
+
+  const aliasId = "jina/jina-embeddings-v5-text-small";
+  const canonicalId = "jina-ai/jina-embeddings-v5-text-small";
+  for (const [mode, expectedRows] of [
+    ["alias", [{ id: aliasId, parent: null }]],
+    ["canonical", [{ id: canonicalId, parent: null }]],
+    [
+      "dual",
+      [
+        { id: aliasId, parent: null },
+        { id: canonicalId, parent: aliasId },
+      ],
+    ],
+  ] as const) {
+    const response = await v1ModelsCatalog.getUnifiedModelsResponse(
+      new Request(`http://localhost/api/v1/models?prefix=${mode}`)
+    );
+    assert.equal(response.status, 200, mode);
+    const body = (await response.json()) as any;
+    const rows = body.data
+      .filter(
+        (item) =>
+          item.owned_by === "jina-ai" &&
+          item.root === "jina-embeddings-v5-text-small" &&
+          item.type === "embedding"
+      )
+      .map((item) => ({ id: item.id, parent: item.parent ?? null }));
+    assert.deepEqual(rows, expectedRows, mode);
+  }
+
+  // Use the *listed* IDs via the real POST route. The mocked upstream proves
+  // both prefixes resolve to this dashboard connection and Jina's bare SKU.
+  const embeddingsRoute = await import("../../src/app/api/v1/embeddings/route.ts");
+  const apiKey = await apiKeysDb.createApiKey("jina-catalog-dispatch", "machine-catalog");
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; authorization: string | null; model: string }> = [];
+  globalThis.fetch = async (input, init) => {
+    const payload = JSON.parse(String(init?.body)) as { model: string };
+    calls.push({
+      url: String(input),
+      authorization: new Headers(init?.headers).get("authorization"),
+      model: payload.model,
+    });
+    return Response.json({
+      data: [{ object: "embedding", embedding: [0.1, 0.2], index: 0 }],
+      usage: { prompt_tokens: 1, total_tokens: 1 },
+    });
+  };
+  try {
+    for (const model of [aliasId, canonicalId]) {
+      const response = await embeddingsRoute.POST(
+        new Request("http://localhost/api/v1/embeddings", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey.key}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ model, input: "catalog dispatch" }),
+        }),
+        {}
+      );
+      assert.equal(response.status, 200, `${model}: ${await response.text()}`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(
+    calls,
+    [aliasId, canonicalId].map(() => ({
+      url: "https://api.jina.ai/v1/embeddings",
+      authorization: "Bearer jina-foundation-test-key",
+      model: "jina-embeddings-v5-text-small",
+    }))
+  );
+});
+
+test("a private provider-node jina prefix shadows the Jina embedding alias, not the canonical ID", async () => {
+  await seedConnection("jina-ai", {
+    name: "jina-foundation-collision",
+    apiKey: "jina-foundation-collision-key",
+  });
+  await providersDb.createProviderNode({
+    type: "openai-compatible-embeddings",
+    name: "Local Jina Prefix Collision",
+    prefix: "jina",
+    apiType: "embeddings",
+    baseUrl: "http://127.0.0.1:11434/v1",
+  });
+
+  const embeddingsRoute = await import("../../src/app/api/v1/embeddings/route.ts");
+  const apiKey = await apiKeysDb.createApiKey("jina-node-collision", "machine-catalog");
+  const calls: Array<{ url: string; authorization: string | null; model: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    calls.push({
+      url: String(input),
+      authorization: new Headers(init?.headers).get("authorization"),
+      model: (JSON.parse(String(init?.body)) as { model: string }).model,
+    });
+    return Response.json({ data: [{ object: "embedding", embedding: [0.1], index: 0 }] });
+  };
+  try {
+    for (const model of [
+      "jina/jina-embeddings-v5-text-small",
+      "jina-ai/jina-embeddings-v5-text-small",
+    ]) {
+      const response = await embeddingsRoute.POST(
+        new Request("http://localhost/api/v1/embeddings", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey.key}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ model, input: "collision diagnostic" }),
+        }),
+        {}
+      );
+      assert.equal(response.status, 200, `${model}: ${await response.text()}`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  // This documents a deployment hazard, not a desired alias precedence: the
+  // local dynamic parser claims jina/* before the built-in Jina alias does.
+  // Clients can use jina-ai/* until the provider-node prefix is renamed.
+  assert.deepEqual(calls, [
+    {
+      url: "http://127.0.0.1:11434/v1/embeddings",
+      authorization: null,
+      model: "jina-embeddings-v5-text-small",
+    },
+    {
+      url: "https://api.jina.ai/v1/embeddings",
+      authorization: "Bearer jina-foundation-collision-key",
+      model: "jina-embeddings-v5-text-small",
+    },
+  ]);
 });
 
 test("v1 models catalog exposes image model input and output modalities for advanced image providers", async () => {
