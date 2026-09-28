@@ -11,11 +11,9 @@
  *    body disclosed host layout, binary install paths, the OS account name and —
  *    for Tailscale — live `tskey-*` credentials. Hard Rule #12 forbids this.
  *
- *    `sanitizeErrorMessage()` alone does not close it: it only rewrites tokens
- *    that look like an absolute path ending in a *source* extension (SOURCE_EXT
- *    in open-sse/utils/error.ts), so `.json` state paths, extension-less binary
- *    paths and `tskey-*` keys all survive it verbatim. The first test below pins
- *    that, so the reason this module exists stays visible.
+ *    `sanitizeErrorMessage()` covers the filesystem paths but does not recognize
+ *    `tskey-*` keys. The dedicated public-safe helper still prevents that
+ *    credential from reaching a response body. The first test pins both facts.
  *
  * 2. `validateBody()` returns `{ success, error }` and has NO `response` field
  *    (`validatedJsonBody()` is the helper that has one). Three call sites did
@@ -62,28 +60,33 @@ const LEAKS = [
     message:
       "ENOENT: no such file or directory, open '/home/operator/.omniroute/data/tunnels.json'",
     secrets: ["/home/operator", "tunnels.json"],
+    sharedSanitizerCovers: true,
   },
   {
     label: "binary path (no extension)",
     message: "spawn /usr/local/bin/cloudflared ENOENT",
     secrets: ["/usr/local/bin/cloudflared"],
+    sharedSanitizerCovers: true,
   },
   {
     label: "tailscale auth key",
     message: "tailscale up failed: invalid key tskey-auth-kMn3Qz7RtY-9fVbXsPq2LdWc",
     secrets: ["tskey-auth-kMn3Qz7RtY-9fVbXsPq2LdWc"],
+    sharedSanitizerCovers: false,
   },
   {
     label: "daemon state path",
     message:
       "Command failed: /opt/omniroute/bin/tailscaled --state=/var/lib/tailscale/tailscaled.state",
     secrets: ["/opt/omniroute/bin/tailscaled", "/var/lib/tailscale"],
+    sharedSanitizerCovers: true,
   },
   {
     label: "windows config path",
     message:
       "listen EADDRINUSE: address already in use 0.0.0.0:41641 (config C:\\Users\\operator\\AppData\\omniroute\\ngrok.yml)",
     secrets: ["C:\\Users\\operator", "ngrok.yml"],
+    sharedSanitizerCovers: true,
   },
 ] as const;
 
@@ -101,18 +104,20 @@ async function withSilencedConsoleError<T>(fn: () => T | Promise<T>): Promise<[T
   }
 }
 
-// ── Why a dedicated module: sanitizeErrorMessage does not cover these ───────
+// ── Shared path coverage does not replace the dedicated tunnel guard ────────
 
-test("sanitizeErrorMessage alone leaves every tunnel leak shape intact", () => {
+test("sanitizeErrorMessage covers tunnel paths but not tskey-auth credentials", () => {
   for (const leak of LEAKS) {
     const out = sanitizeErrorMessage(leak.message);
     const stillLeaks = leak.secrets.some((s) => out.includes(s));
-    assert.ok(
+    assert.equal(
       stillLeaks,
-      `${leak.label}: sanitizeErrorMessage unexpectedly covers this now — if the ` +
-        `shared sanitizer grew to handle it, simplify publicSafeTunnelError accordingly. Got: ${out}`
+      !leak.sharedSanitizerCovers,
+      `${leak.label}: shared-sanitizer coverage changed — expected ` +
+        `${leak.sharedSanitizerCovers ? "covered" : "still leaking"}, got: ${out}`
     );
   }
+  assert.ok(LEAKS.some((leak) => !leak.sharedSanitizerCovers));
 });
 
 // ── The public-safe contract ───────────────────────────────────────────────

@@ -689,7 +689,11 @@ function sanitizeErrorMessageWithStackPolicy(
   // Raw URI credentials must be projected before the path tokenizer consumes
   // the URI tail; Windows path evidence still stays intact until after this
   // credential-only pass and is redacted before escape normalization.
-  str = redactKnownCredentialPatterns(redactSensitiveUrlCredentials(stripStackTail(str)));
+  // Project labeled credentials before scanning paths. Otherwise an ambiguous
+  // filename can consume the credential tail and hide its redaction marker.
+  str = redactLabeledCredentialAssignments(
+    redactKnownCredentialPatterns(redactSensitiveUrlCredentials(stripStackTail(str)))
+  );
   str = redactErrorPaths(str);
   str = redactSensitiveErrorText(str);
   str = truncateSanitizedErrorText(str);

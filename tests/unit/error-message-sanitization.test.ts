@@ -239,6 +239,16 @@ test("sanitizeErrorMessage replaces absolute paths with <path>", async () => {
   assert.ok(out2.includes("<path>"));
 });
 
+test("sanitizeErrorMessage keeps an explicit route hint after a redacted path (#6457)", async () => {
+  const { sanitizeErrorMessage } = await import("../../open-sse/utils/error.ts");
+  const input =
+    "Model 'x' is an image-generation model and cannot be used on /v1/chat/completions. Use POST /v1/images/generations instead.";
+  const out = sanitizeErrorMessage(input);
+  assert.match(out, /\/v1\/images\/generations/, "shielded route hint must survive");
+  assert.match(out, /instead\.$/, "text after the shielded route hint must not be dropped");
+  assert.ok(out.includes("<path>"), "the earlier unshielded span is still redacted");
+});
+
 test("sanitizeErrorMessage handles non-string inputs safely", async () => {
   const { sanitizeErrorMessage } = await import("../../open-sse/utils/error.ts");
   assert.equal(sanitizeErrorMessage(undefined), "");

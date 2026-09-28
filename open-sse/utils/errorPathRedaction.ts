@@ -464,11 +464,14 @@ function findUnquotedPathEnd(
   let hasFilesystemEvidence = false;
   let hasUnresolvedFragments = false;
 
-  const resolveEndpoint = (): number => {
-    if (hasUnresolvedFragments) {
-      return failClosedAmbiguity || hasFilesystemEvidence ? value.length : -1;
-    }
+  const resolveEndpoint = (ignoreAmbiguity = false): number => {
+    // A resolved extension pins the endpoint. Prose after it is not a path suffix.
     if (resolvedExtensionEnd >= 0) return resolvedExtensionEnd;
+    if (hasUnresolvedFragments && !ignoreAmbiguity) {
+      // Separator evidence alone is shared by routes and unknown-root paths.
+      // Leave ambiguous unknown roots to the caller's fail-closed fallback.
+      return failClosedAmbiguity ? value.length : -1;
+    }
     if (hasFilesystemEvidence && lastPathTokenEnd >= 0) return lastPathTokenEnd;
     if (
       acceptFirstTokenPunctuation &&
@@ -529,8 +532,17 @@ function findUnquotedPathEnd(
     let nextTokenStart = tokenEnd;
     while (nextTokenStart < value.length && isWhitespace(value[nextTokenStart])) nextTokenStart++;
     if (nextTokenStart >= value.length) return resolveEndpoint();
+    // A credential pass already replaced this token. Preserve its marker,
+    // but consume any unresolved path fragments before it: filenames with
+    // spaces can otherwise leak a suffix just ahead of the credential.
+    if (startsRedactedToken(value, nextTokenStart)) {
+      if (hasUnresolvedFragments && resolvedExtensionEnd < 0) return tokenEnd;
+      return resolveEndpoint(true);
+    }
     if (isSyntacticallyAbsolutePathAt(value, nextTokenStart)) {
-      const endpoint = resolveEndpoint();
+      // A route-shielded second span is not filesystem evidence. Do not
+      // consume the explicit route hint after a preceding ambiguous path.
+      const endpoint = resolveEndpoint(hasRouteContextBefore(value, nextTokenStart));
       if (endpoint >= 0) return endpoint;
       return acceptEndpointBeforeAnotherAbsolute ? lastPathTokenEnd : -1;
     }
@@ -556,9 +568,10 @@ function isUnquotedPosixSpanCandidateAt(value: string, start: number): boolean {
   for (let index = start; index < tokenEnd; index++) {
     if (value.charCodeAt(index) === 0x2f) slashCount++;
   }
-  // Any boundary-delimited absolute POSIX token is filesystem-sensitive by
-  // default. Explicit Route/HTTP context is shielded by the caller before this
-  // candidate check, so `/vault` is redacted while `Route /vault` is retained.
+  // Any boundary-delimited absolute POSIX token can be filesystem-sensitive.
+  // Explicit Route/HTTP context is shielded by the caller, so `/vault` is
+  // redacted while `Route /vault` is retained. Bare ambiguous routes are
+  // treated as possible unknown-root filesystem paths and fail closed.
   return slashCount >= 1 && token.length > 1;
 }
 
@@ -605,8 +618,9 @@ function redactUnquotedAbsolutePathSpans(value: string): string {
     // Whitespace makes an unquoted path ambiguous. Extend through adjacent
     // separator-bearing tokens or to a deterministic filename extension.
     // Unequivocal Windows, file-URI, and known-root candidates fail closed;
-    // arbitrary extensionless POSIX text falls back to token-level handling so
-    // ordinary `/x/y` route text is not redacted indiscriminately.
+    // unresolved unknown-root POSIX spans also fail closed at the call site.
+    // A route with no explicit context or later anchor cannot be distinguished
+    // from such a filesystem path.
     const isKnownPosixPath = isKnownPosixFilesystemPathAt(value, index);
     const pathEnd = findUnquotedPathEnd(
       value,
@@ -616,7 +630,9 @@ function redactUnquotedAbsolutePathSpans(value: string): string {
       isWindowsPath || isFileUriPath || isKnownPosixPath
     );
     if (pathEnd < 0) {
-      const mustFailClosed = isWindowsPath || isFileUriPath || isKnownPosixPath;
+      // Unknown-root POSIX paths can contain spaces too. A bare unanchored
+      // route has the same shape, so prefer no filesystem leak over its hint.
+      const mustFailClosed = isWindowsPath || isFileUriPath || isKnownPosixPath || isPosixPath;
       if (mustFailClosed) {
         // An unequivocal filesystem prefix with an unknowable endpoint must
         // fail closed over the rest of the first line rather than expose a
@@ -887,9 +903,30 @@ export function stripErrorStackTail(value: string): string {
 
 /**
  * Redact absolute filesystem paths while preserving URLs, explicitly marked
- * API routes, and punctuation around determinable endpoints. Unequivocal
- * filesystem prefixes fail closed when an unquoted endpoint is ambiguous.
+ * API routes, and punctuation around determinable endpoints. Ambiguous
+ * unquoted filesystem candidates, including unknown roots, fail closed.
  */
+const REDACTION_MARKER = "[REDACTED]";
+const CREDENTIAL_MARKER_PREFIX =
+  /^(?:--)?(?:api[-_ ]?key|access[-_ ]?token|refresh[-_ ]?token|authorization|cookie|credential|password|secret|token|private[-_ ]?key|session[-_ ]?id)\s*[:=]\s*['"]?$/i;
+
+/** Only a credential marker may end an ambiguous path span. Literal marker
+ * text in an untrusted filename cannot prove that a path suffix has ended. */
+function startsRedactedToken(value: string, index: number): boolean {
+  let end = index;
+  while (end < value.length && !isWhitespace(value[end])) end++;
+  const token = value.slice(index, end);
+  const markerStart = token.indexOf(REDACTION_MARKER);
+  if (markerStart < 0) return false;
+  const suffix = token.slice(markerStart + REDACTION_MARKER.length);
+  // An embedded path separator or a word suffix can itself be part of a path.
+  if (/[/\\]|[A-Za-z0-9_]/.test(suffix)) return false;
+  const prefix = token.slice(0, markerStart);
+  if (prefix) return CREDENTIAL_MARKER_PREFIX.test(prefix);
+  const previous = value.slice(Math.max(0, index - 48), index);
+  return /\b(?:Authorization|Bearer|Basic)\s*:?\s*$/i.test(previous);
+}
+
 export function redactErrorPaths(value: string): string {
   const quotedPathsRedacted = redactQuotedAbsolutePaths(value);
   const pathSpansRedacted = redactUnquotedAbsolutePathSpans(quotedPathsRedacted);

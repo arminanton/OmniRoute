@@ -19,6 +19,26 @@ test("sanitizeErrorMessage removes bearer credentials and image data URLs", () =
   assert.equal(safe, "upstream echoed Authorization: [REDACTED]");
 });
 
+test("path redaction preserves credential evidence without exposing paths or stack frames", () => {
+  const inputs = [
+    "TLS request failed at /srv/private/provider.ts:44:9 access_token=provider-secret\n" +
+      "    at dispatch (/srv/private/transport.ts:99:1)",
+    String.raw`Transport failed at C:\Program Files\private\provider.ts:44:9 Authorization: Bearer provider-secret`,
+    "Provider failed reading file:///srv/private/provider.ts:44:9 api_key='provider-secret'",
+    "Provider failed reading '/custom/internal secret directory' access_token=provider-secret",
+  ];
+
+  for (const input of inputs) {
+    const projected = sanitizeErrorMessage(input);
+    assert.match(projected, /<path>/);
+    assert.match(projected, /\[REDACTED\]/);
+    assert.doesNotMatch(
+      projected,
+      /provider-secret|\/srv\/private|\/custom\/internal|C:\\Program Files|file:\/\/|at dispatch|transport\.ts/i
+    );
+  }
+});
+
 test("sanitizeErrorMessage redacts common JSON credential fields", () => {
   const safe = sanitizeErrorMessage(
     '{"api_key":"sk-sensitive","access_token":"oauth-sensitive","cookie":"session=sensitive; secondary=also-sensitive","authorization":"Basic dXNlcjpwYXNz"}'
