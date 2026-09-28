@@ -225,7 +225,10 @@ ENV NODE_OPTIONS="--max-old-space-size=${OMNIROUTE_MEMORY_MB}"
 
 # Data directory inside Docker — must match the volume mount in docker-compose.yml
 ENV DATA_DIR=/app/data
-RUN mkdir -p /app/data
+# Docker copies the ownership of an existing image directory into a fresh named
+# volume. Both token and Codex-home mounts must be writable by UID 1000 even when
+# an app profile mounts the volume before the Codex sidecar starts.
+RUN mkdir -p /app/data /run/codex-appserver /home/node/.codex
 
 # `npm run build` (build-next-isolated → assembleStandalone) bundles ALL runtime
 # files into .build/next/standalone/ — .next, node_modules, migrations, scripts,
@@ -251,7 +254,8 @@ COPY --from=builder /app/scripts/dev/healthcheck.mjs ./healthcheck.mjs
 # Hand /app over to the baked-in `node` non-root user (UID/GID 1000) so the
 # runtime process never holds root privileges. The chown happens after all
 # COPYs so it covers files originally owned by root in the builder stage.
-RUN chown -R node:node /app
+RUN chown -R node:node /app /run/codex-appserver /home/node/.codex \
+  && chmod 700 /run/codex-appserver /home/node/.codex
 
 EXPOSE 20128
 

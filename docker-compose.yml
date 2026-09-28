@@ -56,7 +56,7 @@ x-common: &common
     # ~/.codex/auth.json (getCliConfigPaths("codex") = <home>/.codex; the base
     # image runs as `node`, so /home/node/.codex) and the SAME volume is mounted
     # into the sidecar so its `codex app-server` reads the same auth.
-    - codex-appserver-token:/run/codex-appserver
+    - codex-appserver-token:/run/codex-appserver:ro
     - codex-appserver-home:/home/node/.codex
   healthcheck:
     test: ["CMD", "node", "healthcheck.mjs"]
@@ -132,6 +132,9 @@ services:
       - LIVE_WS_ALLOWED_ORIGINS=${LIVE_WS_ALLOWED_ORIGINS:-http://localhost:20128,http://127.0.0.1:20128}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
       - OMNIROUTE_BASE_PATH=${OMNIROUTE_BASE_PATH:-}
+      # This profile overrides x-common.environment; preserve sidecar wiring.
+      - OMNIROUTE_CODEX_APPSERVER_WS=${OMNIROUTE_CODEX_APPSERVER_WS:-ws://codex-app-server:1456}
+      - OMNIROUTE_CODEX_APPSERVER_WS_TOKEN_FILE=${OMNIROUTE_CODEX_APPSERVER_WS_TOKEN_FILE:-/run/codex-appserver/token}
       - CHATGPT_WEB_CODEX_CDP_URL=http://chatgpt-web-codex-browser:9223
     ports:
       - "${DASHBOARD_PORT:-20128}:${DASHBOARD_PORT:-20128}"
@@ -170,6 +173,10 @@ services:
       - "${LIVE_WS_PORT:-20132}:${LIVE_WS_PORT:-20132}"
     volumes:
       - ./data:/app/data
+      # Keep the app-server capability token and Codex auth available when
+      # the cli and codex-app-server profiles are used together.
+      - codex-appserver-token:/run/codex-appserver:ro
+      - codex-appserver-home:/home/node/.codex
       # SECURITY: mounting the host Docker socket gives this container full
       # control over the host Docker daemon — it can create/list/stop/rm any
       # container the host runs. It is here so the in-container auto-updater
@@ -206,6 +213,10 @@ services:
       - LIVE_WS_PORT=${LIVE_WS_PORT:-20132}
       - LIVE_WS_HOST=${LIVE_WS_HOST:-0.0.0.0}
       - LIVE_WS_ALLOWED_ORIGINS=${LIVE_WS_ALLOWED_ORIGINS:-http://localhost:20128,http://127.0.0.1:20128}
+      # This environment list replaces *common; keep the sidecar's WS/token
+      # configuration alongside its shared mounts when host mode is selected.
+      - OMNIROUTE_CODEX_APPSERVER_WS=${OMNIROUTE_CODEX_APPSERVER_WS:-ws://codex-app-server:1456}
+      - OMNIROUTE_CODEX_APPSERVER_WS_TOKEN_FILE=${OMNIROUTE_CODEX_APPSERVER_WS_TOKEN_FILE:-/run/codex-appserver/token}
       - CLI_MODE=host
       - CLI_EXTRA_PATHS=/host-local/bin:/host-node/bin
       - CLI_CONFIG_HOME=/host-home
@@ -216,6 +227,10 @@ services:
       # - CLI_CONTINUE_BIN=cn
     volumes:
       - ./data:/app/data
+      # The app and sidecar share these even in host-CLI mode. Host CLIs
+      # keep their separate ~/.codex bind below; it is not mirrored here.
+      - codex-appserver-token:/run/codex-appserver:ro
+      - codex-appserver-home:/home/node/.codex
       # ── Host binary mounts (read-only) ──
       # Adjust paths below to match YOUR host system.
       - ~/.local/bin:/host-local/bin:ro
@@ -315,15 +330,23 @@ services:
   # the Codex CLI's own `codex app-server` over JSON-RPC/WebSocket instead of
   # replaying a session token to the API. It listens ONLY on the internal compose
   # network (ws://codex-app-server:1456), guarded by a capability token — it is
-  # NEVER published to the host / internet. The Codex CLI (baked into
-  # omniroute:base) self-manages its OpenAI OAuth via the shared ~/.codex volume,
-  # which the dashboard "Apply auth" (device-OAuth) writes and this sidecar reads.
+  # NEVER published to the host / internet. The Codex CLI (installed in
+  # runner-cli, not runner-base) reads OpenAI OAuth from the shared ~/.codex
+  # volume. The dashboard "Apply auth" writes there in base/web/cli mode.
+  # Host mode separately keeps its operator's ~/.codex bind mount for host CLIs.
   #
   # NOTE: this is the GENERIC public sidecar. An operator wanting residential /
   # UDP egress (via a TUN sidecar) runs that separately as an override; it is
   # intentionally not shipped here.
   codex-app-server:
-    image: omniroute:base
+    # Use the same CLI-bearing build/tag as omniroute-cli. Building this profile
+    # alone must not depend on a separately built base or cli image.
+    build:
+      context: .
+      target: runner-cli
+      args:
+        OMNIROUTE_BASE_PATH: ${OMNIROUTE_BASE_PATH:-}
+    image: omniroute:cli
     container_name: omniroute-codex-app-server
     restart: unless-stopped
     # Generate the WS capability token on first boot if absent, then run the
@@ -333,14 +356,16 @@ services:
     command:
       - |
         set -e
+        umask 077
         TOKEN_FILE=/run/codex-appserver/token
         mkdir -p /run/codex-appserver
         if [ ! -s "$$TOKEN_FILE" ]; then
           # 32-byte hex capability token; shared with the app via the token volume.
           TF="$$TOKEN_FILE" node -e 'require("fs").writeFileSync(process.env.TF, require("crypto").randomBytes(32).toString("hex"))' 2>/dev/null || \
             { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$$TOKEN_FILE"; }
-          chmod 600 "$$TOKEN_FILE"
         fi
+        # Existing tokens must be private too (a write failure is fatal).
+        chmod 600 "$$TOKEN_FILE"
         exec codex app-server \
           --listen ws://0.0.0.0:1456 \
           --ws-auth capability-token \
