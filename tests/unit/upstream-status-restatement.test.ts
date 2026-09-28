@@ -10,9 +10,8 @@ import assert from "node:assert/strict";
  * same defect register one rule array — no pipeline changes.
  */
 
-const { applyStatusRestatement, statusRestatementRegistry } = await import(
-  "../../open-sse/config/upstreamStatusRestatement.ts"
-);
+const { applyStatusRestatement, statusRestatementRegistry } =
+  await import("../../open-sse/config/upstreamStatusRestatement.ts");
 
 test("R1: agentrouter 403 + 用户额度不足 → 429 with synthetic Retry-After", () => {
   const out = applyStatusRestatement({
@@ -108,19 +107,108 @@ test("R9: registry exposes agentrouter so future gateways copy the one-line reci
   assert.ok(rules && rules.length > 0);
 });
 
-test("R10: chatCore wires applyStatusRestatement into the providerFailure block", async () => {
-  // chatCore is a god-file that cannot be imported standalone in unit tests
-  // (side-effectful DB/env wiring), so the wiring contract is asserted at the
-  // source level: the hook must exist, run against the parsed error, and
-  // reassign both statusCode and retryAfterMs BEFORE classification.
-  const { readFile } = await import("node:fs/promises");
-  const src = await readFile(
-    new URL("../../open-sse/handlers/chatCore.ts", import.meta.url),
-    "utf8"
-  );
-  assert.match(src, /applyStatusRestatement\(/, "chatCore must call applyStatusRestatement");
-  const hookIndex = src.indexOf("applyStatusRestatement(");
-  const classifyIndex = src.indexOf("classifyProviderError(statusCode");
-  assert.ok(hookIndex > -1 && classifyIndex > -1 && hookIndex < classifyIndex,
-    "restatement must run BEFORE classifyProviderError so fallback sees the corrected status");
+test("R10: chatCore restates agentrouter errors before classifying account state", async () => {
+  // Exercise both paths: streaming parses the upstream error in chatCore, while
+  // non-streaming receives an error from the extracted provider execution pipeline.
+  // A 402 quota control proves that the classifier places a model-quota lock.
+  // The mixed Chinese/English 403 would get the same lock without restatement,
+  // but must become a retryable 429 before the classifier sees it.
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const originalDataDir = process.env.DATA_DIR;
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-status-restate-"));
+  const originalFetch = globalThis.fetch;
+  let resetDbInstance: (() => void) | undefined;
+  let clearModelLockouts: (() => void) | undefined;
+  process.env.DATA_DIR = dataDir;
+  try {
+    ({ resetDbInstance } = await import("../../src/lib/db/core.ts"));
+    const { createProviderConnection, getProviderConnectionById } =
+      await import("../../src/lib/db/providers.ts");
+    const { handleChatCore } = await import("../../open-sse/handlers/chatCore.ts");
+    const { getModelLockoutInfo, clearAllModelLockouts } =
+      await import("../../open-sse/services/accountFallback.ts");
+    clearModelLockouts = clearAllModelLockouts;
+    clearModelLockouts();
+    let sends = 0;
+
+    async function invoke(stream: boolean, message: string, status = 403) {
+      const connection = await createProviderConnection({
+        provider: "agentrouter",
+        authType: "api_key",
+        apiKey: "test-agentrouter-key",
+        isActive: true,
+        providerSpecificData: {},
+      });
+      const body = {
+        model: "agentrouter/gpt-5.6-sol",
+        messages: [{ role: "user", content: "hi" }],
+        stream,
+      };
+      globalThis.fetch = async () => {
+        sends += 1;
+        return new Response(JSON.stringify({ error: { message } }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+      const result = await handleChatCore({
+        body: structuredClone(body),
+        modelInfo: { provider: "agentrouter", model: "gpt-5.6-sol", extendedContext: false },
+        credentials: {
+          apiKey: "test-agentrouter-key",
+          connectionId: connection.id,
+          providerSpecificData: {},
+        },
+        connectionId: connection.id,
+        log: { debug() {}, info() {}, warn() {}, error() {} },
+        clientRawRequest: {
+          endpoint: "/v1/chat/completions",
+          body: structuredClone(body),
+          headers: new Headers({ accept: "application/json" }),
+        },
+        userAgent: "unit-test",
+      });
+      const saved = await getProviderConnectionById(connection.id);
+      assert.ok(saved, "classification fixture must have a persistent connection");
+      return {
+        result,
+        saved,
+        lockout: getModelLockoutInfo("agentrouter", connection.id, "gpt-5.6-sol"),
+      };
+    }
+
+    for (const stream of [false, true]) {
+      const control = await invoke(stream, "insufficient_quota", 402);
+      assert.equal(control.result.success, false);
+      assert.equal(control.result.status, 402, `control 402 stays 402 (stream=${stream})`);
+      assert.equal(
+        control.lockout?.reason,
+        "quota_exhausted",
+        `402 locks model quota (stream=${stream})`
+      );
+
+      const quota = await invoke(stream, "用户额度不足 (insufficient_quota)");
+      assert.equal(quota.result.success, false);
+      assert.equal(quota.result.status, 429, `quota 403 restates to 429 (stream=${stream})`);
+      assert.equal(quota.result.retryAfterMs, 60_000, "client receives the synthetic retry delay");
+      assert.equal(
+        quota.saved.isActive,
+        true,
+        `restatement keeps account active (stream=${stream})`
+      );
+      assert.notEqual(quota.lockout?.reason, "quota_exhausted", `no quota lock (stream=${stream})`);
+    }
+    assert.equal(sends, 4, "one mocked upstream send per case; no live network");
+  } finally {
+    globalThis.fetch = originalFetch;
+    // Let best-effort request logs settle before closing and removing their DB.
+    for (let i = 0; i < 5; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+    clearModelLockouts?.();
+    resetDbInstance?.();
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    if (originalDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = originalDataDir;
+  }
 });

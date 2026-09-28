@@ -392,18 +392,73 @@ test("stream request finalization never warns with a raw error object", () => {
   assert.doesNotMatch(source, /"message" in error[\s\S]{0,160}: error/);
 });
 
-test("chatCore provider-failure writes use the projected persistent message", () => {
-  const source = fs.readFileSync(path.join(REPO_ROOT, "open-sse/handlers/chatCore.ts"), "utf8");
-  const failureStart = source.indexOf("providerFailure: if (!providerResponse.ok)");
-  const failureEnd = source.indexOf("// Non-streaming response", failureStart);
-  assert.ok(failureStart >= 0 && failureEnd > failureStart, "providerFailure block must exist");
-  const failureBlock = source.slice(failureStart, failureEnd);
+test("chatCore provider-failure writes use the projected persistent message", async () => {
+  const { handleChatCore } = await import("../../../open-sse/handlers/chatCore.ts");
+  const { createProviderConnection, getProviderConnectionById } =
+    await import("../../../src/lib/db/providers.ts");
+  // Sentinel's 403 classifies as terminal even for API-key providers; a generic
+  // OpenAI 403 is intentionally left unclassified and would not write lastError.
+  const rawMessage = "SENTINEL_BLOCKED at /srv/private/keys.json access_token=fixture-secret";
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls++;
+    return Response.json({ error: { message: rawMessage } }, { status: 403 });
+  };
 
-  assert.doesNotMatch(failureBlock, /lastError:\s*message\b/);
-  assert.ok(
-    (failureBlock.match(/lastError:\s*persistentMessage\b/g) || []).length >= 11,
-    "every providerFailure persistence branch must use persistentMessage"
-  );
+  try {
+    // Streaming takes providerFailure; non-streaming returns from the provider
+    // leg. Both paths call the shared failure-classification persistence helper.
+    for (const stream of [true, false]) {
+      const connection = await createProviderConnection({
+        provider: "openai",
+        authType: "apikey",
+        name: `projected-provider-failure-${stream ? "stream" : "nonstream"}`,
+        apiKey: "sk-test-public-error-fixture",
+        isActive: true,
+        testStatus: "active",
+      });
+      assert.ok(connection?.id);
+      const body = {
+        model: "gpt-4o-mini",
+        stream,
+        messages: [{ role: "user", content: "test provider failure persistence" }],
+      };
+      const callsBefore = fetchCalls;
+      const result = await handleChatCore({
+        body,
+        modelInfo: { provider: "openai", model: "gpt-4o-mini", extendedContext: false },
+        credentials: {
+          apiKey: "sk-test-public-error-fixture",
+          connectionId: connection.id,
+          providerSpecificData: {},
+        },
+        log: { debug() {}, info() {}, warn() {}, error() {} },
+        clientRawRequest: {
+          endpoint: "/v1/chat/completions",
+          body,
+          headers: new Headers({ accept: stream ? "text/event-stream" : "application/json" }),
+        },
+        connectionId: connection.id,
+        userAgent: "unit-test",
+        comboStrategy: "context-relay",
+        skipUpstreamRetry: true,
+        skipResourcePressureGuard: true,
+      });
+      const persisted = await getProviderConnectionById(connection.id);
+      assert.equal(result.status, 403, `stream=${stream}`);
+      assert.ok(fetchCalls > callsBefore, `stream=${stream}: upstream provider must be called`);
+      assert.equal(persisted?.testStatus, "banned", `stream=${stream}`);
+      assert.equal(persisted?.lastError, sanitizeErrorMessage(rawMessage), `stream=${stream}`);
+      assert.doesNotMatch(String(persisted?.lastError), /fixture-secret|srv\/private/i);
+    }
+    // chatCore writes call logs in the background. Drain them before test.after
+    // removes the fixture database so cleanup cannot race a pending DB write.
+    const { waitForCallLogSaves } = await import("../../../src/lib/usage/callLogs.ts");
+    await waitForCallLogSaves(5000);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("public cooldown and circuit responses sanitize dynamic context", async () => {
