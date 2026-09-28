@@ -210,6 +210,7 @@ type OpenAIReplayOptions = {
   provider: string;
   model: string;
   reasoningCacheScope?: string | null;
+  skipReasoningReplay?: boolean;
 };
 
 function replayOpenAIReasoningMessage(
@@ -263,7 +264,7 @@ function replayOpenAIReasoningMessage(
       ? firstToolCall.id
       : ""
     : buildAssistantMessageCacheKey(options.reasoningCacheScope, messages, messageIndex);
-  if (cacheKey) {
+  if (cacheKey && !options.skipReasoningReplay) {
     const cached = lookupReasoning(cacheKey);
     if (cached) {
       message.reasoning_content = cached;
@@ -320,6 +321,8 @@ export function translateRequest(
     signatureNamespace?: string | null;
     preCompressionBody?: Record<string, unknown> | null;
     reasoningCacheScope?: string | null;
+    /** Managed leases must not read another owner's global tool-ID reasoning. */
+    skipReasoningReplay?: boolean;
     /** UA-detected GitHub Copilot client. Forwarded to translators via the
      *  transient `_copilotClient` credential flag (see openai-responses → openai). */
     copilotClient?: boolean;
@@ -427,6 +430,7 @@ export function translateRequest(
       provider: normalizedProvider,
       model: normalizedModel,
       reasoningCacheScope: options?.reasoningCacheScope,
+      skipReasoningReplay: options?.skipReasoningReplay,
     };
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
       replayOpenAIReasoningMessage(messages, messageIndex, replayOptions);
@@ -570,6 +574,7 @@ export function translateRequest(
     const preserveCache = isClaudePassthrough || options?.preserveCacheControl === true;
     result = prepareClaudeRequest(result, provider, preserveCache, model, {
       fallbackToHeuristicWhenNoMarkers: true,
+      skipReasoningReplay: options?.skipReasoningReplay,
     });
   }
 
@@ -709,7 +714,7 @@ export function translateRequest(
 
         // Client reasoning wins above. Otherwise try authentic replay before
         // retaining Kimi Code's empty protocol marker as the final fallback.
-        if (firstToolUseId) {
+        if (firstToolUseId && !options?.skipReasoningReplay) {
           const cached = lookupReasoning(firstToolUseId);
           if (cached) {
             if (thinkingBlock) {
@@ -753,6 +758,7 @@ export function translateRequest(
         provider: normalizedProvider,
         model: normalizedModel,
         reasoningCacheScope: options?.reasoningCacheScope,
+        skipReasoningReplay: options?.skipReasoningReplay,
       });
     }
   } else if (

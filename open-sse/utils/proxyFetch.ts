@@ -165,6 +165,27 @@ function isProxyUnreachableError(err: unknown): boolean {
  * falling through to a generic 502 that never trips the whole-provider breaker on a
  * homogeneous same-provider combo pool. No-op when the error isn't connect-shaped.
  */
+// Object-identity provenance: provider JSON/code/message cannot forge this brand.
+// Add it only at a terminal transport throw, after all eligible retry/fallback
+// paths have failed. The early tagProxyUnreachable classification is NOT proof.
+const exhaustedTransportErrors = new WeakSet<object>();
+
+function markVerifiedExhaustedTransportError<T>(err: T): T {
+  if (
+    err &&
+    typeof err === "object" &&
+    (err as { code?: unknown }).code === "PROXY_UNREACHABLE" &&
+    (err as { errorCode?: unknown }).errorCode === "proxy_unreachable"
+  ) {
+    exhaustedTransportErrors.add(err);
+  }
+  return err;
+}
+
+export function isVerifiedProxyFetchExhaustedError(value: unknown): boolean {
+  return value !== null && typeof value === "object" && exhaustedTransportErrors.has(value);
+}
+
 function tagProxyUnreachable<T>(err: T): T {
   if (isProxyUnreachableError(err)) {
     const e = err as Error & { code?: string; errorCode?: string };
@@ -714,7 +735,7 @@ export async function runWithProxyContext(
       err.code = "PROXY_UNREACHABLE";
       err.errorCode = "proxy_unreachable";
       err.statusCode = 503;
-      throw err;
+      throw markVerifiedExhaustedTransportError(err);
     }
 
     if (winner.kind === "probe") {
@@ -869,6 +890,9 @@ async function patchedFetch(
           directHeadersTimeoutMs
         );
       } catch (dispatcherError) {
+        if (isCallerAbort(dispatcherError, getEffectiveSignal(input, options))) {
+          throw dispatcherError;
+        }
         if (isDirectResponseStartTimeout(dispatcherError)) {
           if (attempt === 0 && maxAttempts > 1) {
             console.warn(
@@ -887,8 +911,9 @@ async function patchedFetch(
           );
           throw dispatcherError;
         }
-        // Retry/fallback only for connection errors, never HTTP errors.
-        tagProxyUnreachable(dispatcherError);
+        // Decide retry eligibility on the ORIGINAL transport code. Tagging an
+        // early pooled-socket failure here would overwrite EAI_AGAIN/ENOTFOUND
+        // before the fresh-dispatcher retry has a chance to run.
         const errCode = (dispatcherError as { code?: unknown })?.code;
         if (
           msg.includes("fetch failed") ||
@@ -917,7 +942,7 @@ async function patchedFetch(
             if (dispatcherError instanceof Error) {
               (dispatcherError as Error & { proxyFetchDetail?: string }).proxyFetchDetail = detail;
             }
-            throw tagProxyUnreachable(dispatcherError);
+            throw markVerifiedExhaustedTransportError(tagProxyUnreachable(dispatcherError));
           }
 
           // Exhausted attempts: try proxy fallback before native fetch.
@@ -960,7 +985,7 @@ async function patchedFetch(
               (nativeError as Error & { proxyFetchDetail?: string }).proxyFetchDetail = detail;
             }
             tagProxyUnreachable(nativeError);
-            throw nativeError;
+            throw markVerifiedExhaustedTransportError(nativeError);
           }
         }
         tagProxyUnreachable(dispatcherError);
@@ -1070,7 +1095,7 @@ async function patchedFetch(
           await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
           continue;
         }
-        throw relayError;
+        throw markVerifiedExhaustedTransportError(tagProxyUnreachable(relayError));
       } finally {
         clearTimeout(relayTimer);
         options.signal?.removeEventListener("abort", onCallerAbort);
@@ -1176,7 +1201,7 @@ async function patchedFetch(
       console.error(
         `[ProxyFetch] Proxy request failed (${source}, fail-closed; code=${sanitized.code})`
       );
-      throw sanitized;
+      throw markVerifiedExhaustedTransportError(sanitized);
     }
   }
   throw lastProxyError;

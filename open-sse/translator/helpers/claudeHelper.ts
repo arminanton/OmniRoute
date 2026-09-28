@@ -337,7 +337,7 @@ export function prepareClaudeRequest(
   provider: string | null = null,
   preserveCacheControl = false,
   model: string | null = null,
-  opts: { fallbackToHeuristicWhenNoMarkers?: boolean } = {}
+  opts: { fallbackToHeuristicWhenNoMarkers?: boolean; skipReasoningReplay?: boolean } = {}
 ): ClaudeRequestBody {
   // 0. Strip Anthropic `output_config` for providers that reject it on their
   // Claude-compatible endpoints (MiniMax). Must run before any downstream
@@ -662,7 +662,7 @@ export function prepareClaudeRequest(
               if (!text || !latestHasExistingThinking) {
                 if (!text) {
                   const pairedToolUseId = toolUseIds[thinkingBlockIdx];
-                  if (pairedToolUseId) {
+                  if (pairedToolUseId && !opts.skipReasoningReplay) {
                     const cached = lookupReasoning(pairedToolUseId);
                     if (cached) {
                       text = cached;
@@ -704,7 +704,7 @@ export function prepareClaudeRequest(
           } else {
             let text = "";
             const firstToolUseId = toolUseIds[0];
-            if (firstToolUseId) {
+            if (firstToolUseId && !opts.skipReasoningReplay) {
               const cached = lookupReasoning(firstToolUseId);
               if (cached) {
                 text = cached;

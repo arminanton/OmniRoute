@@ -196,10 +196,7 @@ import {
   shouldRetrySameAccountTransport,
   sameAccountTransportRetryDelayMs,
 } from "../services/sameAccountTransportRetry";
-import {
-  isExhaustedNetworkFailure,
-  isProxyFetchExhaustedFailure,
-} from "../services/networkFailure";
+import { isExhaustedNetworkFailure } from "../services/networkFailure";
 import {
   isExhaustedNetworkResponse,
   markExhaustedNetworkResponse,
@@ -1761,8 +1758,10 @@ async function handleSingleModelChat(
         }
 
         const breakerFailureStatus = Number(lastStatus ?? credentials?.lastErrorCode);
-        // Network failures never reached the provider and must not trip its breaker.
-        const isNetworkError = isExhaustedNetworkFailure(retryFailureCode, retryFailureText);
+        // This resolution-only branch has persisted status/text, not the original
+        // transport error object. It cannot prove a local network failure; the
+        // branded live-error branch below handles verified failures separately.
+        const isNetworkError = false;
         const isQueueTimeout =
           typeof lastError === "string" &&
           (lastError.includes("RATE_LIMIT_QUEUE_TIMEOUT") ||
@@ -2032,7 +2031,7 @@ async function handleSingleModelChat(
       // proxyFetch already exhausted its fresh-dispatcher and allowed fallback paths.
       // Mark and return this exact JSON/SSE response before emergency fallback,
       // account health, breaker, cooldown, lockout, or combo routing can reclassify it.
-      if (isProxyFetchExhaustedFailure(result.errorCode)) {
+      if (isExhaustedNetworkFailure(result.errorCode, result.error, result.originalError)) {
         log.warn(
           "NETWORK",
           `${provider}/${model} exhausted local transport paths; returning without redispatch`

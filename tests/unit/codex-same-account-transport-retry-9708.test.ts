@@ -112,7 +112,9 @@ test("exhausted proxyFetch failures return before account cooldown or redispatch
     path.resolve(import.meta.dirname, "../../src/sse/handlers/chat.ts"),
     "utf8"
   );
-  const guardOffset = chatSource.indexOf("if (isProxyFetchExhaustedFailure(result.errorCode))");
+  const guardOffset = chatSource.indexOf(
+    "if (isExhaustedNetworkFailure(result.errorCode, result.error, result.originalError))"
+  );
   assert.notEqual(guardOffset, -1, "missing exhausted-network terminal guard");
   const guardedTail = chatSource.slice(guardOffset);
   assert.ok(

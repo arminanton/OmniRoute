@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import { shouldTripProviderBreakerForResult } from "../../src/sse/handlers/chat.ts";
 import { isProviderBreakerFailureStatus } from "../../src/sse/handlers/chatPredicates.ts";
 import { shouldRecordProviderBreakerFailure } from "../../open-sse/services/combo/comboPredicates.ts";
+import { isExhaustedNetworkFailure } from "../../src/sse/services/networkFailure.ts";
 
 // The exact abort shape described in the PR body / issue #7907: no upstream
 // status arrives, so it defaults to 502, and the error surfaces as the bare
@@ -87,4 +88,12 @@ test("combo.ts handleComboChat path: genuine upstream failures still trip the br
     }),
     true
   );
+});
+
+
+test("resolver-only stored 502 stays breaker-eligible without original transport proof", () => {
+  const storedCode = "EAI_AGAIN";
+  const storedText = "getaddrinfo ENOTFOUND upstream.example";
+  assert.equal(isExhaustedNetworkFailure(storedCode, storedText), false);
+  assert.equal(isProviderBreakerFailureStatus(502), true);
 });

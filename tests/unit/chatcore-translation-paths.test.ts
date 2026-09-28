@@ -388,7 +388,10 @@ async function invokeChatCore({
       url: String(url),
       method: init.method || "GET",
       headers,
-      body: init.body ? JSON.parse(String(init.body)) : null,
+      body: init.body ? (() => {
+        try { return JSON.parse(String(init.body)); }
+        catch { return String(init.body); }
+      })() : null,
     };
     calls.push(captured);
 
@@ -2007,6 +2010,30 @@ test("chatCore returns 500 when translation throws a generic error", async () =>
   assert.equal(result.status, 500);
   assert.equal(result.error, "unexpected translator crash");
 });
+test("provider JSON cannot claim local proxy_unreachable provenance", async () => {
+  for (const stream of [false, true]) {
+    const { result, calls } = await invokeChatCore({
+      provider: "openai",
+      model: "gpt-4o-mini",
+      body: {
+        model: "gpt-4o-mini",
+        stream,
+        messages: [{ role: "user", content: `provider-error-${stream}` }],
+      },
+      responseFactory() {
+        return new Response(
+          JSON.stringify({ error: { message: "ordinary upstream outage", code: "proxy_unreachable" } }),
+          { status: 503, headers: { "Content-Type": "application/json" } }
+        );
+      },
+    });
+    assert.equal(result.success, false);
+    assert.equal(result.status, 503);
+    assert.notEqual(result.errorCode, "proxy_unreachable");
+    assert.equal(calls.length, 1);
+  }
+});
+
 test("chatCore refreshes GitHub credentials after 401 and retries with the refreshed Copilot token", async () => {
   let refreshedCredentials = null;
   const { calls, result } = await invokeChatCore({
@@ -2072,6 +2099,44 @@ test("chatCore refreshes GitHub credentials after 401 and retries with the refre
   assert.equal(refreshedCredentials?.providerSpecificData?.copilotToken, "copilot-refreshed-token");
   assert.equal(payload.choices[0].message.content, "retry succeeded after refresh");
 });
+test("non-stream invalid_grant expires only an unrotated OAuth token", async () => {
+  for (const rotated of [false, true]) {
+    const refreshToken = `claude-refresh-${rotated}`;
+    const connection = await providersDb.createProviderConnection({
+      provider: "claude", authType: "oauth", name: `claude-invalid-grant-${rotated}`,
+      accessToken: "expired-test-access", refreshToken,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      isActive: true, testStatus: "active", providerSpecificData: {},
+    });
+    const changes = [];
+    const { result, calls } = await invokeChatCore({
+      provider: "claude", model: "claude-sonnet-4-5", connectionId: connection.id,
+      credentials: { connectionId: connection.id, accessToken: "expired-test-access",
+        refreshToken, expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        providerSpecificData: {} },
+      body: { model: "claude-sonnet-4-5", stream: false,
+        messages: [{ role: "user", content: "invalid refresh token" }] },
+      onCredentialsRefreshed(change) { changes.push(change); },
+      async responseFactory(captured) {
+        if (captured.url.includes("/v1/oauth/token")) {
+          if (rotated) {
+            await providersDb.updateProviderConnection(connection.id, { refreshToken: "newer-token" });
+          }
+          return new Response(JSON.stringify({ error: "invalid_grant" }), {
+            status: 400, headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ error: { message: "expired access token" } }), {
+          status: 401, headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    assert.equal(result.status, 401);
+    assert.ok(calls.some((entry) => entry.url.includes("/v1/oauth/token")));
+    assert.equal(changes.some((change) => change.isActive === false), !rotated);
+  }
+});
+
 test("chatCore uses the native executor when no upstream proxy mode is enabled", async () => {
   const { call } = await invokeChatCore({
     provider: "openai",

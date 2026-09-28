@@ -44,6 +44,8 @@ export interface ChatCoreErrorResult {
   retryAfterMs?: number;
   originalError?: unknown;
   rawMessage?: string;
+  upstreamHeaders?: Headers;
+  upstreamErrorBody?: unknown;
 }
 
 export type NonStreamingProviderLegResult =
@@ -189,6 +191,7 @@ export interface NonStreamingClientTranslateInput {
   responseToolNameMap: Map<string, string> | null;
   requestToolIdentityMap: Map<string, { namespace?: string; name: string }> | null;
   reasoningCacheScope: string | null;
+  skipReasoningReplay?: boolean;
   clientHeaders: Headers | Record<string, unknown> | null;
   isClaudeCodeCompatible: boolean;
   phase: "intermediate" | "final";

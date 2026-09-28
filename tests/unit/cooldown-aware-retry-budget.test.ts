@@ -36,7 +36,7 @@ test("getCooldownAwareRetryDecision retries when the wait fits both the per-wait
   assert.equal(decision.shouldRetry, true);
 });
 
-test("getCooldownAwareRetryDecision does not redispatch an exhausted local-network failure", () => {
+test("getCooldownAwareRetryDecision does not trust a bare network-looking code", () => {
   const decision = getCooldownAwareRetryDecision({
     retryAfter: new Date(Date.now() + 5000).toISOString(),
     settings: baseSettings(),
@@ -45,11 +45,11 @@ test("getCooldownAwareRetryDecision does not redispatch an exhausted local-netwo
     failureCode: "proxy_unreachable",
     failureText: "fetch failed (cause: UND_ERR_CONNECT_TIMEOUT)",
   });
-  assert.equal(decision.shouldRetry, false);
-  assert.equal(decision.waitMs, 0);
+  assert.equal(decision.shouldRetry, true);
+  assert.ok(decision.waitMs > 0);
 });
 
-test("getCooldownAwareRetryDecision recognizes observed DNS failures even without a stable tag", () => {
+test("getCooldownAwareRetryDecision does not trust provider-like DNS failure text", () => {
   const decision = getCooldownAwareRetryDecision({
     retryAfter: new Date(Date.now() + 5000).toISOString(),
     settings: baseSettings(),
@@ -57,7 +57,7 @@ test("getCooldownAwareRetryDecision recognizes observed DNS failures even withou
     budgetLeftMs: 300000,
     failureText: "[502]: fetch failed (cause: EAI_AGAIN: getaddrinfo EAI_AGAIN chatgpt.com)",
   });
-  assert.equal(decision.shouldRetry, false);
+  assert.equal(decision.shouldRetry, true);
 });
 
 test("getCooldownAwareRetryDecision refuses to wait once the cumulative budget is exhausted, even if the single wait is under maxRetryWaitMs", () => {

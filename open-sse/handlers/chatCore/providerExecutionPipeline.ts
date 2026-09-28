@@ -10,6 +10,7 @@ import { recoverAnthropicThinkingSignature } from "./thinkingSignatureRecovery.t
 import { isModelUnavailableError, getNextFamilyFallback as defaultGetNextFamilyFallback } from "../../services/modelFamilyFallback.ts";
 import { COOLDOWN_MS } from "../../config/errorConfig.ts";
 import { normalizeHeaders } from "../../utils/headers.ts";
+import { projectProviderErrorIdentifier } from "./providerFailureProvenance.ts";
 
 export interface ChatCoreExecutorResult {
   response: Response;
@@ -136,6 +137,71 @@ function retryAfterMsFrom(attempt: ChatCoreExecutorResult): number | null {
   return parsed * 1000;
 }
 
+// Error bodies may be streaming despite a non-2xx status. Never let a stuck
+// stream hold account rotation or replace the header-only 429 cooldown.
+const ERROR_BODY_READ_TIMEOUT_MS = 200;
+const ERROR_BODY_MAX_BYTES = 64 * 1024;
+
+async function readBoundedErrorBody(response: Response): Promise<string | null> {
+  const reader = response.clone().body?.getReader();
+  if (!reader) return null;
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  let complete = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), ERROR_BODY_READ_TIMEOUT_MS);
+  });
+  try {
+    for (;;) {
+      const chunk = await Promise.race([reader.read(), timedOut]);
+      if (chunk === null) return null;
+      if (chunk.done) {
+        complete = true;
+        return text + decoder.decode();
+      }
+      bytes += chunk.value.byteLength;
+      if (bytes > ERROR_BODY_MAX_BYTES) return null;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (!complete) {
+      // A tee's cancel promise may not settle until the original branch closes.
+      // Do not await it; successful account rotation cancels that branch below.
+      void reader.cancel("bounded error-body read complete").catch(() => {});
+    } else {
+      reader.releaseLock();
+    }
+  }
+}
+
+/** A rejected send belongs to the connection that sent it. On a 429, the
+ * header update resets the reservoir; the bounded body update must run
+ * afterwards so its retry-after can drain the new reservoir. */
+async function recordUpstreamRateLimit(
+  state: PipelineStateHooks,
+  provider: string,
+  connectionId: string,
+  model: string,
+  attempt: ChatCoreExecutorResult
+): Promise<void> {
+  if (!connectionId) return;
+  const status = attempt.response.status;
+  try {
+    state.recordRateLimitHeaders(provider, connectionId, attempt.response.headers, status, model);
+  } catch {
+    // Rate-limit learning is best-effort.
+  }
+  try {
+    const text = await readBoundedErrorBody(attempt.response);
+    if (text) state.recordRateLimitBody(provider, connectionId, text, status, model);
+  } catch {
+    // The header signal still applied if the body is unreadable.
+  }
+}
+
 function leaseMismatch(model: string, connectionId: string): ProviderExecutionOutcome {
   const result = createErrorResult(
     LEASE_MISMATCH_STATUS,
@@ -179,27 +245,47 @@ async function toOutcome(
     };
   }
   let message = attempt.response.statusText || "upstream error";
-  let body: unknown = attempt.transformedBody;
+  // Never use the outbound request as an upstream error body. The quota
+  // classifier reads this field for reset hints and account/model cooldowns.
+  let body: unknown = null;
+  let upstreamCode: string | undefined;
+  let upstreamType: string | undefined;
   try {
-    // clone() is the drain. sendProviderAttempt must not cancel() a streaming
-    // non-2xx body before we get here (BYOP 422 / Codex 429 Retry-After).
-    body = JSON.parse(await attempt.response.clone().text());
-    const err = (body as { error?: { message?: unknown } } | null)?.error;
-    if (err && typeof err.message === "string" && err.message) message = err.message;
+    // Clone the response: neither classification nor limiter learning consumes
+    // the original error body needed by callers (BYOP / SSE passthrough).
+    const text = await attempt.response.clone().text();
+    body = text;
+    try {
+      body = JSON.parse(text);
+      const err = (body as { error?: { message?: unknown; code?: unknown; type?: unknown } } | null)
+        ?.error;
+      if (err && typeof err.message === "string" && err.message) message = err.message;
+      // A provider-supplied code is data, not proof that a local proxy failed.
+      // In particular, it must not trigger the local terminal transport guard.
+      upstreamCode = projectProviderErrorIdentifier(err?.code);
+      upstreamType = projectProviderErrorIdentifier(err?.type);
+    } catch {
+      // Non-JSON errors may contain an actionable retry-after or quota hint.
+      // createErrorResult sanitizes the public message separately.
+      if (text.trim()) message = text;
+    }
   } catch {
-    // keep statusText
+    // Unreadable body: retain statusText.
   }
+  const responseRetryAfterMs = retryAfterMsFrom(attempt);
   const restatement = applyStatusRestatement({
     provider,
     status,
     message,
     body,
-    retryAfterMs: null,
+    retryAfterMs: responseRetryAfterMs,
   });
   const result = createErrorResult(
     restatement.status,
     message,
-    restatement.retryAfterMs
+    restatement.retryAfterMs,
+    upstreamCode,
+    upstreamType
   );
   return {
     kind: "error",
@@ -210,6 +296,10 @@ async function toOutcome(
       error: result.error,
       errorCode: result.errorCode,
       errorType: result.errorType,
+      retryAfterMs: result.retryAfterMs,
+      rawMessage: message,
+      upstreamErrorBody: body,
+      upstreamHeaders: attempt.response.headers,
     },
     providerUsage: null,
     model,
@@ -276,6 +366,14 @@ export async function runProviderExecutionPipeline(
       return toOutcome(attempt, wire.currentModel, currentConnectionId(connection), target.provider);
     }
 
+    await recordUpstreamRateLimit(
+      state,
+      target.provider,
+      currentConnectionId(connection),
+      wire.currentModel,
+      attempt
+    );
+
     const isolateProbe = await state.isolateProbeFailures();
     const canRotateAccount = policy.allowAccountRotation && !isolateProbe;
 
@@ -311,6 +409,9 @@ export async function runProviderExecutionPipeline(
           retryAfterMs,
         });
         connection.replaceCredentials(nextCreds as Record<string, unknown>);
+        // The failed streaming error body is no longer needed after rotation.
+        // Cancel the original tee branch so the bounded clone can release too.
+        void attempt.response.body?.cancel().catch(() => {});
         attempts += 1;
         continue;
       }

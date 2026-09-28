@@ -1,21 +1,33 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import test from "node:test";
 
 import { createChatPipelineHarness } from "../integration/_chatPipelineHarness.ts";
 
 const harness = await createChatPipelineHarness("chat-managed-lease-routing");
+const { encodeSkillToolName } = await import("../../src/lib/skills/injection.ts");
 const {
   apiKeysDb,
   buildOpenAIResponse,
   buildRequest,
+  buildOpenAIToolCallResponse,
+  settingsDb,
+  skillExecutor,
+  skillRegistry,
   combosDb,
   handleChat,
   resetStorage,
   seedConnection,
+  idempotencyLayerModule,
+  semanticCacheModule,
 } = harness;
 const leaseDb = await import("../../src/lib/db/exclusiveConnectionLeases.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
+const reasoningCache = await import("../../open-sse/services/reasoningCache.ts");
+const { composeIdempotencyKey, checkIdempotencyCache } =
+  await import("../../open-sse/handlers/chatCore/idempotency.ts");
 const accountSemaphores = await import("../../open-sse/services/accountSemaphore.ts");
+const { getPendingRequests } = await import("../../src/lib/usage/usageHistory.ts");
 const { POST: handleCompletions } = await import("../../src/app/api/v1/completions/route.ts");
 
 const OWNER = "vlo_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -50,6 +62,71 @@ function managedRequest(
       ...bodyOverrides,
     },
   });
+}
+
+async function seedManagedOwnerPair(provider = "openai") {
+  const first = await seedConnection(provider, {
+    name: "managed-owner-a",
+    apiKey: "sk-managed-owner-a",
+    priority: 1,
+  });
+  const second = await seedConnection(provider, {
+    name: "managed-owner-b",
+    apiKey: "sk-managed-owner-b",
+    priority: 2,
+  });
+  const key = await seedManagedKey([first.id, second.id]);
+  const firstLease = leaseDb.acquireExclusiveConnectionLease({
+    leaseOwnerId: OWNER,
+    apiKeyId: key.id,
+    provider,
+    connectionId: first.id,
+  });
+  const secondLease = leaseDb.acquireExclusiveConnectionLease({
+    leaseOwnerId: OWNER_B,
+    apiKeyId: key.id,
+    provider,
+    connectionId: second.id,
+  });
+  assert.equal(firstLease.kind, "ACQUIRED");
+  assert.equal(secondLease.kind, "ACQUIRED");
+  if (firstLease.kind !== "ACQUIRED" || secondLease.kind !== "ACQUIRED") {
+    throw new Error("managed owner pair was not acquired");
+  }
+  return { key, firstLease: firstLease.lease, secondLease: secondLease.lease };
+}
+
+async function handleManagedWithin(request: Request, timeoutMs = 5_000): Promise<Response> {
+  const abort = new AbortController();
+  const pending = handleChat(new Request(request, { signal: abort.signal }));
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<Response>((_, reject) => {
+        deadline = setTimeout(() => {
+          abort.abort();
+          reject(new Error(`managed test handler did not settle within ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (deadline) clearTimeout(deadline);
+  }
+}
+
+async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<boolean>((resolve) => {
+        deadline = setTimeout(() => resolve(false), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (deadline) clearTimeout(deadline);
+  }
 }
 
 function buildOpenAIStreamResponse(text: string): Response {
@@ -142,6 +219,67 @@ test("managed chat blocks missing and stale leases with zero provider dispatch",
   assert.equal(stale.status, 409);
   assert.equal((await stale.json()).error.code, "LEASE_FENCE_STALE");
   assert.equal(dispatches, 0);
+});
+
+test("revoking a managed lease after a server-owned tool call returns 409 before follow-up send", async () => {
+  const followUpOwner = `vlo_${Buffer.from(
+    randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", ""), "hex"
+  ).toString("base64url")}`;
+  const connection = await seedConnection("openai", { apiKey: "sk-lease-tool-followup" });
+  const key = await seedManagedKey([connection.id]);
+  const acquired = leaseDb.acquireExclusiveConnectionLease({
+    leaseOwnerId: followUpOwner,
+    apiKeyId: key.id,
+    provider: "openai",
+    connectionId: connection.id,
+  });
+  assert.equal(acquired.kind, "ACQUIRED");
+  if (acquired.kind !== "ACQUIRED") return;
+  await settingsDb.updateSettings({ skillsEnabled: true });
+  const handlerName = `revoke-managed-followup-${randomUUID()}`;
+  skillExecutor.registerHandler(handlerName, async () => {
+    const released = leaseDb.releaseExclusiveConnectionLease({
+      leaseOwnerId: followUpOwner,
+      apiKeyId: key.id,
+      generation: acquired.lease.generation,
+    });
+    assert.equal(released.kind, "RELEASED");
+    return { ok: true };
+  });
+  await skillRegistry.register({
+    apiKeyId: key.id,
+    name: "revokeLeaseSkill",
+    version: "1.0.0",
+    description: "Revokes the lease before the tool loop follow-up",
+    schema: { input: { type: "object", properties: {} }, output: { type: "object" } },
+    handler: handlerName,
+    enabled: true,
+  });
+  const previousFlag = process.env.SERVER_OWNED_TOOL_LOOP_ENABLED;
+  process.env.SERVER_OWNED_TOOL_LOOP_ENABLED = "true";
+  let dispatches = 0;
+  globalThis.fetch = async () => {
+    dispatches += 1;
+    if (dispatches > 1) throw new Error("revoked lease must not send follow-up upstream");
+    return buildOpenAIToolCallResponse({
+      model: "gpt-4.1",
+      toolName: encodeSkillToolName("revokeLeaseSkill", "1.0.0"),
+      toolCallId: `call_revoke_${randomUUID()}`,
+      argumentsObject: {},
+    });
+  };
+  try {
+    const response = await handleChat(managedRequest(key.key, acquired.lease.generation, {}, {}, followUpOwner));
+    const payload = await response.json();
+    assert.equal(response.status, 409);
+    assert.match(String(payload.error?.code), /^LEASE_/);
+    assert.equal(dispatches, 1);
+    assert.equal(getPendingRequests().details[connection.id], undefined,
+      "rejected follow-up must clear the pending marker");
+  } finally {
+    if (previousFlag === undefined) delete process.env.SERVER_OWNED_TOOL_LOOP_ENABLED;
+    else process.env.SERVER_OWNED_TOOL_LOOP_ENABLED = previousFlag;
+  }
 });
 
 test("managed chat blocks cross-key owner-generation replay before provider dispatch", async () => {
@@ -260,6 +398,297 @@ test("identical prompts with different owners never share a managed connection",
     leaseDb.getActiveExclusiveConnectionLease(OWNER_B)?.connectionId
   );
 });
+
+test(
+  "concurrent managed owners cannot share one in-flight dedup response or skip their own fence",
+  { timeout: 15_000 },
+  async () => {
+    const { key, firstLease, secondLease } = await seedManagedOwnerPair();
+    let enteredFirst!: () => void;
+    let releaseFirst!: () => void;
+    let enteredSecond!: () => void;
+    const firstEntered = new Promise<void>((resolve) => {
+      enteredFirst = resolve;
+    });
+    const firstBlocker = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const secondEntered = new Promise<void>((resolve) => {
+      enteredSecond = resolve;
+    });
+    const dispatchedKeys: string[] = [];
+    globalThis.fetch = async (_url, init) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      dispatchedKeys.push(auth);
+      if (auth === "Bearer sk-managed-owner-a") {
+        enteredFirst();
+        await firstBlocker;
+        return buildOpenAIResponse("owner A private response");
+      }
+      if (auth === "Bearer sk-managed-owner-b") {
+        enteredSecond();
+        return buildOpenAIResponse("owner B private response");
+      }
+      throw new Error(`unexpected managed upstream credential: ${auth}`);
+    };
+    // temperature=0 makes the request eligible for in-flight dedup. The explicit
+    // no-cache header excludes semantic-cache reads, isolating this contract.
+    const body = {
+      temperature: 0,
+      messages: [{ role: "user", content: "concurrent managed owner dedup regression" }],
+    };
+    const headers = { "X-OmniRoute-No-Cache": "true" };
+    const pendingFirst = handleManagedWithin(
+      managedRequest(key.key, firstLease.generation, headers, body, OWNER),
+      8_000
+    );
+    if (!(await settlesWithin(firstEntered, 3_000))) {
+      releaseFirst();
+      void pendingFirst.catch(() => {});
+      assert.fail("first managed owner never reached upstream before the deadline");
+    }
+    const pendingSecond = handleManagedWithin(
+      managedRequest(key.key, secondLease.generation, headers, body, OWNER_B),
+      8_000
+    );
+    let secondDispatchedBeforeFirstReleased: boolean;
+    try {
+      secondDispatchedBeforeFirstReleased = await settlesWithin(secondEntered, 3_000);
+    } finally {
+      releaseFirst();
+    }
+    const [firstResponse, secondResponse] = await Promise.all([pendingFirst, pendingSecond]);
+    assert.equal(
+      secondDispatchedBeforeFirstReleased,
+      true,
+      "a second lease owner must dispatch independently while the first is in flight"
+    );
+    assert.equal(firstResponse.status, 200);
+    assert.equal(secondResponse.status, 200);
+    assert.deepEqual(dispatchedKeys, ["Bearer sk-managed-owner-a", "Bearer sk-managed-owner-b"]);
+    assert.equal(
+      (await firstResponse.json()).choices[0].message.content,
+      "owner A private response"
+    );
+    assert.equal(
+      (await secondResponse.json()).choices[0].message.content,
+      "owner B private response"
+    );
+  }
+);
+
+test("idempotency response from one managed owner cannot replay to another", async () => {
+  const { key, firstLease, secondLease } = await seedManagedOwnerPair();
+  const dispatchedKeys: string[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    dispatchedKeys.push(auth);
+    return buildOpenAIResponse(
+      auth === "Bearer sk-managed-owner-a" ? "idempotent owner A" : "idempotent owner B"
+    );
+  };
+  const headers = { "Idempotency-Key": "managed-cross-owner-idempotency-regression" };
+  const body = { messages: [{ role: "user", content: "managed idempotency owner isolation" }] };
+  const first = await handleChat(
+    managedRequest(key.key, firstLease.generation, headers, body, OWNER)
+  );
+  assert.equal(first.status, 200);
+  assert.equal(
+    (await idempotencyLayerModule.getIdempotencyStats()).activeKeys,
+    0,
+    "managed response must not populate the shared idempotency cache"
+  );
+  // Prove the read guard independently: seed the very key a normal retry would
+  // hit, then verify another managed owner does not consume that foreign entry.
+  const composed = composeIdempotencyKey({
+    rawKey: headers["Idempotency-Key"],
+    provider: "openai",
+    model: "gpt-4.1",
+    messages: body.messages,
+    body: { ...body, stream: false },
+  });
+  assert.ok(composed);
+  idempotencyLayerModule.saveIdempotency(
+    composed,
+    {
+      choices: [{ message: { role: "assistant", content: "foreign cached response" } }],
+    },
+    200
+  );
+  const cached = await checkIdempotencyCache({
+    clientRawRequest: { headers: new Headers(headers) },
+    provider: "openai",
+    model: "gpt-4.1",
+    body: { ...body, stream: false },
+    effectiveServiceTier: null,
+    startTime: Date.now(),
+    log: null,
+  });
+  assert.ok(cached.hit, "the regression must seed a genuinely readable foreign cache entry");
+  const second = await handleChat(
+    managedRequest(key.key, secondLease.generation, headers, body, OWNER_B)
+  );
+  assert.equal(second.status, 200);
+  assert.deepEqual(
+    dispatchedKeys,
+    ["Bearer sk-managed-owner-a", "Bearer sk-managed-owner-b"],
+    "cached response must not short-circuit the second owner's lease fence"
+  );
+  assert.equal((await first.json()).choices[0].message.content, "idempotent owner A");
+  assert.equal((await second.json()).choices[0].message.content, "idempotent owner B");
+  assert.notEqual(second.headers.get("x-omniroute-idempotent"), "true");
+});
+
+test("semantic response from one managed owner cannot replay to another", async () => {
+  const { key, firstLease, secondLease } = await seedManagedOwnerPair();
+  const dispatchedKeys: string[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const auth = new Headers(init?.headers).get("authorization") ?? "";
+    dispatchedKeys.push(auth);
+    return buildOpenAIResponse(
+      auth === "Bearer sk-managed-owner-a" ? "semantic owner A" : "semantic owner B"
+    );
+  };
+  // Explicit temperature=0 is cacheable; do not send a no-cache header here.
+  const body = {
+    temperature: 0,
+    messages: [{ role: "user", content: "managed semantic owner isolation" }],
+  };
+  const first = await handleChat(managedRequest(key.key, firstLease.generation, {}, body, OWNER));
+  assert.equal(first.status, 200);
+  assert.equal(
+    semanticCacheModule.getMemoryCacheStats().size,
+    0,
+    "managed response must not populate the shared semantic cache"
+  );
+  const signature = semanticCacheModule.generateSignature(
+    "gpt-4.1",
+    body.messages,
+    body.temperature,
+    1,
+    key.id
+  );
+  semanticCacheModule.setCachedResponse(signature, "gpt-4.1", {
+    choices: [{ message: { role: "assistant", content: "foreign cached response" } }],
+  });
+  assert.ok(
+    semanticCacheModule.getCachedResponse(signature),
+    "the regression must seed a genuinely readable foreign semantic entry"
+  );
+  const second = await handleChat(
+    managedRequest(key.key, secondLease.generation, {}, body, OWNER_B)
+  );
+  assert.equal(second.status, 200);
+  assert.deepEqual(
+    dispatchedKeys,
+    ["Bearer sk-managed-owner-a", "Bearer sk-managed-owner-b"],
+    "semantic cache must not short-circuit the second owner's lease fence"
+  );
+  assert.equal((await first.json()).choices[0].message.content, "semantic owner A");
+  assert.equal((await second.json()).choices[0].message.content, "semantic owner B");
+  assert.notEqual(second.headers.get("x-omniroute-cache"), "HIT");
+});
+
+test(
+  "managed reasoning replay never writes or sends a different owner's tool-call text upstream",
+  { timeout: 15_000 },
+  async () => {
+    const { key, firstLease, secondLease } = await seedManagedOwnerPair("xiaomi-mimo");
+    const toolId = `call-managed-replay-${randomUUID()}`;
+    const secret = `OWNER_A_PRIVATE_REASONING_${randomUUID()}`;
+    const model = "xiaomi-mimo/mimo-v1";
+    let firstCalls = 0;
+    let secondCalls = 0;
+    let secondUpstreamBody = "";
+    globalThis.fetch = async (_url, init) => {
+      const auth = new Headers(init?.headers).get("authorization") ?? "";
+      if (auth === "Bearer sk-managed-owner-a") {
+        firstCalls += 1;
+        return new Response(
+          JSON.stringify({
+            id: "reasoning-owner-a",
+            object: "chat.completion",
+            model: "mimo-v1",
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: "assistant",
+                  content: null,
+                  reasoning_content: secret,
+                  tool_calls: [
+                    { id: toolId, type: "function", function: { name: "lookup", arguments: "{}" } },
+                  ],
+                },
+                finish_reason: "tool_calls",
+              },
+            ],
+            usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (auth === "Bearer sk-managed-owner-b") {
+        secondCalls += 1;
+        secondUpstreamBody = String(init?.body ?? "");
+        return buildOpenAIResponse("owner B tool result");
+      }
+      throw new Error(`unexpected managed upstream credential: ${auth}`);
+    };
+    const headersA = { "X-OmniRoute-No-Cache": "true", "X-OmniRoute-Session-Id": "owner-a-replay" };
+    const headersB = { "X-OmniRoute-No-Cache": "true", "X-OmniRoute-Session-Id": "owner-b-replay" };
+    const firstBody = {
+      model,
+      messages: [{ role: "user", content: "call lookup, owner A" }],
+    };
+    const secondBody = {
+      model,
+      messages: [
+        { role: "user", content: "call lookup, owner B" },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            { id: toolId, type: "function", function: { name: "lookup", arguments: "{}" } },
+          ],
+        },
+        { role: "tool", tool_call_id: toolId, content: "ok" },
+        { role: "user", content: "continue after tool result" },
+      ],
+    };
+    try {
+      const first = await handleManagedWithin(
+        managedRequest(key.key, firstLease.generation, headersA, firstBody, OWNER)
+      );
+      assert.equal(first.status, 200);
+      await first.text();
+      assert.equal(firstCalls, 1);
+      assert.equal(
+        reasoningCache.lookupReasoning(toolId),
+        null,
+        "managed owner A must not populate the global tool-ID reasoning cache"
+      );
+
+      // A cache entry can already exist from a non-managed caller. The read path
+      // must also ignore it for managed owner B, independent of owner A's write guard.
+      reasoningCache.cacheReasoning(toolId, "xiaomi-mimo", "mimo-v1", secret);
+      assert.equal(reasoningCache.lookupReasoning(toolId), secret);
+      const second = await handleManagedWithin(
+        managedRequest(key.key, secondLease.generation, headersB, secondBody, OWNER_B)
+      );
+      assert.equal(second.status, 200);
+      await second.text();
+      assert.equal(secondCalls, 1);
+      assert.ok(secondUpstreamBody.includes(toolId), "probe must send the matching tool call");
+      assert.ok(
+        !secondUpstreamBody.includes(secret),
+        "owner A reasoning must never appear in owner B's outbound provider request"
+      );
+    } finally {
+      reasoningCache.deleteReasoningCacheEntry(toolId);
+    }
+  }
+);
 
 test("changing prompt, tools, and request model does not change the owner binding", async () => {
   const connection = await seedConnection("openai");

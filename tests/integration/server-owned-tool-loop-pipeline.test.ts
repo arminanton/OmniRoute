@@ -194,6 +194,41 @@ test("server-owned tool loop follow-up failure propagates error cleanly", async 
   }
 });
 
+test("server-owned follow-up model 404 is classified and locked", async () => {
+  const connection = await seedConnection("openai", { apiKey: "test-openai-followup-404" });
+  const apiKey = await seedApiKey();
+  await enableSkills();
+  const { isModelLocked, clearModelLock } = await import("../../open-sse/services/accountFallback.ts");
+  const handler = `weather-followup-404-${Date.now()}`;
+  skillExecutor.registerHandler(handler, async () => ({ forecast: "sunny" }));
+  await registerSkill({ apiKeyId: apiKey.id, name: "lookupWeather", handler });
+  const prevFlag = process.env.SERVER_OWNED_TOOL_LOOP_ENABLED;
+  process.env.SERVER_OWNED_TOOL_LOOP_ENABLED = "true";
+  let sends = 0;
+  globalThis.fetch = async () => {
+    sends += 1;
+    return sends === 1
+      ? buildOpenAIToolCallResponse({ toolCallId: "call_followup_404",
+        toolName: encodeSkillToolName("lookupWeather", "1.0.0") })
+      : new Response(JSON.stringify({ error: { message: "model not found" } }), {
+          status: 404, headers: { "content-type": "application/json" },
+        });
+  };
+  try {
+    const response = await handleChat(buildRequest({ authKey: apiKey.key, body: {
+      model: "openai/gpt-4o-mini", stream: false,
+      messages: [{ role: "user", content: "model lock on the second provider leg" }],
+    } }));
+    assert.equal(sends, 2);
+    assert.equal(response.status, 404);
+    assert.equal(isModelLocked("openai", connection.id, "gpt-4o-mini"), true);
+  } finally {
+    clearModelLock("openai", connection.id, "gpt-4o-mini");
+    if (prevFlag === undefined) delete process.env.SERVER_OWNED_TOOL_LOOP_ENABLED;
+    else process.env.SERVER_OWNED_TOOL_LOOP_ENABLED = prevFlag;
+  }
+});
+
 test("server-owned tool loop completes end-to-end for Claude messages client without returning tool_results", async () => {
   await seedConnection("openai", { apiKey: "test-openai-key" });
   const apiKey = await seedApiKey();

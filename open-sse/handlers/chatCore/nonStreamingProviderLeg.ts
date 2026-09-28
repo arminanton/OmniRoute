@@ -24,6 +24,8 @@ import { extractUsageFromResponse } from "../usageExtractor.ts";
 import { sanitizeUsagePayloadForRequest } from "../../utils/usageTracking.ts";
 import { createErrorResult, formatProviderError } from "../../utils/error.ts";
 import { isLocalStreamLifecycleError } from "@/shared/utils/circuitBreaker";
+import { projectProviderErrorIdentifier } from "./providerFailureProvenance.ts";
+import { isVerifiedProxyFetchExhaustedError } from "../../utils/proxyFetch.ts";
 import { unwrapClinepassEnvelope } from "../../utils/clinepassEnvelope.ts";
 import { unwrapClineNonStreamingEnvelope } from "./clineResponseEnvelope.ts";
 import {
@@ -89,6 +91,7 @@ export interface ProviderLegInput {
   toolNameMap?: Map<string, string> | null;
   requestToolIdentityMap?: Map<string, { namespace?: string; name: string }> | null;
   reasoningCacheScope?: string | null;
+  skipReasoningReplay?: boolean;
   clientHeaders?: Headers | Record<string, unknown> | null;
   isClaudeCodeCompatible?: boolean;
   sleep?: (ms: number) => Promise<void>;
@@ -285,6 +288,7 @@ function finishOk(
     responseToolNameMap,
     requestToolIdentityMap: input.requestToolIdentityMap ?? null,
     reasoningCacheScope: input.reasoningCacheScope ?? null,
+    skipReasoningReplay: input.skipReasoningReplay,
     clientHeaders: input.clientHeaders ?? null,
     isClaudeCodeCompatible: input.isClaudeCodeCompatible ?? false,
     phase: input.phase === "initial" ? "final" : "intermediate",
@@ -429,12 +433,15 @@ export async function runNonStreamingProviderLeg(
               outcome.result.status,
               formatted,
               undefined,
-              null,
+              outcome.result.retryAfterMs ?? null,
               outcome.result.errorCode,
               outcome.result.errorType,
               { passthrough: input.sourceFormat === "claude" }
             ),
             response: outcome.result.response,
+            rawMessage: outcome.result.rawMessage || outcome.result.error,
+            upstreamErrorBody: outcome.result.upstreamErrorBody,
+            upstreamHeaders: outcome.result.upstreamHeaders ?? outcome.result.response?.headers,
           },
           receipt,
           usage: outcome.providerUsage,
@@ -491,7 +498,15 @@ export async function runNonStreamingProviderLeg(
       connectionId,
       model: currentModel,
     });
-    const errorResult = legError(failureStatus, failureMessage, error);
+    const errorResult = legError(
+      failureStatus,
+      failureMessage,
+      error,
+      null,
+      !isRequestAborted && isVerifiedProxyFetchExhaustedError(error)
+        ? "proxy_unreachable"
+        : undefined
+    );
     return {
       kind: "error",
       result: errorResult as ChatCoreErrorResult,
@@ -543,11 +558,14 @@ export async function runNonStreamingProviderLeg(
     let upstreamErrorCode: string | undefined;
     let upstreamErrorType: string | undefined;
     let parsedErrorBody: Record<string, unknown> = {};
+    let rawUpstreamBody: unknown = null;
 
     try {
       const errorBodyText = await providerResponse.text();
+      rawUpstreamBody = errorBodyText;
       try {
         parsedErrorBody = JSON.parse(errorBodyText) as Record<string, unknown>;
+        rawUpstreamBody = parsedErrorBody;
       } catch {
         // non-JSON error body
       }
@@ -557,8 +575,9 @@ export async function runNonStreamingProviderLeg(
         (typeof errObj?.message === "string" ? errObj.message : null) ??
         errorBodyText.slice(0, 200) ??
         "Provider request failed";
-      upstreamErrorCode = typeof errObj?.code === "string" ? errObj.code : undefined;
-      upstreamErrorType = typeof errObj?.type === "string" ? errObj.type : undefined;
+      // Provider JSON cannot claim the local terminal proxy-exhaustion marker.
+      upstreamErrorCode = projectProviderErrorIdentifier(errObj?.code);
+      upstreamErrorType = projectProviderErrorIdentifier(errObj?.type);
     } catch {
       message = "Provider request failed";
     }
@@ -758,6 +777,9 @@ export async function runNonStreamingProviderLeg(
       upstreamErrorType,
       { passthrough: sourceFormat === FORMATS.CLAUDE }
     );
+    errorResult.rawMessage = message;
+    (errorResult as ChatCoreErrorResult).upstreamHeaders = providerResponse.headers;
+    (errorResult as ChatCoreErrorResult).upstreamErrorBody = rawUpstreamBody;
     return {
       kind: "error",
       result: errorResult as ChatCoreErrorResult,

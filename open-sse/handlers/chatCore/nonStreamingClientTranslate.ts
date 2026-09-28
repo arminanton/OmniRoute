@@ -56,6 +56,7 @@ export function translateNonStreamingClientResponse(
     responseToolNameMap,
     requestToolIdentityMap,
     reasoningCacheScope,
+    skipReasoningReplay,
     clientHeaders,
     isClaudeCodeCompatible,
     phase,
@@ -111,7 +112,7 @@ export function translateNonStreamingClientResponse(
     const historyMessages = Array.isArray(input.historyMessages)
       ? input.historyMessages
       : (finalBody as { messages?: unknown[] } | null | undefined)?.messages;
-    if (requiresReasoningReplay({ provider, model })) {
+    if (!skipReasoningReplay && requiresReasoningReplay({ provider, model })) {
       cacheReasoningFromAssistantMessage(msg, provider, model, {
         scope: reasoningCacheScope,
         historyMessages: Array.isArray(historyMessages) ? historyMessages : [],

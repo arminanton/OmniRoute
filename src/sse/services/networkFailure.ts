@@ -1,24 +1,9 @@
 /** Stable classification for network failures that were already retried by proxyFetch. */
+import { isVerifiedProxyFetchExhaustedError } from "@omniroute/open-sse/utils/proxyFetch.ts";
 
-const NETWORK_FAILURE_CODES = new Set([
-  "proxy_unreachable",
-  "PROXY_UNREACHABLE",
-  "EAI_AGAIN",
-  "ENOTFOUND",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "ETIMEDOUT",
-  "ENETUNREACH",
-  "EHOSTUNREACH",
-  "EPIPE",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_SOCKET",
-]);
-
-const NETWORK_FAILURE_TEXT =
-  /proxy_unreachable|PROXY_UNREACHABLE|EAI_AGAIN|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET/i;
-
-/** True when proxyFetch has attached its stable exhausted-path classification. */
+// Network-looking provider codes and messages are untrusted. They can guide
+// ordinary retry policy, but cannot prove final local transport exhaustion.
+/** Legacy code-only retry-policy hint. Not a local-origin proof. */
 export function isProxyFetchExhaustedFailure(errorCode: unknown): boolean {
   return (
     errorCode === "proxy_unreachable" ||
@@ -28,12 +13,12 @@ export function isProxyFetchExhaustedFailure(errorCode: unknown): boolean {
   );
 }
 
-/**
- * Return true only for transport failures that never reached the provider.
- * proxyFetch has already retried these on a fresh dispatcher and native fallback,
- * so a chat-layer retry would repeat parsing and compression without adding a new path.
- */
-export function isExhaustedNetworkFailure(errorCode: unknown, errorText?: unknown): boolean {
-  if (typeof errorCode === "string" && NETWORK_FAILURE_CODES.has(errorCode)) return true;
-  return typeof errorText === "string" && NETWORK_FAILURE_TEXT.test(errorText);
+/** Only an in-process proxyFetch final-site brand proves local exhaustion.
+ * Never infer this from upstream JSON codes, response text, or persisted rows. */
+export function isExhaustedNetworkFailure(
+  _errorCode: unknown,
+  _errorText?: unknown,
+  localTransportError?: unknown
+): boolean {
+  return isVerifiedProxyFetchExhaustedError(localTransportError);
 }
