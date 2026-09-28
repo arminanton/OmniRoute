@@ -213,6 +213,24 @@ function createLegacyCallLogsDb(sqliteFile) {
   seedDb.close();
 }
 
+function assertCallLogsRequestProviderIndex(db) {
+  assert.deepEqual(
+    db
+      .prepare("PRAGMA index_info(idx_cl_request_provider)")
+      .all()
+      .map((column) => column.name),
+    ["request_type", "provider"]
+  );
+  assert.deepEqual(
+    db
+      .prepare(
+        "SELECT id FROM call_logs INDEXED BY idx_cl_request_provider WHERE request_type = ? AND provider = ?"
+      )
+      .all("chat", "openai"),
+    []
+  );
+}
+
 function createRecoverableDb(sqliteFile) {
   const seedDb = new Database(sqliteFile);
   const now = new Date().toISOString();
@@ -377,6 +395,7 @@ test("getDbInstance creates sqlite schema, metadata and applies migrations", ser
       assert.deepEqual(db.prepare("SELECT value FROM db_meta WHERE key = 'schema_version'").get(), {
         value: "1",
       });
+      assertCallLogsRequestProviderIndex(db);
 
       const versions = db
         .prepare("SELECT version FROM _omniroute_migrations ORDER BY version")
@@ -733,12 +752,25 @@ test(
 );
 
 test(
-  "legacy call_logs schemas are upgraded before combo target indexes are created",
+  "legacy call_logs schemas are upgraded before request/provider and combo target indexes are created",
   serial,
   async () => {
     const dataDir = makeTempDir("omniroute-db-legacy-call-logs-");
     const sqliteFile = path.join(dataDir, "storage.sqlite");
     createLegacyCallLogsDb(sqliteFile);
+
+    // The synthetic on-disk fixture must actually predate request_type.
+    const seedDb = new Database(sqliteFile, { readonly: true });
+    try {
+      assert.equal(
+        seedDb
+          .prepare("SELECT name FROM pragma_table_info('call_logs') WHERE name = ?")
+          .get("request_type"),
+        undefined
+      );
+    } finally {
+      seedDb.close();
+    }
 
     try {
       await withEnv({ DATA_DIR: dataDir }, async () => {
@@ -775,12 +807,16 @@ test(
             .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
             .get("idx_call_logs_request_type")
         );
+        assertCallLogsRequestProviderIndex(db);
         assert.ok(
           db
             .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
             .get("idx_cl_combo_target")
         );
 
+        core.resetDbInstance();
+        // Re-opening the upgraded file must leave the index usable.
+        assertCallLogsRequestProviderIndex(core.getDbInstance());
         core.resetDbInstance();
       });
     } finally {
