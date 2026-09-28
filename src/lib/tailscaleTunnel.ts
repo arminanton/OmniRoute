@@ -59,6 +59,10 @@ type BinaryResolution = {
   managedInstall: boolean;
 };
 
+/** Only Linux /proc exposes argv tokens precise enough to prove managed ownership. */
+type ProcessIdentity = { executable: string; args: string[] };
+type ProcessIdentityReader = (pid: number) => Promise<ProcessIdentity | null>;
+
 type TailscaleLoginResult = { alreadyLoggedIn: true } | { authUrl: string };
 
 type TailscaleFunnelResult =
@@ -165,13 +169,26 @@ async function readStateFile(): Promise<PersistedTailscaleState> {
   }
 }
 
+async function readStateFileForUpdate(): Promise<PersistedTailscaleState> {
+  try {
+    const state = JSON.parse(await fsPromises.readFile(getStateFilePath(), "utf8"));
+    if (!state || typeof state !== "object" || Array.isArray(state)) {
+      throw new Error("Invalid Tailscale ownership state");
+    }
+    return state as PersistedTailscaleState;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
+  }
+}
+
 async function writeStateFile(state: PersistedTailscaleState) {
   await ensureTailscaleDir();
   await fsPromises.writeFile(getStateFilePath(), JSON.stringify(state, null, 2) + "\n", "utf8");
 }
 
 async function updateStateFile(patch: Partial<PersistedTailscaleState>) {
-  const current = await readStateFile();
+  const current = await readStateFileForUpdate();
   await writeStateFile({
     ...current,
     ...patch,
@@ -182,18 +199,33 @@ async function updateStateFile(patch: Partial<PersistedTailscaleState>) {
 async function readPidFile() {
   try {
     const raw = await fsPromises.readFile(getPidFilePath(), "utf8");
-    const pid = Number.parseInt(raw.trim(), 10);
-    return Number.isFinite(pid) ? pid : null;
+    const value = raw.trim();
+    if (!/^[1-9]\d*$/.test(value)) return null;
+    const pid = Number(value);
+    return Number.isSafeInteger(pid) ? pid : null;
   } catch {
     return null;
+  }
+}
+
+async function readPidFileForStop() {
+  try {
+    const value = (await fsPromises.readFile(getPidFilePath(), "utf8")).trim();
+    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+      throw new Error("Invalid managed tailscaled PID file");
+    }
+    return Number(value);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 
 async function clearPidFile() {
   try {
     await fsPromises.unlink(getPidFilePath());
-  } catch {
-    // Ignore stale or missing pid files.
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
 
@@ -202,8 +234,9 @@ function isProcessAlive(pid: number | null) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // An EPERM probe still proves that a PID is alive; never treat it as stale.
+    return (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 
@@ -796,68 +829,123 @@ export async function stopTailscaleFunnel() {
   await resetTailscaleFunnel(resolution.binaryPath);
 }
 
+async function readProcessIdentity(pid: number): Promise<ProcessIdentity | null> {
+  // Do not infer ownership from a lossy process listing on macOS or Windows.
+  if (getCurrentPlatform() !== "linux") return null;
+  try {
+    const [comm, cmdline] = await Promise.all([
+      fsPromises.readFile(`/proc/${pid}/comm`, "utf8"),
+      fsPromises.readFile(`/proc/${pid}/cmdline`),
+    ]);
+    return {
+      executable: comm.trim(),
+      args: cmdline.toString("utf8").split("\0").filter(Boolean),
+    };
+  } catch {
+    return null;
+  }
+}
+
+let processIdentityReader: ProcessIdentityReader = readProcessIdentity;
+
+/** Test seam: lets regression tests exercise stop decisions without a real daemon. */
+export function __setTailscaleProcessIdentityReaderForTests(reader: ProcessIdentityReader) {
+  const previous = processIdentityReader;
+  processIdentityReader = reader;
+  return () => {
+    processIdentityReader = previous;
+  };
+}
+
+async function isManagedTailscaleDaemonProcess(pid: number) {
+  // A Unix PID is not ownership evidence by itself. Windows/macOS cannot prove
+  // the exact private socket and state directory, so their stop path fails closed.
+  if (getCurrentPlatform() !== "linux") return false;
+  const identity = await processIdentityReader(pid);
+  return Boolean(
+    identity &&
+    identity.executable === "tailscaled" &&
+    path.basename(identity.args[0] || "") === "tailscaled" &&
+    identity.args.includes(`--socket=${getTailscaleSocketPath()}`) &&
+    identity.args.includes(`--statedir=${getTailscaleDir()}`)
+  );
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (isProcessAlive(pid) && Date.now() < deadline) await sleep(100);
+  return !isProcessAlive(pid);
+}
+
+async function stopManagedTailscaleDaemon(pid: number, password: string) {
+  if (!isProcessAlive(pid)) return;
+  if (!(await isManagedTailscaleDaemonProcess(pid))) {
+    throw new Error(`Refusing to stop unverified tailscaled process ${pid}`);
+  }
+
+  let permissionDenied = false;
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "EPERM") permissionDenied = true;
+    else if (code !== "ESRCH") throw error;
+  }
+  if (!permissionDenied && (await waitForProcessExit(pid))) return;
+  if (!password) {
+    throw new Error(`Managed tailscaled process ${pid} requires elevated permission to stop`);
+  }
+  if (!(await isManagedTailscaleDaemonProcess(pid))) {
+    throw new Error(`Refusing to stop unverified tailscaled process ${pid}`);
+  }
+
+  // No shell and no global process-name match; the password helper preserves
+  // the existing root/no-sudo behavior while using this one verified PID.
+  await execFileWithPassword("sudo", ["-S", "kill", "-TERM", "--", String(pid)], password);
+  if (await waitForProcessExit(pid)) return;
+  if (!(await isManagedTailscaleDaemonProcess(pid))) {
+    throw new Error(`Refusing to stop unverified tailscaled process ${pid}`);
+  }
+  await execFileWithPassword("sudo", ["-S", "kill", "-KILL", "--", String(pid)], password);
+  if (!(await waitForProcessExit(pid))) {
+    throw new Error(`Managed tailscaled process ${pid} did not stop`);
+  }
+}
+
+async function clearStoppedManagedDaemonState(pid: number) {
+  // Do not overwrite a changed or unreadable state file during cleanup.
+  const state = await readStateFileForUpdate();
+  if (state.daemonPid !== pid || (await readPidFileForStop()) !== pid) {
+    throw new Error(`Managed tailscaled ownership changed while stopping process ${pid}`);
+  }
+  try {
+    await fsPromises.unlink(getTailscaleSocketPath());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await writeStateFile({ ...state, daemonPid: null, updatedAt: new Date().toISOString() });
+  await clearPidFile();
+  invalidateSocketCache();
+}
+
 export async function stopTailscaleDaemon({
   sudoPassword,
 }: {
   sudoPassword?: string;
 } = {}) {
   const password = toNonEmptyString(sudoPassword) || getCachedPassword() || "";
-  const pid = await readPidFile();
-
-  if (pid && isProcessAlive(pid)) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Ignore non-owned or stale processes.
-    }
+  const state = await readStateFileForUpdate();
+  const pid = await readPidFileForStop();
+  if (!pid && !state.daemonPid) return;
+  if (!pid || state.daemonPid !== pid) {
+    throw new Error("Refusing to stop tailscaled without matching managed PID records");
   }
 
-  await sleep(1000);
-
-  if (pid && isProcessAlive(pid) && password) {
-    try {
-      await runSudoShell(`kill ${Number(pid)}`, password);
-    } catch {
-      // Ignore fallback failures and keep trying generic process matches.
-    }
-  }
-
-  if (getCurrentPlatform() !== "win32") {
-    try {
-      await execFileAsync("pkill", ["-x", "tailscaled"], {
-        timeout: 3000,
-        windowsHide: true,
-        env: buildExecEnv(),
-      });
-    } catch {
-      // Ignore when the daemon is not running or not owned by this user.
-    }
-
-    if (password) {
-      try {
-        await runSudoShell("pkill -x tailscaled", password);
-      } catch {
-        // Ignore final privileged shutdown failures.
-      }
-    }
-  } else {
-    try {
-      await execFileAsync("net", ["stop", "Tailscale"], {
-        timeout: 10000,
-        windowsHide: true,
-        env: buildExecEnv(),
-      });
-    } catch {
-      // Ignore service stop failures on Windows.
-    }
-  }
-
-  await clearPidFile();
-  try {
-    await fsPromises.unlink(getTailscaleSocketPath());
-  } catch {
-    // Ignore missing sockets.
-  }
+  // Never stop a system daemon by name or stop the Windows Tailscale service:
+  // neither action proves this application started the target. PID reuse also
+  // requires an identity recheck before each scoped TERM/KILL (not atomic).
+  await stopManagedTailscaleDaemon(pid, password);
+  await clearStoppedManagedDaemonState(pid);
 }
 
 export async function enableTailscaleTunnel({
@@ -961,7 +1049,12 @@ export async function disableTailscaleTunnel({
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to disable Tailscale Funnel";
-    await updateStateFile({ lastError: message });
+    try {
+      await updateStateFile({ lastError: message });
+    } catch {
+      // Keep malformed or unreadable ownership evidence untouched and surface
+      // the original stop failure instead of masking it with a write error.
+    }
     throw error;
   }
 }
