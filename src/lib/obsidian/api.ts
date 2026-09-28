@@ -1,4 +1,5 @@
 import { getDbInstance } from "@/lib/db/core";
+import { safeOutboundFetch } from "@/shared/network/safeOutboundFetch";
 
 const DEFAULT_OBSIDIAN_BASE_URL = "http://127.0.0.1:27123";
 const MAX_RETRIES = 2;
@@ -67,13 +68,19 @@ function obsidianFetch(
 
   const attempt = async (retryCount: number): Promise<unknown> => {
     try {
-      const response = await fetch(url, {
+      // Allow legitimate local/LAN/Tailscale vaults, but never metadata or
+      // link-local targets; never follow a redirect off the configured base.
+      const response = await safeOutboundFetch(url, {
         ...options,
         headers: {
           Authorization: `Bearer ${apiKey}`,
           ...(options.headers as Record<string, string>),
         },
         signal: mergedSignal,
+        guard: "block-metadata",
+        allowRedirect: false,
+        retry: false,
+        timeoutMs: TIMEOUT_MS,
       });
 
       clearTimeout(timeout);
