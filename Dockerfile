@@ -8,11 +8,13 @@ WORKDIR /app
 # that already have a fix published in trixie. CVEs without an upstream fix yet
 # (local-only TOCTOU, etc.) remain until the distro patches them and the image
 # is rebuilt; none are reachable from the proxy's request surface at runtime.
+# Sharp/Pango renders Video Bridge timestamp labels with DejaVu Sans Mono.
+# Without a real font, every contact-sheet label renders identically.
 RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
   apt-get update \
   && apt-get upgrade -y \
-  && apt-get install -y --no-install-recommends libsecret-1-0 ca-certificates \
+  && apt-get install -y --no-install-recommends libsecret-1-0 ca-certificates fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
 # npm's *bundled* node_modules (brace-expansion, ip-address, tar, undici) are
