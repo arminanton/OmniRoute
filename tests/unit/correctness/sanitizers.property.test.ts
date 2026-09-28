@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fc from "fast-check";
 import { configureProperties } from "../../helpers/propertyConfig.ts";
 import { sanitizeErrorMessage } from "../../../open-sse/utils/error.ts";
+import { containsStrongCredentialToken } from "../../../open-sse/utils/errorSanitization.ts";
 
 configureProperties();
 
@@ -28,6 +29,27 @@ test("sanitizeErrorMessage never leaks a file path / stack frame", () => {
       assert.ok(!out.includes("at /"), `leaked path in: ${JSON.stringify(out)}`);
     })
   );
+});
+
+test("strong-token detection stays fast without weakening prefixed-key redaction", () => {
+  for (const credential of [
+    "abcsk-12345678",
+    "12345sk_abcdefghij",
+    "a".repeat(4000) + "sk-12345678",
+  ]) {
+    assert.ok(containsStrongCredentialToken(credential), "prefixed key must be detected");
+    assert.equal(sanitizeErrorMessage(`Error ${credential}`), "Error [REDACTED]");
+  }
+
+  // A missing `sk-` must not make the unbounded detector retry a greedy
+  // alphanumeric prefix at each input offset (unlike sanitized output, this
+  // detector does not truncate its input).
+  const adversarial = "a".repeat(20_000);
+  const startCpu = process.cpuUsage();
+  assert.equal(containsStrongCredentialToken(adversarial), false);
+  const usedCpu = process.cpuUsage(startCpu);
+  const cpuMs = (usedCpu.user + usedCpu.system) / 1000;
+  assert.ok(cpuMs < 250, `too slow: ${cpuMs}ms CPU for len=${adversarial.length}`);
 });
 
 test("sanitizeErrorMessage terminates on long adversarial input (ReDoS guard)", () => {

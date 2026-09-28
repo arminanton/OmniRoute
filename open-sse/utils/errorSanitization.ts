@@ -14,7 +14,10 @@ const STRONG_CREDENTIAL_TOKEN_SOURCE =
   "github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|glpat-[A-Za-z0-9_-]{20,}|" +
   "xox[a-z]-[A-Za-z0-9-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|" +
   "(?<![A-Za-z0-9])sk[-_][A-Za-z0-9._~+/=-]{8,}|" +
-  "[A-Za-z0-9]{3,}sk[-_][A-Za-z0-9._~+/=-]{8,})";
+  // Match the entire alphanumeric prefix, but only start at its boundary.
+  // Otherwise each character in a long non-token prefix triggers a fresh
+  // greedy scan of the same suffix (quadratic work before the length cap).
+  "(?<![A-Za-z0-9])[A-Za-z0-9]{3,}sk[-_][A-Za-z0-9._~+/=-]{8,})";
 const STRONG_CREDENTIAL_TOKEN = new RegExp(STRONG_CREDENTIAL_TOKEN_SOURCE, "i");
 const STRONG_CREDENTIAL_TOKEN_GLOBAL = new RegExp(STRONG_CREDENTIAL_TOKEN_SOURCE, "gi");
 
