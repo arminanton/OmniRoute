@@ -13,7 +13,9 @@ type BypassClass = "A" | "B" | "C";
 
 const EXPECTED: Record<InventoryKind, Record<string, number>> = {
   credential: {
-    "open-sse/handlers/chatCore.ts": 2,
+    // Account rotation moved into the managed-aware pipeline. Count both member
+    // calls, not only unqualified calls, or the lease inventory misses them.
+    "open-sse/handlers/chatCore/providerExecutionPipeline.ts": 2,
     "open-sse/services/imageCombo.ts": 1,
     "open-sse/services/speechCombo.ts": 1,
     "open-sse/services/videoCombo.ts": 2,
@@ -80,7 +82,8 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
   },
   connection: {
     "open-sse/handlers/autoComboCandidates.ts": 1,
-    "open-sse/handlers/chatCore.ts": 2,
+    // Token-refresh CAS and invalid-grant rotation checks add read-only queries.
+    "open-sse/handlers/chatCore.ts": 4,
     "open-sse/handlers/cursorCliProxy.ts": 1,
     "open-sse/services/alibabaFreeTier.ts": 1,
     "open-sse/services/alibabaFreeTierQuotaFetcher.ts": 1,
@@ -89,7 +92,8 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
     // v3.8.50 back-merge additions (f95b03d7): combo routing infra and the
     // volcengine-plan binding/auto-sync services query connections the same
     // way as their classified siblings.
-    "open-sse/services/combo.ts": 1,
+    // Dynamic per-target cooldown reads moved out of combo.ts.
+    "open-sse/services/combo/executeTargetGates.ts": 1,
     "open-sse/services/combo/providerWildcard.ts": 1,
     "open-sse/services/tokenRefresh.ts": 1,
     "src/lib/providers/volcPlanAutoSyncBackfill.ts": 1,
@@ -127,6 +131,8 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
     "src/app/api/translator/send/route.ts": 1,
     "src/app/api/translator/translate/route.ts": 1,
     "src/app/api/usage/call-logs/route.ts": 1,
+    // Read-only management discriminator; RPC dispatch lives in fenced reset-credit services.
+    "src/app/api/usage/codex-reset-credit/route.ts": 1,
     "src/app/api/usage/quota/route.ts": 1,
     "src/app/api/usage/utilization/route.ts": 1,
     "src/app/api/v1/vscode/[token]/api/tags/route.ts": 1,
@@ -174,6 +180,8 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
     "src/lib/usage/callLogs.ts": 1,
     "src/lib/usage/codexResetCredits.ts": 1,
     "src/lib/usage/comboScoringInspector.ts": 1,
+    // Auxiliary upstream Grok reset-credit refresh/RPC checks exclusive-lease isolation.
+    "src/lib/usage/grokResetCredits.ts": 1,
     "src/lib/usage/providerLimits.ts": 4,
     "src/lib/usage/resilienceExplain.ts": 1,
     "src/lib/usage/usageStats.ts": 1,
@@ -191,6 +199,7 @@ const CLASSIFICATION: Record<InventoryKind, Record<string, BypassClass>> = {
     Object.keys(EXPECTED.credential).map((file) => [
       file,
       file === "src/app/api/v1/session-leases/route.ts" ||
+      file === "open-sse/handlers/chatCore/providerExecutionPipeline.ts" ||
       file === "src/sse/handlers/chat.ts" ||
       file === "src/sse/services/auth.ts"
         ? "A"
@@ -212,10 +221,9 @@ const CLASSIFICATION: Record<InventoryKind, Record<string, BypassClass>> = {
       [
         "open-sse/handlers/autoComboCandidates.ts",
         "open-sse/handlers/chatCore.ts",
-        "open-sse/services/combo.ts",
         "open-sse/services/alibabaFreeTier.ts",
         "open-sse/services/alibabaFreeTierQuotaFetcher.ts",
-        "open-sse/services/combo.ts",
+        "open-sse/services/combo/executeTargetGates.ts",
         "open-sse/services/combo/providerWildcard.ts",
         "open-sse/services/tokenRefresh.ts",
         "src/app/api/translator/send/route.ts",
@@ -224,6 +232,7 @@ const CLASSIFICATION: Record<InventoryKind, Record<string, BypassClass>> = {
         "src/lib/providers/volcenginePlanBinding.ts",
         "src/lib/services/quotaAutoPing.ts",
         "src/lib/usage/codexResetCredits.ts",
+        "src/lib/usage/grokResetCredits.ts",
         "src/lib/usage/providerLimits.ts",
         "src/lib/vncSession/service.ts",
         "src/lib/warmupScheduler.ts",
@@ -276,15 +285,25 @@ function countCalls(): Record<InventoryKind, Record<string, number>> {
           ) {
             increment("connection");
           }
-        } else if (
-          ts.isPropertyAccessExpression(expression) &&
-          expression.name.text === "execute" &&
-          ts.isIdentifier(expression.expression) &&
-          ["executor", "fallbackExecutor", "providerExecutor", "streamExecutor"].includes(
-            expression.expression.text
-          )
-        ) {
-          increment("executor");
+        } else if (ts.isPropertyAccessExpression(expression)) {
+          // Managed-aware recovery now calls through a connection context member.
+          // Include member calls or extraction from chatCore hides live credential
+          // selectors from this inventory altogether.
+          if (
+            expression.name.text === "getProviderCredentials" ||
+            expression.name.text === "getProviderCredentialsWithQuotaPreflight"
+          ) {
+            increment("credential");
+          }
+          if (
+            expression.name.text === "execute" &&
+            ts.isIdentifier(expression.expression) &&
+            ["executor", "fallbackExecutor", "providerExecutor", "streamExecutor"].includes(
+              expression.expression.text
+            )
+          ) {
+            increment("executor");
+          }
         }
       }
       ts.forEachChild(node, visit);
@@ -308,6 +327,10 @@ test("hard-lease credential, executor, and connection-query inventory has no unc
 test("managed request surfaces are fenced centrally or rejected before independent dispatch", () => {
   const chat = fs.readFileSync(path.join(REPO_ROOT, "src/sse/handlers/chat.ts"), "utf8");
   const core = fs.readFileSync(path.join(REPO_ROOT, "open-sse/handlers/chatCore.ts"), "utf8");
+  const pipeline = fs.readFileSync(
+    path.join(REPO_ROOT, "open-sse/handlers/chatCore/providerExecutionPipeline.ts"),
+    "utf8"
+  );
   const ws = fs.readFileSync(
     path.join(REPO_ROOT, "src/app/api/internal/codex-responses-ws/route.ts"),
     "utf8"
@@ -320,6 +343,7 @@ test("managed request surfaces are fenced centrally or rejected before independe
     "src/lib/api/modelTestRunner.ts",
     "src/lib/services/quotaAutoPing.ts",
     "src/lib/usage/codexResetCredits.ts",
+    "src/lib/usage/grokResetCredits.ts",
     "src/lib/vncSession/service.ts",
     "src/lib/warmupScheduler.ts",
     "src/shared/services/modelSyncScheduler.ts",
@@ -336,7 +360,29 @@ test("managed request surfaces are fenced centrally or rejected before independe
     core,
     /assertManagedLeaseFence\(getExecutionConnectionId\(getExecutionCredentials\(\)\)\)/
   );
-  assert.match(core, /provider === "codex" &&\s*!managedLease/);
+  // Both streaming and non-streaming callers must disallow account rotation for
+  // managed leases; the extracted pipeline must honor that policy before either
+  // credential query, while pinning the expected connection before/after send.
+  assert.equal(
+    (
+      core.match(/allowAccountRotation:\s*!managedLease && comboStrategy !== "context-relay"/g) ||
+      []
+    ).length,
+    2,
+    "both pipeline legs must disable rotation for managed leases"
+  );
+  assert.equal((core.match(/expectedConnectionId:\s*managedLease/g) || []).length, 2);
+  assert.match(pipeline, /const canRotateAccount = policy\.allowAccountRotation && !isolateProbe/);
+  assert.match(pipeline, /const before = assertLease\(policy, connection, wire\.currentModel\)/);
+  assert.match(pipeline, /const after = assertLease\(policy, connection, wire\.currentModel\)/);
+  assert.match(
+    pipeline,
+    /canRotateAccount &&\s*target\.provider === "codex" &&[\s\S]*?\.getProviderCredentials\("codex"/
+  );
+  assert.match(
+    pipeline,
+    /if \(canRotateAccount && target\.provider === "antigravity" && status === 422\)[\s\S]*?\.getProviderCredentials\("antigravity"/
+  );
   assert.match(ws, /LEASE_UNSUPPORTED_TRANSPORT/);
   assert.match(internalKeys, /!k\.scopes\?\.includes\(EXCLUSIVE_LEASE_SCOPE\)/);
   for (const source of auxiliaryIsolationSources) {

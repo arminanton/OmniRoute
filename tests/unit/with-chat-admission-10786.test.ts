@@ -19,7 +19,9 @@ function chatRequest(url: string, body: string): Request {
 }
 
 test("withChatAdmission does not invoke the handler when a second large body is shed", async () => {
-  const controller = new ChatAdmissionController(1);
+  // The shipped healthy headroom is 50. This test needs a one-slot budget
+  // explicitly so one occupied headroom lease really exhausts the capacity.
+  const controller = new ChatAdmissionController(1, undefined, 1);
   const options = { controller, largeBodyBytes: 32, hardMaxBytes: 1024, queueMs: 0 };
   const body = largeBody();
 

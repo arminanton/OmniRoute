@@ -10,6 +10,9 @@ const {
   CHAT_HARD_MAX_MESSAGES,
   CHAT_ADMISSION_QUEUE_MAX_MS,
   CHAT_ADMISSION_MAX_QUEUED_BYTES,
+  CHAT_ADMISSION_HEALTHY_HEADROOM,
+  CHAT_MAX_HEAVY_IN_FLIGHT,
+  perConnectionAdmissionController,
   CHAT_LARGE_BODY_BYTES,
   releaseChatAdmissionAfterHandler,
   releaseChatAdmissionWhenDone,
@@ -49,6 +52,45 @@ function chatRequest(body: string, contentLength: string | null = String(body.le
     body,
   });
 }
+
+test("unconfigured local admission defaults keep bounded queue and headroom", () => {
+  // These are local defaults, not evidence that an operator configured a smaller
+  // production cap. In particular, the effective production request count cap is
+  // currently disabled when its env var is unset (the ingest-byte budget still binds).
+  if (process.env.OMNIROUTE_CHAT_ADMISSION_QUEUE_MS === undefined) {
+    assert.equal(CHAT_ADMISSION_QUEUE_MAX_MS, 30_000);
+  }
+  if (process.env.OMNIROUTE_CHAT_ADMISSION_MAX_QUEUED_BYTES === undefined) {
+    assert.equal(CHAT_ADMISSION_MAX_QUEUED_BYTES, 64 * 1024 * 1024);
+  }
+  if (process.env.OMNIROUTE_CHAT_MAX_HEAVY_IN_FLIGHT === undefined) {
+    assert.equal(CHAT_MAX_HEAVY_IN_FLIGHT, 50);
+    assert.equal(
+      perConnectionAdmissionController.getController("a").maxHeavyInFlight,
+      Number.MAX_SAFE_INTEGER,
+      "nominal 50 is not the effective unset production count cap"
+    );
+    assert.equal(perConnectionAdmissionController.snapshot().countCapEnabled, false);
+  } else {
+    assert.equal(perConnectionAdmissionController.snapshot().countCapEnabled, true);
+  }
+  if (
+    process.env.OMNIROUTE_CHAT_ADMISSION_HEALTHY_HEADROOM === undefined &&
+    process.env.OMNIROUTE_CHAT_MAX_HEAVY_IN_FLIGHT === undefined
+  ) {
+    assert.equal(CHAT_ADMISSION_HEALTHY_HEADROOM, 50);
+    const controller = new ChatAdmissionController(1);
+    const primary = controller.tryAcquireHeavy();
+    assert.ok(primary);
+    const headroom = Array.from({ length: 50 }, () => controller.tryAcquireHealthyHeadroom());
+    assert.ok(headroom.every(Boolean));
+    assert.equal(controller.tryAcquireHealthyHeadroom(), null, "headroom must be finite");
+    for (const lease of headroom) lease?.release();
+    primary.release();
+    assert.equal(controller.activeHealthyHeadroom, 0);
+    assert.equal(controller.activeHeavy, 0);
+  }
+});
 
 test("heavyweight leases are counted for SIGTERM drain (#11015)", () => {
   globalThis.__omnirouteShutdown = { init: true, shuttingDown: false, activeRequests: 0 };

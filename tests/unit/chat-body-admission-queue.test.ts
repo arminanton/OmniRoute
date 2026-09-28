@@ -418,13 +418,27 @@ test("structural admission enforces the queued-bytes cap end-to-end", async () =
   assert.equal(controller.activeHeavy, 0);
 });
 
-test("queue-wait defaults are bounded (2s wait, 4MB queued-bytes budget)", () => {
+test("local queue-wait defaults remain bounded at 30s and 64MiB unless configured", () => {
+  // These are shipped local defaults, not a measured safe production workload.
   if (process.env.OMNIROUTE_CHAT_ADMISSION_QUEUE_MS === undefined) {
-    assert.equal(CHAT_ADMISSION_QUEUE_MAX_MS, 2_000);
+    assert.equal(CHAT_ADMISSION_QUEUE_MAX_MS, 30_000);
   }
   if (process.env.OMNIROUTE_CHAT_ADMISSION_MAX_QUEUED_BYTES === undefined) {
-    assert.equal(CHAT_ADMISSION_MAX_QUEUED_BYTES, 4 * 1024 * 1024);
+    assert.equal(CHAT_ADMISSION_MAX_QUEUED_BYTES, 64 * 1024 * 1024);
   }
+});
+
+test("an explicitly smaller 4MiB queued-byte budget still sheds an over-budget wait", async () => {
+  const controller = new ChatAdmissionController(1, 4 * 1024 * 1024);
+  const held = controller.tryAcquireHeavy();
+  assert.ok(held);
+  // The operator's explicit 2s queue window stays configurable; rejection is
+  // immediate when the body alone cannot fit the 4MiB parked-byte budget.
+  const result = await controller.acquireHeavyWithin(2_000, undefined, 4 * 1024 * 1024 + 1);
+  assert.equal(result, null);
+  assert.equal(controller.queuedBytes, 0);
+  assert.equal(controller.waitingCount, 0);
+  held.release();
 });
 
 test("a pre-aborted signal never parks in the admission queue", async () => {

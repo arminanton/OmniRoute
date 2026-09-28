@@ -12,7 +12,11 @@ import {
   clearCooldownState,
   getRemainingCooldownMs,
 } from "../../open-sse/services/providerCooldownTracker.ts";
-import { hasPerModelQuota } from "../../open-sse/services/accountFallback.ts";
+import {
+  hasPerModelQuota,
+  clearAllModelLockouts,
+} from "../../open-sse/services/accountFallback.ts";
+import { handleComboChat } from "../../open-sse/services/combo.ts";
 
 const settings = {
   providerCooldown: {
@@ -109,6 +113,48 @@ test("fix: combo still records cooldown for non-per-model-quota provider on 500"
   );
 });
 
+test("runtime combo retries a sibling Gemini model after a 500 without provider cooldown", async () => {
+  clearCooldownState();
+  clearAllModelLockouts();
+  const called: string[] = [];
+  const models = ["gemini/gemma-4-31b-it", "gemini/gemma-4-26b-a4b-it"];
+  const noop = () => {};
+  try {
+    const response = await handleComboChat({
+      body: { model: "gemini-cooldown-regression", messages: [{ role: "user", content: "hi" }] },
+      combo: {
+        name: "gemini-cooldown-regression",
+        strategy: "priority",
+        models,
+        config: { maxRetries: 0, retryDelayMs: 0 },
+      },
+      handleSingleModel: async (_body: unknown, modelStr: string) => {
+        called.push(modelStr);
+        if (modelStr === models[0]) {
+          return Response.json({ error: { message: "model-specific 500" } }, { status: 500 });
+        }
+        return Response.json({
+          choices: [{ message: { role: "assistant", content: "sibling ok" } }],
+        });
+      },
+      log: { info: noop, warn: noop, debug: noop, error: noop },
+      settings: { providerCooldown: settings.providerCooldown },
+      allCombos: [],
+    } as never);
+    assert.equal(response.status, 200);
+    assert.equal(called[0], models[0]);
+    assert.equal(called.at(-1), models[1], "the second Gemini model must still be eligible");
+    assert.ok(
+      called.every((model) => models.includes(model)),
+      "only configured models may run"
+    );
+    assert.equal(isProviderInCooldown("gemini", null, settings), false);
+  } finally {
+    clearCooldownState();
+    clearAllModelLockouts();
+  }
+});
+
 // ── Source guards: auth.ts must not model-lockout Gemini on 500 ──
 
 test("source guard: auth.ts skips model lockout for per-model-quota providers on 500+", () => {
@@ -128,13 +174,16 @@ test("source guard: auth.ts skips model lockout for per-model-quota providers on
   );
 });
 
-test("source guard: combo.ts skips provider cooldown for per-model-quota on 500", () => {
+test("source guard: executeTargetAttempt skips provider cooldown for per-model-quota on 500/429", () => {
+  // The per-target outcome branch moved out of combo.ts. Require the model
+  // quota guard in the SAME condition that gates cooldown recording.
   const src = fs.readFileSync(
-    path.join(process.cwd(), "open-sse", "services", "combo.ts"),
+    path.join(process.cwd(), "open-sse", "services", "combo", "executeTargetAttempt.ts"),
     "utf-8"
   );
-  assert.ok(
-    src.includes("hasPerModelQuota(provider, rawModel)") && src.includes("recordProviderCooldown"),
-    "combo.ts must skip provider cooldown recording for per-model-quota providers on 500"
+  assert.match(
+    src,
+    /if \(\s*deps\.resilienceSettings\.providerCooldown\.enabled[\s\S]*?!\(\(result\.status === 500 \|\| result\.status === 429\) && hasPerModelQuota\(provider, rawModel\)\)\s*\) \{\s*recordProviderCooldown\(/,
+    "per-model 500/429 failures must not cool down sibling models"
   );
 });
