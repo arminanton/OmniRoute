@@ -46,7 +46,13 @@ import {
   parseUcExtraDialects,
   UC_CODESTYLE_HEADER,
 } from "./uc/toolDialect.ts";
-import { extractCurrentTurnMedia, uploadUcTurnMedia, type UcMediaBlob } from "./uc/media.ts";
+import {
+  extractCurrentTurnMedia,
+  resolveUcRemoteImages,
+  uploadUcTurnMedia,
+  type UcInlineMedia,
+  type UcMediaBlob,
+} from "./uc/media.ts";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const SSE_HEADERS = {
@@ -209,23 +215,55 @@ export class UcExecutor extends BaseExecutor {
     const body = (input.body ?? {}) as OpenAiChatBody;
     const originalMessages = (body.messages ?? []) as Array<{ role?: string; content?: unknown }>;
 
-    // Vision + doc input (persona blob layer): extract inline images/docs from the
-    // current turn, upload each via the presigned-URL flow, and carry the blob
-    // refs in the frame. UC parses the blob server-side (image vision, PDF text).
-    // Best-effort: upload failures are skipped and the chat proceeds text-only.
+    // Resolve requested media through the guarded input path, then upload it.
+    // A failed attachment must never become an ungrounded text-only WS turn.
     let media: UcMediaBlob[] = [];
-    try {
-      const { inline } = extractCurrentTurnMedia(originalMessages);
-      if (inline.length) {
-        media = await uploadUcTurnMedia(inline, {
+    const { inline, remoteImageUrls, requestedMediaCount } =
+      extractCurrentTurnMedia(originalMessages);
+    if (requestedMediaCount !== inline.length + remoteImageUrls.length) {
+      return wrap(
+        errorResponse(400, "UC input media is missing or invalid.", "uc_invalid_media"),
+        url
+      );
+    }
+    if (requestedMediaCount > 0) {
+      let resolvedRemote: UcInlineMedia[];
+      try {
+        // Remote references are client input, not UC-returned URLs; the shared
+        // resolver checks DNS, redirects, content type and image size.
+        resolvedRemote = await resolveUcRemoteImages(remoteImageUrls, input.signal);
+      } catch {
+        return wrap(
+          errorResponse(
+            input.signal?.aborted ? 499 : 400,
+            input.signal?.aborted
+              ? "Request aborted"
+              : "UC remote image could not be resolved safely.",
+            "uc_invalid_media"
+          ),
+          url
+        );
+      }
+      try {
+        media = await uploadUcTurnMedia([...inline, ...resolvedRemote], {
           jwt,
           uid: cred.uid,
           signal: input.signal,
           log: input.log ?? undefined,
         });
+      } catch {
+        media = [];
       }
-    } catch {
-      media = [];
+      if (media.length !== requestedMediaCount || input.signal?.aborted) {
+        return wrap(
+          errorResponse(
+            input.signal?.aborted ? 499 : 502,
+            input.signal?.aborted ? "Request aborted" : "UC input media upload did not complete.",
+            "uc_media_upload_failed"
+          ),
+          url
+        );
+      }
     }
 
     // Tool-calling (prompted protocol): inject the <tool> contract into the

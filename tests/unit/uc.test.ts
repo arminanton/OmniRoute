@@ -729,3 +729,152 @@ test("ucDirectProvider ships the metered catalog with unique ids", () => {
   assert.ok(ids.includes("gpt-5.5"));
   assert.ok(ids.includes("gemini-3.1-pro-preview"));
 });
+
+test("UcExecutor rejects an unreadable uploaded image without sending a text-only WS turn", async (t) => {
+  const origFetch = globalThis.fetch;
+  const signedUrl = "https://d.moveinwater.com/up/signature_secret";
+  const calls: Array<{ url: string; method: string; redirect?: RequestRedirect }> = [];
+  globalThis.fetch = (async (url: string, init: RequestInit = {}) => {
+    const target = String(url);
+    calls.push({ url: target, method: init.method ?? "GET", redirect: init.redirect });
+    if (target.includes("/generate-signed-url")) {
+      return Response.json({ signed_url: signedUrl, blob_name: "blob_unreadable" });
+    }
+    if (target === signedUrl) return new Response(null, { status: 200 });
+    if (target === "https://d.moveinwater.com/blob_unreadable") {
+      return new Response(null, {
+        status: 302,
+        headers: { location: "http://169.254.169.254/latest/meta-data" },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        object: "token",
+        jwt: fakeJwt({ uid: UID, sid: SID, exp: Math.floor(Date.now() / 1000) + 60 }),
+      }),
+      { status: 200 }
+    );
+  }) as unknown as typeof fetch;
+  let wsConstructs = 0;
+  const restore = __setUcWebSocketForTesting(
+    class {
+      constructor() {
+        wsConstructs++;
+        throw new Error("WS must not start without a ready blob");
+      }
+    } as unknown as typeof WebSocket
+  );
+  t.after(() => {
+    restore();
+    globalThis.fetch = origFetch;
+  });
+
+  const result = await new UcExecutor().execute({
+    model: "claude-opus-46",
+    stream: false,
+    credentials: { providerSpecificData: psd() },
+    body: {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "What is shown?" },
+            { type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } },
+          ],
+        },
+      ],
+    },
+  } as never);
+  const { status, json } = await readJson(result);
+  assert.equal(status, 502);
+  assert.equal(json.error?.code, "uc_media_upload_failed");
+  assert.match(json.error?.message ?? "", /upload did not complete/i);
+  assert.ok(!JSON.stringify(json).includes(signedUrl));
+  assert.equal(wsConstructs, 0);
+  assert.equal(calls.find((call) => call.url === signedUrl)?.redirect, "error");
+  assert.equal(calls.find((call) => call.method === "HEAD")?.redirect, "error");
+});
+
+test("UcExecutor rejects malformed or private remote media without a text-only WS turn", async (t) => {
+  const origFetch = globalThis.fetch;
+  let signedPosts = 0;
+  globalThis.fetch = (async (url: string) => {
+    if (String(url).includes("/generate-signed-url")) signedPosts++;
+    return new Response(
+      JSON.stringify({
+        object: "token",
+        jwt: fakeJwt({ uid: UID, sid: SID, exp: Math.floor(Date.now() / 1000) + 60 }),
+      }),
+      { status: 200 }
+    );
+  }) as unknown as typeof fetch;
+  let wsConstructs = 0;
+  const restore = __setUcWebSocketForTesting(
+    class {
+      constructor() {
+        wsConstructs++;
+        throw new Error("WS must not start without valid media");
+      }
+    } as unknown as typeof WebSocket
+  );
+  t.after(() => {
+    restore();
+    globalThis.fetch = origFetch;
+  });
+  const exec = new UcExecutor();
+  for (const imageUrl of ["", "http://127.0.0.1/private.png"]) {
+    const result = await exec.execute({
+      model: "claude-opus-46",
+      stream: false,
+      credentials: { providerSpecificData: psd() },
+      body: {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What is shown?" },
+              { type: "image_url", image_url: { url: imageUrl } },
+            ],
+          },
+        ],
+      },
+    } as never);
+    const { status, json } = await readJson(result);
+    assert.equal(status, 400);
+    assert.equal(json.error?.code, "uc_invalid_media");
+  }
+  assert.equal(wsConstructs, 0);
+  assert.equal(signedPosts, 0);
+});
+
+test("UcExecutor text-only turn still sends its WS frame without media upload", async (t) => {
+  const origFetch = globalThis.fetch;
+  let signedPosts = 0;
+  globalThis.fetch = (async (url: string) => {
+    if (String(url).includes("/generate-signed-url")) signedPosts++;
+    return new Response(
+      JSON.stringify({
+        object: "token",
+        jwt: fakeJwt({ uid: UID, sid: SID, exp: Math.floor(Date.now() / 1000) + 60 }),
+      }),
+      { status: 200 }
+    );
+  }) as unknown as typeof fetch;
+  const restore = __setUcWebSocketForTesting(
+    makeFakeWs([JSON.stringify({ message_type: "text", end_of_stream: true, raw_text: "TEXT_OK" })])
+  );
+  t.after(() => {
+    restore();
+    globalThis.fetch = origFetch;
+  });
+  const result = await new UcExecutor().execute({
+    model: "claude-opus-46",
+    stream: false,
+    credentials: { providerSpecificData: psd() },
+    body: { messages: [{ role: "user", content: "A plain text prompt" }] },
+  } as never);
+  const { status, json } = await readJson(result);
+  assert.equal(status, 200);
+  assert.equal(json.choices?.[0]?.message?.content, "TEXT_OK");
+  assert.equal(signedPosts, 0);
+});

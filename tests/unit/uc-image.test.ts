@@ -381,3 +381,124 @@ test("handleUcImageGeneration rejects an empty prompt with 400 (both surfaces)",
   assert.equal(result.success, false);
   assert.equal(result.status, 400);
 });
+
+test("persona image result rejects a foreign URL before polling", async () => {
+  for (const resultUrl of [
+    "https://127.0.0.1/private",
+    "https://gen.moveinwater.com.evil.test/img.png",
+    "https://gen.moveinwater.com/",
+  ]) {
+    const result = (await handleUcImageGeneration({
+      model: "uc/seedream-v4.5",
+      provider: "uc",
+      body: { prompt: "x" },
+      credentials: PERSONA_CRED,
+      fetchImpl: personaFetch({ pendingPolls: 0, resultUrl, jwt: fakeJwt("uid", FUTURE_EXP) }),
+      sleepImpl: noSleep,
+    })) as { success: boolean; status?: number };
+    assert.equal(result.success, false);
+    assert.equal(result.status, 502);
+  }
+});
+
+test("persona image result GET refuses a redirect to metadata", async () => {
+  const resultUrl = "https://gen.moveinwater.com/img_redirect.png";
+  const base = personaFetch({ pendingPolls: 0, resultUrl, jwt: fakeJwt("uid", FUTURE_EXP) });
+  let polls = 0;
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    if (url === resultUrl) {
+      polls++;
+      assert.equal(init.redirect, "error");
+      return new Response(null, { status: 302, headers: { location: "http://169.254.169.254/" } });
+    }
+    return base(url, init);
+  }) as typeof fetch;
+  const result = (await handleUcImageGeneration({
+    model: "uc/seedream-v4.5",
+    provider: "uc",
+    body: { prompt: "x" },
+    credentials: PERSONA_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  })) as { success: boolean; status?: number };
+  assert.equal(result.success, false);
+  assert.equal(result.status, 302);
+  assert.equal(polls, 1);
+});
+
+test("persona image polling stops during an abortable wait", async () => {
+  const controller = new AbortController();
+  const resultUrl = "https://gen.moveinwater.com/img_abort.png";
+  const base = personaFetch({
+    pendingPolls: Number.POSITIVE_INFINITY,
+    resultUrl,
+    jwt: fakeJwt("uid", FUTURE_EXP),
+  });
+  let polls = 0;
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    if (url === resultUrl) {
+      polls++;
+      assert.ok(init.signal instanceof AbortSignal);
+    }
+    return base(url, init);
+  }) as typeof fetch;
+  const result = (await handleUcImageGeneration({
+    model: "uc/seedream-v4.5",
+    provider: "uc",
+    body: { prompt: "x" },
+    credentials: PERSONA_CRED,
+    signal: controller.signal,
+    fetchImpl,
+    sleepImpl: async () => {
+      queueMicrotask(() => controller.abort());
+      return new Promise<void>(() => {});
+    },
+  })) as { success: boolean; status?: number };
+  assert.equal(result.success, false);
+  assert.equal(result.status, 499);
+  assert.equal(polls, 1);
+});
+
+test("persona image result GET has a per-request timeout when transport ignores abort", async () => {
+  const resultUrl = "https://gen.moveinwater.com/img_hang.png";
+  const base = personaFetch({ pendingPolls: 0, resultUrl, jwt: fakeJwt("uid", FUTURE_EXP) });
+  let pollSignal: AbortSignal | undefined;
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    if (url === resultUrl) {
+      pollSignal = init.signal as AbortSignal;
+      return new Promise<Response>(() => {});
+    }
+    return base(url, init);
+  }) as typeof fetch;
+  const result = (await handleUcImageGeneration({
+    model: "uc/seedream-v4.5",
+    provider: "uc",
+    body: { prompt: "x", timeout_ms: 0 },
+    credentials: PERSONA_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  })) as { success: boolean; status?: number };
+  assert.equal(result.success, false);
+  assert.equal(result.status, 504);
+  assert.equal(pollSignal?.aborted, true);
+});
+
+test("persona image polling errors do not echo an opaque result query", async () => {
+  const resultUrl = "https://gen.moveinwater.com/img_query.png?token=secret%2Fquery";
+  const base = personaFetch({ pendingPolls: 0, resultUrl, jwt: fakeJwt("uid", FUTURE_EXP) });
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    if (url === resultUrl) throw new Error(`transport failed at ${resultUrl}`);
+    return base(url, init);
+  }) as typeof fetch;
+  const result = (await handleUcImageGeneration({
+    model: "uc/seedream-v4.5",
+    provider: "uc",
+    body: { prompt: "x" },
+    credentials: PERSONA_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  })) as { success: boolean; status?: number; error?: string };
+  assert.equal(result.success, false);
+  assert.equal(result.status, 502);
+  assert.ok(!String(result.error).includes("secret%2Fquery"));
+});

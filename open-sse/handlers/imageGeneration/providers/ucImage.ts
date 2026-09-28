@@ -33,6 +33,14 @@
 import { resolveUcCredential } from "../../../executors/uc/credentials.ts";
 import { mintUcSessionToken } from "../../../executors/uc/clerkAuth.ts";
 import { UC_ORIGIN } from "../../../executors/uc/constants.ts";
+import {
+  boundedUcPollMs,
+  UC_MAX_POLL_ATTEMPTS,
+  UcPollTimeoutError,
+  waitForUcPoll,
+  withUcPollTimeout,
+} from "../../../executors/uc/polling.ts";
+import { validateUcRemoteUrl } from "../../../executors/uc/urlSafety.ts";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
 import { saveImageErrorResult, saveImageSuccessResult } from "../../imageGeneration.ts";
 
@@ -125,11 +133,6 @@ export function extractUcDirectImages(json: unknown): Array<{ url?: string; b64_
     }
   }
   return out;
-}
-
-function normalizePositiveNumber(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
 type SleepImpl = (ms: number) => Promise<void>;
@@ -293,11 +296,11 @@ async function handleUcPersonaImage(
     });
   }
 
-  const resultUrl =
+  const rawResultUrl =
     json && typeof json === "object" && typeof (json as Record<string, unknown>).url === "string"
       ? ((json as Record<string, unknown>).url as string)
       : "";
-  if (!resultUrl) {
+  if (!rawResultUrl) {
     return saveImageErrorResult({
       provider,
       model,
@@ -308,13 +311,29 @@ async function handleUcPersonaImage(
     });
   }
 
-  const timeoutMs = normalizePositiveNumber(
+  let resultUrl: string;
+  try {
+    resultUrl = validateUcRemoteUrl(rawResultUrl, "image-result").toString();
+  } catch {
+    return saveImageErrorResult({
+      provider,
+      model,
+      status: 502,
+      startTime,
+      error: "UC persona image result URL is not allowed",
+      requestBody,
+    });
+  }
+
+  const timeoutMs = boundedUcPollMs(
     body.timeout_ms,
-    normalizePositiveNumber(process.env.UC_IMAGE_POLL_TIMEOUT_MS, UC_POLL_TIMEOUT_MS_DEFAULT)
+    boundedUcPollMs(process.env.UC_IMAGE_POLL_TIMEOUT_MS, UC_POLL_TIMEOUT_MS_DEFAULT, 300_000),
+    300_000
   );
-  const pollIntervalMs = normalizePositiveNumber(
+  const pollIntervalMs = boundedUcPollMs(
     body.poll_interval_ms,
-    normalizePositiveNumber(process.env.UC_IMAGE_POLL_INTERVAL_MS, UC_POLL_INTERVAL_MS_DEFAULT)
+    boundedUcPollMs(process.env.UC_IMAGE_POLL_INTERVAL_MS, UC_POLL_INTERVAL_MS_DEFAULT, 30_000),
+    30_000
   );
 
   const poll = await pollUcResultUrl(
@@ -362,20 +381,33 @@ async function pollUcResultUrl(
 ): Promise<UcPollOutcome> {
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
-  // Poll at least once even when timeoutMs is 0.
+  // Poll at least once even when timeoutMs is 0. The attempt cap also
+  // bounds no-delay test sleepers and mocked clocks.
   do {
+    if (signal?.aborted) return { state: "failed", status: 499, error: "Request aborted" };
     attempt += 1;
     let resp: Response;
     try {
-      resp = await fetchImpl(url, { method: "GET", signal });
+      resp = await withUcPollTimeout(
+        (pollSignal) => fetchImpl(url, { method: "GET", redirect: "error", signal: pollSignal }),
+        Math.max(100, Math.min(15_000, deadline - Date.now())),
+        signal
+      );
     } catch (err) {
+      if (signal?.aborted) return { state: "failed", status: 499, error: "Request aborted" };
       return {
         state: "failed",
-        status: 502,
-        error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
+        status: err instanceof UcPollTimeoutError ? 504 : 502,
+        error:
+          err instanceof UcPollTimeoutError
+            ? "UC image result polling request timed out"
+            : "UC image result polling request failed",
       };
     }
-    if (resp.ok) return { state: "ready" };
+    // Readiness needs only the status, not the returned image body.
+    void resp.body?.cancel().catch(() => {});
+    if (signal?.aborted) return { state: "failed", status: 499, error: "Request aborted" };
+    if (resp.status >= 200 && resp.status < 300) return { state: "ready" };
     // 403/404 = not ready yet; anything else is a hard failure.
     if (resp.status !== 403 && resp.status !== 404) {
       return {
@@ -385,8 +417,10 @@ async function pollUcResultUrl(
       };
     }
     log?.info?.("IMAGE", `uc-image result pending, poll #${attempt} in ${pollIntervalMs}ms`);
-    if (Date.now() + pollIntervalMs >= deadline) break;
-    await sleepImpl(pollIntervalMs);
+    if (attempt >= UC_MAX_POLL_ATTEMPTS || Date.now() + pollIntervalMs >= deadline) break;
+    if (!(await waitForUcPoll(pollIntervalMs, sleepImpl, signal))) {
+      return { state: "failed", status: 499, error: "Request aborted" };
+    }
   } while (Date.now() < deadline);
 
   return {

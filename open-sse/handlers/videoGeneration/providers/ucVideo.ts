@@ -54,6 +54,15 @@
 import { resolveUcCredential } from "../../../executors/uc/credentials.ts";
 import { mintUcSessionToken } from "../../../executors/uc/clerkAuth.ts";
 import { UC_ORIGIN } from "../../../executors/uc/constants.ts";
+import {
+  boundedUcPollMs,
+  UC_MAX_POLL_ATTEMPTS,
+  UcPollTimeoutError,
+  waitForUcPoll,
+  withUcPollTimeout,
+} from "../../../executors/uc/polling.ts";
+import { validateUcBlobName, validateUcRemoteUrl } from "../../../executors/uc/urlSafety.ts";
+import { resolveCursorImages } from "../../../utils/cursorImages.ts";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
 
 /** Persona signed-upload-URL endpoint (for the image-to-video input image). */
@@ -168,11 +177,6 @@ export function resolveUcInputImage(body: UcVideoBody): string | null {
   return null;
 }
 
-function normalizePositiveNumber(value: unknown, fallback: number): number {
-  const n = Number(value);
-  return Number.isFinite(n) && n >= 0 ? n : fallback;
-}
-
 function firstNumber(value: unknown, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -274,32 +278,15 @@ function isDirectFailed(status: string | undefined): boolean {
 /** Decode an input image reference into raw bytes for the signed-URL PUT. */
 async function resolveImageBytes(
   ref: string,
-  fetchImpl: typeof fetch,
   signal: AbortSignal | undefined
 ): Promise<Uint8Array | null> {
-  // data URL: data:image/png;base64,<payload>
-  const dataMatch = /^data:[^;]*;base64,(.*)$/.exec(ref);
-  if (dataMatch) {
-    try {
-      return new Uint8Array(Buffer.from(dataMatch[1], "base64"));
-    } catch {
-      return null;
-    }
-  }
-  // http(s) URL: fetch the bytes.
-  if (/^https?:\/\//i.test(ref)) {
-    try {
-      const resp = await fetchImpl(ref, { method: "GET", signal });
-      if (!resp.ok) return null;
-      const buf = await resp.arrayBuffer();
-      return new Uint8Array(buf);
-    } catch {
-      return null;
-    }
-  }
-  // Bare base64 payload.
+  if (signal?.aborted) return null;
+  const imageRef = /^(?:data:|https?:\/\/)/i.test(ref) ? ref : `data:image/png;base64,${ref}`;
   try {
-    return new Uint8Array(Buffer.from(ref, "base64"));
+    // Shared resolver validates remote URLs, each redirect and DNS answers;
+    // it also strictly decodes inline images and caps input at 1 MiB.
+    const images = await resolveCursorImages([imageRef], { prepareForWire: false, signal });
+    return images[0]?.data ? new Uint8Array(images[0].data) : null;
   } catch {
     return null;
   }
@@ -319,20 +306,30 @@ async function pollUcVideoUrl(
 ): Promise<UcPollOutcome> {
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
-  // Poll at least once even when timeoutMs is 0.
+  // Poll at least once even when timeoutMs is 0; also cap no-delay sleepers.
   do {
+    if (signal?.aborted) return { state: "failed", status: 499, error: "Request aborted" };
     attempt += 1;
     let resp: Response;
     try {
-      resp = await fetchImpl(url, { method: "HEAD", signal });
+      resp = await withUcPollTimeout(
+        (pollSignal) => fetchImpl(url, { method: "HEAD", redirect: "error", signal: pollSignal }),
+        Math.max(100, Math.min(15_000, deadline - Date.now())),
+        signal
+      );
     } catch (err) {
+      if (signal?.aborted) return { state: "failed", status: 499, error: "Request aborted" };
       return {
         state: "failed",
-        status: 502,
-        error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
+        status: err instanceof UcPollTimeoutError ? 504 : 502,
+        error:
+          err instanceof UcPollTimeoutError
+            ? "UC video result polling request timed out"
+            : "UC video result polling request failed",
       };
     }
-    if (resp.ok) return { state: "ready" };
+    if (signal?.aborted) return { state: "failed", status: 499, error: "Request aborted" };
+    if (resp.status >= 200 && resp.status < 300) return { state: "ready" };
     // 403/404 = not ready yet; anything else is a hard failure.
     if (resp.status !== 403 && resp.status !== 404) {
       return {
@@ -342,8 +339,10 @@ async function pollUcVideoUrl(
       };
     }
     log?.info?.("VIDEO", `uc-video result pending, poll #${attempt} in ${pollIntervalMs}ms`);
-    if (Date.now() + pollIntervalMs >= deadline) break;
-    await sleepImpl(pollIntervalMs);
+    if (attempt >= UC_MAX_POLL_ATTEMPTS || Date.now() + pollIntervalMs >= deadline) break;
+    if (!(await waitForUcPoll(pollIntervalMs, sleepImpl, signal))) {
+      return { state: "failed", status: 499, error: "Request aborted" };
+    }
   } while (Date.now() < deadline);
 
   return {
@@ -415,7 +414,8 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
 
   if (inputImage) {
     // Image-to-video: (1) signed URL, (2) PUT bytes, (3) generate.
-    const bytes = await resolveImageBytes(inputImage, fetchImpl, signal);
+    const bytes = await resolveImageBytes(inputImage, signal);
+    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
     if (!bytes) {
       return {
         success: false,
@@ -460,14 +460,24 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
       string,
       unknown
     >;
-    const signedUrl = typeof signedRec.signed_url === "string" ? signedRec.signed_url : "";
-    const blobName = typeof signedRec.blob_name === "string" ? signedRec.blob_name : "";
-    if (!signedUrl || !blobName) {
+    const rawSignedUrl = typeof signedRec.signed_url === "string" ? signedRec.signed_url : "";
+    const rawBlobName = typeof signedRec.blob_name === "string" ? signedRec.blob_name : "";
+    if (!rawSignedUrl || !rawBlobName) {
       return {
         success: false,
         status: 502,
         error: "UC signed-url response missing signed_url or blob_name",
       };
+    }
+    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
+    let signedUrl: string;
+    let blobName: string;
+    try {
+      validateUcRemoteUrl(rawSignedUrl, "upload");
+      signedUrl = rawSignedUrl; // Preserve opaque signed query bytes exactly.
+      blobName = validateUcBlobName(rawBlobName);
+    } catch {
+      return { success: false, status: 502, error: "UC signed upload destination is not allowed" };
     }
 
     // (2) PUT the image bytes to the signed URL. Fresh copy so BodyInit is a
@@ -478,14 +488,15 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     try {
       putResp = await fetchImpl(signedUrl, {
         method: "PUT",
+        redirect: "error",
         headers: { "Content-Type": "image/png" },
         body: putBody,
         signal,
       });
-    } catch (err) {
-      const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
-      log?.error?.("VIDEO", `${provider} uc-video (persona) upload transport error: ${errorText}`);
-      return { success: false, status: 502, error: errorText };
+    } catch {
+      // Fetch exceptions can contain the signed query; never echo the token.
+      log?.error?.("VIDEO", `${provider} uc-video (persona) upload transport error`);
+      return { success: false, status: 502, error: "UC input-image upload transport failed" };
     }
     if (!putResp.ok) {
       return {
@@ -495,6 +506,7 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
       };
     }
 
+    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
     genUrl = UC_PERSONA_IMAGE_TO_VIDEO_URL;
     requestBody = buildUcPersonaVideoBody(prompt, canonicalModel, body, blobName);
   } else {
@@ -537,25 +549,36 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     return { success: false, status: 502, error: "UC persona returned a non-JSON video response" };
   }
   const genRec = (genJson && typeof genJson === "object" ? genJson : {}) as Record<string, unknown>;
-  const resultUrl = typeof genRec.url === "string" ? genRec.url : "";
-  if (!resultUrl) {
+  const rawResultUrl = typeof genRec.url === "string" ? genRec.url : "";
+  if (!rawResultUrl) {
     return {
       success: false,
       status: 502,
       error: "UC persona video response carried no result url",
     };
   }
+  let resultUrl: string;
+  try {
+    resultUrl = validateUcRemoteUrl(rawResultUrl, "video-result").toString();
+  } catch {
+    return { success: false, status: 502, error: "UC persona video result URL is not allowed" };
+  }
   const requestId = typeof genRec.request_id === "string" ? genRec.request_id : undefined;
   const timeoutSeconds = Number(genRec.timeout_seconds);
 
   const defaultTimeoutMs =
     Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
-      ? timeoutSeconds * 1000
-      : normalizePositiveNumber(process.env.UC_VIDEO_POLL_TIMEOUT_MS, UC_POLL_TIMEOUT_MS_DEFAULT);
-  const timeoutMs = normalizePositiveNumber(body.timeout_ms, defaultTimeoutMs);
-  const pollIntervalMs = normalizePositiveNumber(
+      ? Math.min(timeoutSeconds * 1000, UC_POLL_TIMEOUT_MS_DEFAULT)
+      : boundedUcPollMs(
+          process.env.UC_VIDEO_POLL_TIMEOUT_MS,
+          UC_POLL_TIMEOUT_MS_DEFAULT,
+          UC_POLL_TIMEOUT_MS_DEFAULT
+        );
+  const timeoutMs = boundedUcPollMs(body.timeout_ms, defaultTimeoutMs, UC_POLL_TIMEOUT_MS_DEFAULT);
+  const pollIntervalMs = boundedUcPollMs(
     body.poll_interval_ms,
-    normalizePositiveNumber(process.env.UC_VIDEO_POLL_INTERVAL_MS, UC_POLL_INTERVAL_MS_DEFAULT)
+    boundedUcPollMs(process.env.UC_VIDEO_POLL_INTERVAL_MS, UC_POLL_INTERVAL_MS_DEFAULT, 30_000),
+    30_000
   );
 
   const poll = await pollUcVideoUrl(
@@ -693,32 +716,63 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
     };
   }
 
-  // Poll status_url until complete or timeout.
-  const statusUrl = extracted.statusUrl;
-  const timeoutMs = normalizePositiveNumber(body.timeout_ms, UC_POLL_TIMEOUT_MS_DEFAULT);
-  const pollIntervalMs = normalizePositiveNumber(
+  // Poll only UC's status API, never an arbitrary returned URL with the API key.
+  let statusUrl: string;
+  try {
+    statusUrl = validateUcRemoteUrl(extracted.statusUrl, "direct-status").toString();
+  } catch {
+    return { success: false, status: 502, error: "UC direct status URL is not allowed" };
+  }
+  const timeoutMs = boundedUcPollMs(
+    body.timeout_ms,
+    UC_POLL_TIMEOUT_MS_DEFAULT,
+    UC_POLL_TIMEOUT_MS_DEFAULT
+  );
+  const pollIntervalMs = boundedUcPollMs(
     body.poll_interval_ms,
-    UC_POLL_INTERVAL_MS_DEFAULT
+    UC_POLL_INTERVAL_MS_DEFAULT,
+    30_000
   );
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
   do {
+    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
     attempt += 1;
-    let statusResp: Response;
+    let statusPoll: { response: Response; json?: unknown; invalidJson?: boolean };
     try {
-      statusResp = await fetchImpl(statusUrl, {
-        method: "GET",
-        headers: { "X-api-key": apiKey },
-        signal,
-      });
+      statusPoll = await withUcPollTimeout(
+        async (pollSignal) => {
+          const response = await fetchImpl(statusUrl, {
+            method: "GET",
+            redirect: "error",
+            headers: { "X-api-key": apiKey },
+            signal: pollSignal,
+          });
+          if (!response.ok || response.status >= 300) return { response };
+          try {
+            // Keep one abort signal active through the response body read.
+            return { response, json: await response.json() };
+          } catch {
+            return { response, invalidJson: true };
+          }
+        },
+        Math.max(100, Math.min(15_000, deadline - Date.now())),
+        signal
+      );
     } catch (err) {
+      if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
       return {
         success: false,
-        status: 502,
-        error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)),
+        status: err instanceof UcPollTimeoutError ? 504 : 502,
+        error:
+          err instanceof UcPollTimeoutError
+            ? "UC direct status polling request timed out"
+            : "UC direct status polling request failed",
       };
     }
-    if (!statusResp.ok) {
+    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
+    const statusResp = statusPoll.response;
+    if (!statusResp.ok || statusResp.status >= 300) {
       return {
         success: false,
         status: statusResp.status,
@@ -726,16 +780,14 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
         ...(statusResp.status === 429 ? { retryable: true } : {}),
       };
     }
-    let statusJson: unknown;
-    try {
-      statusJson = await statusResp.json();
-    } catch {
+    if (statusPoll.invalidJson) {
       return {
         success: false,
         status: 502,
         error: "UC direct status poll returned a non-JSON response",
       };
     }
+    const statusJson = statusPoll.json;
     extracted = extractUcDirectVideo(statusJson);
     if (isDirectFailed(extracted.status)) {
       return {
@@ -748,8 +800,10 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
       return buildDirectSuccess(extracted.url, extracted.requestId, extracted.status);
     }
     log?.info?.("VIDEO", `uc-video (direct) job pending, poll #${attempt} in ${pollIntervalMs}ms`);
-    if (Date.now() + pollIntervalMs >= deadline) break;
-    await sleepImpl(pollIntervalMs);
+    if (attempt >= UC_MAX_POLL_ATTEMPTS || Date.now() + pollIntervalMs >= deadline) break;
+    if (!(await waitForUcPoll(pollIntervalMs, sleepImpl, signal))) {
+      return { success: false, status: 499, error: "Request aborted" };
+    }
   } while (Date.now() < deadline);
 
   return {

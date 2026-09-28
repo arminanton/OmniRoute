@@ -21,11 +21,19 @@
  * each, and returns the blob descriptors for the executor to fold into the persona
  * frame. Multi-file = N independent uploads (there is no batch endpoint).
  *
- * Best-effort: an upload failure is logged and skipped so the chat still proceeds
- * without that attachment (best-effort doc-list behavior).
+ * An upload failure is logged and returned as a missing blob. The persona
+ * executor rejects turns with missing requested media rather than sending text alone.
  */
 import { Buffer } from "node:buffer";
+import { resolveCursorImages } from "../../utils/cursorImages.ts";
 import { UC_ORIGIN } from "./constants.ts";
+import {
+  boundedUcPollMs,
+  UC_MAX_POLL_ATTEMPTS,
+  waitForUcPoll,
+  withUcPollTimeout,
+} from "./polling.ts";
+import { validateUcBlobName, validateUcRemoteUrl } from "./urlSafety.ts";
 
 const UC_SIGNED_URL_ENDPOINT = "https://internal-6.pubyar.com/generate-signed-url";
 /** Poll cap for the post-upload readiness check. */
@@ -105,9 +113,11 @@ function mimeFromFilename(name: string): string {
 export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
   inline: UcInlineMedia[];
   remoteImageUrls: string[];
+  requestedMediaCount: number;
 } {
   const inline: UcInlineMedia[] = [];
   const remoteImageUrls: string[] = [];
+  let requestedMediaCount = 0;
 
   let lastUser = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -116,16 +126,17 @@ export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
       break;
     }
   }
-  if (lastUser < 0) return { inline, remoteImageUrls };
+  if (lastUser < 0) return { inline, remoteImageUrls, requestedMediaCount };
 
   const content = messages[lastUser]?.content;
-  if (!Array.isArray(content)) return { inline, remoteImageUrls };
+  if (!Array.isArray(content)) return { inline, remoteImageUrls, requestedMediaCount };
 
   for (const raw of content as OpenAiPart[]) {
     if (!raw || typeof raw !== "object") continue;
 
     // Images: {type:"image_url", image_url:{url}} or shorthand {image_url:"url"}
     if (raw.type === "image_url" || raw.image_url) {
+      requestedMediaCount++;
       const iu = raw.image_url;
       const url =
         typeof iu === "string"
@@ -135,7 +146,7 @@ export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
             : "";
       if (!url) continue;
       const data = decodeDataUrl(url);
-      if (data) {
+      if (data?.bytes.length) {
         inline.push(data);
       } else if (/^https?:\/\//i.test(url)) {
         remoteImageUrls.push(url);
@@ -144,7 +155,9 @@ export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
     }
 
     // OpenAI file part: {type:"file", file:{filename, file_data:"data:...;base64,..."}}
-    if (raw.type === "file" && raw.file) {
+    if (raw.type === "file") {
+      requestedMediaCount++;
+      if (!raw.file || typeof raw.file !== "object") continue;
       const fd = raw.file.file_data;
       const fname = typeof raw.file.filename === "string" ? raw.file.filename : "file";
       if (typeof fd === "string") {
@@ -158,7 +171,9 @@ export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
     }
 
     // Responses-style input_file: {type:"input_file", file_data, filename?}
-    if (raw.type === "input_file" && typeof raw.file_data === "string") {
+    if (raw.type === "input_file") {
+      requestedMediaCount++;
+      if (typeof raw.file_data !== "string") continue;
       const dec = decodeDataUrl(raw.file_data) ?? {
         bytes: Buffer.from(raw.file_data, "base64"),
         contentType: "application/octet-stream",
@@ -168,7 +183,9 @@ export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
     }
 
     // Claude-style document: {type:"document", source:{type:"base64", media_type, data}}
-    if (raw.type === "document" && raw.source && typeof raw.source.data === "string") {
+    if (raw.type === "document") {
+      requestedMediaCount++;
+      if (!raw.source || typeof raw.source.data !== "string") continue;
       const contentType =
         typeof raw.source.media_type === "string" ? raw.source.media_type : "application/pdf";
       try {
@@ -181,7 +198,20 @@ export function extractCurrentTurnMedia(messages: OpenAiMessage[]): {
     }
   }
 
-  return { inline, remoteImageUrls };
+  return { inline, remoteImageUrls, requestedMediaCount };
+}
+
+/** Resolve user-supplied remote images through the shared SSRF, DNS and size guard. */
+export async function resolveUcRemoteImages(
+  urls: string[],
+  signal?: AbortSignal | null
+): Promise<UcInlineMedia[]> {
+  if (urls.length === 0) return [];
+  const images = await resolveCursorImages(urls, {
+    prepareForWire: false,
+    signal: signal ?? undefined,
+  });
+  return images.map((image) => ({ bytes: Buffer.from(image.data), contentType: image.mimeType }));
 }
 
 export interface UcUploadContext {
@@ -191,12 +221,15 @@ export interface UcUploadContext {
   userSubscriptions?: string;
   signal?: AbortSignal | null;
   fetchImpl?: typeof fetch;
+  /** Maximum wait for a readable final blob (capped at 20 seconds). */
+  readyTimeoutMs?: number;
+  sleepImpl?: (ms: number) => Promise<void>;
   log?: { warn?: (tag: string, msg: string) => void; debug?: (tag: string, msg: string) => void };
 }
 
 /**
  * Upload one inline media payload via the presigned-URL flow. Returns the blob
- * descriptor, or null on any failure (best-effort; caller proceeds without it).
+ * descriptor, or null on any failure; the persona executor rejects missing media.
  */
 export async function uploadUcBlob(
   media: UcInlineMedia,
@@ -229,20 +262,19 @@ export async function uploadUcBlob(
     }
     const body = (await res.json()) as { signed_url?: unknown; blob_name?: unknown };
     signedUrl = typeof body.signed_url === "string" ? body.signed_url : "";
-    blobName = typeof body.blob_name === "string" ? body.blob_name : "";
-  } catch (err) {
-    ctx.log?.warn?.(
-      "uc",
-      `signed-url request failed: ${err instanceof Error ? err.message : String(err)}`
-    );
+    validateUcRemoteUrl(signedUrl, "upload");
+    blobName = validateUcBlobName(typeof body.blob_name === "string" ? body.blob_name : "");
+  } catch {
+    ctx.log?.warn?.("uc", "signed-url request failed or returned an unsafe destination");
     return null;
   }
-  if (!signedUrl || !blobName) return null;
+  if (!signedUrl || !blobName || ctx.signal?.aborted) return null;
 
   // 2. PUT the raw bytes
   try {
     const put = await doFetch(signedUrl, {
       method: "PUT",
+      redirect: "error",
       headers: { "Content-Type": media.contentType },
       // Buffer -> ArrayBuffer slice (BodyInit-compatible in this codebase's fetch
       // typing; a Uint8Array view is not assignable to BodyInit here).
@@ -256,38 +288,58 @@ export async function uploadUcBlob(
       ctx.log?.warn?.("uc", `blob PUT HTTP ${put.status}`);
       return null;
     }
-  } catch (err) {
-    ctx.log?.warn?.("uc", `blob PUT failed: ${err instanceof Error ? err.message : String(err)}`);
+  } catch {
+    // Fetch exceptions can contain the signed query; never echo the token.
+    ctx.log?.warn?.("uc", "blob PUT failed");
     return null;
   }
 
-  // 3. best-effort readiness check (HEAD the final blob URL). Non-fatal.
-  await confirmBlobReady(blobName, ctx).catch(() => undefined);
-
+  // Do not reference a blob in the persona frame until it is readable.
+  if (ctx.signal?.aborted || !(await confirmBlobReady(blobName, ctx))) return null;
   return { blobName, contentType: media.contentType };
 }
 
-/** HEAD/GET the final blob URL until it resolves (best-effort, bounded). */
-async function confirmBlobReady(blobName: string, ctx: UcUploadContext): Promise<void> {
+/** HEAD the final blob URL until it resolves; fail closed on timeout/abort. */
+async function confirmBlobReady(blobName: string, ctx: UcUploadContext): Promise<boolean> {
   const doFetch = ctx.fetchImpl ?? fetch;
+  const sleep =
+    ctx.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const finalUrl = `https://d.moveinwater.com/${encodeURIComponent(blobName)}`;
-  const deadline = Date.now() + UC_BLOB_READY_TIMEOUT_MS;
-  for (let attempt = 0; Date.now() < deadline; attempt++) {
+  const timeoutMs = boundedUcPollMs(
+    ctx.readyTimeoutMs,
+    UC_BLOB_READY_TIMEOUT_MS,
+    UC_BLOB_READY_TIMEOUT_MS
+  );
+  const deadline = Date.now() + timeoutMs;
+  for (let attempt = 0; attempt < UC_MAX_POLL_ATTEMPTS; attempt++) {
+    if (ctx.signal?.aborted) return false;
     try {
-      const r = await doFetch(finalUrl, { method: "HEAD", signal: ctx.signal ?? undefined });
-      if (r.status === 200) return;
+      const r = await withUcPollTimeout(
+        (pollSignal) =>
+          doFetch(finalUrl, {
+            method: "HEAD",
+            redirect: "error",
+            signal: pollSignal,
+          }),
+        Math.max(100, Math.min(10_000, deadline - Date.now())),
+        ctx.signal
+      );
+      if (ctx.signal?.aborted) return false;
+      if (r.status === 200) return true;
+      // A redirect is never a readiness signal, even if a mock fetch ignores redirect:error.
+      if (r.status >= 300 && r.status < 400) return false;
     } catch {
-      /* keep trying */
+      if (ctx.signal?.aborted) return false;
     }
-    await new Promise((res) => setTimeout(res, 1000));
-    if (attempt > 20) break;
+    const waitMs = Math.min(1000, deadline - Date.now());
+    if (waitMs <= 0 || !(await waitForUcPoll(waitMs, sleep, ctx.signal))) break;
   }
+  return false;
 }
 
 /**
- * Upload every inline media payload for a turn, returning the blob descriptors
- * (best-effort — failed uploads are skipped). Remote http(s) image URLs are NOT
- * uploaded here; the caller may pass them through if UC accepts remote refs.
+ * Upload resolved media payloads for a turn. This low-level helper returns only
+ * successful descriptors; its caller rejects the whole turn if any are missing.
  */
 export async function uploadUcTurnMedia(
   inline: UcInlineMedia[],
