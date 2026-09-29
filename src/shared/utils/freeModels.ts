@@ -65,6 +65,9 @@ const FREE_MODEL_IDS_BY_PROVIDER: Map<string, Set<string>> = (() => {
 /** Whether the given provider exposes any documented free models. Accepts a provider id or alias. */
 export function providerHasFreeModels(providerId: string | undefined | null): boolean {
   if (typeof providerId !== "string") return false;
+  // Nous OAuth discovers zero-priced rows from live first-party /models; it has
+  // no fixed token budget or model-ID list in the free-tier catalog.
+  if (resolveProviderId(providerId) === "nous-oauth") return true;
   return (
     PROVIDERS_WITH_FREE_MODELS.has(providerId) ||
     PROVIDERS_WITH_FREE_MODELS.has(resolveProviderId(providerId))
@@ -86,6 +89,9 @@ export interface FreeModelCandidate {
 
 /** Whether a single fetched model qualifies as free for the given provider (id or alias). */
 export function isFreeModel(provider: string, model: FreeModelCandidate): boolean {
+  // Nous OAuth labels come from the current first-party /models pricing probe.
+  // Neither a `:free` suffix nor old local metadata proves today's price.
+  if (resolveProviderId(provider) === "nous-oauth") return model.isFree === true;
   if (model.isFree === true) return true;
   if (typeof model.id === "string" && model.id.endsWith(":free")) return true;
   if (isZeroPrice(model.pricing?.prompt) && isZeroPrice(model.pricing?.completion)) return true;

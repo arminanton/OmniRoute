@@ -8,6 +8,7 @@ import {
   sortModelsFreeFirst,
 } from "@/shared/utils/freeModels";
 import { FREE_MODEL_BUDGETS } from "@omniroute/open-sse/config/freeModelCatalog";
+import { getProviderAlias, getProviderById } from "@/shared/constants/providers";
 
 test("providerHasFreeModels: true for a provider in the free catalog", () => {
   assert.equal(providerHasFreeModels("openrouter"), true);
@@ -148,4 +149,16 @@ test("sortModelsFreeFirst: does not mutate the input array", () => {
     items.map((m) => m.id),
     before
   );
+});
+
+test("Nous OAuth supports live free discovery without a frozen model-ID list", () => {
+  assert.equal(getProviderAlias("nous-oauth"), "nso");
+  assert.equal(getProviderById("nous-oauth")?.hasFree, true);
+  assert.equal(getProviderById("nous-oauth")?.passthroughModels, true);
+  assert.equal(providerHasFreeModels("nous-oauth"), true);
+  assert.equal(providerHasFreeModels("nso"), true);
+  assert.equal(isFreeModel("nous-oauth", { id: "stealth/space-bunny-alpha", isFree: true }), true);
+  assert.equal(isFreeModel("nso", { id: "example/paid-model:free", isFree: false }), false);
+  assert.equal(isFreeModel("nous-oauth", { id: "example/unknown-model:free" }), false);
+  assert.equal(isFreeModel("nous", { id: "example/unknown-model:free" }), true);
 });

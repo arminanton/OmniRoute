@@ -129,6 +129,7 @@ import {
 } from "./discovery/codex";
 import { maybeHandleConolModelDiscovery } from "./conolDiscovery";
 import { buildNoAuthModelsResponse, filterModelsForRoute } from "./modelRouteProjection";
+import { discoverNousOAuthModels } from "./nousOAuthDiscovery";
 
 /**
  * GET /api/providers/[id]/models - Get models list from provider
@@ -243,6 +244,32 @@ export async function GET(
     };
 
     const connectionId = typeof connection.id === "string" ? connection.id : id;
+
+    if (provider === "nous-oauth") {
+      // Nous's public /models advertises current prices. Never send a bearer to
+      // catalog discovery or overlay old static/synced/custom Free labels: a
+      // stale suffix/name must not make a priced model look free.
+      const catalog = await discoverNousOAuthModels(
+        (connection.providerSpecificData as Record<string, unknown> | undefined)
+          ?.nousInferenceBaseUrl,
+        { refresh }
+      );
+      const chatModels = filterModelsForRoute(provider, catalog.models, chatOnly);
+      const visibleModels = excludeHidden
+        ? chatModels.filter((model) => !getModelIsHidden(provider, model.id))
+        : chatModels;
+      return NextResponse.json(
+        {
+          provider,
+          connectionId,
+          models: visibleModels,
+          source: catalog.source,
+          ...(catalog.warning ? { warning: catalog.warning } : {}),
+        },
+        { status: catalog.source === "error" ? 503 : 200 }
+      );
+    }
+
     const apiKey = typeof connection.apiKey === "string" ? connection.apiKey : "";
     const accessToken = typeof connection.accessToken === "string" ? connection.accessToken : "";
     const autoFetchModels = isAutoFetchModelsEnabled(connection.providerSpecificData);
@@ -615,9 +642,7 @@ export async function GET(
       try {
         const discovery = await discoverMaxaiModels({
           providerSpecificData: connection.providerSpecificData as
-            | Record<string, unknown>
-            | null
-            | undefined,
+            Record<string, unknown> | null | undefined,
           accessToken: apiKey || accessToken,
           fetchImpl: (url, init) =>
             safeOutboundFetch(url, {

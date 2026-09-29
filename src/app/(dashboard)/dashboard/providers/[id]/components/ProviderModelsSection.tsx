@@ -11,7 +11,7 @@
  * Cycle-safe: no import from ProviderDetailPageClient.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/shared/components";
 import { matchesModelCatalogQuery } from "@/shared/utils/modelCatalogSearch";
 import { isFreeModel, sortModelsFreeFirst } from "@/shared/utils/freeModels";
@@ -178,6 +178,54 @@ export default function ProviderModelsSection({
 }: ProviderModelsSectionProps) {
   const [freeFilter, setFreeFilter] = useState<"all" | "free" | "paid">("all");
   const [sortFreeFirst, setSortFreeFirst] = useState(false);
+  const isNousOAuth = providerId === "nous-oauth" || providerId === "nso";
+  const liveNousConnectionId = isNousOAuth
+    ? (selectedConnection?.id ?? connections.find((connection) => connection?.id)?.id ?? "")
+    : "";
+  const [liveNousCatalog, setLiveNousCatalog] = useState<{
+    connectionId: string;
+    models: any[];
+    warning: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!isNousOAuth || !liveNousConnectionId) return;
+    const abort = new AbortController();
+    let active = true;
+    // Provider detail must read the live public /models prices. Old synced
+    // model names and suffixes cannot justify a current Free badge.
+    void fetch(`/api/providers/${encodeURIComponent(liveNousConnectionId)}/models`, {
+      cache: "no-store",
+      signal: abort.signal,
+    })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok || !Array.isArray(payload.models) || payload.source === "error") {
+          throw new Error("Nous public model prices unavailable");
+        }
+        if (active)
+          setLiveNousCatalog({
+            connectionId: liveNousConnectionId,
+            models: payload.models,
+            warning: null,
+          });
+      })
+      .catch(() => {
+        if (active)
+          setLiveNousCatalog({
+            connectionId: liveNousConnectionId,
+            models: [],
+            warning: "Nous model prices unavailable — Free labels hidden. Reload to retry.",
+          });
+      });
+    return () => {
+      active = false;
+      abort.abort();
+    };
+  }, [isNousOAuth, liveNousConnectionId]);
+
+  const visibleNousCatalog =
+    liveNousCatalog?.connectionId === liveNousConnectionId ? liveNousCatalog : null;
   const canConfigureAutoFetchModels = connections.some(
     (connection) => connection.isActive !== false && typeof connection.id === "string"
   );
@@ -344,11 +392,21 @@ export default function ProviderModelsSection({
             <span className="text-xs text-text-muted">{t("addConnectionToImport")}</span>
           )}
         </div>
+        {isNousOAuth && (
+          <p role="status" className="mb-3 text-xs text-text-muted">
+            {!liveNousConnectionId
+              ? "Connect Nous OAuth to load current model prices."
+              : (visibleNousCatalog?.warning ??
+                (visibleNousCatalog
+                  ? "Free labels were checked on page load (server cache up to five minutes). Reload to recheck prices."
+                  : "Checking Nous public model prices…"))}
+          </p>
+        )}
         <PassthroughModelsSection
           providerAlias={providerAlias}
           modelAliases={modelAliases}
-          catalogModels={models}
-          availableModels={syncedAvailableModels}
+          catalogModels={isNousOAuth ? [] : models}
+          availableModels={isNousOAuth ? (visibleNousCatalog?.models ?? []) : syncedAvailableModels}
           customModels={modelMeta.customModels}
           description={passthroughDescription}
           inputLabel={passthroughInputLabel}
@@ -375,7 +433,7 @@ export default function ProviderModelsSection({
           onModelTestStatusChange={onModelTestStatusChange}
           testingModelId={testingModelId}
           providerId={providerId}
-          connectionId={selectedConnection?.id ?? ""}
+          connectionId={isNousOAuth ? liveNousConnectionId : (selectedConnection?.id ?? "")}
           autoHideFailed={autoHideFailed}
           onAutoHideFailedChange={setAutoHideFailed}
         />

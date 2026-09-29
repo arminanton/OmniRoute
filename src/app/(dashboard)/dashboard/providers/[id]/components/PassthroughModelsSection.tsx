@@ -254,11 +254,15 @@ export default function PassthroughModelsSection({
         alias: aliasByModelId.get(model.id) || defaultAlias,
         displayName: model.name || model.id,
         source,
+        // Nous OAuth obtains Free evidence from live /models pricing only.
+        // Do not infer a current zero price from a suffix or a model name.
         isFree:
-          Boolean((model as any).free) ||
-          model.id.endsWith(":free") ||
-          /\bgr[aá]tis\b|\bfree\b/i.test(model.name || "") ||
-          isFreeModel(providerId, { id: model.id, isFree: (model as any).isFree }),
+          providerId === "nous-oauth" || providerId === "nso"
+            ? (model as any).free === true && (model as any).isFree === true
+            : Boolean((model as any).free) ||
+              model.id.endsWith(":free") ||
+              /\bgr[aá]tis\b|\bfree\b/i.test(model.name || "") ||
+              isFreeModel(providerId, { id: model.id, isFree: (model as any).isFree }),
         isHidden: isModelHidden(model.id),
       });
       seenModelIds.add(model.id);
@@ -293,10 +297,12 @@ export default function PassthroughModelsSection({
         displayName: displayAlias,
         source: customModel ? customModel.source || "custom" : "alias",
         isFree:
-          modelId.endsWith(":free") ||
-          Boolean((customModel as any)?.free) ||
-          /\bgr[aá]tis\b|\bfree\b/i.test(customModel?.name || alias || "") ||
-          isFreeModel(providerId, { id: modelId, isFree: (customModel as any)?.isFree }),
+          providerId === "nous-oauth" || providerId === "nso"
+            ? false // An alias without a current /models row has no price proof.
+            : modelId.endsWith(":free") ||
+              Boolean((customModel as any)?.free) ||
+              /\bgr[aá]tis\b|\bfree\b/i.test(customModel?.name || alias || "") ||
+              isFreeModel(providerId, { id: modelId, isFree: (customModel as any)?.isFree }),
         isHidden: isModelHidden(modelId),
       });
       seenModelIds.add(modelId);

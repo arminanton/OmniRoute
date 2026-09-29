@@ -37,15 +37,20 @@ export const OAUTH_PROVIDERS = {
   "nous-oauth": {
     id: "nous-oauth",
     serviceKinds: ["llm"],
-    alias: "nous-oauth",
+    alias: "nso",
     name: "Nous OAuth (experimental)",
     icon: "terminal",
     color: "#6A4FCB",
     textIcon: "NO",
     website: "https://portal.nousresearch.com",
+    hasFree: true,
+    freeNote:
+      "Free badges use Nous /v1/models prices checked when the provider page loads (server cache up to five minutes). Prices and access can change; no quota guarantee.",
+    passthroughModels: true,
     subscriptionRisk: true,
     riskNoticeVariant: "oauth",
-    authHint: "EXPERIMENTAL Hermes-compatible Nous device sign-in. This uses the Hermes CLI public client; it is not official third-party SSO. Sign in through Nous Portal in your browser. No token import is supported.",
+    authHint:
+      "EXPERIMENTAL Hermes-compatible Nous device sign-in. This uses the Hermes CLI public client; it is not official third-party SSO. Sign in through Nous Portal in your browser. No token import is supported.",
   },
   openference: {
     id: "openference",
@@ -155,7 +160,14 @@ export const OAUTH_PROVIDERS = {
     subscriptionRisk: true,
     riskNoticeVariant: "oauth",
   },
-  github: { id: "github", serviceKinds: ["llm"], alias: "gh", name: "GitHub Copilot", icon: "code", color: "#333333" },
+  github: {
+    id: "github",
+    serviceKinds: ["llm"],
+    alias: "gh",
+    name: "GitHub Copilot",
+    icon: "code",
+    color: "#333333",
+  },
   "gitlab-duo": {
     id: "gitlab-duo",
     serviceKinds: ["llm"],
