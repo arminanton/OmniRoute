@@ -11,9 +11,16 @@
 // importers (open-sse/index.ts, executors, src/sse/services/tokenRefresh.ts,
 // tests) keep a stable surface.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import { hasBlockingProxyAssignment, hasBlockingProxyAssignmentForProvider } from "@/lib/db/proxies/guards";
+import {
+  NOUS_OAUTH_INFERENCE_PSD_KEY,
+  validateNousOAuthInferenceBaseUrl,
+  isNousOAuthDirectOrConnectProxy,
+} from "../config/nousOAuth.ts";
 import { PROVIDERS } from "../config/constants.ts";
 import { getCodexAuthIdentityHeaders } from "../config/codexClient.ts";
-import { runWithProxyContext } from "../utils/proxyFetch.ts";
+import { runWithProxyContext, resolveProxyForRequest, hasAmbientProxyContext, getAmbientProxyType } from "../utils/proxyFetch.ts";
 import { serializeRefresh } from "./refreshSerializer.ts";
 import {
   extractOAuthErrorCode,
@@ -113,6 +120,7 @@ export const REFRESH_LEAD_MS: Record<string, number> = {
   "gitlab-duo": 5 * 60 * 1000, // GitLab token family revocation on misuse
   kiro: 5 * 60 * 1000, // AWS SSO OIDC issues one-time-use refresh tokens
   "kimi-coding": 5 * 60 * 1000, // Moonshot rotates per-refresh
+  "nous-oauth": 5 * 60 * 1000, // single-use Portal refresh grant
   // Google OAuth refresh_tokens are permanent (non-rotating) — longer lead
   // is safe and reduces unnecessary upstream chatter.
   antigravity: 15 * 60 * 1000,
@@ -221,6 +229,232 @@ export function getActiveOnPersist(): RefreshPersistFn | undefined {
 // ./tokenRefresh/shared.ts (imported above, re-exported below) — used both by
 // the generic orchestrator below and by every per-provider refresh module.
 
+const NOUS_TOKEN_URL = "https://portal.nousresearch.com/api/oauth/token";
+
+/** The refresh lease must not wait on an unbounded 429/WAF body stream. */
+async function readBoundedNousRefreshBody(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error("Nous refresh response body timed out")), 5000);
+  });
+  const decoder = new TextDecoder();
+  let result = "";
+  let count = 0;
+  try {
+    while (true) {
+      const chunk = await Promise.race([reader.read(), timeout]);
+      if (chunk.done) break;
+      count += chunk.value.byteLength;
+      if (count > 16_384) throw new Error("Nous refresh response body exceeded 16 KiB");
+      result += decoder.decode(chunk.value, { stream: true });
+    }
+    return result + decoder.decode();
+  } finally {
+    clearTimeout(timer);
+    // Never await cancel: a non-compliant upstream stream can itself hang.
+    void reader.cancel().catch(() => {});
+  }
+}
+
+/** Self-persisted provider: generic onPersist callbacks MUST NOT overwrite its DB CAS. */
+export function isSelfPersistedOAuthProvider(provider: string): boolean {
+  return provider === "nous-oauth";
+}
+
+/**
+ * Direct Hermes-compatible Nous refresh. The portal consumes each refresh token
+ * once. Unlike generic OAuth, it takes the token ONLY in x-nous-refresh-token,
+ * never the form body. This path owns the DB persist: caller onPersist would
+ * race and can overwrite a newer rotation or lose inference binding.
+ *
+ * A connectionId is mandatory. Without a shared DB row/lease/CAS, making a
+ * network request is unsafe (another process could spend the same token).
+ */
+export async function refreshNousOAuthToken(credentials, log, proxyConfig: unknown = null) {
+  const id = credentials?.connectionId;
+  if (!id || typeof id !== "string" || !credentials?.refreshToken) {
+    log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh requires a persisted connection ID and refresh token");
+    return null;
+  }
+  const ambientProxyType = getAmbientProxyType()?.toLowerCase();
+  if (!isNousOAuthDirectOrConnectProxy(proxyConfig) ||
+      (ambientProxyType && ambientProxyType !== "http" && ambientProxyType !== "https")) {
+    log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh requires direct or approved HTTP(S) CONNECT proxy; SOCKS egress is not validated");
+    return null;
+  }
+  if (hasBlockingProxyAssignmentForProvider("nous-oauth") ||
+      hasBlockingProxyAssignment(id, "nous-oauth")) {
+    log?.warn?.("TOKEN_REFRESH", "Nous OAuth assigned proxy unavailable; refresh blocked");
+    return null;
+  }
+  const {
+    getProviderConnectionById,
+    acquireNousOAuthRefreshLease,
+    commitNousOAuthRefresh,
+    quarantineNousOAuthRefreshLease,
+    releaseNousOAuthRefreshLease,
+  } = await import("@/lib/db/providers");
+  const load = async () => {
+    const row = await getProviderConnectionById(id);
+    if (row?.provider !== "nous-oauth" || row?.authType !== "oauth" ||
+        typeof row.accessToken !== "string" || !row.accessToken ||
+        typeof row.refreshToken !== "string" || !row.refreshToken) return null;
+    const inferenceBaseUrl = validateNousOAuthInferenceBaseUrl(
+      row.providerSpecificData?.[NOUS_OAUTH_INFERENCE_PSD_KEY]
+    );
+    return {
+      accessToken: row.accessToken,
+      refreshToken: row.refreshToken,
+      expiresAt: row.expiresAt,
+      providerSpecificData: {
+        ...row.providerSpecificData,
+        [NOUS_OAUTH_INFERENCE_PSD_KEY]: inferenceBaseUrl,
+      },
+    };
+  };
+  try {
+    // IMPORTANT for a failed bearer: the 401 may have been sent with stale
+    // in-memory credentials. Try the newest DB bearer before POSTing a grant.
+    const before = await load();
+    if (!before) return null;
+    const usable = before.expiresAt && new Date(before.expiresAt).getTime() > Date.now() + 30_000;
+    if (usable && (
+      (credentials.accessToken && credentials.accessToken !== before.accessToken) ||
+      credentials.refreshToken !== before.refreshToken
+    )) return before;
+
+    const owner = randomUUID();
+    const lease = acquireNousOAuthRefreshLease(id, before.refreshToken, owner);
+    if (lease.status !== "acquired") {
+      // A concurrent process may have just committed while we waited for the DB.
+      // Never POST when the lease is busy or the version has changed.
+      const newest = await load();
+      if (newest && newest.accessToken !== before.accessToken &&
+          new Date(newest.expiresAt).getTime() > Date.now() + 30_000) return newest;
+      return null;
+    }
+    let entered = false;
+    let sent = false;
+    let safeToRelease = false;
+    const performGrant = async () => {
+      entered = true; // proxy family precheck has finished before this callback
+      try {
+      // The lease serializes the network request across processes. The HTTP
+      // timeout is far shorter than its 90s expiry, so normal requests cannot
+      // outlive ownership and a crashed process can recover after expiry.
+      // Strict egress: runWithProxyContext (NOT its OrDirect variant) ignores
+      // control-plane direct-fallback flags. NO_PROXY can still override a
+      // pinned context, so refuse before sending a single-use secret if it did.
+      const route = resolveProxyForRequest(NOUS_TOKEN_URL);
+        // Env HTTPS_PROXY/ALL_PROXY may silently select SOCKS when DB has no
+        // assignment. Validate effective transport BEFORE quarantining/POSTing.
+        if (!isNousOAuthDirectOrConnectProxy(route.proxyUrl)) {
+          throw new Error("Nous OAuth refresh requires an approved HTTP(S) CONNECT proxy");
+        }
+        const needsProxy = Boolean(proxyConfig || hasAmbientProxyContext() ||
+          process.env.HTTPS_PROXY || process.env.https_proxy || process.env.ALL_PROXY || process.env.all_proxy);
+        if (needsProxy && (route.source === "direct" || !route.proxyUrl)) {
+          throw new Error("Assigned Nous OAuth refresh proxy cannot be used");
+        }
+      // Persist uncertain-grant quarantine immediately BEFORE the POST, but
+      // AFTER proxy family/egress prechecks. An upstream timeout/crash cannot
+      // permit another process to spend this token; an unentered callback has
+      // provably sent nothing and releases the ordinary lease below.
+      if (!quarantineNousOAuthRefreshLease(id, lease.leaseOwner)) return null;
+      sent = true;
+      const response = await fetch(NOUS_TOKEN_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+            "x-nous-refresh-token": before.refreshToken,
+          },
+          body: new URLSearchParams({ grant_type: "refresh_token", client_id: "hermes-cli" }),
+          signal: AbortSignal.timeout(20_000),
+          redirect: "manual",
+        });
+      if (response.redirected || (response.url && new URL(response.url).origin !== "https://portal.nousresearch.com") ||
+          (response.status >= 300 && response.status < 400)) {
+        log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh refused a redirected portal response");
+        return null;
+      }
+      if (!response.ok) {
+        const raw = await readBoundedNousRefreshBody(response);
+        // Even a complete 429/5xx/invalid_grant can arrive after the portal
+        // consumed a single-use token. Do not clear quarantine on an error.
+        const code = extractOAuthErrorCode(raw);
+        if (code === "invalid_grant" && response.status < 500 &&
+            !response.headers.get("x-vercel-mitigated")) {
+          // A stale token that was already rotated is NOT terminal. Re-read
+          // after the failure before the health-check can deactivate this row.
+          const current = await load();
+          if (!current) return null;
+          if (current.refreshToken !== before.refreshToken) return current;
+          return { error: "unrecoverable_refresh_error", code: "invalid_grant" };
+        }
+        // 429, WAF/403, 5xx, malformed responses: transient, never deactivate.
+        log?.warn?.("TOKEN_REFRESH", `Nous OAuth refresh transient HTTP ${response.status}`);
+        return null;
+      }
+      const body = JSON.parse(await readBoundedNousRefreshBody(response));
+      if (typeof body?.access_token !== "string" || !body.access_token ||
+          typeof body?.refresh_token !== "string" || !body.refresh_token ||
+          body.refresh_token === before.refreshToken ||
+          !Number.isFinite(Number(body.expires_in)) || Number(body.expires_in) <= 0) {
+        log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh returned incomplete rotating credentials");
+        return null;
+      }
+      // Invalid network metadata cannot drop a successfully rotated credential.
+      // Keep the previous known-good, credential-bound URL if absent/unsafe.
+      let inferenceBaseUrl = before.providerSpecificData[NOUS_OAUTH_INFERENCE_PSD_KEY];
+      if (body.inference_base_url != null && body.inference_base_url !== "") {
+        try {
+          inferenceBaseUrl = validateNousOAuthInferenceBaseUrl(body.inference_base_url);
+        } catch {
+          log?.warn?.("TOKEN_REFRESH", "Nous refresh returned an untrusted inference URL; preserving existing binding");
+        }
+      }
+      const committed = commitNousOAuthRefresh(id, lease.leaseOwner, lease.expectedCipher, {
+        accessToken: body.access_token,
+        refreshToken: body.refresh_token,
+        expiresIn: Number(body.expires_in),
+        inferenceBaseUrl,
+      });
+      if (!committed) {
+        // Another writer won the CAS. Never expose an unpersisted bearer.
+        const current = await load();
+        safeToRelease = Boolean(current && current.refreshToken !== before.refreshToken);
+        return safeToRelease ? current : null;
+      }
+      safeToRelease = true; // durable pair committed; release is now safe
+      // The encrypted access/refresh pair has been committed together. Read
+      // the row back for authoritative expiry and all stored routing metadata.
+      return await load();
+      } finally {
+        // This finalizer belongs to the ACTUAL network work, not to the outer
+        // proxy-health race. Even if the wrapper returns early on a failed
+        // reachability probe, an orphaned request can finish and commit here.
+        // If the response was ambiguous, leave durable quarantine indefinitely;
+        // re-auth (new refresh token) reconciles it.
+        if (!sent || safeToRelease) releaseNousOAuthRefreshLease(id, lease.leaseOwner);
+      }
+    };
+    try {
+      return await runWithProxyContext(proxyConfig, performGrant, { skipUnreachableProbe: true });
+    } finally {
+      // With the optimistic probe DISABLED, precheck failure means the grant
+      // callback never ran; no secret crossed the network, so release safely.
+      if (!entered) releaseNousOAuthRefreshLease(id, lease.leaseOwner);
+    }
+  } catch {
+    // Do not log exception text: proxy/HTTP errors may echo a secret header.
+    log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh failed; credentials were not changed");
+    return null;
+  }
+}
+
 /**
  * Refresh OAuth access token using refresh token
  */
@@ -231,6 +465,9 @@ export async function refreshAccessToken(
   log,
   proxyConfig: unknown = null
 ) {
+  if (provider === "nous-oauth") {
+    return refreshNousOAuthToken({ ...credentials, refreshToken }, log, proxyConfig);
+  }
   const config = PROVIDERS[provider];
 
   const refreshEndpoint = config?.refreshUrl || config?.tokenUrl;
@@ -403,6 +640,9 @@ async function _getAccessTokenInternal(provider, credentials, log, proxyConfig: 
     case "openference":
       return await refreshOpenferenceToken(credentials.refreshToken, log, proxyConfig);
 
+    case "nous-oauth":
+      return await refreshNousOAuthToken(credentials, log, proxyConfig);
+
     case "qoder":
       return await refreshQoderToken(credentials.refreshToken, log, proxyConfig);
 
@@ -458,6 +698,7 @@ export function supportsTokenRefresh(provider) {
     "claude",
     "codex",
     "openference",
+    "nous-oauth",
     "qoder",
     "github",
     "kiro",
@@ -512,6 +753,13 @@ export async function getAccessToken(
   if (!credentials || !credentials.refreshToken || typeof credentials.refreshToken !== "string") {
     log?.warn?.("TOKEN_REFRESH", `No valid refresh token available for provider: ${provider}`);
     return null;
+  }
+
+  // Nous's single-use grant has its own shared SQLite lease and atomic CAS
+  // persist. Bypassing onPersist is deliberate: generic callbacks are blind
+  // overwrites and cannot safely carry credential-bound inference metadata.
+  if (provider === "nous-oauth") {
+    return refreshNousOAuthToken(credentials, log, proxyConfig);
   }
 
   // If the caller did not pass onPersist explicitly, fall back to the active

@@ -34,6 +34,19 @@ export const OAUTH_PROVIDERS = {
     authHint:
       "Sign in with xAI to use api.x.ai models such as Grok 4.5. This is separate from Grok Build JWT sessions, which use cli-chat-proxy.grok.com and grok-build model aliases.",
   },
+  "nous-oauth": {
+    id: "nous-oauth",
+    serviceKinds: ["llm"],
+    alias: "nous-oauth",
+    name: "Nous OAuth (experimental)",
+    icon: "terminal",
+    color: "#6A4FCB",
+    textIcon: "NO",
+    website: "https://portal.nousresearch.com",
+    subscriptionRisk: true,
+    riskNoticeVariant: "oauth",
+    authHint: "EXPERIMENTAL Hermes-compatible Nous device sign-in. This uses the Hermes CLI public client; it is not official third-party SSO. Sign in through Nous Portal in your browser. No token import is supported.",
+  },
   openference: {
     id: "openference",
     serviceKinds: ["llm"],

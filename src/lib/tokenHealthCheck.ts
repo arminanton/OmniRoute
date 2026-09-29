@@ -11,7 +11,12 @@
  * updates the DB, and logs the result.
  */
 
-import { getProviderConnections, updateProviderConnection } from "@/lib/db/providers";
+import {
+  getProviderConnections,
+  updateProviderConnection,
+  getProviderConnectionById,
+  updateNousOAuthHealthIfRefreshUnchanged,
+} from "@/lib/db/providers";
 import { getCachedProviderConnectionById } from "@/lib/db/readCache";
 import { getSettings, resolveProxyForConnection } from "@/lib/db/settings";
 import {
@@ -20,6 +25,7 @@ import {
   supportsTokenRefresh,
   isUnrecoverableRefreshError,
   refreshCopilotToken,
+  isSelfPersistedOAuthProvider,
 } from "@omniroute/open-sse/services/tokenRefresh.ts";
 import { pickMaskedDisplayValue } from "@/shared/utils/maskEmail";
 import { isAutomatedTestProcess } from "@/shared/utils/testProcess";
@@ -542,8 +548,21 @@ export async function sweep(): Promise<number> {
 export async function checkConnection(conn) {
   if (!conn?.id) return;
 
-  const latestConnection = (await getCachedProviderConnectionById(conn.id)) || conn;
-  conn = latestConnection;
+  if (isSelfPersistedOAuthProvider(conn.provider)) {
+    // Other processes can rotate Nous credentials without invalidating this
+    // process's 5-second read cache. An old sweep snapshot must not enter any
+    // generic status update or trigger an unnecessary new single-use grant.
+    const current = await getProviderConnectionById(conn.id);
+    if (!current || current.provider !== conn.provider ||
+        current.refreshToken !== conn.refreshToken ||
+        current.accessToken !== conn.accessToken ||
+        current.testStatus !== conn.testStatus ||
+        current.isActive !== conn.isActive) return;
+    conn = current;
+  } else {
+    const latestConnection = (await getCachedProviderConnectionById(conn.id)) || conn;
+    conn = latestConnection;
+  }
 
   // Per-provider opt-out of proactive refresh (e.g. Codex/OpenAI cascade
   // providers) — their token stays on the reactive, serialized 401 path while
@@ -685,6 +704,11 @@ export async function checkConnection(conn) {
   }
 
   if (!conn.refreshToken || typeof conn.refreshToken !== "string") {
+    // A Nous re-authentication can commit a new token in another process after
+    // this sweep began. Never let this generic branch blindly expire that row.
+    // The dedicated request-time path will ask the user to re-authenticate if
+    // the authoritative row really has no refresh token.
+    if (isSelfPersistedOAuthProvider(conn.provider)) return;
     if (isGitHubAccessTokenOnlyConnection(conn)) {
       const nowMs = Date.now();
       const now = new Date(nowMs).toISOString();
@@ -884,6 +908,7 @@ export async function checkConnection(conn) {
     "gitlab-duo",
     "claude",
     "openference",
+    "nous-oauth",
   ]);
   const isRotatingProvider = ROTATING_REFRESH_PROVIDERS.has(
     String(conn.provider || "").toLowerCase()
@@ -1003,6 +1028,12 @@ export async function checkConnection(conn) {
       }
     );
   } catch (err) {
+    // Dedicated Nous refresh owns every metadata/secret write through SQLite
+    // CAS. A generic catch write would act on an untrusted old sweep snapshot.
+    if (isSelfPersistedOAuthProvider(conn.provider)) {
+      logWarn(`${LOG_PREFIX} ~ Nous OAuth refresh unavailable; no generic status update`);
+      return;
+    }
     // If onPersist already wrote a successful result, do not overwrite it.
     if (persistedResult) {
       logWarn(
@@ -1067,6 +1098,27 @@ export async function checkConnection(conn) {
   }
 
   const now = new Date().toISOString();
+
+  if (isSelfPersistedOAuthProvider(conn.provider)) {
+    // Dedicated getAccessToken has already committed the rotating pair and
+    // inference binding through SQLite CAS. Its onPersist callback is bypassed
+    // by design. Never enter generic fallback updateProviderConnection: that
+    // blind write can revert a newer 401 refresh or replace guest routing.
+    if (result?.accessToken && result?.refreshToken) {
+      const latest = await getProviderConnectionById(conn.id);
+      if (latest?.accessToken === result.accessToken &&
+          latest?.refreshToken === result.refreshToken) {
+        updateNousOAuthHealthIfRefreshUnchanged(conn.id, result.refreshToken, "success");
+      }
+    } else if (isUnrecoverableRefreshError(result)) {
+      // Terminal only when the SAME failed refresh token is still persisted.
+      // The conditional DB UPDATE protects the final read/write race.
+      updateNousOAuthHealthIfRefreshUnchanged(conn.id, attemptedRefreshToken, "invalid_grant");
+    } else {
+      logWarn(`${LOG_PREFIX} ~ Nous OAuth refresh unavailable/uncertain; retry only after reconciliation or re-authentication`);
+    }
+    return;
+  }
 
   // ─── Handle unrecoverable errors (e.g. refresh_token_reused) ───────────
   // OpenAI Codex uses rotating one-time-use refresh tokens.

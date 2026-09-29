@@ -170,10 +170,15 @@ async function updateLocalTokens(cloudProviders: unknown) {
 
   for (const localProviderRaw of localProviders as unknown[]) {
     const localProvider = asRecord(localProviderRaw);
+    // Nous OAuth refresh tokens are single-use and local-only. Cloud sync
+    // cannot import credentials OR metadata into this row, even with the
+    // global credential-sync opt-in. Re-authenticate after restoring a DB.
+    if (localProvider.provider === "nous-oauth") continue;
     const localProviderId = toStringOrNull(localProvider.id);
     if (!localProviderId) continue;
 
     const cloudProvider = asRecord(cloudProvidersMap[localProviderId]);
+    if (cloudProvider.provider === "nous-oauth") continue;
     if (Object.keys(cloudProvider).length === 0) continue;
 
     const cloudUpdatedAt = toDateMs(cloudProvider.updatedAt);

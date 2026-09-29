@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { timingSafeEqual } from "crypto";
+import { createHash, randomUUID, timingSafeEqual } from "crypto";
 import {
   getProvider,
   generateAuthData,
@@ -15,6 +15,12 @@ import {
   findExistingOAuthConnectionMatch,
 } from "@/lib/oauth/connectionPersistence";
 import { createDeviceFlowTicket, getDeviceFlowTicketStatus } from "@/lib/oauth/deviceFlowTickets";
+import { getProviderConnectionById } from "@/lib/db/providers";
+import { isNousOAuthDirectOrConnectProxy } from "@omniroute/open-sse/config/nousOAuth.ts";
+import {
+  hasBlockingProxyAssignment,
+  hasBlockingProxyAssignmentForProvider,
+} from "@/lib/db/proxies/guards";
 import {
   createProviderConnection,
   updateProviderConnection,
@@ -31,7 +37,13 @@ import {
 } from "@/lib/oauth/antigravityProjectGate";
 import { syncToCloud } from "@/lib/cloudSync";
 import { startLocalServer } from "@/lib/oauth/utils/server";
-import { runWithProxyContextOrDirect } from "@omniroute/open-sse/utils/proxyFetch.ts";
+import {
+  runWithProxyContext,
+  runWithProxyContextOrDirect,
+  resolveProxyForRequest,
+  hasAmbientProxyContext,
+  getAmbientProxyType,
+} from "@omniroute/open-sse/utils/proxyFetch.ts";
 import {
   jsonObjectSchema,
   oauthDeviceCompleteSchema,
@@ -40,7 +52,7 @@ import {
   oauthPollSchema,
 } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { isAuthRequired, isAuthenticated, isDashboardSessionAuthenticated } from "@/shared/utils/apiAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { GITLAB_DUO_OAUTH_SETUP_MESSAGE } from "@/shared/constants/gitlabDuoSetupMessage";
 import { keychainImportOnlyGuard } from "./keychainImportOnly";
@@ -69,6 +81,7 @@ const NO_PKCE_DEVICE_CODE_PROVIDERS = new Set([
   "codebuddy-cn",
   "grok-cli",
   "ghe-copilot",
+  "nous-oauth",
 ]);
 
 /**
@@ -81,6 +94,90 @@ const RETIRED_PKCE_PROVIDERS = new Set(["devin-desktop", "devin-cli"]);
 
 /** Providers that allow direct import of a raw API token (no OAuth exchange). */
 const IMPORT_TOKEN_PROVIDERS = new Set(["devin-desktop", "devin-cli", "grok-cli"]);
+
+// The browser timer is only a convenience. The server must enforce the portal's
+// interval/deadline too: a forged poll or duplicate tab cannot hammer the grant.
+type NousDeviceAttempt = {
+  deviceCode: string;
+  connectionId: string | null;
+  sessionHash: string;
+  deadline: number;
+  nextPollAt: number;
+  intervalMs: number;
+  inFlight: boolean;
+};
+// Short-lived, process-local tickets: restart or another replica requires a
+// new device flow. Limit both global and per-session state before upstream POST.
+const nousDeviceAttempts = new Map<string, NousDeviceAttempt>();
+const MAX_NOUS_ATTEMPTS = 128;
+const MAX_NOUS_ATTEMPTS_PER_SESSION = 4;
+const NOUS_FLOW_COOKIE = "nous_oauth_flow_session";
+const NOUS_PORTAL_TOKEN_URL = "https://portal.nousresearch.com/api/oauth/token";
+
+function pruneNousDeviceAttempts(): void {
+  for (const [id, attempt] of nousDeviceAttempts) {
+    if (Date.now() >= attempt.deadline) nousDeviceAttempts.delete(id);
+  }
+}
+
+function assertNousDeviceProxyContext(proxy: unknown): void {
+  const ambientProxyType = getAmbientProxyType()?.toLowerCase();
+  if (!isNousOAuthDirectOrConnectProxy(proxy) ||
+      (ambientProxyType && ambientProxyType !== "http" && ambientProxyType !== "https")) {
+    throw new Error("Nous OAuth requires direct egress or an HTTP(S) CONNECT proxy");
+  }
+  const route = resolveProxyForRequest(NOUS_PORTAL_TOKEN_URL);
+  // Env HTTPS_PROXY/ALL_PROXY can select SOCKS without an assigned DB proxy.
+  // Validate the EFFECTIVE egress scheme, not only the explicit config.
+  if (!isNousOAuthDirectOrConnectProxy(route.proxyUrl)) {
+    throw new Error("Nous OAuth requires direct egress or an approved HTTP(S) CONNECT proxy");
+  }
+  const needsProxy = Boolean(proxy || hasAmbientProxyContext() ||
+    process.env.HTTPS_PROXY || process.env.https_proxy || process.env.ALL_PROXY || process.env.all_proxy);
+  if (needsProxy && (route.source === "direct" || !route.proxyUrl)) {
+    throw new Error("Assigned Nous OAuth proxy cannot be used");
+  }
+}
+
+function nousCookie(request: Request, name: string): string | null {
+  const cookie = request.headers.get("cookie") || "";
+  const entry = cookie.split(";").map((part) => part.trim())
+    .find((part) => part.startsWith(`${name}=`));
+  return entry ? entry.slice(name.length + 1) : null;
+}
+
+/** Bind every attempt to the initiating dashboard session, or a fresh HttpOnly
+ * cookie for no-auth local installs. Never trust a bare client-supplied code. */
+async function nousSessionBinding(request: Request): Promise<string | null> {
+  if (await isAuthRequired(request)) {
+    const sessionCookie = nousCookie(request, "auth_token");
+    if (sessionCookie && await isDashboardSessionAuthenticated(request)) {
+      return createHash("sha256").update(sessionCookie).digest("hex");
+    }
+    const bearer = request.headers.get("authorization");
+    if (bearer && await isAuthenticated(request)) {
+      return createHash("sha256").update(bearer).digest("hex");
+    }
+    return null; // no arbitrary header/cookie can act as a dashboard identity
+  }
+  const serverMintedCookie = nousCookie(request, NOUS_FLOW_COOKIE);
+  return serverMintedCookie ? createHash("sha256").update(serverMintedCookie).digest("hex") : null;
+}
+
+async function getNousDeviceAttempt(
+  flowId: unknown, deviceCode: string, connectionId: unknown, request: Request
+): Promise<NousDeviceAttempt | null> {
+  if (typeof flowId !== "string") return null;
+  const attempt = nousDeviceAttempts.get(flowId);
+  if (!attempt || !safeEqual(attempt.deviceCode, deviceCode) ||
+      !safeEqual(attempt.connectionId, typeof connectionId === "string" ? connectionId : null) ||
+      !safeEqual(attempt.sessionHash, await nousSessionBinding(request))) return null;
+  if (Date.now() >= attempt.deadline) {
+    nousDeviceAttempts.delete(flowId);
+    return null;
+  }
+  return attempt;
+}
 
 /**
  * Constant-time string comparison to prevent timing-oracle attacks (CWE-208).
@@ -198,6 +295,29 @@ export async function GET(
       }
 
       const authData = generateAuthData(provider, null);
+      if (provider === "nous-oauth") {
+        const targetId = searchParams.get("connectionId");
+        if (hasBlockingProxyAssignmentForProvider(provider) ||
+            (targetId && hasBlockingProxyAssignment(targetId, provider))) {
+          return NextResponse.json({ error: "Assigned Nous OAuth proxy unavailable" }, { status: 503 });
+        }
+        pruneNousDeviceAttempts();
+        const session = await nousSessionBinding(request);
+        const sessionCount = [...nousDeviceAttempts.values()]
+          .filter((attempt) => session && attempt.sessionHash === session).length;
+        if (nousDeviceAttempts.size >= MAX_NOUS_ATTEMPTS ||
+            sessionCount >= MAX_NOUS_ATTEMPTS_PER_SESSION) {
+          return NextResponse.json({ error: "Too many active Nous device flows" }, { status: 429 });
+        }
+      }
+      if (provider === "nous-oauth" && searchParams.has("connectionId")) {
+        const reauthId = searchParams.get("connectionId");
+        const connection = reauthId && reauthId.length < 128
+          ? await getProviderConnectionById(reauthId) : null;
+        if (connection?.provider !== "nous-oauth" || connection?.authType !== "oauth") {
+          return NextResponse.json({ error: "Invalid Nous OAuth re-auth connection" }, { status: 400 });
+        }
+      }
       const startUrl = searchParams.get("startUrl");
       const region = searchParams.get("region") || "us-east-1";
       const gheUrl = searchParams.get("gheUrl");
@@ -208,9 +328,20 @@ export async function GET(
       // Resolve proxy for this provider (provider-level → global → direct)
       const proxy = await resolveProxyForProvider(provider);
 
+      // Never let an operator-configurable edge relay receive device grants.
+      if (provider === "nous-oauth" && !isNousOAuthDirectOrConnectProxy(proxy)) {
+        return NextResponse.json({
+          error: "Nous OAuth requires direct egress or an approved HTTP(S) CONNECT proxy; SOCKS egress is not validated and edge relays are unsupported",
+        }, { status: 503 });
+      }
       // Request device code (through proxy if configured)
       let deviceData;
-      if (
+      if (provider === "nous-oauth") {
+        deviceData = await runWithProxyContext(proxy, () => {
+          assertNousDeviceProxyContext(proxy);
+          return requestDeviceCode(provider);
+        }, { skipUnreachableProbe: true });
+      } else if (
         NO_PKCE_DEVICE_CODE_PROVIDERS.has(provider) ||
         provider === "kiro" ||
         provider === "amazon-q"
@@ -262,6 +393,36 @@ export async function GET(
         );
       }
 
+      if (provider === "nous-oauth") {
+        const connectionId = searchParams.get("connectionId");
+        const flowId = randomUUID();
+        const intervalMs = Math.max(1000, deviceData.interval * 1000);
+        let sessionHash = await nousSessionBinding(request);
+        const needFlowCookie = !sessionHash;
+        if (needFlowCookie && await isAuthRequired(request)) {
+          return NextResponse.json({ error: "Authenticated Nous OAuth session required" }, { status: 401 });
+        }
+        const sessionSecret = needFlowCookie ? randomUUID() : null;
+        if (sessionSecret) sessionHash = createHash("sha256").update(sessionSecret).digest("hex");
+        nousDeviceAttempts.set(flowId, {
+          deviceCode: deviceData.device_code,
+          connectionId,
+          sessionHash: sessionHash!,
+          deadline: Date.now() + deviceData.expires_in * 1000,
+          nextPollAt: Date.now() + intervalMs,
+          intervalMs,
+          inFlight: false,
+        });
+        const response = NextResponse.json({ ...deviceData, flowId });
+        if (sessionSecret) response.cookies.set(NOUS_FLOW_COOKIE, sessionSecret, {
+          httpOnly: true,
+          secure: new URL(request.url).protocol === "https:",
+          sameSite: "strict",
+          path: "/api/oauth/nous-oauth",
+          maxAge: Math.ceil(deviceData.expires_in),
+        });
+        return response;
+      }
       return NextResponse.json({
         ...deviceData,
         codeVerifier: authData.codeVerifier,
@@ -285,6 +446,12 @@ export async function GET(
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (error) {
+    const failedProvider = (await params).provider;
+    if (failedProvider === "nous-oauth") {
+      // Proxy errors can echo form fields; never log a device code or token.
+      console.error("Nous OAuth device authorization unavailable");
+      return NextResponse.json({ error: "Nous OAuth device authorization unavailable" }, { status: 502 });
+    }
     console.error("OAuth GET error:", error);
     // Surface the SANITIZED upstream reason instead of a generic 500 that hides WHY the flow failed.
     // device-code providers (qwen → qwen.ai, codebuddy-cn → copilot.tencent.com) throw a descriptive
@@ -579,14 +746,66 @@ export async function POST(
     }
 
     if (action === "poll") {
-      const { deviceCode, connectionId, codeVerifier, extraData } = body;
+      const { deviceCode, codeVerifier, extraData } = body;
+      // The generic schema intentionally drops unknown properties, including
+      // connectionId. Nous uses this validated, bound re-auth ID only.
+      const connectionId = provider === "nous-oauth"
+        ? (typeof rawBody?.connectionId === "string" && rawBody.connectionId.length < 128
+            ? rawBody.connectionId : null)
+        : body.connectionId;
+      const nousFlowId = provider === "nous-oauth" && extraData &&
+        typeof extraData === "object" ? (extraData as any).flowId : null;
+      const nousAttempt = provider === "nous-oauth"
+        ? await getNousDeviceAttempt(nousFlowId, deviceCode, connectionId, request)
+        : null;
+      if (provider === "nous-oauth") {
+        if (hasBlockingProxyAssignmentForProvider(provider) ||
+            (connectionId && hasBlockingProxyAssignment(connectionId, provider))) {
+          if (nousAttempt) nousAttempt.inFlight = false;
+          return NextResponse.json({ success: false, pending: true, error: "temporarily_unavailable" });
+        }
+        const origin = request.headers.get("origin");
+        if ((origin && origin !== new URL(request.url).origin) ||
+            request.headers.get("sec-fetch-site") === "cross-site") {
+          return NextResponse.json({ error: "Cross-site OAuth poll denied" }, { status: 403 });
+        }
+        if (!nousAttempt) {
+          return NextResponse.json({ success: false, error: "expired_token", errorDescription: "Nous device authorization expired. Start again." });
+        }
+        if (nousAttempt.inFlight || Date.now() < nousAttempt.nextPollAt) {
+          return NextResponse.json({ success: false, pending: true, error: "authorization_pending" });
+        }
+        // Reserve the next interval BEFORE the await, to prevent parallel grants.
+        nousAttempt.inFlight = true;
+        nousAttempt.nextPollAt = Date.now() + nousAttempt.intervalMs;
+      }
 
       // Resolve proxy for this provider (provider-level → global → direct)
       const proxy = await resolveProxyForProvider(provider);
 
       // Poll for token (through proxy if configured)
+      if (provider === "nous-oauth" && !isNousOAuthDirectOrConnectProxy(proxy)) {
+        if (nousAttempt) nousAttempt.inFlight = false;
+        return NextResponse.json({
+          success: false,
+          error: "unsupported_proxy",
+          errorDescription: "Nous OAuth requires direct egress or an approved HTTP(S) CONNECT proxy; SOCKS egress is not validated and edge relays are unsupported",
+        }, { status: 503 });
+      }
       let result;
-      if (provider === "ghe-copilot") {
+      if (provider === "nous-oauth") {
+        try {
+          result = await runWithProxyContext(proxy, () => {
+            assertNousDeviceProxyContext(proxy);
+            return (pollForToken as any)(provider, deviceCode);
+          }, { skipUnreachableProbe: true });
+        } catch {
+          // A network/proxy/body timeout is transient, not an authorization denial.
+          return NextResponse.json({ success: false, pending: true, error: "temporarily_unavailable" });
+        } finally {
+          if (nousAttempt) nousAttempt.inFlight = false;
+        }
+      } else if (provider === "ghe-copilot") {
         // GHE Copilot needs gheUrl threaded through poll → postExchange
         const gheUrl =
           extraData && typeof extraData === "object" ? (extraData as any).gheUrl : undefined;
@@ -616,6 +835,22 @@ export async function POST(
         );
       }
 
+      if (provider === "nous-oauth" && nousAttempt) {
+        if (result.error === "slow_down") {
+          nousAttempt.intervalMs += 5000; // RFC 8628: slow_down adds five seconds.
+          nousAttempt.nextPollAt = Date.now() + nousAttempt.intervalMs;
+        } else if (result.error === "temporarily_unavailable") {
+          const retryAfterMs = Number.isFinite(Number(result.retryAfter))
+            ? Math.min(60_000, Math.max(0, Number(result.retryAfter) * 1000)) : 0;
+          nousAttempt.nextPollAt = Date.now() + Math.max(nousAttempt.intervalMs, retryAfterMs, 5000);
+          result.pending = true;
+        }
+        if (result.success || (result.error &&
+            !["authorization_pending", "slow_down", "temporarily_unavailable"].includes(result.error))) {
+          nousDeviceAttempts.delete(nousFlowId);
+        }
+      }
+
       if (result.success) {
         // Normalize: if name is missing, use email as fallback display label
         if (!result.tokens.name && (result.tokens.email || result.tokens.displayName)) {
@@ -628,7 +863,19 @@ export async function POST(
           : null;
 
         let connection: any;
-        if (result.tokens.email) {
+        if (provider === "nous-oauth" && connectionId) {
+          const current = await getProviderConnectionById(connectionId);
+          if (current?.provider !== "nous-oauth" || current?.authType !== "oauth") {
+            return NextResponse.json({ error: "Invalid Nous OAuth re-auth connection" }, { status: 400 });
+          }
+          connection = await updateProviderConnection(connectionId, {
+            ...result.tokens,
+            expiresAt,
+            tokenExpiresAt: expiresAt,
+            testStatus: "active",
+            isActive: true,
+          });
+        } else if (result.tokens.email) {
           const existing = await getProviderConnections({ provider });
           // Codex accounts sharing an email require workspaceId/chatgptUserId
           // agreement to be treated as the same account (#7737).
@@ -668,7 +915,8 @@ export async function POST(
 
       // Still pending or error - don't create connection for pending states
       const isPending =
-        result.pending || result.error === "authorization_pending" || result.error === "slow_down";
+        result.pending || result.error === "authorization_pending" || result.error === "slow_down" ||
+        (provider === "nous-oauth" && result.error === "temporarily_unavailable");
 
       return NextResponse.json({
         success: false,
@@ -959,6 +1207,10 @@ export async function POST(
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (error) {
+    if ((await params).provider === "nous-oauth") {
+      console.error("Nous OAuth poll unavailable");
+      return NextResponse.json({ error: "Nous OAuth poll unavailable" }, { status: 502 });
+    }
     console.error("OAuth POST error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

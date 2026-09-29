@@ -62,6 +62,13 @@ function pickDefined(record: JsonRecord, keys: string[]) {
   );
 }
 
+/** Single-use Nous OAuth credentials and inference binding are local-only.
+ * Restore requires a new device sign-in; never export this connection to Cloud.
+ */
+function isLocalOnlyNousOAuthConnection(connection: unknown): boolean {
+  return asRecord(connection).provider === "nous-oauth";
+}
+
 function sanitizeProviderConnectionForSync(connection: unknown): JsonRecord {
   const record = asRecord(connection);
   return pickDefined(record, [
@@ -180,7 +187,15 @@ export function serializeStableJson(value: unknown) {
 }
 
 export function computeConfigSyncVersion(bundle: ConfigSyncBundle) {
-  return createHash("sha256").update(serializeStableJson(bundle)).digest("hex");
+  // Keep local-only OAuth rotations out of the version even if an external
+  // caller supplies an unsanitized bundle instead of buildConfigSyncBundle().
+  const exportable = {
+    ...bundle,
+    providerConnections: bundle.providerConnections.filter(
+      (connection) => !isLocalOnlyNousOAuthConnection(connection)
+    ),
+  };
+  return createHash("sha256").update(serializeStableJson(exportable)).digest("hex");
 }
 
 export async function buildConfigSyncBundle(): Promise<ConfigSyncBundle> {
@@ -205,7 +220,9 @@ export async function buildConfigSyncBundle(): Promise<ConfigSyncBundle> {
   return {
     settings: sanitizeSettingsForSync(settings),
     providerConnections: sortByStringKeys(
-      providerConnections.map((connection) => sanitizeProviderConnectionForSync(connection)),
+      providerConnections
+        .filter((connection) => !isLocalOnlyNousOAuthConnection(connection))
+        .map((connection) => sanitizeProviderConnectionForSync(connection)),
       ["provider", "name", "id"]
     ),
     providerNodes: sortByStringKeys(
@@ -239,7 +256,9 @@ export async function buildConfigSyncEnvelope() {
 
 export function toLegacyCloudSyncPayload(bundle: ConfigSyncBundle) {
   return {
-    providers: bundle.providerConnections,
+    providers: bundle.providerConnections.filter(
+      (connection) => !isLocalOnlyNousOAuthConnection(connection)
+    ),
     providerNodes: bundle.providerNodes,
     modelAliases: bundle.modelAliases,
     combos: bundle.combos,

@@ -3,6 +3,7 @@
  */
 
 import { v4 as uuidv4 } from "uuid";
+import { createHash } from "node:crypto";
 
 import { isCommonChatGptWebRetiredProviderId } from "@/shared/constants/chatgptWebRetirement";
 import { getDbInstance, rowToCamel, cleanNulls } from "./core";
@@ -10,6 +11,7 @@ import { backupDbFile } from "./backup";
 import {
   encryptConnectionFields,
   decryptConnectionFields,
+  encrypt,
   migrateLegacyEncryptedString,
 } from "./encryption";
 import { createLazyRowProxy } from "./providers/lazyConnectionView";
@@ -39,6 +41,10 @@ import { pickCodexConnectionForUser } from "@/lib/oauth/utils/codexConnectionSel
 import { isMicrosoftDesignerWebRetiredProviderId } from "@/shared/constants/designerWebRetirement";
 import { reconcileCodexUsageHistory } from "./providers/usageIdentityReconciliation";
 import { isRuntimeRetiredProviderId } from "@/shared/constants/providerRetirement";
+import {
+  NOUS_OAUTH_INFERENCE_PSD_KEY,
+  validateNousOAuthInferenceBaseUrl,
+} from "@omniroute/open-sse/config/nousOAuth.ts";
 
 /**
  * normalizeProviderSpecificData + the Codex fingerprint-seed invariant: Codex
@@ -370,6 +376,188 @@ export async function getProviderConnectionById(id: string) {
       camelRow
     )
   );
+}
+
+/**
+ * The Nous refresh grant consumes its refresh token once. A SQLite lease
+ * serializes refresh across processes using the same DB, while the write uses
+ * a CAS on the original encrypted value to protect against other row writers.
+ * No secret is stored in the lease table. Network requests must time out well
+ * before the 90s lease expires; a crashed process delays retry, never spends a
+ * second grant in parallel with a live 20s request.
+ */
+const NOUS_REFRESH_LEASE_MS = 90_000;
+const NOUS_UNCERTAIN_GRANT_UNTIL = Number.MAX_SAFE_INTEGER;
+
+function nousRefreshFingerprint(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+type NousRefreshRow = {
+  refresh_token: string | null;
+  provider_specific_data: string | null;
+  provider: string;
+  auth_type: string;
+};
+
+function ensureNousRefreshLeaseTable(db: DbLike): void {
+  db.prepare(`CREATE TABLE IF NOT EXISTS nous_oauth_refresh_leases (
+    connection_id TEXT PRIMARY KEY, owner TEXT NOT NULL, lease_until INTEGER NOT NULL
+  )`).run();
+}
+
+export function acquireNousOAuthRefreshLease(
+  id: string,
+  expectedRefreshToken: string,
+  owner: string
+): { status: "acquired"; expectedCipher: string; leaseOwner: string } | { status: "busy" | "stale" | "missing" } {
+  const db = getDbInstance() as unknown as DbLike;
+  ensureNousRefreshLeaseTable(db);
+  return db.transaction(() => {
+    const row = db.prepare<NousRefreshRow>(
+      "SELECT provider, auth_type, refresh_token, provider_specific_data FROM provider_connections WHERE id = ?"
+    ).get(id);
+    if (!row || row.provider !== "nous-oauth" || row.auth_type !== "oauth" || !row.refresh_token) {
+      return { status: "missing" as const };
+    }
+    const plaintext = decryptConnectionFields({ refreshToken: row.refresh_token }).refreshToken;
+    if (!plaintext) return { status: "missing" as const };
+    if (plaintext !== expectedRefreshToken) return { status: "stale" as const };
+    // Fail closed if the stored routing URL is missing or malformed.
+    const psd = row.provider_specific_data ? JSON.parse(row.provider_specific_data) : {};
+    validateNousOAuthInferenceBaseUrl(psd?.[NOUS_OAUTH_INFERENCE_PSD_KEY]);
+    const fingerprint = nousRefreshFingerprint(plaintext);
+    // A previous grant may have reached the portal without its response being
+    // observed. Its quarantine NEVER expires for the same one-use token. When
+    // an operator re-authenticates (or the tokens were committed before a
+    // crash), a different persisted token clears this obsolete quarantine.
+    const existing = db.prepare<{ owner: string; lease_until: number }>(
+      "SELECT owner, lease_until FROM nous_oauth_refresh_leases WHERE connection_id = ?"
+    ).get(id);
+    if (existing?.lease_until === NOUS_UNCERTAIN_GRANT_UNTIL &&
+        existing.owner.split(":").at(-1) !== fingerprint) {
+      db.prepare("DELETE FROM nous_oauth_refresh_leases WHERE connection_id = ?").run(id);
+    }
+    db.prepare("DELETE FROM nous_oauth_refresh_leases WHERE lease_until < ?").run(Date.now());
+    const leaseOwner = `${owner}:${fingerprint}`; // hash only, never the token
+    const inserted = db.prepare(
+      "INSERT OR IGNORE INTO nous_oauth_refresh_leases (connection_id, owner, lease_until) VALUES (?, ?, ?)"
+    ).run(id, leaseOwner, Date.now() + NOUS_REFRESH_LEASE_MS);
+    return (inserted.changes ?? 0) > 0
+      ? { status: "acquired" as const, expectedCipher: row.refresh_token, leaseOwner }
+      : { status: "busy" as const };
+  })();
+}
+
+/** Durable uncertain-grant quarantine, written BEFORE a single-use POST. */
+export function quarantineNousOAuthRefreshLease(id: string, leaseOwner: string): boolean {
+  const db = getDbInstance() as unknown as DbLike;
+  const result = db.prepare(
+    "UPDATE nous_oauth_refresh_leases SET lease_until = ? WHERE connection_id = ? AND owner = ?"
+  ).run(NOUS_UNCERTAIN_GRANT_UNTIL, id, leaseOwner);
+  return (result.changes ?? 0) === 1;
+}
+
+export function releaseNousOAuthRefreshLease(id: string, owner: string): void {
+  const db = getDbInstance() as unknown as DbLike;
+  db.prepare("DELETE FROM nous_oauth_refresh_leases WHERE connection_id = ? AND owner = ?")
+    .run(id, owner);
+}
+
+/** Metadata-only CAS for the proactive sweep or manual refresh result.
+ * Never rewrites Nous access/refresh tokens or credential-bound inference URL. */
+export function updateNousOAuthHealthIfRefreshUnchanged(
+  id: string,
+  expectedRefreshToken: string,
+  outcome: "success" | "invalid_grant"
+): boolean {
+  const db = getDbInstance() as unknown as DbLike;
+  const changed = db.transaction(() => {
+    const row = db.prepare<{
+      provider: string; auth_type: string; refresh_token: string | null;
+      expires_at: string | null; token_expires_at: string | null;
+    }>(`SELECT provider, auth_type, refresh_token, expires_at, token_expires_at
+        FROM provider_connections WHERE id = ?`).get(id);
+    if (!row || row.provider !== "nous-oauth" || row.auth_type !== "oauth") return false;
+    const actual = decryptConnectionFields({ refreshToken: row.refresh_token }).refreshToken;
+    if (!expectedRefreshToken || actual !== expectedRefreshToken) return false;
+    const now = new Date().toISOString();
+    const expired = Math.max(
+      new Date(row.token_expires_at || 0).getTime() || 0,
+      new Date(row.expires_at || 0).getTime() || 0
+    ) <= Date.now();
+    const result = outcome === "success"
+      ? db.prepare(`UPDATE provider_connections SET last_health_check_at = ?,
+          test_status = 'active', last_error = NULL, last_error_at = NULL,
+          last_error_type = NULL, last_error_source = NULL, error_code = NULL,
+          updated_at = ? WHERE id = ? AND provider = 'nous-oauth' AND refresh_token = ?`)
+          .run(now, now, id, row.refresh_token)
+      : db.prepare(`UPDATE provider_connections SET last_health_check_at = ?,
+          test_status = ?, last_error = 'Nous OAuth refresh token rejected; re-authenticate.',
+          last_error_at = ?, last_error_type = 'invalid_grant',
+          last_error_source = 'oauth', error_code = 'invalid_grant',
+          is_active = CASE WHEN ? THEN 0 ELSE is_active END,
+          updated_at = ? WHERE id = ? AND provider = 'nous-oauth' AND refresh_token = ?`)
+          .run(now, expired ? "expired" : "active", now, expired ? 1 : 0, now, id, row.refresh_token);
+    return (result.changes ?? 0) === 1;
+  })();
+  if (changed) {
+    try {
+      invalidateDbCache("connections");
+      bumpProxyConfigGeneration();
+    } catch {
+      // The metadata is committed already; do not retry or overwrite tokens.
+    }
+  }
+  return changed;
+}
+
+/** Commit rotated secrets + validated routing metadata in ONE conditional DB write. */
+export function commitNousOAuthRefresh(
+  id: string,
+  owner: string,
+  expectedCipher: string,
+  tokens: { accessToken: string; refreshToken: string; expiresIn: number; inferenceBaseUrl?: string }
+): boolean {
+  if (!tokens.accessToken || !tokens.refreshToken || !Number.isFinite(tokens.expiresIn) ||
+      tokens.expiresIn <= 0) throw new Error("Invalid Nous refresh response");
+  const db = getDbInstance() as unknown as DbLike;
+  const applied = db.transaction(() => {
+    const row = db.prepare<NousRefreshRow>(
+      "SELECT provider, auth_type, refresh_token, provider_specific_data FROM provider_connections WHERE id = ?"
+    ).get(id);
+    if (!row || row.provider !== "nous-oauth" || row.auth_type !== "oauth" ||
+        row.refresh_token !== expectedCipher) return false;
+    const psd = row.provider_specific_data ? JSON.parse(row.provider_specific_data) : {};
+    const inferenceBaseUrl = validateNousOAuthInferenceBaseUrl(
+      tokens.inferenceBaseUrl ?? psd?.[NOUS_OAUTH_INFERENCE_PSD_KEY]
+    );
+    const expiresAt = new Date(Date.now() + tokens.expiresIn * 1000).toISOString();
+    const result = db.prepare(`UPDATE provider_connections SET
+      access_token = ?, refresh_token = ?, expires_at = ?, token_expires_at = ?,
+      expires_in = ?, provider_specific_data = ?, updated_at = ?
+      WHERE id = ? AND provider = 'nous-oauth' AND auth_type = 'oauth' AND refresh_token = ?
+      AND EXISTS (SELECT 1 FROM nous_oauth_refresh_leases WHERE connection_id = ? AND owner = ? AND lease_until > ?)`)
+      .run(
+        encrypt(tokens.accessToken), encrypt(tokens.refreshToken), expiresAt, expiresAt,
+        tokens.expiresIn,
+        JSON.stringify({ ...psd, [NOUS_OAUTH_INFERENCE_PSD_KEY]: inferenceBaseUrl }),
+        new Date().toISOString(), id, expectedCipher, id, owner, Date.now()
+      );
+    return (result.changes ?? 0) === 1;
+  })();
+  if (applied) {
+    // The write has already committed. A backup/side-effect failure must never
+    // make a caller retry a single-use token or hide the now-valid credentials.
+    try {
+      backupDbFile("pre-write");
+      invalidateDbCache("connections");
+      bumpProxyConfigGeneration();
+    } catch {
+      console.warn("Nous refresh persisted, but cache/backup update failed");
+    }
+  }
+  return applied;
 }
 
 export interface ProviderConnectionDisplayMetadata {

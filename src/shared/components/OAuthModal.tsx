@@ -49,6 +49,7 @@ const DEVICE_CODE_PROVIDERS = new Set([
   "codebuddy-cn",
   "ghe-copilot",
   "grok-cli",
+  "nous-oauth",
 ]);
 
 const TOKEN_PASTE_PROVIDERS = new Set(["devin-desktop", "devin-cli", "grok-cli"]);
@@ -418,6 +419,9 @@ export default function OAuthModal({
           if (provider === "ghe-copilot" && gheUrl.trim()) {
             deviceCodeUrl.searchParams.set("gheUrl", gheUrl.trim());
           }
+          if (provider === "nous-oauth" && reauthConnection?.id) {
+            deviceCodeUrl.searchParams.set("connectionId", reauthConnection.id);
+          }
 
           const res = await fetch(deviceCodeUrl.toString());
           const data = (await parseResponseBody(res)) as Record<string, unknown>;
@@ -446,7 +450,9 @@ export default function OAuthModal({
                 }
               : provider === "ghe-copilot" && gheUrl.trim()
                 ? { gheUrl: gheUrl.trim() }
-                : null;
+                : provider === "nous-oauth"
+                  ? { flowId: data.flowId }
+                  : null;
           startPolling(
             data.device_code,
             data.codeVerifier,
@@ -1004,6 +1010,13 @@ export default function OAuthModal({
       size="lg"
     >
       <div className="flex flex-col gap-4">
+        {provider === "nous-oauth" && (
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+            EXPERIMENTAL Hermes-compatible Nous device sign-in. This is not official third-party
+            SSO. Approve the device code at Nous Portal. No token import is supported.
+            This connection stays local and is not backed up by cloud sync. Sign in again after restore.
+          </p>
+        )}
         {/* Browser login with an optional token-import fallback. grok-cli adds a
             third "Device Code" tab since it keeps BOTH the device_code flow
             (#7358, default) and the browser PKCE login (#7013) alongside the

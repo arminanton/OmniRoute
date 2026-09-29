@@ -44,6 +44,7 @@ const {
   TRAE_CONFIG,
   XAI_OAUTH_CONFIG,
   OPENFERENCE_CONFIG,
+  NOUS_OAUTH_CONFIG,
   ZED_HOSTED_CONFIG,
 } = oauthModule;
 const { getAntigravityLoadCodeAssistMetadata } = antigravityHeadersModule;
@@ -72,6 +73,7 @@ const EXPECTED_PROVIDER_KEYS = [
   "grok-cli",
   "xai-oauth",
   "openference",
+  "nous-oauth",
   "codebuddy-cn",
   "zed",
   "zed-hosted",
@@ -106,6 +108,7 @@ const EXPECTED_CONFIG_BY_PROVIDER = {
   "grok-cli": GROK_BUILD_OAUTH_CONFIG,
   "xai-oauth": XAI_OAUTH_CONFIG,
   openference: OPENFERENCE_CONFIG,
+  "nous-oauth": NOUS_OAUTH_CONFIG,
   "codebuddy-cn": CODEBUDDY_CN_CONFIG,
   zed: ZED_CONFIG,
   "zed-hosted": ZED_HOSTED_CONFIG,
@@ -128,6 +131,7 @@ const REQUIRED_FIELDS_BY_PROVIDER = {
   agy: ["authorizeUrl", "tokenUrl", "userInfoUrl", "scopes", "clientId"],
   qoder: ["extraParams"],
   "kimi-coding": ["deviceCodeUrl", "tokenUrl", "clientId"],
+  "nous-oauth": ["deviceCodeUrl", "tokenUrl", "clientId", "scope"],
   github: ["deviceCodeUrl", "tokenUrl", "userInfoUrl", "copilotTokenUrl", "clientId"],
   // GHE Copilot derives its URLs at runtime from the per-connection gheUrl — only static fields.
   "ghe-copilot": ["clientId", "scopes", "apiVersion", "userAgent"],
@@ -265,7 +269,25 @@ test("every registered OAuth provider has a valid config object, flow type and t
     assert.ok(allowedFlowTypes.has(provider.flowType), `${providerId} has unsupported flowType`);
     assert.equal(typeof provider.mapTokens, "function", `${providerId} must expose mapTokens`);
 
-    const mapped = provider.mapTokens({});
+    if (providerId === "nous-oauth") {
+      assert.throws(() => provider.mapTokens({}), /rotating credentials/);
+    }
+    const mapped = provider.mapTokens(
+      providerId === "nous-oauth"
+        ? {
+            access_token: "fixture-access",
+            refresh_token: "fixture-refresh",
+            expires_in: 3600,
+            inference_base_url: "https://welcome-api.nousresearch.com/v1",
+          }
+        : {}
+    );
+    if (providerId === "nous-oauth") {
+      assert.equal(
+        mapped.providerSpecificData.nousInferenceBaseUrl,
+        "https://welcome-api.nousresearch.com/v1"
+      );
+    }
     assert.ok(
       mapped && typeof mapped === "object",
       `${providerId} mapTokens must return an object`

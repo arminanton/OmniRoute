@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { getCachedProviderConnectionById } from "@/lib/db/readCache";
-import { updateProviderConnection } from "@/lib/db/providers";
+import {
+  updateProviderConnection,
+  getProviderConnectionById,
+  updateNousOAuthHealthIfRefreshUnchanged,
+} from "@/lib/db/providers";
+import { isSelfPersistedOAuthProvider } from "@omniroute/open-sse/services/tokenRefresh.ts";
 import {
   getAccessToken,
   updateProviderCredentials,
@@ -81,6 +86,54 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
       idToken: connection.idToken,
       providerSpecificData: connection.providerSpecificData,
     };
+
+    if (isSelfPersistedOAuthProvider(provider)) {
+      // getAccessToken persists rotating Nous credentials + inference URL via
+      // its own SQLite lease/CAS. Never run generic onPersist or fallback
+      // updateProviderCredentials, both of which can revert a later 401 grant.
+      const refreshed = (await getAccessToken(provider, credentials)) as RefreshResult | null;
+      const latest = await getProviderConnectionById(id);
+      if (refreshed?.accessToken) {
+        if (latest?.provider !== "nous-oauth" || latest?.authType !== "oauth") {
+          return NextResponse.json({ error: "Nous OAuth connection changed" }, { status: 409 });
+        }
+        if (refreshed.refreshToken === latest.refreshToken &&
+            refreshed.accessToken === latest.accessToken) {
+          updateNousOAuthHealthIfRefreshUnchanged(id, latest.refreshToken, "success");
+        }
+        return NextResponse.json({
+          success: true,
+          connectionId: id,
+          provider,
+          expiresAt: latest.tokenExpiresAt || latest.expiresAt || null,
+          refreshedAt: new Date().toISOString(),
+        });
+      }
+      if (refreshed?.error === "unrecoverable_refresh_error" &&
+          refreshed?.code === "invalid_grant") {
+        // DB metadata-only CAS verifies the presented token still exists. A
+        // concurrent successful 401 refresh makes this stale failure harmless.
+        if (latest?.refreshToken !== connection.refreshToken ||
+            latest?.accessToken !== connection.accessToken) {
+          return NextResponse.json({
+            success: true, skipped: true, connectionId: id, provider,
+            message: "Another request refreshed this Nous OAuth connection",
+            expiresAt: latest?.tokenExpiresAt || latest?.expiresAt || null,
+          });
+        }
+        const marked = updateNousOAuthHealthIfRefreshUnchanged(id, connection.refreshToken, "invalid_grant");
+        if (!marked) {
+          return NextResponse.json({ error: "Connection changed during refresh; retry" }, { status: 409 });
+        }
+        return NextResponse.json({
+          error: "Nous OAuth refresh token was rejected; re-authenticate via device sign-in",
+          requiresReauth: true,
+        }, { status: 401 });
+      }
+      return NextResponse.json({
+        error: "Nous OAuth refresh was unavailable or uncertain; retry or re-authenticate via device sign-in",
+      }, { status: 502 });
+    }
 
     // github.com Copilot and GHE Copilot (device-code flow) never receive a
     // refresh_token — only a GitHub access token plus a short-lived Copilot

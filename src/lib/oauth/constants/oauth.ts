@@ -169,6 +169,15 @@ export const OPENFERENCE_CONFIG = {
   callbackHost: "127.0.0.1",
 };
 
+// Hermes CLI-compatible Nous Portal device-code client. Fixed production origin:
+// no operator-supplied portal host can receive device or refresh credentials.
+export const NOUS_OAUTH_CONFIG = {
+  clientId: "hermes-cli",
+  scope: "inference:invoke",
+  deviceCodeUrl: "https://portal.nousresearch.com/api/oauth/device/code",
+  tokenUrl: "https://portal.nousresearch.com/api/oauth/token",
+};
+
 // Kimi Coding OAuth Configuration (Device Code Flow)
 export const KIMI_CODING_CONFIG = {
   clientId: resolvePublicCred("kimi_id", "KIMI_CODING_OAUTH_CLIENT_ID"),
@@ -511,6 +520,7 @@ export const PROVIDERS = {
   GROK_CLI: "grok-cli",
   XAI_OAUTH: "xai-oauth",
   OPENFERENCE: "openference",
+  NOUS_OAUTH: "nous-oauth",
   ZED: "zed",
   ZED_HOSTED: "zed-hosted",
 };

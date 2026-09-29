@@ -1,6 +1,10 @@
 // Re-export from open-sse with local logger
 import * as log from "../utils/logger";
-import { updateProviderConnection } from "@/lib/db/providers";
+import { updateProviderConnection, getProviderConnectionById } from "@/lib/db/providers";
+import {
+  NOUS_OAUTH_INFERENCE_PSD_KEY,
+  validateNousOAuthInferenceBaseUrl,
+} from "@omniroute/open-sse/config/nousOAuth.ts";
 import { resolveProxyForConnection } from "@/lib/db/settings";
 import { resolveProxyForProvider } from "@/lib/db/proxies";
 import {
@@ -14,6 +18,7 @@ import {
   refreshGitHubToken as _refreshGitHubToken,
   refreshCopilotToken as _refreshCopilotToken,
   getAccessToken as _getAccessToken,
+  isSelfPersistedOAuthProvider,
   refreshTokenByProvider as _refreshTokenByProvider,
   formatProviderCredentials as _formatProviderCredentials,
   getAllAccessTokens as _getAllAccessTokens,
@@ -199,6 +204,51 @@ export async function updateProviderCredentials(connectionId: string, newCredent
 // Local-specific: Check and refresh token proactively
 export async function checkAndRefreshToken(provider: string, credentials: any) {
   let updatedCredentials = { ...credentials };
+
+  if (isSelfPersistedOAuthProvider(provider)) {
+    // Single-use refresh must have a persisted row. Re-read its CURRENT
+    // credential-bound inference URL; never return a stale paid/guest URL from
+    // the caller's old bearer after a concurrent rotation.
+    if (!credentials?.connectionId) return null;
+    const row = await getProviderConnectionById(credentials.connectionId);
+    if (row?.provider !== "nous-oauth" || row?.authType !== "oauth" ||
+        !row.accessToken || !row.refreshToken) return null;
+    const boundUrl = validateNousOAuthInferenceBaseUrl(
+      row.providerSpecificData?.[NOUS_OAUTH_INFERENCE_PSD_KEY]
+    );
+    const freshest = {
+      ...updatedCredentials,
+      accessToken: row.accessToken,
+      refreshToken: row.refreshToken,
+      expiresAt: row.tokenExpiresAt || row.expiresAt,
+      providerSpecificData: {
+        ...row.providerSpecificData,
+        [NOUS_OAUTH_INFERENCE_PSD_KEY]: boundUrl,
+      },
+    };
+    const until = new Date(freshest.expiresAt || 0).getTime();
+    // Missing expiry is not a reason to burn a single-use grant hourly.
+    // Reactive 401 handles unknown token lifetime with a failed bearer.
+    if (!Number.isFinite(until) || until <= 0 ||
+        until > Date.now() + _getRefreshLeadMs(provider, freshest.providerSpecificData)) {
+      return freshest;
+    }
+    const rotated = await getAccessToken(provider, freshest);
+    if (rotated?.accessToken && rotated?.refreshToken) {
+      return {
+        ...freshest,
+        ...rotated,
+        providerSpecificData: {
+          ...rotated.providerSpecificData,
+          [NOUS_OAUTH_INFERENCE_PSD_KEY]: validateNousOAuthInferenceBaseUrl(
+            rotated.providerSpecificData?.[NOUS_OAUTH_INFERENCE_PSD_KEY]
+          ),
+        },
+      };
+    }
+    // An uncertain refresh outcome must never return an expired bearer.
+    return until > Date.now() + 30_000 ? freshest : null;
+  }
 
   // Check regular token expiry. Use the provider-specific lead time so rotating-
   // token providers (Codex/OpenAI) refresh FAR ahead of access_token expiry. This
