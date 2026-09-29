@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts";
 import {
   detectFormat,
   getTargetFormat,
@@ -84,6 +85,15 @@ export async function POST(request) {
       sourceFormat: reqSourceFormat,
       targetFormat: reqTargetFormat,
     } = reqData;
+    // A generic translated request can disclose a bearer in response headers
+    // or later send it to a custom base/redirect. OAuth inference uses its
+    // pinned-host executor and must never enter this helper path.
+    if (provider && getRegistryEntry(provider)?.id === "nous-oauth") {
+      return NextResponse.json(
+        { success: false, error: "Nous OAuth requires the dedicated chat inference route" },
+        { status: 400 }
+      );
+    }
     let result;
 
     // Direct translation mode (Playground): sourceFormat → targetFormat in one shot

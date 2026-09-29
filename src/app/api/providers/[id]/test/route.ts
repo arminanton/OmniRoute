@@ -882,6 +882,25 @@ export async function testSingleConnection(connectionId: string, validationModel
     return { valid: false, error: "Connection not found", diagnosis: null, latencyMs: 0 };
   }
 
+  // #8408: Nous OAuth has no safe, reliable Test Connection probe. In particular,
+  // an inference request can consume quota and an expired token can spend a
+  // rotating refresh token. Skip before lease/proxy/runtime checks and before
+  // the generic skipped-result activation and health-status writes below.
+  if (connection.provider === "nous-oauth" || connection.provider === "nso") {
+    const warning =
+      "Nous OAuth Test Connection is not supported. No credential check was made; use an inference request to verify access.";
+    return {
+      valid: false,
+      skipped: true,
+      error: warning,
+      warning,
+      refreshed: false,
+      diagnosis: classifyFailure({ error: warning, unsupported: true }),
+      latencyMs: 0,
+      testedAt: null,
+    };
+  }
+
   if (await isConnectionUnavailableToAuxiliaryActivity(connectionId)) {
     const error = "Connection test deferred while an exclusive session lease is active";
     return {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts";
 import {
   buildProviderUrl,
   buildProviderHeaders,
@@ -42,6 +43,12 @@ export async function POST(request) {
       return NextResponse.json({ success: false, error: validation.error }, { status: 400 });
     }
     const { provider, body } = validation.data;
+    if (getRegistryEntry(provider)?.id === "nous-oauth") {
+      return NextResponse.json(
+        { success: false, error: "Nous OAuth requires the dedicated chat inference route" },
+        { status: 400 }
+      );
+    }
 
     const sourceFormat = detectFormat(body);
     let targetFormat = getTargetFormat(provider);

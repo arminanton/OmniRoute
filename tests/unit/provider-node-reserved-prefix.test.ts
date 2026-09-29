@@ -183,7 +183,10 @@ test("shared set size includes live REGISTRY and retired Designer + Felo + Qwen 
   // The fork briefly used uc-persona as a connection ID. Preserve that fifth UC
   // prefix as a reserved compatibility alias (408 → 409). The short ChatGPT Web
   // Codex secondary alias adds one more live prefix (409 → 410).
-  assert.equal(RESERVED_PREFIX_COUNT, 410);
+  // Nous device OAuth reserves two new routing IDs without changing API-key nous (410 → 412).
+  assert.equal(RESERVED_PROVIDER_PREFIXES.has("nous-oauth"), true);
+  assert.equal(RESERVED_PROVIDER_PREFIXES.has("nso"), true);
+  assert.equal(RESERVED_PREFIX_COUNT, 412);
 });
 
 test("isReservedProviderPrefix rejects non-string input", () => {

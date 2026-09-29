@@ -95,7 +95,8 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
     // Dynamic per-target cooldown reads moved out of combo.ts.
     "open-sse/services/combo/executeTargetGates.ts": 1,
     "open-sse/services/combo/providerWildcard.ts": 1,
-    "open-sse/services/tokenRefresh.ts": 1,
+    // Nous OAuth adds one DB-bound refresh re-read under its SQLite lease.
+    "open-sse/services/tokenRefresh.ts": 2,
     "src/lib/providers/volcPlanAutoSyncBackfill.ts": 1,
     "src/lib/providers/volcenginePlanBinding.ts": 1,
     "src/app/(dashboard)/dashboard/tools/agent-bridge/page.tsx": 1,
@@ -103,7 +104,7 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
     "src/app/api/cloud/credentials/update/route.ts": 1,
     "src/app/api/models/route.ts": 1,
     "src/app/api/monitoring/health/route.ts": 1,
-    "src/app/api/oauth/[provider]/[action]/route.ts": 4,
+    "src/app/api/oauth/[provider]/[action]/route.ts": 6,
     "src/app/api/oauth/codex/import/route.ts": 1,
     "src/app/api/oauth/kiro/api-key/route.ts": 1,
     "src/app/api/oauth/kiro/auto-import/route.ts": 2,
@@ -113,6 +114,8 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
     "src/app/api/provider-nodes/[id]/route.ts": 1,
     "src/app/api/providers/[id]/chatgpt-web-codex-doctor/route.ts": 1,
     "src/app/api/providers/[id]/refresh-token/route.ts": 1,
+    // Manual Nous refresh re-reads the CAS-persisted row; auxiliary upstream work.
+    "src/app/api/providers/[id]/refresh/route.ts": 1,
     "src/app/api/providers/bulk/route.ts": 1,
     "src/app/api/providers/client/route.ts": 1,
     "src/app/api/providers/free-onboarding/route.ts": 2,
@@ -175,7 +178,7 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
     "src/lib/quota/connectionRecovery.ts": 2,
     "src/lib/sync/bundle.ts": 1,
     // #11495: verify-only sweep queries oauth + cookie connections
-    "src/lib/tokenHealthCheck.ts": 2,
+    "src/lib/tokenHealthCheck.ts": 4,
     "src/lib/tokenHealthCheckCopilot.ts": 1,
     "src/lib/usage/callLogs.ts": 1,
     "src/lib/usage/codexResetCredits.ts": 1,
@@ -191,6 +194,8 @@ const EXPECTED: Record<InventoryKind, Record<string, number>> = {
     "src/shared/services/modelSyncScheduler.ts": 1,
     "src/sse/handlers/chatHelpers.ts": 1,
     "src/sse/services/auth.ts": 4,
+    // Proactive Nous refresh adopts a newer persisted token instead of using a stale bearer.
+    "src/sse/services/tokenRefresh.ts": 1,
   },
 };
 
@@ -226,6 +231,7 @@ const CLASSIFICATION: Record<InventoryKind, Record<string, BypassClass>> = {
         "open-sse/services/combo/executeTargetGates.ts",
         "open-sse/services/combo/providerWildcard.ts",
         "open-sse/services/tokenRefresh.ts",
+        "src/app/api/providers/[id]/refresh/route.ts",
         "src/app/api/translator/send/route.ts",
         "src/lib/credentialHealth/scheduler.ts",
         "src/lib/providers/volcPlanAutoSyncBackfill.ts",
@@ -238,6 +244,7 @@ const CLASSIFICATION: Record<InventoryKind, Record<string, BypassClass>> = {
         "src/lib/warmupScheduler.ts",
         "src/shared/services/modelSyncScheduler.ts",
         "src/sse/services/auth.ts",
+        "src/sse/services/tokenRefresh.ts",
       ].includes(file)
         ? "B"
         : "C",

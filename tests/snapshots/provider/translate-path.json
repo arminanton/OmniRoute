@@ -4235,6 +4235,18 @@
       "stream": "https://app.notion.com/api/v3/runInferenceTranscript"
     }
   },
+  "nous-oauth": {
+    "format": "openai",
+    "headers": {
+      "apiKey": "THROW: Nous OAuth requires the dedicated inference executor",
+      "nonStream": "THROW: Nous OAuth requires the dedicated inference executor",
+      "oauth": "THROW: Nous OAuth requires the dedicated inference executor"
+    },
+    "url": {
+      "nonStream": "https://inference-api.nousresearch.com/v1/chat/completions",
+      "stream": "https://inference-api.nousresearch.com/v1/chat/completions"
+    }
+  },
   "nous-research": {
     "format": "openai",
     "headers": {

@@ -336,8 +336,14 @@ export function buildProviderUrl(
 // Build provider headers
 export function buildProviderHeaders(provider, credentials, stream = true, body = null) {
   void body;
-  const config = getProviderConfig(provider);
   const entry = getRegistryEntry(provider);
+  // Nous OAuth bearer egress belongs only to the pinned-host dedicated executor.
+  // The generic translator/validation builder accepts API keys and arbitrary
+  // per-connection base URLs, so it must never mint headers for this provider.
+  if (entry?.id === "nous-oauth") {
+    throw new Error("Nous OAuth requires the dedicated inference executor");
+  }
+  const config = getProviderConfig(provider);
   const headers = {
     "Content-Type": "application/json",
     ...config.headers,
