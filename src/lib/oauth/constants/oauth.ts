@@ -19,6 +19,7 @@ import {
   GROK_BUILD_TOKEN_URL,
 } from "@omniroute/open-sse/config/grokBuild.ts";
 import { resolvePublicCred } from "@omniroute/open-sse/utils/publicCreds.ts";
+import { NOUS_OAUTH_PUBLIC_CLIENT_ID } from "@omniroute/open-sse/config/nousOAuth.ts";
 import { CURSOR_AGENT_CLI_VERSION } from "@omniroute/open-sse/utils/cursorAgentCliVersion.ts";
 import { buildGitLabOAuthEndpoints, GITLAB_DUO_DEFAULT_BASE_URL } from "../gitlab";
 
@@ -172,7 +173,7 @@ export const OPENFERENCE_CONFIG = {
 // Hermes CLI-compatible Nous Portal device-code client. Fixed production origin:
 // no operator-supplied portal host can receive device or refresh credentials.
 export const NOUS_OAUTH_CONFIG = {
-  clientId: "hermes-cli",
+  clientId: NOUS_OAUTH_PUBLIC_CLIENT_ID,
   scope: "inference:invoke",
   deviceCodeUrl: "https://portal.nousresearch.com/api/oauth/device/code",
   tokenUrl: "https://portal.nousresearch.com/api/oauth/token",

@@ -1,5 +1,7 @@
 /** Trusted Nous OAuth inference URLs; never infer these from user-supplied endpoints. */
 export const NOUS_OAUTH_INFERENCE_PSD_KEY = "nousInferenceBaseUrl";
+/** Issuer-registered public device-flow client, not an operator-supplied credential. */
+export const NOUS_OAUTH_PUBLIC_CLIENT_ID = "hermes-cli";
 
 export const NOUS_OAUTH_INFERENCE_BASE_URLS = [
   "https://inference-api.nousresearch.com/v1",
