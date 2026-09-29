@@ -460,10 +460,20 @@
       "configSource": "<custom-config>",
       "provider": "notion-web"
     },
+    "nous-oauth": {
+      "className": "NousOAuthExecutor",
+      "configSource": "<custom-config>",
+      "provider": "nous-oauth"
+    },
     "nr": {
       "className": "NineRouterExecutor",
       "configSource": "<custom-config>",
       "provider": "9router"
+    },
+    "nso": {
+      "className": "NousOAuthExecutor",
+      "configSource": "<custom-config>",
+      "provider": "nous-oauth"
     },
     "nw": {
       "className": "NotionWebExecutor",
@@ -676,6 +686,6 @@
       "provider": "zai-web"
     }
   },
-  "keyCount": 135,
+  "keyCount": 137,
   "sharedInstances": []
 }

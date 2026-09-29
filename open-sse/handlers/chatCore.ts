@@ -1060,9 +1060,10 @@ export async function handleChatCore({
   const pipelineSessionId = explicitSessionIdHeader || skillRequestId;
   const reasoningReplaySessionKey = sessionAffinityKey || explicitSessionIdHeader;
   const skipReasoningReplay = Boolean(managedLease);
-  const reasoningCacheScope = !skipReasoningReplay && reasoningReplaySessionKey
-    ? `api-key:${String(apiKeyInfo?.id ?? "local")}\x1f${String(reasoningReplaySessionKey)}`
-    : null;
+  const reasoningCacheScope =
+    !skipReasoningReplay && reasoningReplaySessionKey
+      ? `api-key:${String(apiKeyInfo?.id ?? "local")}\x1f${String(reasoningReplaySessionKey)}`
+      : null;
   // persistAttemptLogs extracted to chatCore/attemptLogging.ts (#3501); bind the per-request context
   // once so the 16 call sites keep passing only the per-attempt args (byte-identical).
   const persistAttemptLogs = (args: PersistAttemptLogsArgs) =>
@@ -3648,6 +3649,10 @@ export async function handleChatCore({
     currentCreds: Record<string, unknown>
   ): Promise<Record<string, unknown> | null> => {
     if (
+      // Nous OAuth already performs one DB-leased refresh and resend inside its
+      // isolated executor. A second reactive refresh here would rotate twice.
+      provider === "nous-oauth" ||
+      provider === "nso" ||
       typeof executor.refreshCredentials !== "function" ||
       pipelineHadStreamOptions ||
       (await shouldIsolateProbeFailures())
@@ -3664,7 +3669,9 @@ export async function handleChatCore({
           Object.assign(refreshTarget, updated);
           Object.assign(credentials, updated);
           const refreshConnectionId =
-            typeof refreshTarget.connectionId === "string" ? refreshTarget.connectionId : connectionId;
+            typeof refreshTarget.connectionId === "string"
+              ? refreshTarget.connectionId
+              : connectionId;
           if (refreshConnectionId && connectionId && refreshConnectionId !== connectionId) {
             await updateProviderConnection(refreshConnectionId, updated);
           } else {
@@ -3672,7 +3679,8 @@ export async function handleChatCore({
           }
         }
       : undefined;
-    const casId = typeof refreshTarget.connectionId === "string" ? refreshTarget.connectionId.trim() : "";
+    const casId =
+      typeof refreshTarget.connectionId === "string" ? refreshTarget.connectionId.trim() : "";
     const casReread = casId
       ? async () => {
           const latest = await getProviderConnectionById(casId);
@@ -3692,7 +3700,9 @@ export async function handleChatCore({
     if (!updated?.accessToken && !updated?.copilotToken) {
       if (isUnrecoverableRefreshError(updated) && onCredentialsRefreshed) {
         const refreshConnectionId =
-          typeof refreshTarget.connectionId === "string" ? refreshTarget.connectionId : connectionId;
+          typeof refreshTarget.connectionId === "string"
+            ? refreshTarget.connectionId
+            : connectionId;
         let alreadyRotated = false;
         if (refreshConnectionId && attemptedRefreshToken) {
           try {
@@ -4386,6 +4396,10 @@ export async function handleChatCore({
     if (
       (providerResponse.status === HTTP_STATUS.UNAUTHORIZED ||
         providerResponse.status === HTTP_STATUS.FORBIDDEN) &&
+      // Nous OAuth's executor owns its single 401 refresh/resend. Never run a
+      // second refresh (or retry a 403) in the streaming reactive path.
+      provider !== "nous-oauth" &&
+      provider !== "nso" &&
       !hadStreamOptions && // Skip refresh if failure may be from stream_options removal, not auth
       !(await shouldIsolateProbeFailures())
     ) {

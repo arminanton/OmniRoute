@@ -695,6 +695,28 @@ async function resolveModelByProviderInference(modelId: string, extendedContext:
     modelId
   );
 
+  // Bare Hermes IDs are shared by two different Nous authentication planes.
+  // With both connected, a silent first-candidate choice can send a request
+  // through the wrong credentials. Require an explicit provider prefix ONLY
+  // when both routes actually serve this ID and both have active connections.
+  if (
+    providers.includes("nous-research") &&
+    providers.includes("nous-oauth") &&
+    activeProviders?.has("nous-research") &&
+    activeProviders.has("nous-oauth")
+  ) {
+    const message = `Ambiguous model '${modelId}'. Use nous/${modelId} (API key) or nso/${modelId} (OAuth).`;
+    return {
+      provider: null,
+      model: modelId,
+      extendedContext,
+      errorType: "ambiguous_model",
+      errorMessage: message,
+      candidateProviders: ["nous-research", "nous-oauth"],
+      candidateAliases: ["nous", "nso"],
+    };
+  }
+
   if (providers.length === 0 && excludedProviders.length > 0) {
     return {
       provider: null,

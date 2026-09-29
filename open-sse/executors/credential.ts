@@ -28,6 +28,8 @@ const specializedCredentialExecutors: Record<string, CredentialExecutorLoader> =
   xai: () => import("./xai.ts").then((m) => new m.XaiExecutor()),
   "xai-oauth": () => import("./xai.ts").then((m) => new m.XaiExecutor("xai-oauth")),
   xao: () => import("./xai.ts").then((m) => new m.XaiExecutor("xai-oauth")),
+  "nous-oauth": () => import("./nous-oauth.ts").then((m) => new m.NousOAuthExecutor()),
+  nso: () => import("./nous-oauth.ts").then((m) => new m.NousOAuthExecutor()),
 };
 
 const credentialExecutorCache = new Map<string, Promise<BaseExecutor>>();

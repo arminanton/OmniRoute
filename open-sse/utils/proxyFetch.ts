@@ -599,7 +599,7 @@ function getTargetUrl(input) {
 export async function runWithProxyContext(
   proxyConfig,
   fn,
-  opts?: { directFallbackOnUnreachable?: boolean }
+  opts?: { directFallbackOnUnreachable?: boolean; skipUnreachableProbe?: boolean }
 ) {
   if (typeof fn !== "function") {
     throw new TypeError("runWithProxyContext requires a callback function");
@@ -618,6 +618,12 @@ export async function runWithProxyContext(
   // This fallback changes egress IP, so upgrades must not silently turn it on.
   const directFallbackOnUnreachable =
     opts?.directFallbackOnUnreachable === true && isControlPlaneProxyDirectFallbackEnabled();
+  // Only callers that explicitly opt out of the optimistic TCP probe avoid the
+  // fast-fail race. For single-use OAuth/expensive inference, that race could
+  // report 503 while the already-dispatched POST completes unseen by the caller.
+  // This does NOT change proxy egress or permit a direct fallback; the actual
+  // transport still fails closed on a dead assigned proxy.
+  const skipUnreachableProbe = opts?.skipUnreachableProbe === true && !directFallbackOnUnreachable;
   // Keep an explicit direct sentinel so resolveProxyForRequest cannot re-read
   // HTTPS_PROXY/HTTP_PROXY after the control-plane route decision.
   const runDirect = () => proxyContext.run(DIRECT_PROXY_CONTEXT, fn);
@@ -652,7 +658,7 @@ export async function runWithProxyContext(
         );
         return runDirect();
       }
-    } else {
+    } else if (!skipUnreachableProbe) {
       // Fire the probe WITHOUT awaiting; dispatch optimistically below.
       unreachableProbe = isProxyReachable(resolvedProxyUrl);
     }
@@ -759,6 +765,14 @@ export function runWithDirectFetchContext<T>(fn: () => T): T {
 export function hasAmbientProxyContext(): boolean {
   const store = proxyContext.getStore();
   return Boolean(store) && store !== DIRECT_PROXY_CONTEXT;
+}
+
+/** Read only the proxy KIND, never its URL or auth, for credential egress gates. */
+export function getAmbientProxyType(): string | null {
+  const store = proxyContext.getStore();
+  if (!store || store === DIRECT_PROXY_CONTEXT || typeof store !== "object") return null;
+  const type = (store as { type?: unknown }).type;
+  return typeof type === "string" ? type : null;
 }
 
 /**

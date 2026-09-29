@@ -24,13 +24,13 @@ import {
 import { inheritTrustedLocalRateLimitResponse } from "@omniroute/open-sse/services/rateLimitManager/errors.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts";
+import { isNousOAuthDirectOrConnectProxy } from "@omniroute/open-sse/config/nousOAuth.ts";
 import { getCachedProviderNodes } from "@/lib/db/readCache";
 import {
   runWithProxyContext,
   runWithAppliedProxyCapture,
   runWithTlsTracking,
   isTlsFingerprintActive,
-  type AppliedProxySink,
 } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { resolveProxyForConnection } from "@/lib/db/settings";
 import { hasBlockingProxyAssignment } from "@/lib/db/proxies";
@@ -339,7 +339,7 @@ export async function resolveModelOrError(
 
 export async function checkPipelineGates(
   provider: string,
-  model: string,
+  _model: string,
   options: {
     ignoreCircuitBreaker?: boolean;
     ignoreModelCooldown?: boolean;
@@ -444,7 +444,6 @@ export async function executeChatWithBreaker({
   // see its own destructure default for the shape and consumers.
   videoBridgeLog = undefined,
 }: ExecuteChatWithBreakerOptions): Promise<ExecuteChatWithBreakerResult> {
-  let tlsFingerprintUsed = false;
   const normalizedTrafficType: TrafficType =
     typeof trafficType === "string" && trafficType.trim().toLowerCase() === "shadow"
       ? "shadow"
@@ -462,10 +461,49 @@ export async function executeChatWithBreaker({
     return { localResourcePressureResult: pressureGuard, tlsFingerprintUsed: false };
   }
 
+  // Edge relays terminate HTTP at a configurable host and receive the raw
+  // Authorization header. OAuth inference permits only direct or HTTP CONNECT
+  // (end-to-end first-party TLS). Reject an assigned relay before any request.
+  // An assigned dead proxy must also never degrade to direct, even if the
+  // general PROXY_FAIL_OPEN setting returned a null proxyInfo upstream.
+  let unavailableNousProxy = false;
+  if (provider === "nous-oauth" || provider === "nso") {
+    try {
+      unavailableNousProxy =
+        !isNousOAuthDirectOrConnectProxy(proxyInfo?.proxy) ||
+        (!proxyInfo?.proxy &&
+          !!credentials.connectionId &&
+          hasBlockingProxyAssignment(credentials.connectionId, "nous-oauth"));
+    } catch {
+      unavailableNousProxy = true;
+    }
+  }
+  if (unavailableNousProxy) {
+    return {
+      result: {
+        success: false,
+        response: unavailableResponse(
+          HTTP_STATUS.SERVICE_UNAVAILABLE,
+          "Nous OAuth proxy transport unavailable",
+          2
+        ),
+        status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+        error: "Nous OAuth proxy transport unavailable",
+      },
+      tlsFingerprintUsed: false,
+    };
+  }
+
   try {
+    const withInferenceProxyContext = <T>(fn: () => Promise<T>): Promise<T> =>
+      runWithProxyContext(
+        proxyInfo?.proxy || null,
+        fn,
+        provider === "nous-oauth" || provider === "nso" ? { skipUnreachableProbe: true } : undefined
+      );
     const chatFn = () =>
       capture(() =>
-        runWithProxyContext(proxyInfo?.proxy || null, () =>
+        withInferenceProxyContext(() =>
           (handleChatCore as any)({
             body: { ...body, model: `${provider}/${model}` },
             // #2905-followup: forward the already-resolved custom-model targetFormat
@@ -932,17 +970,20 @@ export async function safeResolveProxy(
       !(resolved as { proxy?: unknown } | null)?.proxy &&
       hasBlockingProxyAssignment(connectionId, providerId)
     ) {
-      return decideProxyResolutionFailure(
-        Object.assign(
-          new Error(
-            "PROXY_ASSIGNED_UNAVAILABLE: assigned proxy is inactive/unreachable; refusing to egress on a direct connection"
-          ),
-          { code: "PROXY_ASSIGNED_UNAVAILABLE" }
-        )
+      const unavailable = Object.assign(
+        new Error(
+          "PROXY_ASSIGNED_UNAVAILABLE: assigned proxy is inactive/unreachable; refusing to egress on a direct connection"
+        ),
+        { code: "PROXY_ASSIGNED_UNAVAILABLE" }
       );
+      if (providerId === "nous-oauth" || providerId === "nso") throw unavailable;
+      return decideProxyResolutionFailure(unavailable);
     }
     return resolved;
   } catch (proxyErr) {
+    // For Nous OAuth, even an operator's generic PROXY_FAIL_OPEN setting may
+    // not silently turn an assigned failed proxy into direct bearer egress.
+    if (providerId === "nous-oauth" || providerId === "nso") throw proxyErr;
     return decideProxyResolutionFailure(proxyErr);
   }
 }

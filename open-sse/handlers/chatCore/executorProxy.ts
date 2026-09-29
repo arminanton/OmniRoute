@@ -105,6 +105,15 @@ export async function resolveExecutorWithProxy(
   assertRuntimeProviderAvailable(prov);
   assertCommonChatGptWebProviderAvailable(prov);
 
+  // OAuth inference tokens may ONLY reach the direct, first-party Nous executor.
+  // An operator's provider-level proxy backend (including fallback) or a
+  // per-connection deep-mode flag must not substitute CLIProxyAPI/Dario: both
+  // would receive the user's OAuth bearer at a separately configurable URL.
+  // Keep this BEFORE reading either mode or its backend credentials.
+  if (prov === "nous-oauth" || prov === "nso") {
+    return getExecutor(prov);
+  }
+
   // Per-connection routing override (#6339): the resolved connection can opt itself
   // into the CLIProxyAPI passthrough executor via providerSpecificData.cliproxyapiMode
   // === "claude-native" (UI toggle). This takes precedence over the provider-level
