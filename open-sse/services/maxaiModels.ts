@@ -18,7 +18,11 @@
  * it in try/catch and falls back to the curated catalog — but it validates HTTP
  * status and shape and throws a sanitized error on failure so the route logs it.
  */
+import { readMaxaiJson } from "../executors/maxai/response.ts";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { resolveMaxaiCredential } from "../executors/maxai/credentials.ts";
+import { MaxaiRefreshError, ensureFreshMaxaiCredential } from "../executors/maxai/refresh.ts";
+import { maxaiFetch, runMaxaiConnectionTransport } from "./maxaiTransport.ts";
 import { buildMaxaiSignedHeaders } from "../executors/maxai/signing.ts";
 import { ensureMaxaiConstants } from "../executors/maxai/constantsStore.ts";
 import {
@@ -47,17 +51,55 @@ export interface MaxaiDiscoveredModel {
 }
 
 export interface MaxaiModelDiscoveryInput {
+  /** Required before any refresh, signing-bundle fetch, or API request. */
+  connectionId?: string | null;
   /** Connection credential material (from providerSpecificData + apiKey). */
   providerSpecificData: Record<string, unknown> | null | undefined;
   accessToken?: string | null;
+  refreshToken?: string | null;
   signal?: AbortSignal | null;
-  /** Injectable fetch (the route passes a proxy/guard-wrapped safeOutboundFetch). */
+  /** Offline test seam. Production uses the connection-bound MaxAI transport. */
   fetchImpl?: typeof fetch;
 }
 
 export interface MaxaiModelDiscoveryResult {
   models: MaxaiDiscoveredModel[];
   warning?: string;
+}
+
+export const MAXAI_DISCOVERY_ERRORS = {
+  connection: [400, "MaxAI model discovery requires a connection."],
+  credentials: [401, "MaxAI credentials unavailable."],
+  constants: [503, "MaxAI signing constants unavailable."],
+  rejected: [502, "MaxAI model catalog unavailable."],
+  invalid: [502, "MaxAI model catalog invalid."],
+  empty: [502, "MaxAI model catalog empty."],
+  aborted: [499, "MaxAI model discovery cancelled."],
+  timeout: [504, "MaxAI model discovery timed out."],
+  failed: [502, "MaxAI model discovery failed."],
+} as const;
+export class MaxaiDiscoveryError extends Error {
+  readonly status: number;
+  constructor(readonly code: keyof typeof MAXAI_DISCOVERY_ERRORS, status?: number) {
+    super(MAXAI_DISCOVERY_ERRORS[code][1]);
+    this.name = "MaxaiDiscoveryError";
+    this.status = status ?? MAXAI_DISCOVERY_ERRORS[code][0];
+  }
+}
+
+/** Race inside the transport owner so ignored I/O cannot renew it indefinitely. */
+async function withDiscoverySignal<T>(signal: AbortSignal, run: () => Promise<T>): Promise<T> {
+  let abort: () => void = () => {};
+  try {
+    signal.throwIfAborted();
+    const aborted = new Promise<never>((_resolve, reject) => {
+      abort = () => reject(new MaxaiDiscoveryError("aborted"));
+      signal.addEventListener("abort", abort, { once: true });
+    });
+    return await Promise.race([run(), aborted]);
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
 }
 
 /** The curated paid-model id set — only these are surfaced (quality gate). */
@@ -108,65 +150,107 @@ function toDiscovered(raw: RawChatModel): MaxaiDiscoveredModel | null {
  * back to the curated static catalog).
  */
 export async function discoverMaxaiModels(
-  input: MaxaiModelDiscoveryInput
+  input: MaxaiModelDiscoveryInput,
+  // Trusted offline dependency seams, never read from request input.
+  dependencies: {
+    runTransport?: typeof runMaxaiConnectionTransport;
+    ensureCredential?: typeof ensureFreshMaxaiCredential;
+  } = {}
 ): Promise<MaxaiModelDiscoveryResult> {
-  const doFetch = input.fetchImpl ?? fetch;
-  const cred = resolveMaxaiCredential(input.providerSpecificData, input.accessToken);
-  if (!cred) {
-    throw new Error("MaxAI connection is not configured (missing token/device/user id).");
+  const connectionId = input.connectionId;
+  if (typeof connectionId !== "string" || !connectionId.trim()) {
+    throw new MaxaiDiscoveryError("connection");
   }
+  const doFetch = input.fetchImpl ?? maxaiFetch;
+  const runTransport = dependencies.runTransport ?? runMaxaiConnectionTransport;
+  const ensureCredential = dependencies.ensureCredential ?? ensureFreshMaxaiCredential;
+  // Preserve the discovery budget without generic safeOutboundFetch, which can
+  // replace the selected account proxy with a provider/global proxy.
+  const timeout = AbortSignal.timeout(10_000);
+  const signal = input.signal ? AbortSignal.any([input.signal, timeout]) : timeout;
 
-  const path = MAXAI_MODELS_CONFIG_PATH;
-  const constants = await ensureMaxaiConstants({ fetchImpl: doFetch, signal: input.signal });
-  if (!constants) {
-    throw new Error("MaxAI signing constants unavailable (extraction failed).");
-  }
-  const res = await doFetch(MAXAI_BASE_URL + path, {
-    method: "POST",
-    headers: {
-      ...maxaiStaticHeaders(),
-      ...buildMaxaiSignedHeaders({ path, userId: cred.userId, deviceId: cred.deviceId }, constants),
-      Authorization: `Bearer ${cred.accessToken}`,
-    },
-    body: "{}",
-    signal: input.signal ?? undefined,
-  });
-
-  if (res.status !== 200) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`MaxAI /models/get_config ${res.status}: ${detail.slice(0, 160)}`);
-  }
-
-  let parsed: { data?: { chat_models?: unknown }; chat_models?: unknown };
   try {
-    parsed = (await res.json()) as typeof parsed;
-  } catch {
-    throw new Error("MaxAI /models/get_config returned unparseable JSON.");
+    signal.throwIfAborted();
+    return await runTransport(connectionId, () => withDiscoverySignal(signal, async () => {
+      signal.throwIfAborted();
+      const credential = resolveMaxaiCredential(
+        input.providerSpecificData,
+        input.accessToken,
+        input.refreshToken
+      );
+      if (!credential) throw new MaxaiDiscoveryError("credentials");
+      // This helper owns durable token rotation. Never write a stale connection
+      // snapshot back from the discovery route after a shared refresh completes.
+      const cred = await ensureCredential({
+        connectionId,
+        credential,
+        signal,
+        fetchImpl: doFetch,
+      });
+      signal.throwIfAborted();
+      const path = MAXAI_MODELS_CONFIG_PATH;
+      const constants = await ensureMaxaiConstants({ fetchImpl: doFetch, signal });
+      signal.throwIfAborted();
+      if (!constants) throw new MaxaiDiscoveryError("constants");
+      const res = await doFetch(MAXAI_BASE_URL + path, {
+        method: "POST",
+        headers: {
+          ...maxaiStaticHeaders(),
+          ...buildMaxaiSignedHeaders(
+            { path, userId: cred.userId, deviceId: cred.deviceId },
+            constants
+          ),
+          Authorization: `Bearer ${cred.accessToken}`,
+        },
+        body: JSON.stringify({ language: "en", client_type: "web" }),
+        signal,
+        redirect: "error",
+      });
+
+      if (signal.aborted || res.status !== 200 || res.redirected ||
+          (res.url && res.url !== MAXAI_BASE_URL + path)) {
+        // Upstream bodies can contain credentials. Do not read or log them.
+        void res.body?.cancel().catch(() => {});
+        signal.throwIfAborted();
+        throw new MaxaiDiscoveryError("rejected", [401, 403, 429].includes(res.status) ? res.status : 502);
+      }
+
+      let parsed: { data?: { chat_models?: unknown }; chat_models?: unknown };
+      try {
+        parsed = await readMaxaiJson(res, signal) as typeof parsed;
+      } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
+        throw new MaxaiDiscoveryError("invalid");
+      }
+      signal.throwIfAborted();
+      const data = parsed?.data ?? parsed;
+      const chatModels = data?.chat_models;
+      if (!Array.isArray(chatModels)) throw new MaxaiDiscoveryError("invalid");
+
+      const models: MaxaiDiscoveredModel[] = [];
+      for (const raw of chatModels) {
+        if (!raw || typeof raw !== "object") continue;
+        const mapped = toDiscovered(raw as RawChatModel);
+        if (mapped) models.push(mapped);
+      }
+      if (models.length === 0) throw new MaxaiDiscoveryError("empty");
+
+      const liveIds = new Set(models.map((m) => m.id));
+      const missing = [...CURATED_IDS].filter((id) => !liveIds.has(id));
+      const warning =
+        missing.length > 0
+          ? `MaxAI no longer offers ${missing.length} curated model(s): ${missing.join(", ")}`
+          : undefined;
+      return { models, warning };
+    }));
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
+    // Neither transport exceptions nor caller-provided abort reasons are safe
+    // to pass through the route's logs or public fallback response.
+    if (input.signal?.aborted) throw new MaxaiDiscoveryError("aborted");
+    if (timeout.aborted) throw new MaxaiDiscoveryError("timeout");
+    if (error instanceof MaxaiDiscoveryError) throw error;
+    if (error instanceof MaxaiRefreshError) throw new MaxaiDiscoveryError("credentials", error.status);
+    throw new MaxaiDiscoveryError("failed");
   }
-
-  const data = parsed?.data ?? parsed;
-  const chatModels = (data as { chat_models?: unknown })?.chat_models;
-  if (!Array.isArray(chatModels)) {
-    throw new Error("MaxAI /models/get_config had no chat_models array.");
-  }
-
-  const models: MaxaiDiscoveredModel[] = [];
-  for (const raw of chatModels as RawChatModel[]) {
-    const mapped = toDiscovered(raw);
-    if (mapped) models.push(mapped);
-  }
-
-  if (models.length === 0) {
-    throw new Error("MaxAI /models/get_config yielded no usable curated models.");
-  }
-
-  // Note when the live list dropped a curated model (e.g. MaxAI deprecated it).
-  const liveIds = new Set(models.map((m) => m.id));
-  const missing = [...CURATED_IDS].filter((id) => !liveIds.has(id));
-  const warning =
-    missing.length > 0
-      ? `MaxAI no longer offers ${missing.length} curated model(s): ${missing.join(", ")}`
-      : undefined;
-
-  return { models, warning };
 }

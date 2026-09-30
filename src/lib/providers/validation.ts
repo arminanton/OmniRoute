@@ -1,4 +1,5 @@
 import { getEmbeddingProvider } from "@omniroute/open-sse/config/embeddingRegistry.ts";
+import { checkMaxaiConnection } from "@omniroute/open-sse/services/maxaiConnectionCheck.ts";
 import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts";
 import {
   isClaudeCodeCompatibleProvider,
@@ -177,6 +178,7 @@ export async function validateFreebuffProvider({ apiKey }: { apiKey: string }) {
 
 export async function validateProviderApiKey({ provider, apiKey, providerSpecificData = {} }: any) {
   provider = typeof provider === "string" ? resolveProviderId(provider) : provider;
+  if (provider === "maxai" || provider === "mx") return checkMaxaiConnection();
   const requiresApiKey = !providerAllowsOptionalApiKey(provider);
   const isLocal = isLocalProvider(provider);
 

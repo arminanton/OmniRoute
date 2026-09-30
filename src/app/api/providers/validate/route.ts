@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { checkMaxaiConnection } from "@omniroute/open-sse/services/maxaiConnectionCheck.ts";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/errorSanitization.ts";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
@@ -70,6 +71,15 @@ export async function POST(request) {
 
     const retirementResponse = rejectRetiredCommonChatGptWebProvider(provider);
     if (retirementResponse) return retirementResponse;
+
+    if (provider === "maxai" || provider === "mx") {
+      // Neither a public catalog nor a token refresh is a credential check.
+      // Remain neutral and allow the UI to save without claiming valid auth.
+      return NextResponse.json(
+        { ...checkMaxaiConnection(), unsupported: true },
+        { status: 400 }
+      );
+    }
 
     let providerSpecificData: any = { validationModelId };
     if (customUserAgent) {

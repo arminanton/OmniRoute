@@ -1,6 +1,14 @@
 import { existsSync } from "node:fs";
 
 import {
+  assertLocalHelper,
+  getRuntimePolicy,
+  assertNotLockedCapability,
+  isRuntimePolicyError,
+  markRuntimePolicyResponse,
+} from "../../src/shared/runtimePolicy.ts";
+
+import {
   CHATGPT_WEB_CODEX_CONNECTOR_NAME,
   CHATGPT_WEB_CODEX_RUNTIME_HEADED,
 } from "@/shared/constants/chatgptWebCodex";
@@ -97,6 +105,20 @@ function configuredString(data: Record<string, unknown>, ...keys: string[]): str
   return undefined;
 }
 
+export function resolveChatGptWebCodexCdpEndpoint(
+  data: Record<string, unknown>
+): string | undefined {
+  const configured = data.browserCdpEndpoint;
+  const fromConnection = typeof configured === "string" && configured.trim().length > 0;
+  const endpoint = fromConnection ? configured : process.env.CHATGPT_WEB_CODEX_CDP_URL;
+  if (endpoint) {
+    assertLocalHelper({ role: "browser-cdp", endpoint, phase: "configured" });
+  } else {
+    assertNotLockedCapability("local-browser-launch");
+  }
+  return fromConnection ? configured.trim() : endpoint;
+}
+
 export function detectChromeExecutable(explicit?: string): string | undefined {
   const candidates = [
     explicit,
@@ -175,8 +197,7 @@ function buildProviderConfig(
   const data = record(input.credentials.providerSpecificData);
   const route = requireChatGptWebCodexRoute(input.model);
   const paths = connectionRuntimePaths(connectionId);
-  const cdpEndpoint =
-    configuredString(data, "browserCdpEndpoint") ?? process.env.CHATGPT_WEB_CODEX_CDP_URL;
+  const cdpEndpoint = resolveChatGptWebCodexCdpEndpoint(data);
   const chromeExecutablePath = detectChromeExecutable(
     configuredString(data, "chromeExecutablePath")
   );
@@ -319,11 +340,9 @@ export class ChatGptWebCodexExecutor extends BaseExecutor {
         );
       }
 
-      const storageStatePath = ensureConnectionStorageStateFromCredential(connectionId, secrets);
       const providerData = record(input.credentials.providerSpecificData);
-      const cdpEndpoint =
-        configuredString(providerData, "browserCdpEndpoint") ??
-        process.env.CHATGPT_WEB_CODEX_CDP_URL;
+      const cdpEndpoint = resolveChatGptWebCodexCdpEndpoint(providerData);
+      const storageStatePath = ensureConnectionStorageStateFromCredential(connectionId, secrets);
       const chromeExecutablePath = detectChromeExecutable(
         configuredString(providerData, "chromeExecutablePath")
       );
@@ -391,6 +410,8 @@ export class ChatGptWebCodexExecutor extends BaseExecutor {
       trackChatGptWebCodexRuntime(worker, connectionRuntimePaths(connectionId).brokerSocketPath);
       const maps = toolMaps(parsed);
       const events = new AsyncEventQueue<AdapterEvent>();
+      let policyFailure: unknown;
+      let policyResponse: Response | undefined;
       const incoming = {
         headers: headersFromRecord(input.clientHeaders),
         abortSignal: input.signal ?? undefined,
@@ -399,6 +420,11 @@ export class ChatGptWebCodexExecutor extends BaseExecutor {
         try {
           await adapter.runTurn(parsed, incoming, (event) => events.push(event));
         } catch (error) {
+          if (isRuntimePolicyError(error)) {
+            policyFailure = error;
+            if (policyResponse) markRuntimePolicyResponse(policyResponse);
+            return;
+          }
           events.push({
             type: "error",
             message: sanitizeErrorMessage(error instanceof Error ? error.message : error),
@@ -407,21 +433,27 @@ export class ChatGptWebCodexExecutor extends BaseExecutor {
             code: "chatgpt_web_codex_turn_failed",
           });
         } finally {
-          try {
-            const storageState = readConnectionStorageState(storageStatePath);
-            await input.onCredentialsRefreshed?.({
-              apiKey: encodeChatGptWebCodexSecrets({
-                storageState,
-                runtimeKey: secrets.runtimeKey,
-              }),
-            });
-          } catch (refreshError) {
-            input.log?.warn?.(
-              "CHATGPT_WEB_CODEX",
-              sanitizeErrorMessage(
-                refreshError instanceof Error ? refreshError.message : refreshError
-              )
-            );
+          if (!policyFailure) {
+            try {
+              const storageState = readConnectionStorageState(storageStatePath);
+              await input.onCredentialsRefreshed?.({
+                apiKey: encodeChatGptWebCodexSecrets({
+                  storageState,
+                  runtimeKey: secrets.runtimeKey,
+                }),
+              });
+            } catch (refreshError) {
+              if (isRuntimePolicyError(refreshError)) {
+                policyFailure = refreshError;
+                if (policyResponse) markRuntimePolicyResponse(policyResponse);
+              } else
+                input.log?.warn?.(
+                  "CHATGPT_WEB_CODEX",
+                  sanitizeErrorMessage(
+                    refreshError instanceof Error ? refreshError.message : refreshError
+                  )
+                );
+            }
           }
           events.close();
         }
@@ -431,6 +463,7 @@ export class ChatGptWebCodexExecutor extends BaseExecutor {
         const running = run();
         const collected = await events.collect();
         await running;
+        if (policyFailure) throw policyFailure;
         const response = buildResponseJSON(collected, input.model, {
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           toolNsMap: maps.namespace,
@@ -457,12 +490,32 @@ export class ChatGptWebCodexExecutor extends BaseExecutor {
         {
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           compaction: parsed._compactionRequest,
-          onCompletedResponse: (response) =>
-            rememberResponseState(expandedBody, response, { force: true, namespace }),
+          onCompletedResponse: (response) => {
+            if (!policyFailure) {
+              rememberResponseState(expandedBody, response, { force: true, namespace });
+            }
+          },
         }
       );
-      return wrapped(new Response(stream, { status: 200, headers: SSE_HEADERS }), expandedBody);
+      const guardedStream =
+        getRuntimePolicy().mode === "locked"
+          ? stream.pipeThrough(
+              new TransformStream({
+                transform(chunk, controller) {
+                  if (policyFailure) throw policyFailure;
+                  controller.enqueue(chunk);
+                },
+                flush() {
+                  if (policyFailure) throw policyFailure;
+                },
+              })
+            )
+          : stream;
+      policyResponse = new Response(guardedStream, { status: 200, headers: SSE_HEADERS });
+      if (policyFailure) markRuntimePolicyResponse(policyResponse);
+      return wrapped(policyResponse, expandedBody);
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       input.log?.warn?.(
         "CHATGPT_WEB_CODEX",
         sanitizeErrorMessage(error instanceof Error ? error.message : error)

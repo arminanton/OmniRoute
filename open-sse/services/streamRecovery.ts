@@ -11,6 +11,7 @@
  * without real sockets. The ReadableStream wiring lives in `createRecoverableStream`.
  */
 import { STREAM_RECOVERY } from "../config/constants.ts";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import {
   createThroughputWatchdog,
   ThroughputWatchdogError,
@@ -130,6 +131,7 @@ const RETRYABLE_ERROR_NAMES = new Set(["TimeoutError", "BodyTimeoutError"]);
  * the executor retry/failover loop, not here.
  */
 export function isRetryableStreamError(error: unknown): boolean {
+  if (isRuntimePolicyError(error) || isRuntimePolicyResponse(error)) return false;
   if (error instanceof TruncatedStreamError || error instanceof ThroughputWatchdogError) {
     return true;
   }
@@ -406,7 +408,11 @@ export function createRecoverableStream(
     let next: ReadableStream<Uint8Array> | null = null;
     try {
       next = await reopen();
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error) || isRuntimePolicyResponse(error)) {
+        runFinalize();
+        throw error;
+      }
       next = null;
     }
     // Only drop the held window once we actually have a replacement. If reopen
@@ -519,7 +525,11 @@ export function createRecoverableStream(
     let contStream: ReadableStream<Uint8Array> | null = null;
     try {
       contStream = await options.continueStream!(emittedText);
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error) || isRuntimePolicyResponse(error)) {
+        runFinalize();
+        throw error;
+      }
       contStream = null;
     }
     if (!contStream) return false;
@@ -533,7 +543,11 @@ export function createRecoverableStream(
       let r: ReadableStreamReadResult<Uint8Array>;
       try {
         r = await contReader.read();
-      } catch {
+      } catch (error) {
+        if (isRuntimePolicyError(error) || isRuntimePolicyResponse(error)) {
+          runFinalize();
+          throw error;
+        }
         break; // the continuation itself truncated — emit what we have, maybe continue again
       }
       if (r.done) break;
@@ -589,6 +603,11 @@ export function createRecoverableStream(
           result = await reader.read();
         } catch (error) {
           if (cancelled) return; // torn down while awaiting — don't touch the controller
+          if (isRuntimePolicyError(error) || isRuntimePolicyResponse(error)) {
+            runFinalize();
+            controller.error(error);
+            return;
+          }
           if (holdback.committed) {
             // Post-commit: an early-retry is unsafe (text already sent). Try mid-stream
             // continuation for a retryable cut; otherwise propagate as before.

@@ -248,11 +248,12 @@ export function registerContexts(program) {
     .option("--no-secrets", "Omit API keys from export")
     .action(async (opts, cmd) => {
       const cfg = loadContexts();
-      const out = opts.noSecrets ? redactContextSecrets(cfg) : JSON.parse(JSON.stringify(cfg));
+      const out =
+        opts.secrets === false ? redactContextSecrets(cfg) : JSON.parse(JSON.stringify(cfg));
       const json = JSON.stringify(out, null, 2);
       if (opts.out) {
-        const { writeFileSync } = await import("node:fs");
-        writeFileSync(opts.out, json);
+        const { writeContextExportFile } = await import("../contexts.mjs");
+        writeContextExportFile(opts.out, out);
         process.stdout.write(`Exported to ${opts.out}\n`);
       } else {
         process.stdout.write(json + "\n");

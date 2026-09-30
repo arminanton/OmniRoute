@@ -6,7 +6,7 @@ import { fetchRemoteImage } from "@/shared/network/remoteImageFetch";
 // Stub DNS resolver: every (unused) hostname resolves to a public IP. The
 // rebinding guard (GHSA-cmhj-wh2f-9cgx) needs a non-empty resolution; without
 // it, fictitious hosts like `cdn.example.com` would correctly be rejected.
-const publicLookup = async () => [{ address: "203.0.113.5" as string, family: 4 }];
+const publicLookup = async () => [{ address: "93.184.216.34" as string, family: 4 }];
 
 test("fetchRemoteImage reads public image bytes", async () => {
   const result = await fetchRemoteImage("https://cdn.example.com/image.png", {
@@ -57,12 +57,8 @@ test("fetchRemoteImage blocks redirects to private image hosts", async () => {
   );
 });
 
-// The default guard mode (no `guard` option passed, matching production callers that rely on
-// `getProviderOutboundGuard()`'s local-first default) is "block-metadata". Every other test in
-// this file passes `guard: "public-only"` explicitly, which never exercised this branch — the
-// gap that let `validateRemoteImageUrl()`'s fall-through to the unchecked `parseOutboundUrl()`
-// for cloud-metadata hosts go undetected.
-test("fetchRemoteImage blocks cloud-metadata hosts under the default block-metadata guard", async () => {
+// Untrusted remote media is public-only by default, independent of admin provider flags.
+test("fetchRemoteImage blocks cloud-metadata hosts under the default public-only guard", async () => {
   let called = false;
 
   await assert.rejects(
@@ -73,14 +69,15 @@ test("fetchRemoteImage blocks cloud-metadata hosts under the default block-metad
           return new Response("unexpected");
         },
       }),
-    /Blocked cloud-metadata endpoint/
+    /Blocked private or local provider URL/
   );
 
   assert.equal(called, false);
 });
 
-test("fetchRemoteImage allows private/LAN image hosts under the default block-metadata guard", async () => {
+test("fetchRemoteImage allows private/LAN image hosts only with an explicit admin policy", async () => {
   const result = await fetchRemoteImage("http://192.168.1.50:8080/local.png", {
+    guard: "block-metadata",
     fetchImpl: async () =>
       new Response(new Uint8Array([1, 2, 3]), {
         status: 200,
@@ -91,7 +88,7 @@ test("fetchRemoteImage allows private/LAN image hosts under the default block-me
   assert.equal(result.buffer.toString("base64"), "AQID");
 });
 
-test("fetchRemoteImage blocks redirects to cloud-metadata hosts under the default block-metadata guard", async () => {
+test("fetchRemoteImage blocks redirects to cloud-metadata hosts under the default public-only guard", async () => {
   await assert.rejects(
     () =>
       fetchRemoteImage("https://cdn.example.com/redirect.png", {
@@ -102,6 +99,6 @@ test("fetchRemoteImage blocks redirects to cloud-metadata hosts under the defaul
           }),
         lookup: publicLookup,
       }),
-    /Blocked cloud-metadata endpoint/
+    /Blocked private or local provider URL/
   );
 });

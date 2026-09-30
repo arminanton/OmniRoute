@@ -10,10 +10,12 @@ import {
 } from "../accountFallback.ts";
 import {
   errorResponse,
+  runtimePolicyErrorResponse,
   unavailableResponse,
   errorResponseWithComboDiagnostics,
 } from "../../utils/error.ts";
 import { buildRecoveryHint } from "./pinRecovery.ts";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
 import { formatExhaustedConnectionKey } from "./comboDiagFormat.ts";
 import { recordComboRequest } from "../comboMetrics.ts";
@@ -655,7 +657,7 @@ export async function handleRoundRobinCombo({
 
           // Local network exhaustion is request-terminal. Preserve the exact response
           // before quota, breaker, cooldown, lockout, retry, or target rotation work.
-          if (isExhaustedNetworkResponse(result)) return result;
+          if (isRuntimePolicyResponse(result) || isExhaustedNetworkResponse(result)) return result;
 
           // Quota-aware scheduling: reserve the estimated budget for this
           // dispatch (opt-in, same env gate as the pre-request check). Best-effort
@@ -1093,6 +1095,7 @@ export async function handleRoundRobinCombo({
       }
     }
   } catch (err) {
+    if (isRuntimePolicyError(err)) return runtimePolicyErrorResponse();
     // G4: unexpected exception in the round-robin loop must never crash the
     // request silently — surface a 500 instead of hanging the client.
     log.error?.("COMBO-RR", "Unexpected error in round-robin loop", err);

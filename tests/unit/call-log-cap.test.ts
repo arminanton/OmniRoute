@@ -162,10 +162,9 @@ test("saveCallLog stores only summary metadata in SQLite and writes detailed art
     (detail?.pipelinePayloads as PayloadMap | undefined)?.clientResponse?.body?.final,
     true
   );
-  assert.match(
-    detail?.artifactRelPath || "",
-    /^2026-03-30\/2026-03-30T12-34-56\.789Z_req_artifact_1\.json$/
-  );
+  assert.ok(detail);
+  assert.notEqual(detail.id, logId, "caller ID remains an alias, not a physical PK");
+  assert.equal(detail.artifactRelPath, `2026-03-30/2026-03-30T12-34-56.789Z_${detail.id}.json`);
 
   const db = core.getDbInstance();
   const columns = db
@@ -183,7 +182,7 @@ test("saveCallLog stores only summary metadata in SQLite and writes detailed art
       FROM call_logs WHERE id = ?
     `
     )
-    .get(logId);
+    .get(detail.id);
   assert.equal((summaryRow as CallLogRow).detail_state, "ready");
   assert.equal((summaryRow as CallLogRow).cache_source, "semantic");
   assert.equal((summaryRow as CallLogRow).has_request_body, 1);
@@ -196,7 +195,7 @@ test("saveCallLog stores only summary metadata in SQLite and writes detailed art
   const artifact = JSON.parse(serializedArtifact);
   assert.equal(Buffer.byteLength(serializedArtifact), detail.artifactSizeBytes);
   assert.match(detail.artifactSha256 || "", /^[0-9a-f]{8}$/);
-  assert.equal(artifact.summary.id, logId);
+  assert.equal(artifact.summary.id, detail.id);
   assert.equal(artifact.summary.requestedModel, "openai/gpt-5");
   assert.equal(artifact.summary.comboExecutionKey, "combo-a:0:step-openai-a");
 });
@@ -266,7 +265,7 @@ test("rotateCallLogs removes expired rows and orphaned artifacts but keeps fresh
   const freshRow = core
     .getDbInstance()
     .prepare("SELECT artifact_relpath FROM call_logs WHERE id = ?")
-    .get("fresh-log");
+    .get((await callLogs.getCallLogById("fresh-log"))!.id);
   const freshAbsPath = path.join(
     TEST_DATA_DIR,
     "call_logs",
@@ -301,7 +300,7 @@ test("rotateCallLogs removes expired rows and orphaned artifacts but keeps fresh
     (
       db
         .prepare("SELECT COUNT(*) AS cnt FROM call_logs WHERE id = ?")
-        .get("fresh-log") as CallLogRow
+        .get((await callLogs.getCallLogById("fresh-log"))!.id) as CallLogRow
     ).cnt,
     1
   );
@@ -527,7 +526,7 @@ test("saveCallLog keeps large payloads out of SQLite while preserving explicit d
       FROM call_logs WHERE id = ?
     `
     )
-    .get("artifact-only-large-payload");
+    .get((await callLogs.getCallLogById("artifact-only-large-payload"))!.id);
   assert.equal((row as CallLogRow).detail_state, "ready");
   assert.equal((row as CallLogRow).has_request_body, 1);
   assert.equal(typeof (row as CallLogRow).artifact_relpath, "string");
@@ -578,7 +577,7 @@ test("saveCallLog truncates oversized call log artifacts for storage", async () 
       FROM call_logs WHERE id = ?
     `
     )
-    .get("truncated-artifact");
+    .get((await callLogs.getCallLogById("truncated-artifact"))!.id);
   assert.equal((row as CallLogRow).detail_state, "ready");
   assert.ok((row as CallLogRow).artifact_size_bytes <= 512 * 1024);
 
@@ -621,7 +620,7 @@ test("saveCallLog omits oversized non-stream pipeline payloads to enforce artifa
       FROM call_logs WHERE id = ?
     `
     )
-    .get("truncated-pipeline-artifact");
+    .get((await callLogs.getCallLogById("truncated-pipeline-artifact"))!.id);
   assert.equal((row as CallLogRow).detail_state, "ready");
   assert.ok((row as CallLogRow).artifact_size_bytes <= 512 * 1024);
 
@@ -665,7 +664,7 @@ test("saveCallLog honors CALL_LOG_PIPELINE_MAX_SIZE_KB for pipeline artifacts", 
       FROM call_logs WHERE id = ?
     `
     )
-    .get("configured-pipeline-artifact-cap");
+    .get((await callLogs.getCallLogById("configured-pipeline-artifact-cap"))!.id);
   assert.equal((row as CallLogRow).detail_state, "ready");
   assert.ok((row as CallLogRow).artifact_size_bytes <= 8 * 1024);
 
@@ -707,7 +706,7 @@ test("saveCallLog falls back to a compact sentinel when the configured cap is ve
       FROM call_logs WHERE id = ?
     `
     )
-    .get("tiny-pipeline-artifact-cap");
+    .get((await callLogs.getCallLogById("tiny-pipeline-artifact-cap"))!.id);
   assert.equal((row as CallLogRow).detail_state, "ready");
   assert.ok((row as CallLogRow).artifact_size_bytes <= 1024);
 
@@ -755,7 +754,7 @@ test("saveCallLog preserves a truncated error in size-limit-fallback artifacts (
       FROM call_logs WHERE id = ?
     `
     )
-    .get("tiny-cap-preserves-error");
+    .get((await callLogs.getCallLogById("tiny-cap-preserves-error"))!.id);
   assert.equal((row as CallLogRow).detail_state, "ready");
 
   const artifactPath = path.join(TEST_DATA_DIR, "call_logs", (row as CallLogRow).artifact_relpath);
@@ -797,7 +796,7 @@ test("CALL_LOG_PIPELINE_MAX_SIZE_KB does not cap artifacts without pipeline deta
       FROM call_logs WHERE id = ?
     `
     )
-    .get("non-pipeline-artifact-ignores-pipeline-cap");
+    .get((await callLogs.getCallLogById("non-pipeline-artifact-ignores-pipeline-cap"))!.id);
   assert.equal((row as CallLogRow).detail_state, "ready");
   assert.ok((row as CallLogRow).artifact_size_bytes > 8 * 1024);
 

@@ -17,6 +17,8 @@ import {
   type FitnessTier,
 } from "../../../src/domain/pipeline.ts";
 import { renderPrompt } from "../../../src/domain/prompts.ts";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
+import { runtimePolicyErrorResponse } from "../../utils/error.ts";
 import { getTaskFitness } from "./taskFitness.ts";
 
 // ---------------------------------------------------------------------------
@@ -148,6 +150,9 @@ function createStageExecutor(
 
     log.info("PIPELINE", `Stage: tier=${fitnessTier}, model=${model}, stream=${stream}`);
     const response = await handleChatCore(stageBody, model);
+    // The buffered engine drops response metadata. Carry a local denial through
+    // its stage-error exit without consuming its body; the adapter below returns it.
+    if (isRuntimePolicyResponse(response)) throw response;
 
     // Final stage: return raw Response for streaming
     if (stream) {
@@ -310,12 +315,24 @@ export async function handlePipelineCombo({
     ((settings as Record<string, unknown>).max_reflection_loops as number) ??
     1;
 
+  let terminalPolicyResponse: Response | null = null;
   const wrappedExecutor = async (args: StageExecutorArgs) => {
-    // fitnessTier is now passed by the pipeline engine via StageExecutorArgs
-    return stageExecutor({ ...args, fitnessTier: args.fitnessTier as FitnessTier | undefined });
+    if (terminalPolicyResponse) throw terminalPolicyResponse;
+    try {
+      // fitnessTier is now passed by the pipeline engine via StageExecutorArgs
+      return await stageExecutor({
+        ...args,
+        fitnessTier: args.fitnessTier as FitnessTier | undefined,
+      });
+    } catch (error) {
+      if (isRuntimePolicyResponse(error)) terminalPolicyResponse = error as Response;
+      else if (isRuntimePolicyError(error)) terminalPolicyResponse = runtimePolicyErrorResponse();
+      throw error;
+    }
   };
 
   let result = await executePipeline(pipelineConfig, wrappedExecutor);
+  if (terminalPolicyResponse) return terminalPolicyResponse;
 
   // ── Handle reflection loops ───────────────────────────────────────────────
   // While the reflect stage reports "fail", re-run the whole pipeline up to
@@ -334,6 +351,7 @@ export async function handlePipelineCombo({
 
     const retryConfig = buildPipelineConfig(promptText, taskType);
     const retryResult = await executePipeline(retryConfig, wrappedExecutor);
+    if (terminalPolicyResponse) return terminalPolicyResponse;
 
     // Adopt the retry only if it passed; otherwise keep scanning until the loop
     // budget is exhausted, then fall through with the original result.

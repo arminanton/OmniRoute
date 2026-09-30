@@ -1,3 +1,4 @@
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { handleImageGeneration } from "@omniroute/open-sse/handlers/imageGeneration.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
 import {
@@ -10,7 +11,11 @@ import {
   getImageModelEntry,
   modalitiesRequireImageInput,
 } from "@omniroute/open-sse/config/imageRegistry.ts";
-import { errorResponse, unavailableResponse } from "@omniroute/open-sse/utils/error.ts";
+import {
+  errorResponse,
+  runtimePolicyErrorResponse,
+  unavailableResponse,
+} from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { isAllRateLimitedCredentials } from "@/app/api/v1/_shared/rateLimit";
 import * as log from "@/sse/utils/logger";
@@ -33,6 +38,7 @@ import {
   type LocalSyncedEndpointRoute,
 } from "@/lib/providerModels/syncedEndpointRouting";
 import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
+import { runMaxaiConnectionTransport } from "@omniroute/open-sse/services/maxaiTransport.ts";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { calculateModalCost } from "@/lib/usage/costCalculator";
 import { generateRequestId } from "@/shared/utils/requestId";
@@ -317,8 +323,9 @@ async function postHandler(request, context) {
     requestedModel,
     credentials,
     execute: async (attemptCredentials) => {
+      const isMaxai = provider === "maxai" || provider === "mx";
       let proxyInfo = null;
-      if (attemptCredentials?.connectionId) {
+      if (!isMaxai && attemptCredentials?.connectionId) {
         try {
           proxyInfo = await resolveProxyForConnection(attemptCredentials.connectionId);
         } catch {
@@ -348,6 +355,30 @@ async function postHandler(request, context) {
               peerLocality: request.headers.get(AUTHZ_HEADER_PEER_LOCALITY),
             })
         );
+
+      if (isMaxai) {
+        // Every fallback attempt selects and verifies its own account transport.
+        // Missing connection identity must never fall through to generateImage.
+        if (!attemptCredentials?.connectionId) {
+          return {
+            success: false,
+            status: 503,
+            error: "MaxAI image generation requires a connection.",
+          };
+        }
+        try {
+          request.signal?.throwIfAborted();
+          return await runMaxaiConnectionTransport(attemptCredentials.connectionId, generateImage);
+        } catch (error) {
+          if (isRuntimePolicyError(error)) throw error;
+          return {
+            success: false,
+            status: request.signal?.aborted ? 499 : 503,
+            error: "MaxAI image generation unavailable.",
+            retryable: !request.signal?.aborted,
+          };
+        }
+      }
 
       return attemptCredentials?.connectionId
         ? runWithProxyContext(proxyInfo?.proxy || null, generateImage).catch((err: any) => ({
@@ -395,4 +426,11 @@ async function postHandler(request, context) {
   return errorResponse((result as any).status, message);
 }
 
-export const POST = withInjectionGuard(postHandler);
+export const POST = withInjectionGuard(async (request, context) => {
+  try {
+    return await postHandler(request, context);
+  } catch (error) {
+    if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
+    throw error;
+  }
+});

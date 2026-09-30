@@ -17,6 +17,7 @@
  */
 
 import { assertRuntimeProviderAvailable } from "@/shared/constants/providerRetirement";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 
 import { getExecutor } from "../../executors/index.ts";
 import { isCliproxyapiDeepModeEnabled } from "../../executors/cliproxyapi.ts";
@@ -70,7 +71,8 @@ async function loadCliproxyapiSettings(): Promise<{
       ],
       dedicatedApiKey: resolveDedicatedCliproxyapiApiKey(allSettings),
     };
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return {
       fallbackCodes: [...DEFAULT_FALLBACK_CODES],
       dedicatedApiKey: resolveDedicatedCliproxyapiApiKey(null),
@@ -192,6 +194,7 @@ export async function resolveExecutorWithProxy(
     try {
       result = await nativeExec.execute(input);
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       const errMsg = err instanceof Error ? err.message : String(err);
       log?.info?.(
         "UPSTREAM_PROXY",
@@ -206,7 +209,7 @@ export async function resolveExecutorWithProxy(
       }
     }
 
-    if (!isRetryableStatus(result.response.status)) {
+    if (isRuntimePolicyResponse(result.response) || !isRetryableStatus(result.response.status)) {
       return result;
     }
     log?.info?.(

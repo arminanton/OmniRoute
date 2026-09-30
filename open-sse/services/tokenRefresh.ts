@@ -12,7 +12,10 @@
 // tests) keep a stable surface.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import { hasBlockingProxyAssignment, hasBlockingProxyAssignmentForProvider } from "@/lib/db/proxies/guards";
+import {
+  hasBlockingProxyAssignment,
+  hasBlockingProxyAssignmentForProvider,
+} from "@/lib/db/proxies/guards";
 import {
   NOUS_OAUTH_INFERENCE_PSD_KEY,
   validateNousOAuthInferenceBaseUrl,
@@ -20,8 +23,14 @@ import {
 } from "../config/nousOAuth.ts";
 import { PROVIDERS } from "../config/constants.ts";
 import { getCodexAuthIdentityHeaders } from "../config/codexClient.ts";
-import { runWithProxyContext, resolveProxyForRequest, hasAmbientProxyContext, getAmbientProxyType } from "../utils/proxyFetch.ts";
+import {
+  runWithProxyContext,
+  resolveProxyForRequest,
+  hasAmbientProxyContext,
+  getAmbientProxyType,
+} from "../utils/proxyFetch.ts";
 import { serializeRefresh } from "./refreshSerializer.ts";
+import { parseTokenExpiryMs } from "../utils/tokenExpiry.ts";
 import {
   extractOAuthErrorCode,
   isUnrecoverableRefreshError,
@@ -831,9 +840,7 @@ export async function getAccessToken(
   // the legacy `connectionId`-less path would silently swallow the callback,
   // leaving DB rows out of sync with rotated tokens (Codex/OpenAI). We still
   // resolve the promise to all waiters with the refreshed credentials.
-  const refreshPromise = serializeRefresh(provider, () =>
-    _getAccessTokenInternal(provider, credentials, log, proxyConfig)
-  )
+  const refreshPromise = _getAccessTokenWithStalenessCheck(provider, credentials, log, proxyConfig)
     .then(async (result) => {
       if (result?.accessToken && effectiveOnPersist) {
         // #4038: same compare-and-swap guard as Layer 1 — skip the persist if a concurrent
@@ -867,11 +874,14 @@ export async function getAccessToken(
   return refreshPromise;
 }
 
-/**
- * Internal helper: performs the DB staleness check then calls the actual refresh.
- * Only called from the per-connection mutex path (Layer 1 above).
- */
+/** Wait for the rotation-group lane BEFORE checking consumed/stale tokens. */
 async function _getAccessTokenWithStalenessCheck(provider, credentials, log, proxyConfig) {
+  return serializeRefresh(provider, () =>
+    _refreshWithFreshCredentials(provider, credentials, log, proxyConfig)
+  );
+}
+
+async function _refreshWithFreshCredentials(provider, credentials, log, proxyConfig) {
   // ROTATION MAP CHECK (codex-multi-auth pattern): if this refresh_token was
   // rotated very recently (within ROTATION_MAP_TTL_MS), reuse the cached new
   // tokens INSTEAD of hitting upstream. Auth0 treats re-use of a rotated token
@@ -899,7 +909,9 @@ async function _getAccessTokenWithStalenessCheck(provider, credentials, log, pro
       const dbConnection = await getProviderConnectionById(credentials.connectionId);
       if (dbConnection && dbConnection.refreshToken) {
         const now = Date.now();
-        const dbExpiresAt = dbConnection.expiresAt ? new Date(dbConnection.expiresAt).getTime() : 0;
+        const dbExpiresAt = parseTokenExpiryMs(
+          dbConnection.tokenExpiresAt || dbConnection.expiresAt
+        );
 
         if (dbConnection.refreshToken !== credentials.refreshToken) {
           log?.info?.(
@@ -917,7 +929,7 @@ async function _getAccessTokenWithStalenessCheck(provider, credentials, log, pro
               // Return absolute expiresAt so downstream callers do NOT recompute lifetime
               // from a relative expiresIn value (which would incorrectly extend the TTL).
               // expiresIn intentionally omitted here.
-              expiresAt: dbConnection.expiresAt,
+              expiresAt: new Date(dbExpiresAt).toISOString(),
             };
           } else {
             // DB token is also expired, but it's the NEWEST one. We must use it to refresh.
@@ -936,8 +948,9 @@ async function _getAccessTokenWithStalenessCheck(provider, credentials, log, pro
     } catch (e) {
       log?.warn?.(
         "TOKEN_REFRESH",
-        `Failed to check DB for stale token: ${e instanceof Error ? e.message : String(e)}`
+        "Unable to verify current refresh credentials; refusing token refresh"
       );
+      return null;
     }
   }
 
@@ -945,9 +958,7 @@ async function _getAccessTokenWithStalenessCheck(provider, credentials, log, pro
   // Front 1: serialize the network refresh across all connections of the same
   // rotation group (e.g. Codex+openai share one Auth0 client) so two sibling
   // accounts never refresh concurrently and trip Auth0 family revocation.
-  const result = await serializeRefresh(provider, () =>
-    _getAccessTokenInternal(provider, credentials, log, proxyConfig)
-  );
+  const result = await _getAccessTokenInternal(provider, credentials, log, proxyConfig);
 
   // Record the rotation so subsequent stale callers can be redirected to the
   // new tokens without re-hitting upstream (which would trigger Auth0 family

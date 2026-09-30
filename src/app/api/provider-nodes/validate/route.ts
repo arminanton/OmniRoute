@@ -1,4 +1,7 @@
 import { NextResponse } from "next/server";
+import { validateProviderNodeCandidate } from "@/shared/runtimePolicyEntrypoints";
+import { isRuntimePolicyError, markRuntimePolicyResponse } from "@/shared/runtimePolicy";
+import { buildErrorBody } from "@omniroute/open-sse/utils/error.ts";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getAuditRequestContext, logAuditEvent } from "@/lib/compliance/index";
 import { validateClaudeCodeCompatibleProvider } from "@/lib/providers/validation";
@@ -198,6 +201,9 @@ export async function POST(request) {
     if (isValidationFailure(validation)) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
+    // This unsaved probe has no server-resolved node ID. It cannot borrow a
+    // configured grant by supplying an identity in request JSON.
+    validateProviderNodeCandidate({ ...validation.data, id: undefined });
     const { baseUrl, apiKey, type, compatMode, apiType, chatPath, modelsPath, modelId } =
       validation.data;
     const trimmedModelId = typeof modelId === "string" ? modelId.trim() : "";
@@ -321,6 +327,11 @@ export async function POST(request) {
     }
     return NextResponse.json({ valid: false, error: getModelsErrorMessage(res.status) });
   } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      return markRuntimePolicyResponse(
+        NextResponse.json(buildErrorBody(403, "Runtime policy denied"), { status: 403 })
+      );
+    }
     const attemptedBaseUrl =
       rawBody && typeof rawBody === "object" && "baseUrl" in rawBody
         ? String((rawBody as { baseUrl?: unknown }).baseUrl || "")

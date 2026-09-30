@@ -26,7 +26,7 @@ import {
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { assembleStandalone } from "./assembleStandalone.mjs";
+import { assembleStandalone, assertRequiredStandaloneModules } from "./assembleStandalone.mjs";
 import { isNativeExecutable, resolveLocalBinEntry } from "./buildToolRunner.mjs";
 import { resolveBundledNpmEntry } from "./resolveNpmEntry.ts";
 import {
@@ -714,6 +714,10 @@ if (remainingUnexpectedFiles.length > 0) {
   );
   process.exit(1);
 }
+
+// Retention alone is insufficient: required authority bytes must still match
+// the canonical source after staging prune, before publish can report success.
+assertRequiredStandaloneModules(ROOT, DIST_DIR);
 
 // -- Step 11: Resolve workspace: protocol dependencies -----------------
 // npm/pnpm workspace protocol specifiers (workspace:*, workspace:^, ...)

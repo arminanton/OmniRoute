@@ -458,68 +458,72 @@ class AdaptiveAdmissionRuntimeImpl implements AdaptiveAdmissionRuntime {
       return response;
     }
 
-    const upstream = response.body;
-    const reader = upstream.getReader();
+    const reader = response.body.getReader();
     let settled = false;
     let readerCancelled = false;
+    let cancellation: Promise<void> | null = null;
+    let streamController: ReadableStreamDefaultController<Uint8Array>;
 
     const settle = (outcome: AdmissionReleaseOutcome): void => {
       if (settled) return;
       settled = true;
+      detachAbort();
+      reader.releaseLock();
       releaseOnce(lease, outcome, admittedAtMs, nowMs);
     };
 
-    const cancelReader = (reason?: unknown): void => {
-      if (readerCancelled) return;
+    const cancelReader = (reason?: unknown): Promise<void> => {
+      if (cancellation) return cancellation;
+      if (settled) return Promise.resolve();
+      // cancel() resolves pending reads before its underlying cleanup finishes.
+      // Suppress that EOF path until the actual cancel promise settles.
       readerCancelled = true;
-      void reader.cancel(reason).catch(() => {
-        /* ignore cancel races */
-      });
+      detachAbort();
+      cancellation = reader
+        .cancel(reason)
+        .catch(() => undefined)
+        .then(() => {
+          settle("cancelled");
+          try {
+            streamController.close();
+          } catch {
+            /* consumer already cancelled */
+          }
+        });
+      return cancellation;
     };
 
     const onAbort = (): void => {
-      cancelReader(options.signal?.reason);
-      settle("cancelled");
+      void cancelReader(options.signal?.reason);
     };
-
-    if (options.signal) {
-      if (options.signal.aborted) {
-        onAbort();
-      } else {
-        options.signal.addEventListener("abort", onAbort, { once: true });
-      }
-    }
-
     const detachAbort = (): void => {
       options.signal?.removeEventListener("abort", onAbort);
     };
 
     const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+        if (options.signal?.aborted) onAbort();
+        else options.signal?.addEventListener("abort", onAbort, { once: true });
+      },
       async pull(controller) {
-        if (settled) {
-          controller.close();
-          return;
-        }
+        if (settled || readerCancelled) return;
         try {
           const { done, value } = await reader.read();
+          if (settled || readerCancelled) return;
           if (done) {
-            detachAbort();
             settle(classifyHttpOutcome(response.status, options.signal));
             controller.close();
             return;
           }
           controller.enqueue(value);
         } catch (err) {
-          detachAbort();
+          if (settled || readerCancelled) return;
           settle(options.signal?.aborted ? "cancelled" : "upstream_error");
           controller.error(err);
         }
       },
-      cancel(reason) {
-        detachAbort();
-        cancelReader(reason);
-        settle("cancelled");
-      },
+      cancel: cancelReader,
     });
 
     return new Response(stream, {

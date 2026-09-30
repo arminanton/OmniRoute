@@ -24,6 +24,8 @@ const {
 const leaseDb = await import("../../src/lib/db/exclusiveConnectionLeases.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const reasoningCache = await import("../../open-sse/services/reasoningCache.ts");
+const { createReasoningCacheKeyContext } =
+  await import("../../open-sse/services/reasoningCacheContext.ts");
 const { composeIdempotencyKey, checkIdempotencyCache } =
   await import("../../open-sse/handlers/chatCore/idempotency.ts");
 const accountSemaphores = await import("../../open-sse/services/accountSemaphore.ts");
@@ -223,7 +225,8 @@ test("managed chat blocks missing and stale leases with zero provider dispatch",
 
 test("revoking a managed lease after a server-owned tool call returns 409 before follow-up send", async () => {
   const followUpOwner = `vlo_${Buffer.from(
-    randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", ""), "hex"
+    randomUUID().replaceAll("-", "") + randomUUID().replaceAll("-", ""),
+    "hex"
   ).toString("base64url")}`;
   const connection = await seedConnection("openai", { apiKey: "sk-lease-tool-followup" });
   const key = await seedManagedKey([connection.id]);
@@ -269,13 +272,18 @@ test("revoking a managed lease after a server-owned tool call returns 409 before
     });
   };
   try {
-    const response = await handleChat(managedRequest(key.key, acquired.lease.generation, {}, {}, followUpOwner));
+    const response = await handleChat(
+      managedRequest(key.key, acquired.lease.generation, {}, {}, followUpOwner)
+    );
     const payload = await response.json();
     assert.equal(response.status, 409);
     assert.match(String(payload.error?.code), /^LEASE_/);
     assert.equal(dispatches, 1);
-    assert.equal(getPendingRequests().details[connection.id], undefined,
-      "rejected follow-up must clear the pending marker");
+    assert.equal(
+      getPendingRequests().details[connection.id],
+      undefined,
+      "rejected follow-up must clear the pending marker"
+    );
   } finally {
     if (previousFlag === undefined) delete process.env.SERVER_OWNED_TOOL_LOOP_ENABLED;
     else process.env.SERVER_OWNED_TOOL_LOOP_ENABLED = previousFlag;
@@ -589,106 +597,169 @@ test("semantic response from one managed owner cannot replay to another", async 
   assert.notEqual(second.headers.get("x-omniroute-cache"), "HIT");
 });
 
-test(
-  "managed reasoning replay never writes or sends a different owner's tool-call text upstream",
-  { timeout: 15_000 },
-  async () => {
-    const { key, firstLease, secondLease } = await seedManagedOwnerPair("xiaomi-mimo");
-    const toolId = `call-managed-replay-${randomUUID()}`;
-    const secret = `OWNER_A_PRIVATE_REASONING_${randomUUID()}`;
-    const model = "xiaomi-mimo/mimo-v1";
-    let firstCalls = 0;
-    let secondCalls = 0;
-    let secondUpstreamBody = "";
-    globalThis.fetch = async (_url, init) => {
-      const auth = new Headers(init?.headers).get("authorization") ?? "";
-      if (auth === "Bearer sk-managed-owner-a") {
-        firstCalls += 1;
-        return new Response(
-          JSON.stringify({
-            id: "reasoning-owner-a",
-            object: "chat.completion",
-            model: "mimo-v1",
-            choices: [
-              {
-                index: 0,
-                message: {
-                  role: "assistant",
-                  content: null,
-                  reasoning_content: secret,
-                  tool_calls: [
-                    { id: toolId, type: "function", function: { name: "lookup", arguments: "{}" } },
-                  ],
+for (const stream of [false, true]) {
+  test(
+    `managed reasoning replay never writes or sends private tool-call text upstream (stream=${stream})`,
+    { timeout: 15_000 },
+    async () => {
+      const { key, firstLease, secondLease } = await seedManagedOwnerPair("xiaomi-mimo");
+      const cacheContext = createReasoningCacheKeyContext(key.key);
+      assert.ok(cacheContext);
+      const toolId = `call-managed-replay-${randomUUID()}`;
+      const secret = `OWNER_A_PRIVATE_REASONING_${randomUUID()}`;
+      const model = "xiaomi-mimo/mimo-v1";
+      let firstCalls = 0;
+      let secondCalls = 0;
+      let secondUpstreamBody = "";
+      globalThis.fetch = async (_url, init) => {
+        const auth = new Headers(init?.headers).get("authorization") ?? "";
+        if (auth === "Bearer sk-managed-owner-a") {
+          firstCalls += 1;
+          if (stream) {
+            const chunk = {
+              id: "reasoning-owner-a",
+              object: "chat.completion.chunk",
+              model: "mimo-v1",
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    role: "assistant",
+                    reasoning_content: secret,
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: toolId,
+                        type: "function",
+                        function: { name: "lookup", arguments: "{}" },
+                      },
+                    ],
+                  },
+                  finish_reason: "tool_calls",
                 },
-                finish_reason: "tool_calls",
-              },
+              ],
+            };
+            return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+              status: 200,
+              headers: { "Content-Type": "text/event-stream" },
+            });
+          }
+          return new Response(
+            JSON.stringify({
+              id: "reasoning-owner-a",
+              object: "chat.completion",
+              model: "mimo-v1",
+              choices: [
+                {
+                  index: 0,
+                  message: {
+                    role: "assistant",
+                    content: null,
+                    reasoning_content: secret,
+                    tool_calls: [
+                      {
+                        id: toolId,
+                        type: "function",
+                        function: { name: "lookup", arguments: "{}" },
+                      },
+                    ],
+                  },
+                  finish_reason: "tool_calls",
+                },
+              ],
+              usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        if (auth === "Bearer sk-managed-owner-b") {
+          secondCalls += 1;
+          secondUpstreamBody = String(init?.body ?? "");
+          if (stream) {
+            const chunk = {
+              id: "owner-b",
+              object: "chat.completion.chunk",
+              model: "mimo-v1",
+              choices: [
+                {
+                  index: 0,
+                  delta: { role: "assistant", content: "owner B tool result" },
+                  finish_reason: "stop",
+                },
+              ],
+            };
+            return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+              status: 200,
+              headers: { "Content-Type": "text/event-stream" },
+            });
+          }
+          return buildOpenAIResponse("owner B tool result");
+        }
+        throw new Error(`unexpected managed upstream credential: ${auth}`);
+      };
+      const headersA = {
+        "X-OmniRoute-No-Cache": "true",
+        "X-OmniRoute-Session-Id": "owner-a-replay",
+      };
+      const headersB = {
+        "X-OmniRoute-No-Cache": "true",
+        "X-OmniRoute-Session-Id": "owner-b-replay",
+      };
+      const firstBody = {
+        model,
+        stream,
+        messages: [{ role: "user", content: "call lookup, owner A" }],
+      };
+      const secondBody = {
+        model,
+        stream,
+        messages: [
+          { role: "user", content: "call lookup, owner B" },
+          {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              { id: toolId, type: "function", function: { name: "lookup", arguments: "{}" } },
             ],
-            usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } }
+          },
+          { role: "tool", tool_call_id: toolId, content: "ok" },
+          { role: "user", content: "continue after tool result" },
+        ],
+      };
+      try {
+        const first = await handleManagedWithin(
+          managedRequest(key.key, firstLease.generation, headersA, firstBody, OWNER)
         );
-      }
-      if (auth === "Bearer sk-managed-owner-b") {
-        secondCalls += 1;
-        secondUpstreamBody = String(init?.body ?? "");
-        return buildOpenAIResponse("owner B tool result");
-      }
-      throw new Error(`unexpected managed upstream credential: ${auth}`);
-    };
-    const headersA = { "X-OmniRoute-No-Cache": "true", "X-OmniRoute-Session-Id": "owner-a-replay" };
-    const headersB = { "X-OmniRoute-No-Cache": "true", "X-OmniRoute-Session-Id": "owner-b-replay" };
-    const firstBody = {
-      model,
-      messages: [{ role: "user", content: "call lookup, owner A" }],
-    };
-    const secondBody = {
-      model,
-      messages: [
-        { role: "user", content: "call lookup, owner B" },
-        {
-          role: "assistant",
-          content: null,
-          tool_calls: [
-            { id: toolId, type: "function", function: { name: "lookup", arguments: "{}" } },
-          ],
-        },
-        { role: "tool", tool_call_id: toolId, content: "ok" },
-        { role: "user", content: "continue after tool result" },
-      ],
-    };
-    try {
-      const first = await handleManagedWithin(
-        managedRequest(key.key, firstLease.generation, headersA, firstBody, OWNER)
-      );
-      assert.equal(first.status, 200);
-      await first.text();
-      assert.equal(firstCalls, 1);
-      assert.equal(
-        reasoningCache.lookupReasoning(toolId),
-        null,
-        "managed owner A must not populate the global tool-ID reasoning cache"
-      );
+        assert.equal(first.status, 200);
+        await first.text();
+        assert.equal(firstCalls, 1);
+        assert.equal(
+          reasoningCache.lookupReasoning(toolId, cacheContext),
+          null,
+          "managed owner A must not populate the principal-scoped reasoning cache"
+        );
 
-      // A cache entry can already exist from a non-managed caller. The read path
-      // must also ignore it for managed owner B, independent of owner A's write guard.
-      reasoningCache.cacheReasoning(toolId, "xiaomi-mimo", "mimo-v1", secret);
-      assert.equal(reasoningCache.lookupReasoning(toolId), secret);
-      const second = await handleManagedWithin(
-        managedRequest(key.key, secondLease.generation, headersB, secondBody, OWNER_B)
-      );
-      assert.equal(second.status, 200);
-      await second.text();
-      assert.equal(secondCalls, 1);
-      assert.ok(secondUpstreamBody.includes(toolId), "probe must send the matching tool call");
-      assert.ok(
-        !secondUpstreamBody.includes(secret),
-        "owner A reasoning must never appear in owner B's outbound provider request"
-      );
-    } finally {
-      reasoningCache.deleteReasoningCacheEntry(toolId);
+        // A cache entry can already exist from a non-managed caller. The read path
+        // must also ignore it for managed owner B, independent of owner A's write guard.
+        reasoningCache.cacheReasoning(toolId, "xiaomi-mimo", "mimo-v1", secret, cacheContext);
+        assert.equal(reasoningCache.lookupReasoning(toolId, cacheContext), secret);
+        const second = await handleManagedWithin(
+          managedRequest(key.key, secondLease.generation, headersB, secondBody, OWNER_B)
+        );
+        assert.equal(second.status, 200);
+        await second.text();
+        assert.equal(secondCalls, 1);
+        assert.ok(secondUpstreamBody.includes(toolId), "probe must send the matching tool call");
+        assert.ok(
+          !secondUpstreamBody.includes(secret),
+          "owner A reasoning must never appear in owner B's outbound provider request"
+        );
+      } finally {
+        reasoningCache.deleteReasoningCacheEntry(toolId, cacheContext);
+      }
     }
-  }
-);
+  );
+}
 
 test("changing prompt, tools, and request model does not change the owner binding", async () => {
   const connection = await seedConnection("openai");

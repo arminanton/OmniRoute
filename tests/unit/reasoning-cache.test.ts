@@ -7,17 +7,20 @@
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-
-import { mkdtempSync } from "node:fs";
+import { createHmac } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "omniroute-reasoning-"));
-process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "reasoning-cache-test-secret";
+const previousDataDir = process.env.DATA_DIR;
+const previousApiKeySecret = process.env.API_KEY_SECRET;
+const testDataDir = mkdtempSync(join(tmpdir(), "omniroute-reasoning-"));
+const TEST_API_KEY_SECRET = "reasoning-cache-test-secret";
+process.env.DATA_DIR = testDataDir;
+process.env.API_KEY_SECRET = TEST_API_KEY_SECRET;
 
-// ──────────── Direct service import ────────────
-
-import {
+// Import DB-dependent modules only after the isolated test environment is ready.
+const {
   buildAssistantMessageCacheKey,
   cacheReasoningFromAssistantMessage,
   cacheReasoning,
@@ -32,20 +35,33 @@ import {
   isDeepSeekReasoningModel,
   requiresReasoningReplay,
   cleanupReasoningCache,
-} from "../../open-sse/services/reasoningCache.ts";
-import { translateRequest } from "../../open-sse/translator/index.ts";
-import { FORMATS } from "../../open-sse/translator/formats.ts";
-import { ensureToolCallIds } from "../../open-sse/translator/helpers/toolCallHelper.ts";
-import { translateNonStreamingResponse } from "../../open-sse/handlers/responseTranslator.ts";
-import { getDbInstance } from "../../src/lib/db/core.ts";
-import { getReasoningCache, setReasoningCache } from "../../src/lib/db/reasoningCache.ts";
-import { DELETE, GET } from "../../src/app/api/cache/reasoning/route.ts";
-import { createApiKey } from "../../src/lib/db/apiKeys.ts";
-import { updateSettings } from "../../src/lib/db/settings";
-import {
-  clearModelsDevCapabilities,
-  saveModelsDevCapabilities,
-} from "../../src/lib/modelsDevSync.ts";
+} = await import("../../open-sse/services/reasoningCache.ts");
+const { createLocalReasoningCacheContext } =
+  await import("../../open-sse/services/reasoningCacheContext.ts");
+const { translateRequest } = await import("../../open-sse/translator/index.ts");
+const { FORMATS } = await import("../../open-sse/translator/formats.ts");
+const { ensureToolCallIds } = await import("../../open-sse/translator/helpers/toolCallHelper.ts");
+const { translateNonStreamingResponse } =
+  await import("../../open-sse/handlers/responseTranslator.ts");
+const { getDbInstance, resetDbInstance } = await import("../../src/lib/db/core.ts");
+const { getReasoningCache, setReasoningCache, deleteReasoningCache } =
+  await import("../../src/lib/db/reasoningCache.ts");
+const { DELETE, GET } = await import("../../src/app/api/cache/reasoning/route.ts");
+const { createApiKey } = await import("../../src/lib/db/apiKeys.ts");
+const { updateSettings } = await import("../../src/lib/db/settings.ts");
+const { clearModelsDevCapabilities, saveModelsDevCapabilities } =
+  await import("../../src/lib/modelsDevSync.ts");
+
+const reasoningCacheContext = createLocalReasoningCacheContext();
+assert.ok(reasoningCacheContext);
+
+// DB-only fixtures use the documented v2 tuple, never a service storage-key bypass.
+function storageKeyForTest(logicalId: string): string {
+  const tuple = ["reasoning-cache-v2", "local", "", null, logicalId];
+  return `rc2h:${createHmac("sha256", TEST_API_KEY_SECRET)
+    .update(JSON.stringify(tuple))
+    .digest("hex")}`;
+}
 
 function buildCapability(overrides = {}) {
   return {
@@ -75,7 +91,17 @@ before(async () => {
 });
 
 after(async () => {
-  await updateSettings({ requireLogin: true });
+  try {
+    await updateSettings({ requireLogin: true });
+    clearReasoningCacheAll();
+  } finally {
+    resetDbInstance();
+    rmSync(testDataDir, { recursive: true, force: true });
+    if (previousDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previousDataDir;
+    if (previousApiKeySecret === undefined) delete process.env.API_KEY_SECRET;
+    else process.env.API_KEY_SECRET = previousApiKeySecret;
+  }
 });
 
 describe("Reasoning Replay Cache — Service Layer", () => {
@@ -93,18 +119,28 @@ describe("Reasoning Replay Cache — Service Layer", () => {
       "call_test_1",
       "deepseek",
       "deepseek-reasoner",
+      "The user wants to read the file...",
+      reasoningCacheContext
+    );
+    const result = lookupReasoning("call_test_1", reasoningCacheContext);
+    assert.equal(result, "The user wants to read the file...");
+    assert.equal(
+      getReasoningCache(storageKeyForTest("call_test_1"))?.reasoning,
       "The user wants to read the file..."
     );
-    const result = lookupReasoning("call_test_1");
-    assert.equal(result, "The user wants to read the file...");
-    assert.equal(getReasoningCache("call_test_1")?.reasoning, "The user wants to read the file...");
+    assert.equal(getReasoningCache("call_test_1"), null);
   });
 
   it("should fall back to SQLite when memory misses", () => {
     clearReasoningCacheAll();
-    setReasoningCache("call_db_only", "deepseek", "deepseek-reasoner", "DB-only reasoning");
+    setReasoningCache(
+      storageKeyForTest("call_db_only"),
+      "deepseek",
+      "deepseek-reasoner",
+      "DB-only reasoning"
+    );
 
-    assert.equal(lookupReasoning("call_db_only"), "DB-only reasoning");
+    assert.equal(lookupReasoning("call_db_only", reasoningCacheContext), "DB-only reasoning");
 
     const stats = getReasoningCacheServiceStats();
     assert.equal(stats.hits, 1);
@@ -117,7 +153,7 @@ describe("Reasoning Replay Cache — Service Layer", () => {
     const realDateNow = Date.now;
     const startedAt = realDateNow();
     setReasoningCache(
-      "call_db_short_ttl",
+      storageKeyForTest("call_db_short_ttl"),
       "deepseek",
       "deepseek-v4-pro",
       "Short-lived DB reasoning",
@@ -125,30 +161,57 @@ describe("Reasoning Replay Cache — Service Layer", () => {
     );
 
     try {
-      assert.equal(lookupReasoning("call_db_short_ttl"), "Short-lived DB reasoning");
-      getDbInstance()
-        .prepare("DELETE FROM reasoning_cache WHERE tool_call_id = ?")
-        .run("call_db_short_ttl");
+      assert.equal(
+        lookupReasoning("call_db_short_ttl", reasoningCacheContext),
+        "Short-lived DB reasoning"
+      );
+      assert.equal(getReasoningCacheServiceStats().memoryEntries, 1);
+      deleteReasoningCache(storageKeyForTest("call_db_short_ttl"));
       Date.now = () => startedAt + 6_000;
-      assert.equal(lookupReasoning("call_db_short_ttl"), null);
+      assert.equal(lookupReasoning("call_db_short_ttl", reasoningCacheContext), null);
     } finally {
       Date.now = realDateNow;
     }
   });
 
+  it("should enforce the memory cap when promoting SQLite-only entries", () => {
+    clearReasoningCacheAll();
+    for (let i = 0; i < 205; i++) {
+      setReasoningCache(
+        storageKeyForTest(`call_promote_${i}`),
+        "deepseek",
+        "deepseek-v4-pro",
+        `DB reasoning ${i}`
+      );
+    }
+    assert.equal(getReasoningCacheServiceStats().memoryEntries, 0);
+
+    for (let i = 0; i < 205; i++) {
+      assert.equal(
+        lookupReasoning(`call_promote_${i}`, reasoningCacheContext),
+        `DB reasoning ${i}`
+      );
+      assert.ok(getReasoningCacheServiceStats().memoryEntries <= 200);
+    }
+    assert.equal(getReasoningCacheServiceStats().memoryEntries, 200);
+    assert.equal(getReasoningCacheServiceStats().dbEntries, 205);
+    assert.equal(lookupReasoning("call_promote_0", reasoningCacheContext), "DB reasoning 0");
+    assert.equal(getReasoningCacheServiceStats().memoryEntries, 200);
+  });
+
   it("should return null for unknown tool_call_id", () => {
-    const result = lookupReasoning("call_nonexistent");
+    const result = lookupReasoning("call_nonexistent", reasoningCacheContext);
     assert.equal(result, null);
   });
 
   it("should return null for empty tool_call_id", () => {
-    const result = lookupReasoning("");
+    const result = lookupReasoning("", reasoningCacheContext);
     assert.equal(result, null);
   });
 
   it("should skip caching when reasoning is empty", () => {
-    cacheReasoning("call_empty", "deepseek", "deepseek-chat", "");
-    const result = lookupReasoning("call_empty");
+    cacheReasoning("call_empty", "deepseek", "deepseek-chat", "", reasoningCacheContext);
+    const result = lookupReasoning("call_empty", reasoningCacheContext);
     assert.equal(result, null);
   });
 
@@ -157,11 +220,12 @@ describe("Reasoning Replay Cache — Service Layer", () => {
       ["call_batch_1", "call_batch_2", "call_batch_3"],
       "deepseek",
       "deepseek-reasoner",
-      "Batch reasoning content"
+      "Batch reasoning content",
+      reasoningCacheContext
     );
-    assert.equal(lookupReasoning("call_batch_1"), "Batch reasoning content");
-    assert.equal(lookupReasoning("call_batch_2"), "Batch reasoning content");
-    assert.equal(lookupReasoning("call_batch_3"), "Batch reasoning content");
+    assert.equal(lookupReasoning("call_batch_1", reasoningCacheContext), "Batch reasoning content");
+    assert.equal(lookupReasoning("call_batch_2", reasoningCacheContext), "Batch reasoning content");
+    assert.equal(lookupReasoning("call_batch_3", reasoningCacheContext), "Batch reasoning content");
   });
 
   it("should capture assistant reasoning for all tool_call IDs", () => {
@@ -174,12 +238,19 @@ describe("Reasoning Replay Cache — Service Layer", () => {
         tool_calls: [{ id: "call_capture_1" }, { id: "call_capture_2" }],
       },
       "deepseek",
-      "deepseek-reasoner"
+      "deepseek-reasoner",
+      reasoningCacheContext
     );
 
     assert.equal(cached, 2);
-    assert.equal(lookupReasoning("call_capture_1"), "Captured assistant reasoning");
-    assert.equal(lookupReasoning("call_capture_2"), "Captured assistant reasoning");
+    assert.equal(
+      lookupReasoning("call_capture_1", reasoningCacheContext),
+      "Captured assistant reasoning"
+    );
+    assert.equal(
+      lookupReasoning("call_capture_2", reasoningCacheContext),
+      "Captured assistant reasoning"
+    );
   });
 
   it("should keep request message cache keys stable when tool call IDs change", () => {
@@ -204,13 +275,19 @@ describe("Reasoning Replay Cache — Service Layer", () => {
       ],
     };
 
-    cacheReasoning(cacheKey, "deepseek", "deepseek-reasoner", "Stable cached reasoning");
+    cacheReasoning(
+      cacheKey,
+      "deepseek",
+      "deepseek-reasoner",
+      "Stable cached reasoning",
+      reasoningCacheContext
+    );
     const originalToolCallId = body.messages[0].tool_calls[0].id;
 
     ensureToolCallIds(body, { use9CharId: true });
 
     assert.notEqual(body.messages[0].tool_calls[0].id, originalToolCallId);
-    assert.equal(lookupReasoning(cacheKey), "Stable cached reasoning");
+    assert.equal(lookupReasoning(cacheKey, reasoningCacheContext), "Stable cached reasoning");
   });
 
   it("should capture provider reasoning alias when reasoning_content is absent", () => {
@@ -223,11 +300,12 @@ describe("Reasoning Replay Cache — Service Layer", () => {
         tool_calls: [{ id: "call_capture_alias" }],
       },
       "kimi",
-      "kimi-k2.5"
+      "kimi-k2.5",
+      reasoningCacheContext
     );
 
     assert.equal(cached, 1);
-    assert.equal(lookupReasoning("call_capture_alias"), "Alias reasoning");
+    assert.equal(lookupReasoning("call_capture_alias", reasoningCacheContext), "Alias reasoning");
   });
 
   it("should cache assistant reasoning without tool calls by scoped transcript", () => {
@@ -244,6 +322,7 @@ describe("Reasoning Replay Cache — Service Layer", () => {
       assistantMessage,
       "deepseek",
       "deepseek-v4-pro",
+      reasoningCacheContext,
       { scope, historyMessages }
     );
     const cacheKey = buildAssistantMessageCacheKey(
@@ -253,10 +332,10 @@ describe("Reasoning Replay Cache — Service Layer", () => {
     );
 
     assert.equal(cached, 1);
-    assert.equal(lookupReasoning(cacheKey), "No tool call reasoning");
+    assert.equal(lookupReasoning(cacheKey, reasoningCacheContext), "No tool call reasoning");
   });
 
-  it("should skip assistant reasoning without tool calls when stable key context is absent", () => {
+  it("should skip assistant reasoning without tool calls when stable transcript scope is absent", () => {
     clearReasoningCacheAll();
 
     const cached = cacheReasoningFromAssistantMessage(
@@ -265,11 +344,12 @@ describe("Reasoning Replay Cache — Service Layer", () => {
         reasoning_content: "Missing key context",
       },
       "deepseek",
-      "deepseek-reasoner"
+      "deepseek-reasoner",
+      reasoningCacheContext
     );
 
     assert.equal(cached, 0);
-    assert.equal(lookupReasoning("request:req_missing:message:0"), null);
+    assert.equal(lookupReasoning("request:req_missing:message:0", reasoningCacheContext), null);
   });
 
   it("should store arbitrary reasoning cache keys", () => {
@@ -279,29 +359,55 @@ describe("Reasoning Replay Cache — Service Layer", () => {
       "request:req_direct:message:1",
       "deepseek",
       "deepseek-reasoner",
-      "Keyed plan"
+      "Keyed plan",
+      reasoningCacheContext
     );
 
-    assert.equal(lookupReasoning("request:req_direct:message:1"), "Keyed plan");
-    assert.equal(getReasoningCache("request:req_direct:message:1")?.reasoning, "Keyed plan");
+    assert.equal(
+      lookupReasoning("request:req_direct:message:1", reasoningCacheContext),
+      "Keyed plan"
+    );
+    assert.equal(
+      getReasoningCache(storageKeyForTest("request:req_direct:message:1"))?.reasoning,
+      "Keyed plan"
+    );
+    assert.equal(getReasoningCache("request:req_direct:message:1"), null);
   });
 
-  it("should not overwrite if same tool_call_id is cached again", () => {
-    cacheReasoning("call_overwrite", "deepseek", "deepseek-chat", "First reasoning");
-    cacheReasoning("call_overwrite", "deepseek", "deepseek-chat", "Updated reasoning");
+  it("should overwrite if the same tool_call_id is cached again in the same context", () => {
+    cacheReasoning(
+      "call_overwrite",
+      "deepseek",
+      "deepseek-chat",
+      "First reasoning",
+      reasoningCacheContext
+    );
+    cacheReasoning(
+      "call_overwrite",
+      "deepseek",
+      "deepseek-chat",
+      "Updated reasoning",
+      reasoningCacheContext
+    );
     // Second write wins (INSERT OR REPLACE)
-    const result = lookupReasoning("call_overwrite");
+    const result = lookupReasoning("call_overwrite", reasoningCacheContext);
     assert.equal(result, "Updated reasoning");
   });
 
   it("should track hits and misses correctly", () => {
     clearReasoningCacheAll();
 
-    cacheReasoning("call_hit_test", "deepseek", "deepseek-chat", "test reasoning");
+    cacheReasoning(
+      "call_hit_test",
+      "deepseek",
+      "deepseek-chat",
+      "test reasoning",
+      reasoningCacheContext
+    );
 
-    lookupReasoning("call_hit_test"); // hit
-    lookupReasoning("call_hit_test"); // hit
-    lookupReasoning("call_miss_test"); // miss
+    lookupReasoning("call_hit_test", reasoningCacheContext); // hit
+    lookupReasoning("call_hit_test", reasoningCacheContext); // hit
+    lookupReasoning("call_miss_test", reasoningCacheContext); // miss
 
     const stats = getReasoningCacheServiceStats();
     assert.ok(stats.hits >= 2, `Expected at least 2 hits, got ${stats.hits}`);
@@ -322,8 +428,20 @@ describe("Reasoning Replay Cache — Service Layer", () => {
   it("should report correct stats structure", () => {
     clearReasoningCacheAll();
 
-    cacheReasoning("call_stat_1", "deepseek", "deepseek-reasoner", "Reasoning A");
-    cacheReasoning("call_stat_2", "kimi", "kimi-k2.5", "Reasoning B from Kimi");
+    cacheReasoning(
+      "call_stat_1",
+      "deepseek",
+      "deepseek-reasoner",
+      "Reasoning A",
+      reasoningCacheContext
+    );
+    cacheReasoning(
+      "call_stat_2",
+      "kimi",
+      "kimi-k2.5",
+      "Reasoning B from Kimi",
+      reasoningCacheContext
+    );
 
     const stats = getReasoningCacheServiceStats();
 
@@ -346,8 +464,14 @@ describe("Reasoning Replay Cache — Service Layer", () => {
   it("should list persisted entries for the dashboard API", () => {
     clearReasoningCacheAll();
 
-    cacheReasoning("call_entry_1", "deepseek", "deepseek-reasoner", "Entry reasoning A");
-    cacheReasoning("call_entry_2", "kimi", "kimi-k2.5", "Entry reasoning B");
+    cacheReasoning(
+      "call_entry_1",
+      "deepseek",
+      "deepseek-reasoner",
+      "Entry reasoning A",
+      reasoningCacheContext
+    );
+    cacheReasoning("call_entry_2", "kimi", "kimi-k2.5", "Entry reasoning B", reasoningCacheContext);
 
     const deepseekEntries = getReasoningCacheServiceEntries({ provider: "deepseek" }) as Array<{
       toolCallId: string;
@@ -355,61 +479,127 @@ describe("Reasoning Replay Cache — Service Layer", () => {
     }>;
 
     assert.equal(deepseekEntries.length, 1);
-    assert.equal(deepseekEntries[0].toolCallId, "call_entry_1");
+    assert.equal(deepseekEntries[0].toolCallId, storageKeyForTest("call_entry_1"));
+    assert.match(deepseekEntries[0].toolCallId, /^rc2h:[0-9a-f]{64}$/);
     assert.doesNotThrow(() => new Date(deepseekEntries[0].expiresAt).toISOString());
   });
 
   it("should clear all entries", () => {
-    cacheReasoning("call_clear_1", "deepseek", "deepseek-chat", "Will be cleared");
-    cacheReasoning("call_clear_2", "deepseek", "deepseek-chat", "Also cleared");
+    cacheReasoning(
+      "call_clear_1",
+      "deepseek",
+      "deepseek-chat",
+      "Will be cleared",
+      reasoningCacheContext
+    );
+    cacheReasoning(
+      "call_clear_2",
+      "deepseek",
+      "deepseek-chat",
+      "Also cleared",
+      reasoningCacheContext
+    );
 
     const count = clearReasoningCacheAll();
     assert.ok(count >= 0);
 
-    assert.equal(lookupReasoning("call_clear_1"), null);
-    assert.equal(lookupReasoning("call_clear_2"), null);
+    assert.equal(lookupReasoning("call_clear_1", reasoningCacheContext), null);
+    assert.equal(lookupReasoning("call_clear_2", reasoningCacheContext), null);
   });
 
   it("should delete one entry by tool_call_id", () => {
     clearReasoningCacheAll();
 
-    cacheReasoning("call_delete_1", "deepseek", "deepseek-chat", "Delete me");
-    cacheReasoning("call_delete_2", "deepseek", "deepseek-chat", "Keep me");
+    cacheReasoning(
+      "call_delete_1",
+      "deepseek",
+      "deepseek-chat",
+      "Delete me",
+      reasoningCacheContext
+    );
+    cacheReasoning("call_delete_2", "deepseek", "deepseek-chat", "Keep me", reasoningCacheContext);
 
-    assert.equal(deleteReasoningCacheEntry("call_delete_1"), 1);
-    assert.equal(lookupReasoning("call_delete_1"), null);
-    assert.equal(lookupReasoning("call_delete_2"), "Keep me");
+    assert.equal(deleteReasoningCacheEntry("call_delete_1", reasoningCacheContext), 1);
+    assert.equal(lookupReasoning("call_delete_1", reasoningCacheContext), null);
+    assert.equal(lookupReasoning("call_delete_2", reasoningCacheContext), "Keep me");
   });
 
   it("should clear entries by provider only", () => {
     clearReasoningCacheAll();
 
-    cacheReasoning("call_provider_ds", "deepseek", "deepseek-chat", "DeepSeek reasoning");
-    cacheReasoning("call_provider_kimi", "kimi", "kimi-k2.5", "Kimi reasoning");
+    cacheReasoning(
+      "call_provider_ds",
+      "deepseek",
+      "deepseek-chat",
+      "DeepSeek reasoning",
+      reasoningCacheContext
+    );
+    cacheReasoning(
+      "call_provider_kimi",
+      "kimi",
+      "kimi-k2.5",
+      "Kimi reasoning",
+      reasoningCacheContext
+    );
 
     assert.equal(clearReasoningCacheAll("deepseek"), 1);
-    assert.equal(lookupReasoning("call_provider_ds"), null);
-    assert.equal(lookupReasoning("call_provider_kimi"), "Kimi reasoning");
+    assert.equal(lookupReasoning("call_provider_ds", reasoningCacheContext), null);
+    assert.equal(lookupReasoning("call_provider_kimi", reasoningCacheContext), "Kimi reasoning");
   });
 
   it("should cleanup expired reasoning (no-op when nothing expired)", () => {
-    cacheReasoning("call_cleanup_test", "deepseek", "deepseek-chat", "Not expired yet");
+    cacheReasoning(
+      "call_cleanup_test",
+      "deepseek",
+      "deepseek-chat",
+      "Not expired yet",
+      reasoningCacheContext
+    );
     const cleaned = cleanupReasoningCache();
     assert.equal(typeof cleaned, "number");
     // Entry should still be available since TTL is 2 hours
-    assert.equal(lookupReasoning("call_cleanup_test"), "Not expired yet");
+    assert.equal(lookupReasoning("call_cleanup_test", reasoningCacheContext), "Not expired yet");
   });
 
   it("should not return expired SQLite entries and cleanup should prune them", () => {
     clearReasoningCacheAll();
-    setReasoningCache("call_expired", "deepseek", "deepseek-chat", "Expired reasoning", -1_000);
+    setReasoningCache(
+      storageKeyForTest("call_expired"),
+      "deepseek",
+      "deepseek-chat",
+      "Expired reasoning",
+      -1_000
+    );
 
-    assert.equal(lookupReasoning("call_expired"), null);
+    assert.equal(lookupReasoning("call_expired", reasoningCacheContext), null);
     assert.equal(cleanupReasoningCache(), 1);
     assert.equal(getReasoningCacheServiceStats().dbEntries, 0);
   });
 
-  it("should read and prune legacy ISO expires_at rows", () => {
+  it("should read v2 storage rows with legacy ISO expires_at values", () => {
+    clearReasoningCacheAll();
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    getDbInstance()
+      .prepare(
+        `INSERT INTO reasoning_cache
+         (tool_call_id, provider, model, reasoning, char_count, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'), ?)`
+      )
+      .run(
+        storageKeyForTest("call_v2_iso_active"),
+        "deepseek",
+        "deepseek-v4-pro",
+        "V2 ISO reasoning",
+        "V2 ISO reasoning".length,
+        expiresAt
+      );
+
+    assert.equal(lookupReasoning("call_v2_iso_active", reasoningCacheContext), "V2 ISO reasoning");
+    assert.equal(getReasoningCacheServiceStats().memoryEntries, 1);
+    assert.equal(cleanupReasoningCache(), 0);
+  });
+
+  it("should ignore legacy raw ISO rows for replay and still prune expired rows", () => {
     clearReasoningCacheAll();
 
     const db = getDbInstance();
@@ -440,8 +630,10 @@ describe("Reasoning Replay Cache — Service Layer", () => {
       expiredIso
     );
 
-    assert.equal(lookupReasoning("call_legacy_iso_active"), "Legacy ISO reasoning");
-    assert.equal(lookupReasoning("call_legacy_iso_expired"), null);
+    assert.equal(lookupReasoning("call_legacy_iso_active", reasoningCacheContext), null);
+    assert.equal(getReasoningCache("call_legacy_iso_active")?.reasoning, "Legacy ISO reasoning");
+    assert.equal(getReasoningCacheServiceStats().memoryEntries, 0);
+    assert.equal(lookupReasoning("call_legacy_iso_expired", reasoningCacheContext), null);
     const entries = getReasoningCacheServiceEntries({ provider: "deepseek" }) as Array<{
       toolCallId: string;
       expiresAt: string;
@@ -598,7 +790,9 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       },
       false,
       null,
-      provider
+      provider,
+      null,
+      { reasoningCacheContext }
     );
   }
 
@@ -614,7 +808,13 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
         }),
       },
     });
-    cacheReasoning("call_translate_ds", "deepseek", "deepseek-reasoner", "DeepSeek cached plan");
+    cacheReasoning(
+      "call_translate_ds",
+      "deepseek",
+      "deepseek-reasoner",
+      "DeepSeek cached plan",
+      reasoningCacheContext
+    );
 
     const translated = translateWithToolHistory(
       "deepseek",
@@ -630,7 +830,13 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
     clearReasoningCacheAll();
     clearModelsDevCapabilities();
     const callId = "call_ds_chat_to_responses";
-    cacheReasoning(callId, "deepseek", "deepseek-v4-flash", "Cached Chat continuation reasoning");
+    cacheReasoning(
+      callId,
+      "deepseek",
+      "deepseek-v4-flash",
+      "Cached Chat continuation reasoning",
+      reasoningCacheContext
+    );
 
     const translated = translateRequest(
       FORMATS.OPENAI,
@@ -656,7 +862,9 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       },
       false,
       null,
-      "deepseek"
+      "deepseek",
+      null,
+      { reasoningCacheContext }
     );
 
     assert.deepEqual(
@@ -676,7 +884,8 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       "call_ds_responses",
       "deepseek",
       "deepseek-v4-flash",
-      "Conflicting cached reasoning"
+      "Conflicting cached reasoning",
+      reasoningCacheContext
     );
     const statsBeforeTranslation = getReasoningCacheServiceStats();
 
@@ -712,7 +921,9 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       },
       false,
       null,
-      "deepseek"
+      "deepseek",
+      null,
+      { reasoningCacheContext }
     );
 
     const assistant = translated.messages.find((message) => message.role === "assistant");
@@ -748,8 +959,16 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
 
     assert.ok(message);
     assert.equal(message.reasoning_content, "Authentic provider reasoning");
-    assert.equal(cacheReasoningFromAssistantMessage(message, "deepseek", "deepseek-v4-flash"), 1);
-    assert.equal(lookupReasoning(callId), "Authentic provider reasoning");
+    assert.equal(
+      cacheReasoningFromAssistantMessage(
+        message,
+        "deepseek",
+        "deepseek-v4-flash",
+        reasoningCacheContext
+      ),
+      1
+    );
+    assert.equal(lookupReasoning(callId, reasoningCacheContext), "Authentic provider reasoning");
   });
 
   it("preserves plaintext reasoning from a mixed plaintext + encrypted_content item (#10949)", () => {
@@ -784,9 +1003,17 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       message.reasoning_content,
       "Let me start by reading the directory to understand the structure of the corpus."
     );
-    assert.equal(cacheReasoningFromAssistantMessage(message, "deepseek", "deepseek-v4-flash"), 1);
     assert.equal(
-      lookupReasoning(callId),
+      cacheReasoningFromAssistantMessage(
+        message,
+        "deepseek",
+        "deepseek-v4-flash",
+        reasoningCacheContext
+      ),
+      1
+    );
+    assert.equal(
+      lookupReasoning(callId, reasoningCacheContext),
       "Let me start by reading the directory to understand the structure of the corpus."
     );
   });
@@ -814,8 +1041,16 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
     assert.ok(message);
     assert.equal(message.reasoning_content, undefined);
     assert.ok(Array.isArray(message.reasoning_summary));
-    assert.equal(cacheReasoningFromAssistantMessage(message, "deepseek", "deepseek-v4-flash"), 0);
-    assert.equal(lookupReasoning(callId), null);
+    assert.equal(
+      cacheReasoningFromAssistantMessage(
+        message,
+        "deepseek",
+        "deepseek-v4-flash",
+        reasoningCacheContext
+      ),
+      0
+    );
+    assert.equal(lookupReasoning(callId, reasoningCacheContext), null);
   });
 
   it("should preserve client-provided reasoning content", () => {
@@ -830,7 +1065,13 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
         }),
       },
     });
-    cacheReasoning("call_preserve", "deepseek", "deepseek-reasoner", "Cached reasoning");
+    cacheReasoning(
+      "call_preserve",
+      "deepseek",
+      "deepseek-reasoner",
+      "Cached reasoning",
+      reasoningCacheContext
+    );
     const statsBeforeTranslation = getReasoningCacheServiceStats();
 
     const translated = translateRequest(
@@ -856,7 +1097,9 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       },
       false,
       null,
-      "deepseek"
+      "deepseek",
+      null,
+      { reasoningCacheContext }
     );
 
     assert.equal(translated.messages[1].reasoning_content, "Client reasoning");
@@ -885,8 +1128,20 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
         }),
       },
     });
-    cacheReasoning("call_qwen_think", "qwen", "qwen3-thinking-235b", "Qwen cached plan");
-    cacheReasoning("call_glm_think", "glm", "glm-5-thinking", "GLM cached plan");
+    cacheReasoning(
+      "call_qwen_think",
+      "qwen",
+      "qwen3-thinking-235b",
+      "Qwen cached plan",
+      reasoningCacheContext
+    );
+    cacheReasoning(
+      "call_glm_think",
+      "glm",
+      "glm-5-thinking",
+      "GLM cached plan",
+      reasoningCacheContext
+    );
 
     const qwen = translateWithToolHistory("qwen", "qwen3-thinking-235b", "call_qwen_think");
     const glm = translateWithToolHistory("glm", "glm-5-thinking", "call_glm_think");
@@ -899,7 +1154,7 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
   it("should not inject reasoning_content for generic non-reasoning providers", () => {
     clearReasoningCacheAll();
     clearModelsDevCapabilities();
-    cacheReasoning("call_openai", "openai", "gpt-4o", "Should not replay");
+    cacheReasoning("call_openai", "openai", "gpt-4o", "Should not replay", reasoningCacheContext);
 
     const translated = translateWithToolHistory("openai", "gpt-4o", "call_openai");
 
@@ -927,7 +1182,8 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
         tool_calls: [{ id: "call_full_flow", type: "function" }],
       },
       "deepseek",
-      "deepseek-reasoner"
+      "deepseek-reasoner",
+      reasoningCacheContext
     );
 
     const translated = translateWithToolHistory("deepseek", "deepseek-reasoner", "call_full_flow");
@@ -957,7 +1213,9 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       },
       false,
       null,
-      "deepseek"
+      "deepseek",
+      null,
+      { reasoningCacheContext }
     );
 
     assert.equal(translated.messages[1].reasoning_content, undefined);
@@ -975,7 +1233,13 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
         }),
       },
     });
-    cacheReasoning("call_details", "testprovider", "test-reasoning-details", "cached");
+    cacheReasoning(
+      "call_details",
+      "testprovider",
+      "test-reasoning-details",
+      "cached",
+      reasoningCacheContext
+    );
 
     const translated = translateWithToolHistory(
       "testprovider",
@@ -1030,7 +1294,9 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       },
       false,
       null,
-      "deepseek"
+      "deepseek",
+      null,
+      { reasoningCacheContext }
     );
 
     assert.equal(
@@ -1072,7 +1338,9 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       },
       false,
       null,
-      "deepseek"
+      "deepseek",
+      null,
+      { reasoningCacheContext }
     );
 
     assert.equal(
@@ -1101,7 +1369,13 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       { role: "user", content: "tell me more" },
     ];
     const cacheKey = buildAssistantMessageCacheKey(scope, messages, 1);
-    cacheReasoning(cacheKey, "deepseek", "deepseek-v4-pro", "Real cached plain-turn reasoning");
+    cacheReasoning(
+      cacheKey,
+      "deepseek",
+      "deepseek-v4-pro",
+      "Real cached plain-turn reasoning",
+      reasoningCacheContext
+    );
 
     const translated = translateRequest(
       FORMATS.OPENAI,
@@ -1112,7 +1386,7 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       null,
       "deepseek",
       null,
-      { reasoningCacheScope: scope }
+      { reasoningCacheContext, reasoningCacheScope: scope }
     );
 
     assert.equal(translated.messages[1].reasoning_content, "Real cached plain-turn reasoning");
@@ -1137,6 +1411,7 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       { role: "assistant", content: "Hello! How can I help?", reasoning_content: "real reasoning" },
       "deepseek",
       "deepseek-v4-pro",
+      reasoningCacheContext,
       { scope, historyMessages }
     );
 
@@ -1155,7 +1430,7 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       null,
       "deepseek",
       null,
-      { reasoningCacheScope: scope }
+      { reasoningCacheContext, reasoningCacheScope: scope }
     );
 
     assert.equal(translated.messages[1].reasoning_content, "real reasoning");
@@ -1180,6 +1455,7 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       { role: "assistant", content: "Hello! How can I help?", reasoning_content: "real reasoning" },
       "deepseek",
       "deepseek-v4-pro",
+      reasoningCacheContext,
       { scope, historyMessages }
     );
 
@@ -1207,7 +1483,7 @@ describe("Reasoning Replay Cache — Translator Replay", () => {
       null,
       "deepseek",
       null,
-      { reasoningCacheScope: scope }
+      { reasoningCacheContext, reasoningCacheScope: scope }
     );
 
     assert.equal(translated.messages[1].reasoning_content, "real reasoning");
@@ -1241,7 +1517,13 @@ describe("Reasoning Replay Cache — API Route", () => {
 
   it("should return stats and entries from GET", async () => {
     clearReasoningCacheAll();
-    cacheReasoning("call_api_get", "deepseek", "deepseek-reasoner", "API visible reasoning");
+    cacheReasoning(
+      "call_api_get",
+      "deepseek",
+      "deepseek-reasoner",
+      "API visible reasoning",
+      reasoningCacheContext
+    );
 
     const response = await GET(
       authedRequest("http://localhost/api/cache/reasoning?provider=deepseek") as never
@@ -1251,30 +1533,108 @@ describe("Reasoning Replay Cache — API Route", () => {
     assert.equal(response.status, 200);
     assert.equal(body.stats.dbEntries, 1);
     assert.equal(body.entries.length, 1);
-    assert.equal(body.entries[0].toolCallId, "call_api_get");
+    assert.equal(body.entries[0].toolCallId, storageKeyForTest("call_api_get"));
+    assert.match(body.entries[0].toolCallId, /^rc2h:[0-9a-f]{64}$/);
   });
 
-  it("should delete a single entry by toolCallId", async () => {
+  it("should delete a single entry by the opaque toolCallId returned by GET", async () => {
     clearReasoningCacheAll();
-    cacheReasoning("call_api_delete_1", "deepseek", "deepseek-reasoner", "Delete API");
-    cacheReasoning("call_api_delete_2", "deepseek", "deepseek-reasoner", "Keep API");
-
-    const response = await DELETE(
-      authedRequest("http://localhost/api/cache/reasoning?toolCallId=call_api_delete_1") as never
+    cacheReasoning(
+      "call_api_delete_1",
+      "deepseek",
+      "deepseek-reasoner",
+      "Delete API",
+      reasoningCacheContext
     );
+    cacheReasoning(
+      "call_api_delete_2",
+      "deepseek",
+      "deepseek-reasoner",
+      "Keep API",
+      reasoningCacheContext
+    );
+
+    const listResponse = await GET(authedRequest("http://localhost/api/cache/reasoning") as never);
+    const listing = await listResponse.json();
+    assert.equal(listResponse.status, 200);
+    const entry = (listing.entries as Array<{ toolCallId: string }>).find(
+      (item) => item.toolCallId === storageKeyForTest("call_api_delete_1")
+    );
+    assert.ok(entry);
+    assert.match(entry.toolCallId, /^rc2h:[0-9a-f]{64}$/);
+    const url = new URL("http://localhost/api/cache/reasoning");
+    url.searchParams.set("toolCallId", entry.toolCallId);
+
+    const response = await DELETE(authedRequest(url.toString()) as never);
     const body = await response.json();
 
     assert.equal(response.status, 200);
     assert.equal(body.scope, "toolCallId");
     assert.equal(body.cleared, 1);
-    assert.equal(lookupReasoning("call_api_delete_1"), null);
-    assert.equal(lookupReasoning("call_api_delete_2"), "Keep API");
+    assert.equal(lookupReasoning("call_api_delete_1", reasoningCacheContext), null);
+    assert.equal(lookupReasoning("call_api_delete_2", reasoningCacheContext), "Keep API");
+  });
+
+  it("should reject raw and malformed storage IDs without deleting cached reasoning", async () => {
+    clearReasoningCacheAll();
+    cacheReasoning(
+      "call_api_raw_delete",
+      "deepseek",
+      "deepseek-v4-pro",
+      "Keep scoped reasoning",
+      reasoningCacheContext
+    );
+
+    for (const id of ["call_api_raw_delete", "rc2h:123", `rc2h:${"A".repeat(64)}`]) {
+      const url = new URL("http://localhost/api/cache/reasoning");
+      url.searchParams.set("toolCallId", id);
+      const response = await DELETE(authedRequest(url.toString()) as never);
+      assert.equal(response.status, 400, id);
+      assert.equal(
+        lookupReasoning("call_api_raw_delete", reasoningCacheContext),
+        "Keep scoped reasoning"
+      );
+    }
+  });
+
+  it("should reject an empty toolCallId without clearing the cache", async () => {
+    clearReasoningCacheAll();
+    cacheReasoning(
+      "call_api_empty_delete",
+      "deepseek",
+      "deepseek-v4-pro",
+      "Keep reasoning after empty delete",
+      reasoningCacheContext
+    );
+
+    const response = await DELETE(
+      authedRequest("http://localhost/api/cache/reasoning?toolCallId=") as never
+    );
+
+    assert.equal(response.status, 400);
+    assert.equal(
+      lookupReasoning("call_api_empty_delete", reasoningCacheContext),
+      "Keep reasoning after empty delete"
+    );
+    assert.equal(getReasoningCacheServiceStats().dbEntries, 1);
   });
 
   it("should delete entries by provider", async () => {
     clearReasoningCacheAll();
-    cacheReasoning("call_api_provider_ds", "deepseek", "deepseek-reasoner", "Delete provider");
-    cacheReasoning("call_api_provider_kimi", "kimi", "kimi-k2.5", "Keep provider");
+    cacheReasoning(
+      "call_api_provider_ds",
+      "deepseek",
+      "deepseek-reasoner",
+      "Delete provider",
+      reasoningCacheContext
+    );
+    cacheReasoning(
+      "call_api_provider_kimi",
+      "kimi",
+      "kimi-k2.5",
+      "Keep provider",
+      reasoningCacheContext
+    );
 
     const response = await DELETE(
       authedRequest("http://localhost/api/cache/reasoning?provider=deepseek") as never
@@ -1284,7 +1644,7 @@ describe("Reasoning Replay Cache — API Route", () => {
     assert.equal(response.status, 200);
     assert.equal(body.scope, "provider");
     assert.equal(body.cleared, 1);
-    assert.equal(lookupReasoning("call_api_provider_ds"), null);
-    assert.equal(lookupReasoning("call_api_provider_kimi"), "Keep provider");
+    assert.equal(lookupReasoning("call_api_provider_ds", reasoningCacheContext), null);
+    assert.equal(lookupReasoning("call_api_provider_kimi", reasoningCacheContext), "Keep provider");
   });
 });

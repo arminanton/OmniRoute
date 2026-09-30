@@ -55,7 +55,7 @@ globalThis.fetch = boundaryFetch;
 
 const core = await import("../../../src/lib/db/core.ts");
 const providersDb = await import("../../../src/lib/db/providers.ts");
-const { saveCallLog, waitForCallLogSaves, closeCallLogSaves } =
+const { saveCallLog, getCallLogById, waitForCallLogSaves, closeCallLogSaves } =
   await import("../../../src/lib/usage/callLogs.ts");
 const { flushProxyLogsSync } = await import("../../../src/lib/proxyLogger.ts");
 const { projectProviderRuntimeForPublicResponse, testSingleConnection } =
@@ -235,17 +235,29 @@ test("failed call logs sanitize response-body copies while successful bodies sta
   assert.equal(await waitForCallLogSaves(2_000), true, "call-log writes must drain");
 
   const db = core.getDbInstance();
-  const rows = db
-    .prepare(
-      `SELECT id, artifact_relpath FROM call_logs
-       WHERE id IN (
-         'error-body-json', 'error-body-text', 'success-body-control', 'error-body-binary'
-       )`
-    )
-    .all() as Array<{ id: string; artifact_relpath: string | null }>;
-  const artifacts = Object.fromEntries(
-    rows.map((row) => [row.id, readArtifact(row.artifact_relpath)])
-  ) as Record<string, Record<string, unknown>>;
+  const aliases = [
+    "error-body-json",
+    "error-body-text",
+    "success-body-control",
+    "error-body-binary",
+  ];
+  const artifacts: Record<string, Record<string, unknown>> = {};
+  const physicalIds = new Set<string>();
+  for (const alias of aliases) {
+    const persisted = await getCallLogById(alias);
+    assert.ok(persisted, `${alias} must resolve to a persisted call log`);
+    assert.equal(persisted.detailState, "ready", `${alias} must have a ready artifact`);
+    const row = db
+      .prepare("SELECT id, artifact_relpath FROM call_logs WHERE id = ?")
+      .get(persisted.id);
+    assert.ok(isRecord(row), `${alias} must have a published call_logs row`);
+    assert.ok(typeof row.id === "string");
+    assert.equal(row.id, persisted.id);
+    assert.ok(typeof row.artifact_relpath === "string");
+    physicalIds.add(row.id);
+    artifacts[alias] = readArtifact(row.artifact_relpath);
+  }
+  assert.equal(physicalIds.size, aliases.length, "all four saves must remain distinct");
 
   assert.doesNotMatch(
     JSON.stringify({ json: artifacts["error-body-json"], text: artifacts["error-body-text"] }),

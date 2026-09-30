@@ -52,7 +52,7 @@ test("fetchRemoteImage returns an ArrayBuffer-backed buffer that new Blob accept
         headers: { "content-type": "image/png" },
       }),
     guard: "public-only",
-    lookup: async () => [{ address: "203.0.113.5", family: 4 }],
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
   });
 
   assert.ok(result.buffer.buffer instanceof ArrayBuffer, "image bytes must be ArrayBuffer-backed");

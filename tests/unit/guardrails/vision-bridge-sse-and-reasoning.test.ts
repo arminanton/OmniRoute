@@ -53,7 +53,7 @@ const TINY_PNG =
 
 test("vision-bridge: describe request sends stream:false + Accept application/json", async () => {
   let capturedBody: Record<string, unknown> = {};
-  let capturedHeaders: Record<string, string> = {};
+  let capturedHeaders = new Headers();
 
   const mockResponse = {
     ok: true,
@@ -64,7 +64,7 @@ test("vision-bridge: describe request sends stream:false + Accept application/js
 
   globalThis.fetch = async (_url: URL | RequestInfo, init?: RequestInit) => {
     if (init?.body) capturedBody = JSON.parse(init.body as string);
-    capturedHeaders = (init?.headers as Record<string, string>) ?? {};
+    capturedHeaders = new Headers(init?.headers);
     return mockResponse as unknown as Response;
   };
 
@@ -73,7 +73,7 @@ test("vision-bridge: describe request sends stream:false + Accept application/js
 
     // Root-cause regression: explicit non-stream so the self-loop returns JSON.
     assert.strictEqual(capturedBody.stream, false);
-    assert.strictEqual(capturedHeaders["Accept"], "application/json");
+    assert.strictEqual(capturedHeaders.get("accept"), "application/json");
     // Self-loop uses the full provider-prefixed model id for cmd/* models.
     assert.strictEqual(capturedBody.model, "cmd/xiaomi/mimo-v2.5");
   } finally {

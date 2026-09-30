@@ -50,7 +50,7 @@ const SENSITIVE_CHALLENGE_KEYS = new Set([
 ]);
 
 function isSensitivePayloadKey(key: string): boolean {
-  if (SENSITIVE_KEYS.has(key)) return true;
+  if (SENSITIVE_KEYS.has(key) || key.toLowerCase() === "x-omniroute-self-hop") return true;
   const normalizedKey = key.replace(/[-_]/g, "").toLowerCase();
   return SENSITIVE_CHALLENGE_KEYS.has(normalizedKey);
 }

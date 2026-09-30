@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -82,6 +90,11 @@ function createStandalone(rootDir: string): {
 } {
   const distDir = join(rootDir, ".build", "next");
   const standaloneDir = join(distDir, "standalone");
+
+  // The synthetic project still needs the real required authority sidecar.
+  const policySource = join(rootDir, "scripts", "build", "runtime-policy.mjs");
+  mkdirSync(dirname(policySource), { recursive: true });
+  copyFileSync(new URL("../../scripts/build/runtime-policy.mjs", import.meta.url), policySource);
 
   mkdirSync(join(standaloneDir, "node_modules"), {
     recursive: true,
@@ -247,13 +260,15 @@ test("#9166 co-location is not skipped when every closure dir exists but one is 
 test("#9166 Docker explicitly installs and validates LLMLingua optionals", () => {
   const dockerfile = readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8");
 
-  const builderStart = dockerfile.indexOf("FROM base AS builder");
+  const dependenciesStart = dockerfile.indexOf("FROM base AS dependencies");
+  const builderStart = dockerfile.indexOf("FROM dependencies AS builder");
   const runnerStart = dockerfile.indexOf("FROM base AS runner-base");
 
-  assert.ok(builderStart >= 0, "Docker builder stage must exist");
+  assert.ok(dependenciesStart >= 0, "Docker dependency stage must exist");
+  assert.ok(builderStart > dependenciesStart, "Docker builder must inherit locked dependencies");
   assert.ok(runnerStart > builderStart, "Docker runner stage must follow builder");
 
-  const builder = dockerfile.slice(builderStart, runnerStart);
+  const builder = dockerfile.slice(dependenciesStart, runnerStart);
 
   assert.match(
     builder,

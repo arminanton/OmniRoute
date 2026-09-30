@@ -37,7 +37,11 @@ import {
   isTaskRoutingStrategy,
   reorderByTaskWeight,
 } from "../taskAwareRouting.ts";
-import { errorResponseWithComboDiagnostics } from "../../utils/error.ts";
+import {
+  errorResponseWithComboDiagnostics,
+  runtimePolicyErrorResponse,
+} from "../../utils/error.ts";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
 import type { ResilienceSettings } from "../../../src/lib/resilience/settings";
 import { applyStrategyOrdering } from "./applyStrategyOrdering.ts";
@@ -373,6 +377,7 @@ async function dispatchSmartPipeline(
     // PipelineResult here instead of leaking the raw object.
     return pipelineRaw instanceof Response ? pipelineRaw : buildPipelineResponse(pipelineRaw, body);
   } catch (pipelineErr) {
+    if (isRuntimePolicyError(pipelineErr)) return runtimePolicyErrorResponse();
     logPipelineFallthrough(pipelineErr, log);
     return null;
   }

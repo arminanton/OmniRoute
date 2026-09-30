@@ -1,5 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const previousDataDir = process.env.DATA_DIR;
+const previousApiKeySecret = process.env.API_KEY_SECRET;
+const dataDir = mkdtempSync(join(tmpdir(), "omniroute-translator-replay-"));
+process.env.DATA_DIR = dataDir;
+process.env.API_KEY_SECRET = "fabricated-translator-replay-test-secret";
 
 const schemaCoercion = await import("../../open-sse/translator/helpers/schemaCoercion.ts");
 const openaiHelper = await import("../../open-sse/translator/helpers/openaiHelper.ts");
@@ -16,6 +25,19 @@ const {
 } = await import("../../open-sse/services/reasoningCache.ts");
 const { clearModelsDevCapabilities, saveModelsDevCapabilities } =
   await import("../../src/lib/modelsDevSync.ts");
+const { createLocalReasoningCacheContext } =
+  await import("../../open-sse/services/reasoningCacheContext.ts");
+const reasoningCacheContext = createLocalReasoningCacheContext();
+const { resetDbInstance } = await import("../../src/lib/db/core.ts");
+
+test.after(() => {
+  resetDbInstance();
+  rmSync(dataDir, { recursive: true, force: true });
+  if (previousDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = previousDataDir;
+  if (previousApiKeySecret === undefined) delete process.env.API_KEY_SECRET;
+  else process.env.API_KEY_SECRET = previousApiKeySecret;
+});
 
 function buildCapability(overrides = {}) {
   return {
@@ -652,7 +674,8 @@ test("translateRequest replays cached reasoning-only messages when interleaved f
     buildAssistantMessageCacheKey(scope, messages, 1),
     "deepseek",
     "deepseek-v4-flash",
-    "cached reasoning only"
+    "cached reasoning only",
+    reasoningCacheContext
   );
 
   const result = translateRequest(
@@ -664,7 +687,7 @@ test("translateRequest replays cached reasoning-only messages when interleaved f
     null,
     "deepseek",
     null,
-    { reasoningCacheScope: scope }
+    { reasoningCacheScope: scope, reasoningCacheContext }
   );
 
   assert.equal(result.messages[1].reasoning_content, "cached reasoning only");
@@ -684,7 +707,8 @@ test("translateRequest does not replay reasoning-only messages for non-DeepSeek 
     buildAssistantMessageCacheKey(scope, messages, 1),
     "kimi",
     "kimi-k2.6",
-    "cached kimi reasoning"
+    "cached kimi reasoning",
+    reasoningCacheContext
   );
 
   const result = translateRequest(
@@ -696,7 +720,7 @@ test("translateRequest does not replay reasoning-only messages for non-DeepSeek 
     null,
     "kimi",
     null,
-    { reasoningCacheScope: scope }
+    { reasoningCacheScope: scope, reasoningCacheContext }
   );
 
   assert.equal(result.messages[1].reasoning_content, undefined);
@@ -710,7 +734,8 @@ test("translateRequest replays cached reasoning before Kimi Coding's empty fallb
     "toolu_kimi_claude",
     "kimi-coding-apikey",
     "k3-256k",
-    "cached thinking for Kimi tool call"
+    "cached thinking for Kimi tool call",
+    reasoningCacheContext
   );
 
   // Claude-format request: assistant has tool_use in content[] but NO thinking block
@@ -739,7 +764,9 @@ test("translateRequest replays cached reasoning before Kimi Coding's empty fallb
     },
     false,
     null,
-    "kimi-coding-apikey"
+    "kimi-coding-apikey",
+    null,
+    { reasoningCacheContext }
   );
 
   const assistantMsg = result.messages.find((m) => m.role === "assistant");
@@ -799,7 +826,8 @@ test("translateRequest does NOT inject duplicate thinking for Claude-format mess
     "toolu_existing",
     "kimi-coding-apikey",
     "k3-256k",
-    "cached thinking must not replace client thinking"
+    "cached thinking must not replace client thinking",
+    reasoningCacheContext
   );
 
   const result = translateRequest(
@@ -823,7 +851,9 @@ test("translateRequest does NOT inject duplicate thinking for Claude-format mess
     },
     false,
     null,
-    "kimi-coding-apikey"
+    "kimi-coding-apikey",
+    null,
+    { reasoningCacheContext }
   );
 
   const assistantMsg = result.messages.find((m) => m.role === "assistant");
@@ -847,7 +877,13 @@ test("translateRequest replays cached reasoning when the client's Claude-format 
   // tool_use turn still needs a thinking precursor, and the reasoning cache (keyed by the
   // tool_use id) is the authentic source — it must be re-hydrated exactly once.
   clearReasoningCacheAll();
-  cacheReasoningByKey("toolu_unsigned", "kimi-coding-apikey", "k3-256k", "cached thinking");
+  cacheReasoningByKey(
+    "toolu_unsigned",
+    "kimi-coding-apikey",
+    "k3-256k",
+    "cached thinking",
+    reasoningCacheContext
+  );
 
   const result = translateRequest(
     FORMATS.OPENAI,
@@ -868,7 +904,9 @@ test("translateRequest replays cached reasoning when the client's Claude-format 
     },
     false,
     null,
-    "kimi-coding-apikey"
+    "kimi-coding-apikey",
+    null,
+    { reasoningCacheContext }
   );
 
   const assistantMsg = result.messages.find((m) => m.role === "assistant");

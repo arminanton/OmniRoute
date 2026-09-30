@@ -3,6 +3,9 @@
  */
 
 import { v4 as uuidv4 } from "uuid";
+import { assertResolvedProviderConnectionEntrypoint } from "@/sse/services/compatibleNodeBaseUrl";
+import { getRuntimePolicy } from "@/shared/runtimePolicy";
+import { assertRuntimePolicyProxyConfig } from "@/shared/runtimePolicyProxyConfig";
 import { createHash } from "node:crypto";
 
 import { isCommonChatGptWebRetiredProviderId } from "@/shared/constants/chatgptWebRetirement";
@@ -26,7 +29,11 @@ import { normalizeProviderSpecificData } from "@/lib/providers/requestDefaults";
 import { withDerivedCookieExpiry } from "@/shared/utils/webCookieExpiry";
 import { WEB_COOKIE_PROVIDERS } from "@/shared/constants/providers";
 import { ensureCodexFingerprintSeed } from "@omniroute/open-sse/config/codexIdentity.ts";
-import { bumpProxyConfigGeneration, getSettings } from "./settings";
+import {
+  bumpProxyConfigGeneration,
+  getSettings,
+  getRuntimePolicySettingsCandidate,
+} from "./settings";
 import {
   getStoredManagementPassword,
   isBcryptHash,
@@ -633,6 +640,28 @@ function findExistingCookieConnection(
   return null;
 }
 
+/** Resolve trusted global/API-key facts before a connection toggle can activate them. */
+async function admitProviderConnectionWrite(db: DbLike, candidate: JsonRecord): Promise<void> {
+  if (getRuntimePolicy().mode === "locked") {
+    const settings = await getRuntimePolicySettingsCandidate();
+    // Exclude the target's stored state: disabling the last eligible connection
+    // must not be evaluated as if its old per-key permission were still enabled.
+    const otherPerKeyConnection = db
+      .prepare(
+        "SELECT 1 FROM provider_connections WHERE id != ? AND (proxy_enabled IS NULL OR proxy_enabled != 0) AND per_key_proxy_enabled = 1 LIMIT 1"
+      )
+      .get(typeof candidate.id === "string" ? candidate.id : "");
+    const candidatePerKeyConnection =
+      normalizeBooleanColumn(candidate.proxyEnabled, true) &&
+      normalizeBooleanColumn(candidate.perKeyProxyEnabled, false);
+    assertRuntimePolicyProxyConfig({
+      ...settings,
+      proxyPerKeyConnectionEnabled: Boolean(otherPerKeyConnection) || candidatePerKeyConnection,
+    });
+  }
+  await assertResolvedProviderConnectionEntrypoint(candidate);
+}
+
 export async function createProviderConnection(data: JsonRecord) {
   await assertApiKeyIsNotManagementPassword(data.apiKey);
   const db = getDbInstance() as unknown as DbLike;
@@ -778,6 +807,7 @@ export async function createProviderConnection(data: JsonRecord) {
       merged,
       decryptedExisting.providerSpecificData
     );
+    await admitProviderConnectionWrite(db, { ...merged, id: existingId });
     const persistence: JsonRecord = { ...merged };
     for (const field of CONNECTION_CREDENTIAL_FIELDS) {
       if (!Object.hasOwn(data, field)) {
@@ -927,6 +957,7 @@ export async function createProviderConnection(data: JsonRecord) {
     connection.rateLimitOverrides = result.sanitized;
   }
 
+  await admitProviderConnectionWrite(db, connection);
   _insertConnectionRow(db, encryptConnectionFields({ ...connection }));
   const providerId = toStringOrNull(data.provider);
   if (providerId) {
@@ -1167,6 +1198,7 @@ export async function updateProviderConnection(id: string, data: JsonRecord) {
     }
     merged.rateLimitOverrides = result.sanitized;
   }
+  await admitProviderConnectionWrite(db, { ...merged, id });
   const existingRecord = toRecord(existing);
 
   db.transaction(() => {

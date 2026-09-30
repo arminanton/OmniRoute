@@ -19,6 +19,7 @@ import { normalizeAntigravityClientProfile } from "@/shared/constants/antigravit
 import { ensureAntigravityProjectAssigned } from "@omniroute/open-sse/services/antigravityProjectBootstrap.ts";
 import { persistDiscoveredAntigravityProjectId } from "@omniroute/open-sse/services/antigravityProjectPersist.ts";
 import { asRecord, toNonEmptyString } from "./helpers";
+import { expandAntigravityClaudeEffortModels } from "@omniroute/open-sse/config/antigravityClaudeEffort.ts";
 
 const antigravityDiscoveryInflight = new Map<
   string,
@@ -29,6 +30,7 @@ type AntigravityDiscoveryModel = {
   id: string;
   name: string;
   isInternal?: boolean;
+  supportsAdaptiveThinking?: boolean;
   /** Token window advertised by the upstream discovery payload, when present. */
   inputTokenLimit?: number;
   outputTokenLimit?: number;
@@ -81,6 +83,8 @@ export function normalizeAntigravityModelsResponse(data: unknown): AntigravityDi
               id,
               name,
               ...extractDiscoveryTokenLimits(item),
+              ...((item.supportsAdaptiveThinking === true || item.supports_adaptive_thinking === true)
+                ? { supportsAdaptiveThinking: true } : {}),
               ...(item.isInternal === true ? { isInternal: true } : {}),
             }
           : null;
@@ -103,6 +107,8 @@ export function normalizeAntigravityModelsResponse(data: unknown): AntigravityDi
             id,
             name,
             ...extractDiscoveryTokenLimits(item),
+            ...((item.supportsAdaptiveThinking === true || item.supports_adaptive_thinking === true)
+              ? { supportsAdaptiveThinking: true } : {}),
             ...(item.isInternal === true ? { isInternal: true } : {}),
           }
         : null;
@@ -124,17 +130,19 @@ export function filterUserCallableAntigravityModels(
 }
 
 export function mapAntigravityModelForClient(
-  model: { id: string; name: string; inputTokenLimit?: number; outputTokenLimit?: number },
+  model: AntigravityDiscoveryModel,
   provider: "antigravity" | "agy" = "antigravity"
 ): {
   id: string;
   name: string;
   inputTokenLimit?: number;
   outputTokenLimit?: number;
+  supportsAdaptiveThinking?: boolean;
 } {
   const clientId = toClientAntigravityModelId(model.id);
   return {
     id: clientId,
+    ...(model.supportsAdaptiveThinking === true ? { supportsAdaptiveThinking: true } : {}),
     name:
       provider === "agy"
         ? getClientVisibleAgyModelName(clientId, model.name)
@@ -202,7 +210,7 @@ export async function fetchAntigravityDiscoveryModelsCached(
           provider
         ).map((model) => mapAntigravityModelForClient(model, provider));
         if (models.length > 0) {
-          return models;
+          return expandAntigravityClaudeEffortModels(models);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

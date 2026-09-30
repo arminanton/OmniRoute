@@ -9,12 +9,14 @@ const TEST_DATA_DIR = path.join(TEST_ROOT, "data");
 const TEST_PLUGINS_DIR = path.join(TEST_ROOT, "plugins");
 const ORIGINAL_DATA_DIR = process.env.DATA_DIR;
 const ORIGINAL_PLUGINS_DIR = process.env.OMNIROUTE_PLUGINS_DIR;
+const ORIGINAL_API_KEY_SECRET = process.env.API_KEY_SECRET;
 fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
 fs.mkdirSync(TEST_PLUGINS_DIR, { recursive: true });
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.OMNIROUTE_PLUGINS_DIR = TEST_PLUGINS_DIR;
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
 const auth = await import("../../src/sse/services/auth.ts");
 const upstreamProxyDb = await import("../../src/lib/db/upstreamProxy.ts");
@@ -38,6 +40,8 @@ const { saveModelsDevCapabilities, clearModelsDevCapabilities } =
   await import("../../src/lib/modelsDevSync.ts");
 // Dynamic import is required after TEST_DATA_DIR is initialized above.
 const { clearReasoningCacheAll } = await import("../../open-sse/services/reasoningCache.ts");
+const { createReasoningCacheKeyContext } =
+  await import("../../open-sse/services/reasoningCacheContext.ts");
 const {
   getBackgroundDegradationConfig,
   setBackgroundDegradationConfig,
@@ -78,6 +82,10 @@ function restorePipelineCaptureEnv() {
     process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS =
       originalCallLogPipelineCaptureStreamChunks;
   }
+}
+function restoreReasoningCacheSecret() {
+  if (ORIGINAL_API_KEY_SECRET === undefined) delete process.env.API_KEY_SECRET;
+  else process.env.API_KEY_SECRET = ORIGINAL_API_KEY_SECRET;
 }
 function toPlainHeaders(headers) {
   if (!headers) return {};
@@ -358,6 +366,20 @@ async function getLatestCallLog() {
   return getCallLogById(rows[0].id);
 }
 
+async function createReasoningReplayPrincipal() {
+  process.env.API_KEY_SECRET = "fabricated-chatcore-translation-replay-secret";
+  const key = await apiKeysDb.createApiKey(
+    "Synthetic reasoning replay caller",
+    "chatcore-translation-paths"
+  );
+  assert.equal(await apiKeysDb.validateApiKey(key.key), true);
+  // Mirror the trusted server boundary: metadata and session strings do not
+  // authenticate replay. Keep this original context instance across both turns.
+  const reasoningCacheContext = createReasoningCacheKeyContext(key.key);
+  assert.ok(reasoningCacheContext && reasoningCacheContext.kind === "key");
+  return { apiKeyInfo: { id: key.id }, reasoningCacheContext };
+}
+
 async function invokeChatCore({
   body,
   provider = "openai",
@@ -367,6 +389,7 @@ async function invokeChatCore({
   userAgent = "unit-test",
   credentials,
   apiKeyInfo = null,
+  reasoningCacheContext = null,
   responseFormat = "openai",
   responseFactory,
   isCombo = false,
@@ -424,6 +447,7 @@ async function invokeChatCore({
       },
       connectionId,
       apiKeyInfo,
+      reasoningCacheContext,
       userAgent,
       sessionAffinityKey,
       isCombo,
@@ -449,6 +473,7 @@ test.afterEach(async () => {
   resetAccountSemaphores();
   await flushAsyncSideEffects();
   await resetStorage();
+  restoreReasoningCacheSecret();
 });
 
 test.after(async () => {
@@ -458,6 +483,7 @@ test.after(async () => {
   resetAccountSemaphores();
   await flushAsyncSideEffects();
   await resetStorage();
+  restoreReasoningCacheSecret();
   if (ORIGINAL_DATA_DIR === undefined) delete process.env.DATA_DIR;
   else process.env.DATA_DIR = ORIGINAL_DATA_DIR;
   if (ORIGINAL_PLUGINS_DIR === undefined) delete process.env.OMNIROUTE_PLUGINS_DIR;
@@ -831,7 +857,7 @@ test("chatCore carries Chat reasoning_content into official DeepSeek Responses i
 test("chatCore replays nonstream DeepSeek Responses reasoning across a Chat tool turn", async () => {
   const callId = "call_deepseek_nonstream_replay";
   const reasoning = "Authentic nonstream DeepSeek reasoning";
-  const apiKeyInfo = { id: "deepseek-nonstream-chat-key" };
+  const { apiKeyInfo, reasoningCacheContext } = await createReasoningReplayPrincipal();
   const first = await invokeChatCore({
     provider: "deepseek",
     model: "deepseek-v4-flash",
@@ -849,6 +875,7 @@ test("chatCore replays nonstream DeepSeek Responses reasoning across a Chat tool
       ],
     },
     apiKeyInfo,
+    reasoningCacheContext,
     responseFactory: () => buildDeepSeekResponsesToolResponse({ stream: false, callId, reasoning }),
   });
 
@@ -875,6 +902,7 @@ test("chatCore replays nonstream DeepSeek Responses reasoning across a Chat tool
       ],
     },
     apiKeyInfo,
+    reasoningCacheContext,
     responseFactory: () => buildResponsesResponse("done"),
   });
 
@@ -888,7 +916,7 @@ test("chatCore replays nonstream DeepSeek Responses reasoning across a Chat tool
 test("chatCore replays streamed DeepSeek Responses reasoning across a Chat tool turn", async () => {
   const callId = "call_deepseek_stream_replay";
   const reasoning = "Authentic streamed DeepSeek reasoning";
-  const apiKeyInfo = { id: "deepseek-stream-chat-key" };
+  const { apiKeyInfo, reasoningCacheContext } = await createReasoningReplayPrincipal();
   const first = await invokeChatCore({
     provider: "deepseek",
     model: "deepseek-v4-flash",
@@ -906,6 +934,7 @@ test("chatCore replays streamed DeepSeek Responses reasoning across a Chat tool 
       ],
     },
     apiKeyInfo,
+    reasoningCacheContext,
     responseFactory: () => buildDeepSeekResponsesToolResponse({ stream: true, callId, reasoning }),
   });
 
@@ -939,6 +968,7 @@ test("chatCore replays streamed DeepSeek Responses reasoning across a Chat tool 
       ],
     },
     apiKeyInfo,
+    reasoningCacheContext,
     responseFactory: () => buildResponsesResponse("done"),
   });
 
@@ -962,7 +992,7 @@ test("chatCore replays no-tool reasoning across public Responses turns", async (
     },
   });
   const sessionAffinityKey = "header:reasoning-replay-session";
-  const apiKeyInfo = { id: "reasoning-replay-key" };
+  const { apiKeyInfo, reasoningCacheContext } = await createReasoningReplayPrincipal();
   const responseFactory = () =>
     new Response(
       JSON.stringify({
@@ -995,6 +1025,7 @@ test("chatCore replays no-tool reasoning across public Responses turns", async (
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
     },
     apiKeyInfo,
+    reasoningCacheContext,
     sessionAffinityKey,
     responseFactory,
   });
@@ -1023,6 +1054,7 @@ test("chatCore replays no-tool reasoning across public Responses turns", async (
       ],
     },
     apiKeyInfo,
+    reasoningCacheContext,
     sessionAffinityKey,
     responseFactory,
   });
@@ -1041,7 +1073,7 @@ test("chatCore captures streaming no-tool reasoning for Responses replay", async
     },
   });
   const sessionAffinityKey = "header:streaming-reasoning-replay-session";
-  const apiKeyInfo = { id: "streaming-reasoning-replay-key" };
+  const { apiKeyInfo, reasoningCacheContext } = await createReasoningReplayPrincipal();
   const streamResponseFactory = () =>
     new Response(
       [
@@ -1085,6 +1117,7 @@ test("chatCore captures streaming no-tool reasoning for Responses replay", async
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
     },
     apiKeyInfo,
+    reasoningCacheContext,
     sessionAffinityKey,
     responseFactory: streamResponseFactory,
   });
@@ -1115,6 +1148,7 @@ test("chatCore captures streaming no-tool reasoning for Responses replay", async
       ],
     },
     apiKeyInfo,
+    reasoningCacheContext,
     sessionAffinityKey,
     responseFactory: () => buildOpenAIResponse(false),
   });
@@ -1904,6 +1938,10 @@ test("chatCore downgrades unsupported xhigh effort for assistant-prefill OpenAI-
     provider: "openai-compatible-aio",
     model: "glm-5.1",
     endpoint: "/v1/chat/completions",
+    credentials: {
+      apiKey: "sk-test",
+      providerSpecificData: { baseUrl: "https://proxy.example.com/v1" },
+    },
     body: {
       model: "aio/glm-5.1",
       messages: [

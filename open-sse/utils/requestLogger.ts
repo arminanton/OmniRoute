@@ -105,7 +105,7 @@ function maskSensitiveHeaders(headers: HeaderInput): Record<string, unknown> {
     if (lowerKey.startsWith("x-ratelimit-")) {
       continue;
     }
-    if (lowerKey === "x-omniroute-lease-owner") {
+    if (lowerKey === "x-omniroute-lease-owner" || lowerKey === "x-omniroute-self-hop") {
       masked[key] = "[REDACTED]";
       continue;
     }

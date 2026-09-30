@@ -140,35 +140,114 @@ test("API-key-only antigravity connection is NOT marked expired by health check"
   );
 });
 
+/** Only the Google refresh request is admitted. Nothing reaches a real fetch. */
+async function withGoogleRefreshFixture(
+  refreshToken: string,
+  respond: () => Response | Promise<Response>,
+  check: () => Promise<void>
+) {
+  const originalFetch = globalThis.fetch;
+  const unexpectedRequests: string[] = [];
+  let refreshCalls = 0;
+  globalThis.fetch = async (input, init) => {
+    try {
+      const request = new Request(input, init);
+      assert.equal(request.url, "https://oauth2.googleapis.com/token");
+      assert.equal(request.method, "POST");
+      assert.equal(request.headers.get("content-type"), "application/x-www-form-urlencoded");
+      assert.equal(request.headers.get("accept"), "application/json");
+      const form = new URLSearchParams(await request.text());
+      assert.equal(form.get("grant_type"), "refresh_token");
+      assert.equal(form.get("refresh_token"), refreshToken);
+      assert.ok(form.get("client_id"), "Google refresh must include its client ID");
+      assert.ok(form.get("client_secret"), "Google refresh must include its client secret");
+    } catch (error) {
+      unexpectedRequests.push(String(error));
+      throw error;
+    }
+    refreshCalls++;
+    return respond();
+  };
+  try {
+    await check();
+  } finally {
+    globalThis.fetch = originalFetch;
+    // checkConnection can catch transport errors. Do not let it hide a bad fixture request.
+    assert.deepEqual(unexpectedRequests, [], "no unexpected refresh transport is allowed");
+    assert.equal(refreshCalls, 1, "the Google refresh path must run exactly once");
+  }
+}
+
 test("connection with both apiKey and refreshToken: refresh path is tried", async () => {
   await resetStorage();
 
-  // Edge case: connection has both an API key and a refresh token
-  // The health check tries the refresh token path first.
-  // With a stale/invalid refresh token, the connection gets marked expired
-  // even though an API key exists — the refresh path takes precedence.
+  // A verified permanent OAuth rejection, not an offline DNS failure, expires dual auth.
+  const refreshToken = "1//old-refresh-token";
   const conn = await providersDb.createProviderConnection({
     provider: "gemini",
     name: "gemini-dual-auth",
     apiKey: "AIzaSyTest1234567890abcdefghijklmnop",
-    refreshToken: "1//old-refresh-token",
+    refreshToken,
     accessToken: "ya29.expired-token",
     isActive: true,
     testStatus: "active",
     healthCheckInterval: 60,
   });
 
-  await checkConnection(conn);
+  await withGoogleRefreshFixture(
+    refreshToken,
+    () =>
+      new Response(JSON.stringify({ error: "invalid_grant" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      }),
+    async () => {
+      await checkConnection(conn);
+      const updated = await providersDb.getProviderConnectionById(conn.id);
 
-  const updated = await providersDb.getProviderConnectionById(conn.id);
+      assert.equal(
+        updated?.testStatus,
+        "expired",
+        "dual-auth connection with stale refresh token should be expired (refresh path takes precedence)"
+      );
+      assert.equal(
+        updated?.refreshToken,
+        refreshToken,
+        "nonrotating Google refresh token must remain available for recovery"
+      );
+    }
+  );
+});
 
-  // The refresh token path is tried first. Since the refresh token is invalid,
-  // the connection gets marked expired. This is expected — the operator should
-  // either remove the stale refresh token or re-authenticate.
-  assert.equal(
-    updated?.testStatus,
-    "expired",
-    "dual-auth connection with stale refresh token should be expired (refresh path takes precedence)"
+test("dual-auth connection remains active after a transient refresh transport failure", async () => {
+  await resetStorage();
+
+  const refreshToken = "1//transient-refresh-token";
+  const conn = await providersDb.createProviderConnection({
+    provider: "gemini",
+    name: "gemini-dual-auth-transient",
+    apiKey: "AIzaSyTest1234567890abcdefghijklmnop",
+    refreshToken,
+    accessToken: "ya29.expired-transient-token",
+    isActive: true,
+    testStatus: "active",
+    healthCheckInterval: 60,
+  });
+
+  await withGoogleRefreshFixture(
+    refreshToken,
+    () => {
+      throw Object.assign(new Error("fixture DNS unavailable"), { code: "EAI_AGAIN" });
+    },
+    async () => {
+      await checkConnection(conn);
+      const updated = await providersDb.getProviderConnectionById(conn.id);
+
+      assert.equal(updated?.testStatus, "active", "transient failures must not expire dual auth");
+      assert.equal(updated?.isActive, true);
+      assert.equal(updated?.errorCode, "refresh_transient");
+      assert.equal(updated?.refreshToken, refreshToken);
+    }
   );
 });
 

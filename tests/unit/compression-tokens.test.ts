@@ -68,8 +68,10 @@ test("tokensCompressed round-trips through saveCallLog → getCallLogs", async (
       limit: 10,
     });
 
-    const logNull = logs.find((l: { id: string }) => l.id === "log-null");
-    const logComp = logs.find((l: { id: string }) => l.id === "log-350");
+    const nullId = (await callLogs.getCallLogById("log-null"))!.id;
+    const compressedId = (await callLogs.getCallLogById("log-350"))!.id;
+    const logNull = logs.find((l: { id: string }) => l.id === nullId);
+    const logComp = logs.find((l: { id: string }) => l.id === compressedId);
 
     // null when no compression
     assert.equal(logNull.tokens?.compressed, null, "uncompressed log should have null compressed");

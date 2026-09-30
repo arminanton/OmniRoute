@@ -1,6 +1,7 @@
 // Web-cookie session-ping validator + Bytez auth-only probe. Extracted from validation.ts
 // (god-file decomposition) — top-level functions with no dispatcher-state captures; behavior is
 // byte-identical to the original inline defs.
+import { checkMaxaiConnection } from "@omniroute/open-sse/services/maxaiConnectionCheck.ts";
 import { WEB_COOKIE_PROVIDERS, isLocalProvider } from "@/shared/constants/providers";
 import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts";
 import { extractZaiToken } from "@omniroute/open-sse/executors/zai-web.ts";
@@ -116,6 +117,7 @@ export async function validateWebCookieProvider({
   apiKey?: string;
   providerSpecificData?: Record<string, unknown>;
 }) {
+  if (provider === "maxai" || provider === "mx") return checkMaxaiConnection();
   if (provider === "chatgpt-web") return validateChatGptWebProvider({ apiKey });
   try {
     // For web-cookie providers, apiKey contains the cookie string

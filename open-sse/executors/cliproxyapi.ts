@@ -16,6 +16,11 @@
  */
 
 import {
+  assertNotLockedCapability,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+} from "@/shared/runtimePolicy";
+import {
   BaseExecutor,
   mergeUpstreamExtraHeaders,
   mergeAbortSignals,
@@ -125,15 +130,20 @@ export function clearCliproxyapiUrlCache() {
 
 // Pre-load settings URL at module init so the sync path has a cache hit.
 // This runs once when the executor module is first imported.
-(async () => {
-  try {
-    const { getSettings } = await import("@/lib/db/settings");
-    const settings = await getSettings();
-    if (typeof settings.cliproxyapi_url === "string" && settings.cliproxyapi_url.trim()) {
-      _cachedSettingsUrl = { url: settings.cliproxyapi_url.trim(), ts: Date.now() };
+if (getRuntimePolicy().mode === "standalone") {
+  (async () => {
+    try {
+      const { getSettings } = await import("@/lib/db/settings");
+      const settings = await getSettings();
+      if (typeof settings.cliproxyapi_url === "string" && settings.cliproxyapi_url.trim()) {
+        _cachedSettingsUrl = { url: settings.cliproxyapi_url.trim(), ts: Date.now() };
+      }
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
+      /* env vars will be used as fallback */
     }
-  } catch { /* env vars will be used as fallback */ }
-})();
+  })();
+}
 
 /**
  * Resolve CLIProxyAPI base URL. Priority:
@@ -142,6 +152,7 @@ export function clearCliproxyapiUrlCache() {
  *   3. Defaults (127.0.0.1:8317)
  */
 async function resolveCliproxyapiBaseUrl(): Promise<string> {
+  assertNotLockedCapability("embedded-service-cliproxyapi");
   // Check settings cache first
   if (_cachedSettingsUrl && Date.now() - _cachedSettingsUrl.ts < URL_CACHE_TTL_MS) {
     return _cachedSettingsUrl.url;
@@ -155,7 +166,10 @@ async function resolveCliproxyapiBaseUrl(): Promise<string> {
       _cachedSettingsUrl = { url, ts: Date.now() };
       return url;
     }
-  } catch { /* fall through to env vars */ }
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
+    /* fall through to env vars */
+  }
 
   const host = process.env.CLIPROXYAPI_HOST || DEFAULT_HOST;
   const port = parseInt(process.env.CLIPROXYAPI_PORT || String(DEFAULT_PORT), 10);
@@ -386,6 +400,7 @@ export class CliproxyapiExecutor extends BaseExecutor {
     log?: any;
     upstreamExtraHeaders?: Record<string, string> | null;
   }) {
+    assertNotLockedCapability("embedded-service-cliproxyapi");
     // Resolve URL dynamically so settings table cliproxyapi_url is respected.
     // Uses 60s cache to avoid DB reads on every request.
     const baseUrl = await resolveCliproxyapiBaseUrl();
@@ -443,6 +458,7 @@ export class CliproxyapiExecutor extends BaseExecutor {
    * liveness probe and works on every CPA version we've tested.
    */
   async healthCheck(): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+    assertNotLockedCapability("embedded-service-cliproxyapi");
     const start = Date.now();
     try {
       const baseUrl = await resolveCliproxyapiBaseUrl();
@@ -455,6 +471,7 @@ export class CliproxyapiExecutor extends BaseExecutor {
         ...(!res.ok ? { error: `HTTP ${res.status}` } : {}),
       };
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       return {
         ok: false,
         latencyMs: Date.now() - start,

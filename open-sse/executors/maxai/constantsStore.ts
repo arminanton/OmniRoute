@@ -16,6 +16,7 @@
  * signer has no keys and MaxAI is simply unconfigured (callers surface a clear
  * auth error) — we never sign with a guessed/stale secret.
  */
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import type { MaxaiSigningConstants, FetchConstantsOptions } from "./constants.ts";
 import {
   MAXAI_CONSTANTS_SETTINGS_KEY,
@@ -26,12 +27,10 @@ import {
 
 /** In-process memo so the hot signing path never touches the DB or network. */
 let memo: MaxaiSigningConstants | null = null;
-let inflight: Promise<MaxaiSigningConstants | null> | null = null;
 
 /** Reset the in-process memo (tests + after a forced refresh). */
 export function resetMaxaiConstantsMemo(): void {
   memo = null;
-  inflight = null;
 }
 
 /**
@@ -41,7 +40,6 @@ export function resetMaxaiConstantsMemo(): void {
  */
 export function __setMaxaiConstantsForTest(constants: MaxaiSigningConstants | null): void {
   memo = constants;
-  inflight = null;
 }
 
 /** Shape-guard a persisted record before trusting it. */
@@ -72,19 +70,19 @@ export async function getStoredMaxaiConstants(): Promise<MaxaiSigningConstants |
       headerNames: { ...MAXAI_DEFAULT_HEADER_NAMES, ...raw.headerNames },
     };
     return validateMaxaiConstants(withDefaults) ? withDefaults : null;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }
 
 /** Persist a freshly-extracted+validated constants set to settings. */
-export async function persistMaxaiConstants(
-  constants: MaxaiSigningConstants
-): Promise<void> {
+export async function persistMaxaiConstants(constants: MaxaiSigningConstants): Promise<void> {
   try {
     const { updateSettings } = await import("@/lib/db/settings");
     await updateSettings({ [MAXAI_CONSTANTS_SETTINGS_KEY]: constants });
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     // Non-fatal: a persist failure just means the next process re-extracts.
   }
 }
@@ -92,11 +90,13 @@ export async function persistMaxaiConstants(
 /**
  * Return usable MaxAI signing constants, extracting + persisting on a cold store.
  * Order: in-process memo → persisted store → live extraction (validated) → null.
- * Concurrent callers share a single in-flight extraction. Never throws.
+ * Public constants share a memo; HTTP extraction stays caller/transport-scoped.
+ * Caller cancellation propagates instead of falling through to a signed send.
  */
 export async function ensureMaxaiConstants(
   opts: FetchConstantsOptions = {}
 ): Promise<MaxaiSigningConstants | null> {
+  opts.signal?.throwIfAborted();
   if (memo) return memo;
 
   const stored = await getStoredMaxaiConstants();
@@ -105,28 +105,23 @@ export async function ensureMaxaiConstants(
     return memo;
   }
 
-  if (inflight) return inflight;
-  inflight = (async () => {
-    try {
-      const fresh = await fetchMaxaiConstants(opts);
-      if (fresh) {
-        memo = fresh;
-        await persistMaxaiConstants(fresh);
-        return fresh;
-      }
-      return null;
-    } finally {
-      inflight = null;
-    }
-  })();
-  return inflight;
+  // Public constants may be memoized, but one connection must not borrow
+  // another connection's in-flight network work, proxy, or cancellation.
+  const fresh = await fetchMaxaiConstants(opts);
+  opts.signal?.throwIfAborted();
+  if (fresh) {
+    memo = fresh;
+    await persistMaxaiConstants(fresh);
+  }
+  return fresh;
 }
 
 /**
  * Force a live re-extraction (used by the daily token refresh). If the fetched
  * set validates AND differs from what's stored, it is persisted + memoized so a
  * MaxAI-side rotation is picked up. Returns the current-best constants (the fresh
- * set on success, else whatever was already stored/memoized). Never throws.
+ * set on success, else whatever was already stored/memoized). Locally branded
+ * runtime-policy denials remain terminal and never select a cached fallback.
  */
 export async function refreshMaxaiConstants(
   opts: FetchConstantsOptions = {}
@@ -134,10 +129,13 @@ export async function refreshMaxaiConstants(
   let fresh: MaxaiSigningConstants | null = null;
   try {
     fresh = await fetchMaxaiConstants(opts);
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
+    opts.signal?.throwIfAborted();
     fresh = null;
   }
 
+  opts.signal?.throwIfAborted();
   if (fresh) {
     const changed =
       !memo ||

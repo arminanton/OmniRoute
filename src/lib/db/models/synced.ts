@@ -11,6 +11,7 @@ export interface SyncedAvailableModel {
   upstreamProtocol?: string;
   supportedEndpoints?: string[];
   supportedThinkingEfforts?: string[];
+  supportsAdaptiveThinking?: boolean;
   defaultThinkingEffort?: string;
   inputTokenLimit?: number;
   outputTokenLimit?: number;
@@ -63,6 +64,7 @@ function normalizeSyncedAvailableModel(model: unknown): SyncedAvailableModel | n
       ? { upstreamProtocol: toNonEmptyString(record.upstreamProtocol)! }
       : {}),
     ...(supportedEndpoints && supportedEndpoints.length > 0 ? { supportedEndpoints } : {}),
+    ...(record.supportsAdaptiveThinking === true ? { supportsAdaptiveThinking: true } : {}),
     ...(Array.isArray(record.supportedThinkingEfforts)
       ? {
           supportedThinkingEfforts: record.supportedThinkingEfforts.filter(

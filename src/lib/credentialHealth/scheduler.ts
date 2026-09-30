@@ -19,6 +19,12 @@
 
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 
+import {
+  assertNotLockedCapability,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+  type RuntimePolicyError,
+} from "@/shared/runtimePolicy";
 import { testSingleConnection } from "@/app/api/providers/[id]/test/route";
 import { getProviderConnections } from "@/lib/db/providers";
 import { getCachedSettings } from "@/lib/db/readCache";
@@ -45,6 +51,8 @@ declare global {
   var __omnirouteCredentialHC:
     | {
         initialized: boolean;
+        /** A locally branded denial is terminal until process restart. */
+        terminalPolicyError: RuntimePolicyError | null;
         sweepTimer: ReturnType<typeof setTimeout> | null;
         sweepInProgress: boolean;
         /** Track consecutive scheduler failures per connection for backoff */
@@ -63,6 +71,7 @@ function getSchedulerState() {
   if (!globalThis.__omnirouteCredentialHC) {
     globalThis.__omnirouteCredentialHC = {
       initialized: false,
+      terminalPolicyError: null,
       sweepTimer: null,
       sweepInProgress: false,
       failureCounts: new Map(),
@@ -183,7 +192,9 @@ async function testConnection(
     const { getCredentialHealth } = await import("@/lib/credentialHealth/cache");
     const prev = getCredentialHealth(connectionId);
     oldStatus = prev?.status;
-  } catch {}
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
+  }
   try {
     const result = await testSingleConnection(connectionId);
 
@@ -281,6 +292,7 @@ async function testConnection(
       }
     }
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const message = err instanceof Error ? err.message : "Scheduler error";
     const latencyMs = Date.now() - startTime;
     const state = getSchedulerState();
@@ -308,8 +320,9 @@ async function testConnection(
  * Single sweep: test all provider connections in parallel (with concurrency limit).
  */
 export async function sweep(): Promise<void> {
+  if (getRuntimePolicy().mode === "locked") return;
   const state = getSchedulerState();
-  if (state.sweepInProgress) return;
+  if (state.terminalPolicyError || state.sweepInProgress) return;
   state.sweepInProgress = true;
 
   try {
@@ -319,7 +332,8 @@ export async function sweep(): Promise<void> {
     try {
       const settings = (await getCachedSettings()) as Record<string, unknown> | null;
       globalIntervalMs = resolveCredentialHealthSweepInterval(settings);
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       globalIntervalMs = resolveCredentialHealthSweepInterval(null);
     }
 
@@ -350,6 +364,7 @@ export async function sweep(): Promise<void> {
         healthCheckInterval?: number | null;
       }>;
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       console.error(LOG_PREFIX, "Failed to load provider connections:", err);
       return;
     }
@@ -388,18 +403,29 @@ export async function sweep(): Promise<void> {
       // Yield so GET /healthz and cached /api/monitoring/health can drain
       // while this background sweep talks to providers (#12532).
       await yieldToEventLoop();
-      await Promise.allSettled(
+      const results = await Promise.allSettled(
         batch.map((conn) =>
           testConnection(conn.id, conn.provider, getConnIntervalMs(conn, globalIntervalMs))
         )
       );
+      for (const result of results) {
+        if (result.status === "rejected" && isRuntimePolicyError(result.reason)) {
+          throw result.reason;
+        }
+      }
     }
     // Remember the cadence this cycle ran at so scheduleSweep can re-arm with
     // the operator's configured interval instead of the built-in default.
     lastGlobalIntervalMs = globalIntervalMs;
+  } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      state.terminalPolicyError = error;
+      stopCredentialHealthCheck();
+    }
+    throw error;
   } finally {
     state.sweepInProgress = false;
-    scheduleSweep();
+    if (!state.terminalPolicyError) scheduleSweep();
   }
 }
 
@@ -411,8 +437,9 @@ export function __test_resetCredentialHealthScheduler(): void {
 }
 
 function scheduleSweep(): void {
+  if (getRuntimePolicy().mode === "locked") return;
   const state = getSchedulerState();
-  if (!state.initialized) return;
+  if (state.terminalPolicyError || !state.initialized) return;
   if (state.sweepTimer) clearTimeout(state.sweepTimer);
 
   // Use a stable sweep interval — per-connection retry timing is now managed
@@ -421,7 +448,15 @@ function scheduleSweep(): void {
   // cadence observed during the last sweep; fall back to env/default.
   const interval = lastGlobalIntervalMs ?? getSweepInterval();
 
-  state.sweepTimer = setTimeout(sweep, interval);
+  state.sweepTimer = setTimeout(
+    () =>
+      sweep().catch((error: unknown) => {
+        // The sweep already stopped and latched this local denial. Do not retry it.
+        if (isRuntimePolicyError(error) && state.terminalPolicyError === error) return;
+        throw error;
+      }),
+    interval
+  );
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
@@ -430,9 +465,12 @@ function scheduleSweep(): void {
  * Start the credential health check scheduler (idempotent).
  * Returns whether the sweep is armed. False when
  * OMNIROUTE_DISABLE_CREDENTIAL_HEALTH_CHECK is set (#11016).
+ * Locked-v1 disables automatic credential-health probes; forceSweep also denies.
  */
 export function initCredentialHealthCheck(): boolean {
+  if (getRuntimePolicy().mode === "locked") return false;
   const state = getSchedulerState();
+  if (state.terminalPolicyError) return false;
   if (isCredentialHealthCheckDisabled()) return false;
   if (state.initialized) return true;
   state.initialized = true;
@@ -465,7 +503,9 @@ export function stopCredentialHealthCheck(): void {
  * Force an immediate sweep (for manual refresh / testing).
  */
 export async function forceSweep(): Promise<void> {
+  assertNotLockedCapability("credential-health");
   const state = getSchedulerState();
+  if (state.terminalPolicyError) throw state.terminalPolicyError;
   state.initialized = true;
   initCredentialCache();
   await sweep();

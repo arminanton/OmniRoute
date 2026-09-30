@@ -8,6 +8,8 @@
 
 import { FEATURE_FLAG_DEFINITIONS } from "@/shared/constants/featureFlagDefinitions";
 import { getDbInstance } from "./core";
+import { assertRuntimePolicyProxyConfig } from "@/shared/runtimePolicyProxyConfig";
+import { getRuntimePolicy } from "@/shared/runtimePolicy";
 import { finishModelCatalogWriteWithoutBackup } from "./models/modelCatalogWriteSignals";
 
 const NAMESPACE = "feature_flags";
@@ -65,6 +67,11 @@ export function setFeatureFlagOverride(key: string, value: string): void {
       `Invalid value "${value}" for enum flag ${key}. Allowed: ${definition.enumValues.join(", ")}`
     );
   }
+  if (getRuntimePolicy().mode === "locked") {
+    assertRuntimePolicyProxyConfig({
+      featureFlags: { ...getFeatureFlagOverrides(), [key]: value },
+    });
+  }
   const db = getDbInstance();
   db.prepare("INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES (?, ?, ?)").run(
     NAMESPACE,
@@ -81,6 +88,12 @@ export function setFeatureFlagOverride(key: string, value: string): void {
  * behaviour.
  */
 export function removeFeatureFlagOverride(key: string): void {
+  if (getRuntimePolicy().mode === "locked") {
+    const remaining = { ...getFeatureFlagOverrides() };
+    delete remaining[key];
+    // Removing a DB denial may reveal an enabling environment value/default.
+    assertRuntimePolicyProxyConfig({ featureFlags: remaining });
+  }
   const db = getDbInstance();
   db.prepare("DELETE FROM key_value WHERE namespace = ? AND key = ?").run(NAMESPACE, key);
   if (CATALOG_RELEVANT_FEATURE_FLAGS.has(key)) {
@@ -92,6 +105,7 @@ export function removeFeatureFlagOverride(key: string): void {
  * Removes all stored feature flag overrides.
  */
 export function clearAllFeatureFlagOverrides(): void {
+  assertRuntimePolicyProxyConfig({ featureFlags: {} });
   const db = getDbInstance();
   // Placeholders are derived from the set size — a hardcoded `IN (?, ?, ?)` breaks
   // (parameter-count mismatch) the moment a flag is added to the set above.

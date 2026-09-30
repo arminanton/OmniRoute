@@ -1,3 +1,8 @@
+import {
+  assertNoApplicationProxy,
+  isRuntimePolicyError,
+  markRuntimePolicyResponse,
+} from "@/shared/runtimePolicy";
 import { request as undiciRequest } from "undici";
 import {
   createProxyDispatcher,
@@ -42,6 +47,14 @@ function supportedTypesMessage() {
 export async function POST(request: Request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
+  try {
+    assertNoApplicationProxy("configured");
+  } catch (error) {
+    if (!isRuntimePolicyError(error)) throw error;
+    return markRuntimePolicyResponse(
+      Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+    );
+  }
 
   let rawBody: unknown;
   try {

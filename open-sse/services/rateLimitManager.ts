@@ -34,6 +34,7 @@ import {
 } from "./rateLimitManager/errors";
 import { LimiterWedgeWatchdog, WATCHDOG_INTERVAL_MS } from "./rateLimitManager/wedgeWatchdog";
 import { toNumber } from "@/shared/utils/numeric";
+import { bindProbeContext } from "@/shared/utils/probeOrigin";
 
 interface LearnedLimitEntry {
   provider: string;
@@ -579,6 +580,10 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
     throw err;
   }
 
+  // Capture trusted probe provenance before the first await. The queued task
+  // must restore its own marker (or absence), not inherit the draining job's.
+  const scheduledFn = bindProbeContext<unknown, unknown[], ReturnType<typeof fn>>(fn);
+
   // Proactive sliding-window fallback for header-less providers with a declared cap
   // (Fase 8.2). No-op unless PROVIDER_DEFAULT_RATE_LIMITS has an entry for `provider`.
   const maxWaitMs = resolveRequestQueueMaxWaitMs(provider, undefined, connectionId);
@@ -641,7 +646,7 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
         // running inside Bottleneck's limiter — its eventual rejection must not
         // surface as an unhandledRejection. The .catch(noop) silences only the
         // orphaned branch; the real rejection comes from abortPromise.
-        const scheduled = limiter.schedule(scheduleOpts, fn);
+        const scheduled = limiter.schedule(scheduleOpts, scheduledFn);
         scheduled.catch(() => {}); // prevent unhandledRejection when abort wins
         abortPromise.catch(() => {}); // prevent unhandledRejection when scheduled wins
         return await Promise.race([scheduled, abortPromise]);
@@ -651,7 +656,7 @@ export async function withRateLimit(provider, connectionId, model, fn, signal = 
         }
       }
     } else {
-      return await limiter.schedule(scheduleOpts, fn);
+      return await limiter.schedule(scheduleOpts, scheduledFn);
     }
   } catch (err) {
     // Only Bottleneck-owned failures are rewritten. Application code can throw

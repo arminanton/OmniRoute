@@ -1,7 +1,34 @@
-import { describe, it } from "node:test";
+import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const previousDataDir = process.env.DATA_DIR;
+const previousApiKeySecret = process.env.API_KEY_SECRET;
+const testDataDir = mkdtempSync(join(tmpdir(), "omniroute-reasoning-helpers-"));
+process.env.DATA_DIR = testDataDir;
+process.env.API_KEY_SECRET = "reasoning-cache-helpers-test-secret";
 
 const mod = await import("../../open-sse/services/reasoningCache.ts");
+const { createLocalReasoningCacheContext } =
+  await import("../../open-sse/services/reasoningCacheContext.ts");
+const { resetDbInstance } = await import("../../src/lib/db/core.ts");
+const reasoningCacheContext = createLocalReasoningCacheContext();
+assert.ok(reasoningCacheContext);
+
+after(() => {
+  try {
+    mod.clearReasoningCacheAll();
+  } finally {
+    resetDbInstance();
+    rmSync(testDataDir, { recursive: true, force: true });
+    if (previousDataDir === undefined) delete process.env.DATA_DIR;
+    else process.env.DATA_DIR = previousDataDir;
+    if (previousApiKeySecret === undefined) delete process.env.API_KEY_SECRET;
+    else process.env.API_KEY_SECRET = previousApiKeySecret;
+  }
+});
 
 describe("reasoningCache helpers", () => {
   describe("isDeepSeekReasoningModel", () => {
@@ -175,12 +202,15 @@ describe("reasoningCache helpers", () => {
     });
 
     it("lookupReasoning returns null for unknown key", () => {
-      const result = mod.lookupReasoning("nonexistent-key-" + Date.now());
+      const result = mod.lookupReasoning("nonexistent-key-" + Date.now(), reasoningCacheContext);
       assert.equal(result, null);
     });
 
     it("deleteReasoningCacheEntry returns 0 for unknown key", () => {
-      const result = mod.deleteReasoningCacheEntry("nonexistent-" + Date.now());
+      const result = mod.deleteReasoningCacheEntry(
+        "nonexistent-" + Date.now(),
+        reasoningCacheContext
+      );
       assert.equal(result, 0);
     });
 

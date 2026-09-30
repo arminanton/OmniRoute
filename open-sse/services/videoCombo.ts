@@ -25,6 +25,7 @@ import {
 } from "@/sse/services/auth";
 import { isAllRateLimitedCredentials } from "@/app/api/v1/_shared/rateLimit";
 import { handleVideoGeneration } from "@omniroute/open-sse/handlers/videoGeneration.ts";
+import { isRemoteMediaFailureResult } from "@/shared/network/remoteImageFetch";
 import {
   isMediaGenerationFailure,
   promptRequiredResponse,
@@ -173,6 +174,7 @@ export async function executeVideoCombo(
       body: { ...body, model: modelStr },
       credentials,
       log,
+      signal: auth.request?.signal || null,
       ...(isCustomModel && { resolvedProvider: targetProvider }),
     });
 
@@ -196,7 +198,7 @@ export async function executeVideoCombo(
         ? (result as { error: string }).error
         : "Video generation failed";
 
-    if (status === 400 || status === 401 || status === 403) {
+    if (isRemoteMediaFailureResult(result) || status === 400 || status === 401 || status === 403) {
       return errorResponse(status, `[${targetProvider}] ${error}`);
     }
 

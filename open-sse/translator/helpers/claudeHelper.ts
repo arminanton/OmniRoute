@@ -1,6 +1,7 @@
 // Claude helper functions for translator
 import { DEFAULT_THINKING_CLAUDE_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
 import { lookupReasoning, recordReplay } from "../../services/reasoningCache.ts";
+import type { ReasoningCacheContext } from "../../services/reasoningCacheContext.ts";
 import { getModelTargetFormat } from "../../config/providerModels.ts";
 import { NON_ANTHROPIC_THINKING_PLACEHOLDER } from "../../utils/reasoningPlaceholder.ts";
 import { sanitizeToolId } from "./schemaCoercion.ts";
@@ -337,7 +338,11 @@ export function prepareClaudeRequest(
   provider: string | null = null,
   preserveCacheControl = false,
   model: string | null = null,
-  opts: { fallbackToHeuristicWhenNoMarkers?: boolean; skipReasoningReplay?: boolean } = {}
+  opts: {
+    fallbackToHeuristicWhenNoMarkers?: boolean;
+    reasoningCacheContext?: ReasoningCacheContext | null;
+    skipReasoningReplay?: boolean;
+  } = {}
 ): ClaudeRequestBody {
   // 0. Strip Anthropic `output_config` for providers that reject it on their
   // Claude-compatible endpoints (MiniMax). Must run before any downstream
@@ -601,8 +606,8 @@ export function prepareClaudeRequest(
 
         // Pre-collect tool_use ids in this content[] for reasoningCache
         // lookups when the upstream is a non-Anthropic Claude-shape provider.
-        // The cache is keyed by tool_call_id which equals tool_use.id for
-        // Anthropic-shape (the same value is reused across formats — see
+        // The logical cache ID is tool_call_id, scoped by the trusted context.
+        // It equals tool_use.id for Anthropic-shape (reused across formats — see
         // claude-to-openai.ts:63 where openai tool_call.id = claude tool_use.id).
         const toolUseIds: string[] = [];
         if (!supportsRedactedThinking) {
@@ -663,7 +668,10 @@ export function prepareClaudeRequest(
                 if (!text) {
                   const pairedToolUseId = toolUseIds[thinkingBlockIdx];
                   if (pairedToolUseId && !opts.skipReasoningReplay) {
-                    const cached = lookupReasoning(pairedToolUseId);
+                    const cached = lookupReasoning(
+                      pairedToolUseId,
+                      opts.reasoningCacheContext ?? null
+                    );
                     if (cached) {
                       text = cached;
                       recordReplay();
@@ -705,7 +713,7 @@ export function prepareClaudeRequest(
             let text = "";
             const firstToolUseId = toolUseIds[0];
             if (firstToolUseId && !opts.skipReasoningReplay) {
-              const cached = lookupReasoning(firstToolUseId);
+              const cached = lookupReasoning(firstToolUseId, opts.reasoningCacheContext ?? null);
               if (cached) {
                 text = cached;
                 recordReplay();

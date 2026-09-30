@@ -18,7 +18,11 @@ import {
   updateNousOAuthHealthIfRefreshUnchanged,
 } from "@/lib/db/providers";
 import { getCachedProviderConnectionById } from "@/lib/db/readCache";
-import { getSettings, resolveProxyForConnection } from "@/lib/db/settings";
+import { getSettings } from "@/lib/db/settings";
+import {
+  resolveGuardedProxyConfig,
+  withRequiredRefreshProxy,
+} from "@/lib/tokenHealthCheckProxyGuard";
 import {
   getAccessToken,
   getDeprecationNotice,
@@ -37,6 +41,9 @@ import {
   isWebCookieHealthProbeCandidate,
 } from "@/lib/tokenHealthCheckWebCookie";
 
+import { parseTokenExpiryMs } from "@omniroute/open-sse/utils/tokenExpiry.ts";
+export { parseTokenExpiryMs };
+
 const LOG_PREFIX = "[HealthCheck]";
 const TRUE_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 const TICK_MS = 60 * 1000; // sweep interval: every 60 seconds (restored — #7719 dropped the const but kept two call sites)
@@ -44,6 +51,24 @@ const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_HEALTH_CHECK_INTERVAL_MIN = 60; // default per-connection interval
 const EXPIRED_RETRY_MAX = 3; // max retry attempts for expired connections before giving up
 const EXPIRED_RETRY_BACKOFF_MIN = 5; // backoff between expired retries (minutes)
+const ROTATING_REFRESH_PROVIDERS = new Set([
+  "codex",
+  "openai",
+  "kimi-coding",
+  "cline",
+  "kiro",
+  "amazon-q",
+  "gitlab-duo",
+  "claude",
+  "openference",
+  "nous-oauth",
+]);
+
+export function shouldNullRefreshTokenAfterUnrecoverable(provider: unknown): boolean {
+  const id = String(provider || "").toLowerCase();
+  // Claude keeps its recovery artifact; Nous writes are dedicated SQLite CAS only.
+  return id !== "claude" && !isSelfPersistedOAuthProvider(id) && ROTATING_REFRESH_PROVIDERS.has(id);
+}
 
 function isBuildProcess(): boolean {
   return typeof process !== "undefined" && process.env.NEXT_PHASE === "phase-production-build";
@@ -68,27 +93,18 @@ export function extractResolvedProxyConfig(resolvedProxy: unknown) {
 
 function getEffectiveTokenExpiryIso(conn: any): string | null {
   if (!conn || typeof conn !== "object") return null;
-  return conn.tokenExpiresAt || conn.expiresAt || null;
+  const expiry = parseTokenExpiryMs(conn.tokenExpiresAt || conn.expiresAt);
+  return expiry ? new Date(expiry).toISOString() : null;
 }
 
 function getEffectiveTokenExpiryMs(conn: any): number {
-  const effectiveExpiry = getEffectiveTokenExpiryIso(conn);
-  if (!effectiveExpiry) return 0;
-  const expiryMs = new Date(effectiveExpiry).getTime();
-  return Number.isFinite(expiryMs) ? expiryMs : 0;
+  return parseTokenExpiryMs(getEffectiveTokenExpiryIso(conn));
 }
 
 const TOKEN_EXPIRY_BUFFER = 5 * 60 * 1000; // 5 minutes
 
 function getCopilotTokenExpiryMs(expiresAt: unknown): number {
-  if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
-    return expiresAt < 1e12 ? expiresAt * 1000 : expiresAt;
-  }
-  if (typeof expiresAt === "string" && expiresAt.trim()) {
-    const parsed = new Date(expiresAt).getTime();
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
+  return parseTokenExpiryMs(expiresAt);
 }
 
 // Providers whose OAuth flow yields only a GitHub-style access token (no
@@ -734,8 +750,11 @@ export async function checkConnection(conn) {
 
       let refreshedProviderSpecificData: Record<string, unknown> | null = null;
       const hideLogs = await shouldHideLogs();
-      const proxyResolution = await resolveProxyForConnection(conn.id);
-      const proxyConfig = extractResolvedProxyConfig(proxyResolution);
+      const { proxyConfig, blocked } = await resolveGuardedProxyConfig(conn.id, conn.provider);
+      if (blocked) {
+        logWarn(`${LOG_PREFIX} Assigned proxy unavailable; skipping Copilot refresh`);
+        return;
+      }
       const healthCheckLog = {
         info: (tag: string, msg: string) => {
           if (!hideLogs) console.log(LOG_PREFIX, `[${tag}]`, msg);
@@ -748,11 +767,13 @@ export async function checkConnection(conn) {
         },
       };
 
-      const copilotResult = await refreshCopilotToken(
-        conn.accessToken,
-        healthCheckLog,
-        proxyConfig,
-        getCopilotTokenBaseUrl(conn)
+      const copilotResult = await withRequiredRefreshProxy(proxyConfig, () =>
+        refreshCopilotToken(
+          conn.accessToken,
+          healthCheckLog,
+          proxyConfig,
+          getCopilotTokenBaseUrl(conn)
+        )
       );
       if (copilotResult?.status === 401) {
         await updateProviderConnection(conn.id, {
@@ -898,18 +919,6 @@ export async function checkConnection(conn) {
   // and is the root cause of "adding account B invalidates account A" reports.
   // The interval path is kept ONLY for non-rotating providers where token state can
   // drift silently (e.g. cookie-based, opaque sessions without expires_at).
-  const ROTATING_REFRESH_PROVIDERS = new Set([
-    "codex",
-    "openai",
-    "kimi-coding",
-    "cline",
-    "kiro",
-    "amazon-q",
-    "gitlab-duo",
-    "claude",
-    "openference",
-    "nous-oauth",
-  ]);
   const isRotatingProvider = ROTATING_REFRESH_PROVIDERS.has(
     String(conn.provider || "").toLowerCase()
   );
@@ -940,8 +949,11 @@ export async function checkConnection(conn) {
   };
 
   const hideLogs = await shouldHideLogs();
-  const proxyResolution = await resolveProxyForConnection(conn.id);
-  const proxyConfig = extractResolvedProxyConfig(proxyResolution);
+  const { proxyConfig, blocked } = await resolveGuardedProxyConfig(conn.id, conn.provider);
+  if (blocked) {
+    logWarn(`${LOG_PREFIX} Assigned proxy unavailable; skipping token refresh`);
+    return;
+  }
 
   const healthCheckLog = {
     info: (tag: string, msg: string) => {
@@ -970,62 +982,64 @@ export async function checkConnection(conn) {
   let persistedResult: RefreshResultShape | null = null;
   let result: RefreshResultShape | null;
   try {
-    result = await getAccessToken(
-      conn.provider,
-      credentials,
-      healthCheckLog,
-      proxyConfig,
-      async (refreshResult: RefreshResultShape) => {
-        const now = new Date().toISOString();
-        const updateData: ConnectionUpdate = {
-          accessToken: refreshResult.accessToken,
-          lastHealthCheckAt: now,
-          testStatus: "active",
-          lastError: null,
-          lastErrorAt: null,
-          lastErrorType: null,
-          lastErrorSource: null,
-          errorCode: null,
-          expiredRetryCount: null,
-          expiredRetryAt: null,
-        };
-        if (refreshResult.refreshToken) {
-          updateData.refreshToken = refreshResult.refreshToken;
+    result = await withRequiredRefreshProxy(proxyConfig, () =>
+      getAccessToken(
+        conn.provider,
+        credentials,
+        healthCheckLog,
+        proxyConfig,
+        async (refreshResult: RefreshResultShape) => {
+          const now = new Date().toISOString();
+          const updateData: ConnectionUpdate = {
+            accessToken: refreshResult.accessToken,
+            lastHealthCheckAt: now,
+            testStatus: "active",
+            lastError: null,
+            lastErrorAt: null,
+            lastErrorType: null,
+            lastErrorSource: null,
+            errorCode: null,
+            expiredRetryCount: null,
+            expiredRetryAt: null,
+          };
+          if (refreshResult.refreshToken) {
+            updateData.refreshToken = refreshResult.refreshToken;
+          }
+          if (refreshResult.expiresAt) {
+            updateData.expiresAt = refreshResult.expiresAt;
+            updateData.tokenExpiresAt = refreshResult.expiresAt;
+          } else if (refreshResult.expiresIn) {
+            const expiresAt = new Date(Date.now() + refreshResult.expiresIn * 1000).toISOString();
+            updateData.expiresAt = expiresAt;
+            updateData.tokenExpiresAt = expiresAt;
+          }
+          // Merge new providerSpecificData and ALWAYS clear the refresh circuit
+          // breaker streak on a successful refresh.
+          const mergedProviderData = {
+            ...(conn.providerSpecificData || {}),
+            ...(refreshResult.providerSpecificData || {}),
+          };
+          const clearedProviderData = clearRefreshCircuit(mergedProviderData);
+          if (clearedProviderData !== undefined) {
+            updateData.providerSpecificData = clearedProviderData;
+          } else if (refreshResult.providerSpecificData) {
+            updateData.providerSpecificData = mergedProviderData;
+          }
+          try {
+            await updateProviderConnection(conn.id, updateData);
+          } catch (dbErr) {
+            // DB write failed after successful refresh - log but do not throw.
+            // The outer catch would misclassify this as a network error.
+            logWarn(
+              `${LOG_PREFIX} ~ ${conn.provider}/${getConnectionLogLabel(conn)} DB write failed after successful refresh` +
+                ` (${dbErr instanceof Error ? dbErr.message : String(dbErr)}); token not persisted`
+            );
+            return;
+          }
+          // Mark as persisted AFTER the DB write succeeds.
+          persistedResult = refreshResult;
         }
-        if (refreshResult.expiresAt) {
-          updateData.expiresAt = refreshResult.expiresAt;
-          updateData.tokenExpiresAt = refreshResult.expiresAt;
-        } else if (refreshResult.expiresIn) {
-          const expiresAt = new Date(Date.now() + refreshResult.expiresIn * 1000).toISOString();
-          updateData.expiresAt = expiresAt;
-          updateData.tokenExpiresAt = expiresAt;
-        }
-        // Merge new providerSpecificData and ALWAYS clear the refresh circuit
-        // breaker streak on a successful refresh.
-        const mergedProviderData = {
-          ...(conn.providerSpecificData || {}),
-          ...(refreshResult.providerSpecificData || {}),
-        };
-        const clearedProviderData = clearRefreshCircuit(mergedProviderData);
-        if (clearedProviderData !== undefined) {
-          updateData.providerSpecificData = clearedProviderData;
-        } else if (refreshResult.providerSpecificData) {
-          updateData.providerSpecificData = mergedProviderData;
-        }
-        try {
-          await updateProviderConnection(conn.id, updateData);
-        } catch (dbErr) {
-          // DB write failed after successful refresh - log but do not throw.
-          // The outer catch would misclassify this as a network error.
-          logWarn(
-            `${LOG_PREFIX} ~ ${conn.provider}/${getConnectionLogLabel(conn)} DB write failed after successful refresh` +
-              ` (${dbErr instanceof Error ? dbErr.message : String(dbErr)}); token not persisted`
-          );
-          return;
-        }
-        // Mark as persisted AFTER the DB write succeeds.
-        persistedResult = refreshResult;
-      }
+      )
     );
   } catch (err) {
     // Dedicated Nous refresh owns every metadata/secret write through SQLite
@@ -1125,7 +1139,8 @@ export async function checkConnection(conn) {
   // Once used, the old token is permanently invalidated.
   // Retrying will never succeed → deactivate and stop the loop.
   if (isUnrecoverableRefreshError(result)) {
-    const currentConnection = await getCachedProviderConnectionById(conn.id);
+    const currentConnection = await getProviderConnectionById(conn.id);
+    if (!currentConnection) return;
     const credentialsChangedSinceSweep =
       !!currentConnection &&
       (currentConnection.refreshToken !== attemptedRefreshToken ||
@@ -1185,7 +1200,7 @@ export async function checkConnection(conn) {
       // gemini) the stored refresh_token is the user's only recovery
       // artifact — nulling it caused #3679 (the connection reports "No valid refresh
       // token available" and can never recover even after re-activation). Preserve it.
-      ...(isRotatingProvider ? { refreshToken: null } : {}),
+      ...(shouldNullRefreshTokenAfterUnrecoverable(conn.provider) ? { refreshToken: null } : {}),
     });
     logError(
       `${LOG_PREFIX} ✗ ${conn.provider}/${getConnectionLogLabel(conn)} — ` +
@@ -1246,17 +1261,19 @@ export async function checkConnection(conn) {
     // ── GitHub Copilot sub-token refresh ──────────────────────────────────────
     // Extracted to tokenHealthCheckCopilot.ts to keep this file under the
     // frozen file-size budget. See that file's header comment for context.
-    await refreshGithubCopilotSubTokenIfNeeded({
-      conn,
-      result,
-      proxyConfig,
-      healthCheckLog,
-      log,
-      logWarn,
-      logError,
-      getConnectionLogLabel,
-      logPrefix: LOG_PREFIX,
-    });
+    await withRequiredRefreshProxy(proxyConfig, () =>
+      refreshGithubCopilotSubTokenIfNeeded({
+        conn,
+        result,
+        proxyConfig,
+        healthCheckLog,
+        log,
+        logWarn,
+        logError,
+        getConnectionLogLabel,
+        logPrefix: LOG_PREFIX,
+      })
+    );
   } else {
     const updateData = buildRefreshFailureUpdate(conn, now);
     await updateProviderConnection(conn.id, updateData);

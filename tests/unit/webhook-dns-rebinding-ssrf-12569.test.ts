@@ -101,7 +101,7 @@ describe("#12569 — webhook outbound guard is hostname-string-only (DNS rebindi
       0,
       {
         lookup: async () => [
-          { address: "203.0.113.5", family: 4 },
+          { address: "93.184.216.34", family: 4 },
           { address: "169.254.169.254", family: 4 },
         ],
         fetchImpl: async (input: string | URL) => {
@@ -123,7 +123,7 @@ describe("#12569 — webhook outbound guard is hostname-string-only (DNS rebindi
       null,
       0,
       {
-        lookup: async () => [{ address: "203.0.113.5", family: 4 }],
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
         fetchImpl: async (input: string | URL) => {
           fetchCalls.push(String(input));
           return new Response("ok", { status: 200 });
@@ -161,10 +161,10 @@ describe("webhook DNS/pin policy — fake DNS and transport only", () => {
       [{ address: "127.0.0.1", family: 4 }],
       [{ address: "::1", family: 6 }],
       [
-        { address: "203.0.113.5", family: 4 },
+        { address: "93.184.216.34", family: 4 },
         { address: "fd00::1", family: 6 },
       ],
-      [{ address: "203.0.113.5", family: 6 }], // malformed family, fail closed
+      [{ address: "93.184.216.34", family: 6 }], // malformed family, fail closed
     ]) {
       await assert.rejects(
         fetchWebhookUrl(
@@ -323,7 +323,7 @@ describe("webhook DNS/pin policy — fake DNS and transport only", () => {
         { method: "POST" },
         {
           lookup: async (host) => [
-            { address: host === "first.example" ? "203.0.113.5" : "10.0.0.1", family: 4 },
+            { address: host === "first.example" ? "93.184.216.34" : "10.0.0.1", family: 4 },
           ],
           fetchImpl: async () => {
             fetches++;
@@ -337,38 +337,57 @@ describe("webhook DNS/pin policy — fake DNS and transport only", () => {
     assert.equal(canceled, true);
   });
 
-  it("matches POST 302 redirect method handling and strips webhook signature across origins", async () => {
+  it("blocks altered origin before body, HMAC, or arbitrary auth headers can leave", async () => {
     delete process.env[PRIVATE_OPT_IN];
     delete process.env[APPROVED_HOSTS];
-    const seen: Array<{ url: string; init: RequestInit }> = [];
-    const result = await fetchWebhookUrl(
-      "https://first.example/hook",
-      {
-        method: "POST",
-        body: "test-data",
-        headers: { "X-Webhook-Signature": "sha256=secret", "Content-Type": "application/json" },
-      },
-      {
-        lookup: async () => [{ address: "203.0.113.5", family: 4 }],
-        fetchImpl: async (url, init) => {
-          seen.push({ url: String(url), init: init ?? {} });
-          return seen.length === 1
-            ? new Response(null, {
-                status: 302,
+    let sends = 0;
+    for (const status of [301, 302, 303, 307, 308]) {
+      await assert.rejects(
+        fetchWebhookUrl(
+          "https://first.example/hook",
+          {
+            method: "POST",
+            body: "private-payload",
+            headers: { "X-Webhook-Signature": "sha256=secret", "X-API-Key": "secret" },
+          },
+          {
+            lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+            fetchImpl: async () => {
+              sends++;
+              return new Response(null, {
+                status,
                 headers: { location: "https://other.example/hook" },
-              })
-            : publicResponse();
-        },
-      }
+              });
+            },
+          }
+        ),
+        /cross-origin.*blocked/i
+      );
+    }
+    assert.equal(sends, 5);
+  });
+
+  it("re-resolves a same-origin redirect and blocks a rebound DNS answer", async () => {
+    let resolutions = 0;
+    let sends = 0;
+    await assert.rejects(
+      fetchWebhookUrl(
+        "https://first.example/hook",
+        { method: "POST", body: "data" },
+        {
+          lookup: async () => [
+            { address: ++resolutions === 1 ? "93.184.216.34" : "169.254.169.254", family: 4 },
+          ],
+          fetchImpl: async () => {
+            sends++;
+            return new Response(null, { status: 307, headers: { location: "/next" } });
+          },
+        }
+      ),
+      /blocked/i
     );
-    assert.equal(result.response.ok, true);
-    assert.equal(seen.length, 2);
-    assert.equal(seen[0].init.redirect, "manual");
-    assert.equal(seen[1].init.method, "GET");
-    assert.equal(seen[1].init.body, undefined);
-    assert.equal(new Headers(seen[1].init.headers).has("x-webhook-signature"), false);
-    assert.equal(new Headers(seen[1].init.headers).has("content-type"), false);
-    await result.response.body?.cancel();
+    assert.equal(resolutions, 2);
+    assert.equal(sends, 1);
   });
 
   it("stops waiting for a hung resolver after the caller aborts, without transport calls", async () => {

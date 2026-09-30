@@ -314,3 +314,34 @@ test("timed transcription drops malformed provider segments instead of trusting 
 
   assert.equal(result.segments, undefined);
 });
+
+test("audio self-hop proof is separate from API auth and uses manual redirects", async () => {
+  const prior = process.env.PORT;
+  process.env.PORT = "3210";
+  try {
+    await callAudioTranscription(
+      {
+        messageIndex: 0,
+        partIndex: 0,
+        ref: Buffer.from("audio").toString("base64"),
+        shape: "input_audio",
+        format: "wav",
+      },
+      { model: "deepgram/nova-3", timeoutMs: 1000 },
+      {
+        getPort: () => 3210,
+        getBearer: () => "validated-api-key",
+        fetchImpl: async (_input, init) => {
+          const headers = new Headers(init?.headers);
+          assert.equal(headers.get("authorization"), "Bearer validated-api-key");
+          assert.match(headers.get("x-omniroute-self-hop") ?? "", /^[a-f0-9]{64}$/);
+          assert.equal(init?.redirect, "manual");
+          return Response.json({ text: "ok" });
+        },
+      }
+    );
+  } finally {
+    if (prior === undefined) delete process.env.PORT;
+    else process.env.PORT = prior;
+  }
+});

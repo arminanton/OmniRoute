@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getDbInstance } from "../../src/lib/db/core.ts";
-import { saveCallLog, getCallLogs } from "../../src/lib/usage/callLogs.ts";
+import { saveCallLog, getCallLogById, getCallLogs } from "../../src/lib/usage/callLogs.ts";
 
 test("saveCallLog persists to DB with correlationId", async () => {
   const db = getDbInstance();
@@ -20,17 +20,18 @@ test("saveCallLog persists to DB with correlationId", async () => {
     sourceFormat: "openai",
     targetFormat: "openai",
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const row = db
     .prepare("SELECT id, correlation_id, status, model FROM call_logs WHERE id = ?")
-    .get(testId) as Record<string, unknown>;
+    .get(physicalId) as Record<string, unknown>;
   assert.ok(row, "row should exist in call_logs");
-  assert.equal(row.id, testId);
+  assert.equal(row.id, physicalId);
   assert.equal(row.correlation_id, "test-correlation-id-123");
   assert.equal(row.status, 200);
   assert.equal(row.model, "test-model");
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("saveCallLog persists null correlationId when not provided", async () => {
@@ -47,14 +48,15 @@ test("saveCallLog persists null correlationId when not provided", async () => {
     duration: 500,
     tokens: {},
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const row = db
     .prepare("SELECT id, correlation_id FROM call_logs WHERE id = ?")
-    .get(testId) as Record<string, unknown>;
+    .get(physicalId) as Record<string, unknown>;
   assert.ok(row, "row should exist");
   assert.equal(row.correlation_id, null, "correlation_id should be null when not provided");
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("getCallLogs returns correlationId", async () => {
@@ -72,13 +74,14 @@ test("getCallLogs returns correlationId", async () => {
     tokens: { in: 20, out: 10 },
     correlationId: "cid-roundtrip-test",
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const logs = await getCallLogs({ limit: 100 });
-  const found = logs.find((l: { id: string }) => l.id === testId);
+  const found = logs.find((l: { id: string }) => l.id === physicalId);
   assert.ok(found, "log entry should be found via getCallLogs");
   assert.equal(found.correlationId, "cid-roundtrip-test");
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("call_logs table has correlation_id column", () => {
@@ -117,14 +120,15 @@ test("saveCallLog persists modelPinned=true as 1", async () => {
     tokens: { in: 10, out: 5 },
     modelPinned: true,
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const row = db
     .prepare("SELECT id, model_pinned FROM call_logs WHERE id = ?")
-    .get(testId) as Record<string, unknown>;
+    .get(physicalId) as Record<string, unknown>;
   assert.ok(row, "row should exist");
   assert.equal(row.model_pinned, 1, "model_pinned should be 1 when modelPinned=true");
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("saveCallLog persists modelPinned=false as 0", async () => {
@@ -142,14 +146,15 @@ test("saveCallLog persists modelPinned=false as 0", async () => {
     tokens: { in: 10, out: 5 },
     modelPinned: false,
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const row = db
     .prepare("SELECT id, model_pinned FROM call_logs WHERE id = ?")
-    .get(testId) as Record<string, unknown>;
+    .get(physicalId) as Record<string, unknown>;
   assert.ok(row, "row should exist");
   assert.equal(row.model_pinned, 0, "model_pinned should be 0 when modelPinned=false");
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("call_logs table has video_content_removed column", () => {
@@ -177,10 +182,11 @@ test("saveCallLog persists videoContentRemoved=true as 1 (#12150 P2)", async () 
     tokens: { in: 10, out: 5 },
     videoContentRemoved: true,
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const row = db
     .prepare("SELECT id, video_content_removed FROM call_logs WHERE id = ?")
-    .get(testId) as Record<string, unknown>;
+    .get(physicalId) as Record<string, unknown>;
   assert.ok(row, "row should exist");
   assert.equal(
     row.video_content_removed,
@@ -188,7 +194,7 @@ test("saveCallLog persists videoContentRemoved=true as 1 (#12150 P2)", async () 
     "video_content_removed should be 1 when videoContentRemoved=true"
   );
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("saveCallLog defaults video_content_removed to 0 when absent (#12150 P2)", async () => {
@@ -205,10 +211,11 @@ test("saveCallLog defaults video_content_removed to 0 when absent (#12150 P2)", 
     duration: 500,
     tokens: { in: 10, out: 5 },
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const row = db
     .prepare("SELECT id, video_content_removed FROM call_logs WHERE id = ?")
-    .get(testId) as Record<string, unknown>;
+    .get(physicalId) as Record<string, unknown>;
   assert.ok(row, "row should exist");
   assert.equal(
     row.video_content_removed,
@@ -216,7 +223,7 @@ test("saveCallLog defaults video_content_removed to 0 when absent (#12150 P2)", 
     "video_content_removed should default to 0 when not provided"
   );
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("getCallLogs returns modelPinned boolean", async () => {
@@ -234,11 +241,12 @@ test("getCallLogs returns modelPinned boolean", async () => {
     tokens: { in: 20, out: 10 },
     modelPinned: true,
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const logs = await getCallLogs({ limit: 100 });
-  const found = logs.find((l: { id: string }) => l.id === testId);
+  const found = logs.find((l: { id: string }) => l.id === physicalId);
   assert.ok(found, "log entry should be found via getCallLogs");
   assert.equal(found.modelPinned, true, "getCallLogs should return modelPinned as boolean true");
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });

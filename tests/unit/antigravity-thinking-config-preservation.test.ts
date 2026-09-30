@@ -96,7 +96,7 @@ test("antigravity translator: translates reasoning_effort into Gemini thinkingCo
   );
 });
 
-test("antigravity translator: Claude models bump maxOutputTokens and strip raw thinkingConfig", () => {
+test("antigravity translator: selected Claude carries level-only intent for the executor account gate", () => {
   const inputReq = {
     model: "antigravity/claude-sonnet-4-6",
     messages: [{ role: "user", content: "Explain quantum mechanics" }],
@@ -118,10 +118,10 @@ test("antigravity translator: Claude models bump maxOutputTokens and strip raw t
   )?.request?.generationConfig;
 
   assert.ok(generationConfig, "generationConfig must exist in Cloud Code envelope");
-  assert.equal(
+  assert.deepEqual(
     generationConfig.thinkingConfig,
-    undefined,
-    "raw thinkingConfig must be stripped for Claude models on Antigravity"
+    { thinkingLevel: "HIGH" },
+    "carry level-only intent; the executor must verify account capability before dispatch"
   );
   assert.ok(
     (generationConfig.maxOutputTokens as number) >= 16384,

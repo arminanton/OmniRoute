@@ -5,8 +5,10 @@
  * @internal — not part of the public combo.ts barrel.
  */
 import { formatRetryAfter, getModelLockoutInfo } from "../accountFallback.ts";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import {
   errorResponse,
+  runtimePolicyErrorResponse,
   errorResponseWithComboDiagnostics,
   unavailableResponse,
 } from "../../utils/error.ts";
@@ -231,6 +233,13 @@ export async function dispatchWithCooldownRetry(opts: {
             deps.signal?.removeEventListener("abort", onClientAbort);
           }
         })().catch((err) => {
+          if (isRuntimePolicyError(err)) {
+            if (!anySuccess && globalResolve) {
+              anySuccess = true;
+              globalResolve(runtimePolicyErrorResponse());
+            }
+            return;
+          }
           const logError = deps.log.error ?? deps.log.warn;
           logError("COMBO", `Speculative task error for target ${i}`, err);
           // G2 (silent-stop fix): never leave the speculative loop waiting on an

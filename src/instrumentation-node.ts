@@ -8,6 +8,7 @@
 
 import { markServerReady, markServerStarting } from "@/lib/serverLifecycle";
 import { normalizeBootError } from "@/lib/instrumentationBootError";
+import { getRuntimePolicy, isRuntimePolicyError } from "@/shared/runtimePolicy";
 
 function getRandomBytes(byteLength: number): Uint8Array {
   const bytes = new Uint8Array(byteLength);
@@ -73,6 +74,7 @@ export async function ensureDbReadyForBoot(
   try {
     await ensureDbInitialized();
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const normalized = normalizeBootError(err);
     if (!TRANSIENT_DB_CLOSED_RE.test(normalized.message)) {
       // Fatal, non-transient boot-time DB init failure (e.g. the entire
@@ -92,6 +94,7 @@ export async function ensureDbReadyForBoot(
     try {
       await ensureDbInitialized();
     } catch (retryErr: unknown) {
+      if (isRuntimePolicyError(retryErr)) throw retryErr;
       const normalizedRetryErr = normalizeBootError(retryErr);
       console.error(
         "[STARTUP] Fatal: Database driver initialization failed after retry:",
@@ -115,6 +118,7 @@ async function ensureSecrets(): Promise<void> {
   try {
     ({ getPersistedSecret, persistSecret } = await import("@/lib/db/secrets"));
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(
       "[STARTUP] Secret persistence unavailable; falling back to process-local secrets:",
@@ -181,6 +185,7 @@ export async function warmModelCatalogCache(): Promise<void> {
     await getUnifiedModelsResponse(new Request("http://127.0.0.1/v1/models"));
     console.log("[STARTUP] Model catalog cache warmed");
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] Model catalog warmup failed (non-fatal):", msg);
   }
@@ -198,6 +203,7 @@ export async function warmModelCatalogCache(): Promise<void> {
       console.log("[STARTUP] OpenRouter model catalog cache warmed");
     }
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] OpenRouter catalog warmup failed (non-fatal):", msg);
   }
@@ -228,6 +234,7 @@ export async function scanComboModelNameCollisionsAtBoot(): Promise<void> {
       );
     }
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] Could not scan combos for model-name collisions (non-fatal):", msg);
   }
@@ -255,6 +262,7 @@ export async function warmAdaptiveVirtualLanesIntoRuntime(): Promise<void> {
       );
     }
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] Could not warm adaptive virtual lanes flag (non-fatal):", msg);
   }
@@ -314,9 +322,10 @@ export async function registerQuotaFetchers(): Promise<void> {
         id: typeof node.id === "string" ? node.id : null,
         prefix: typeof node.prefix === "string" ? node.prefix : null,
         baseUrl: typeof node.baseUrl === "string" ? node.baseUrl : null,
-      })),
+      }))
     );
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     console.warn("[STARTUP] Moonshot custom-node fetcher scan skipped:", error);
   }
   registerOpenrouterQuotaFetcher();
@@ -327,8 +336,51 @@ export async function registerQuotaFetchers(): Promise<void> {
   console.log("[STARTUP] Quota fetchers registered");
 }
 
+/** Locked-only, awaited admission before any network patch, quota or helper startup. */
+export async function preflightLockedRuntime(): Promise<void> {
+  if (getRuntimePolicy().mode !== "locked") return;
+  await ensureDbReadyForBoot();
+  const [
+    { getSettings, getRuntimePolicySettingsCandidate },
+    { assertLockedManagementAuthProvisioned, ensurePersistentManagementPasswordHash },
+    { assertRuntimePolicySettings },
+    {
+      assertRuntimeEntrypointInventory,
+      validateRuntimeHelperEnvironment,
+      validateProviderNodeCandidate,
+    },
+    { assertResolvedProviderConnectionEntrypoint },
+    { getProviderConnections, getProviderNodes },
+  ] = await Promise.all([
+    import("@/lib/db/settings"),
+    import("@/lib/auth/managementPassword"),
+    import("@/shared/runtimePolicySettings"),
+    import("@/shared/runtimePolicyEntrypoints"),
+    import("@/sse/services/compatibleNodeBaseUrl"),
+    import("@/lib/db/providers"),
+  ]);
+  const settings = await getSettings({ autoCompleteSetup: false });
+  // Check plaintext/env placeholders BEFORE the existing migration can hash them.
+  assertLockedManagementAuthProvisioned(settings, process.env.INITIAL_PASSWORD);
+  // requireLogin is not the effective authority in this deployment.
+  assertRuntimePolicySettings({
+    ...(await getRuntimePolicySettingsCandidate()),
+    requireLogin: true,
+  });
+  validateRuntimeHelperEnvironment(process.env);
+  assertRuntimeEntrypointInventory();
+  for (const connection of await getProviderConnections({ isActive: true })) {
+    await assertResolvedProviderConnectionEntrypoint(connection);
+  }
+  for (const node of await getProviderNodes()) validateProviderNodeCandidate(node ?? {});
+  await ensurePersistentManagementPasswordHash({ settings, source: "locked-startup" });
+}
+
 export async function registerNodejs(): Promise<void> {
+  // Synchronous per-bundle policy read; never caught as an optional warmup.
+  getRuntimePolicy();
   markServerStarting();
+  await preflightLockedRuntime();
 
   // Rename the process title so OmniRoute is identifiable in ps/htop instead
   // of the generic "next-server" standalone server name.
@@ -379,6 +431,7 @@ export async function registerNodejs(): Promise<void> {
       );
     }
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] Could not clear stale crash cooldowns (non-fatal):", msg);
   }
@@ -529,6 +582,7 @@ export async function registerNodejs(): Promise<void> {
 
     startRuntimeConfigHotReload();
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] Could not restore runtime settings:", msg);
   }
@@ -549,6 +603,7 @@ export async function registerNodejs(): Promise<void> {
         : "[STARTUP] Credential health scheduler disabled"
     );
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] Could not start credential health scheduler:", msg);
   }
@@ -570,6 +625,7 @@ export async function registerNodejs(): Promise<void> {
       console.log("[COMPLIANCE] Expired log cleanup:", cleanup);
     }
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[COMPLIANCE] Could not initialize audit log:", msg);
   }
@@ -581,6 +637,7 @@ export async function registerNodejs(): Promise<void> {
     initVacuumScheduler();
     console.log("[STARTUP] Scheduled VACUUM initialized (#4437)");
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] Could not initialize vacuum scheduler (non-fatal):", msg);
   }
@@ -592,6 +649,7 @@ export async function registerNodejs(): Promise<void> {
   try {
     startCleanupScheduler();
   } catch (err: unknown) {
+    if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[STARTUP] Could not start cleanup scheduler (non-fatal):", msg);
   }
@@ -599,17 +657,19 @@ export async function registerNodejs(): Promise<void> {
   // Warm the model catalog's durable, apiKey-independent sub-caches at
   // startup — see warmModelCatalogCache() for why the top-level Response
   // cache alone doesn't deliver this. Fire-and-forget, non-fatal.
-  void warmModelCatalogCache();
+  if (getRuntimePolicy().mode === "locked") await warmModelCatalogCache();
+  else void warmModelCatalogCache();
 
   if (!isBackgroundServicesDisabled()) {
     // All services are independent — run in parallel for faster cold start.
-    await Promise.allSettled([
+    const serviceResults = await Promise.allSettled([
       import("@/lib/services/bootstrap")
         .then(async (m) => {
           await m.bootstrapEmbeddedServices();
           console.log("[STARTUP] Embedded services bootstrap complete");
         })
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] Embedded services bootstrap failed (non-fatal):", msg);
         }),
@@ -617,6 +677,7 @@ export async function registerNodejs(): Promise<void> {
       import("@/lib/services/embedWsProxy")
         .then((m) => m.initEmbedWsProxy())
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] Embed WS proxy failed to start (non-fatal):", msg);
         }),
@@ -624,18 +685,22 @@ export async function registerNodejs(): Promise<void> {
       import("@omniroute/open-sse/services/autoRefreshDaemon")
         .then((m) => m.autoRefreshDaemon.start())
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] Auto-refresh daemon failed to start (non-fatal):", msg);
         }),
 
       // Conductor bridge (PRD Conductor RF1): mirrors OmniConductor hub tasks into the
       // A2A TaskManager via the hub SSE. Opt-in — self-gated on CONDUCTOR_HUB_URL.
-      import("@/lib/conductor/boot").then((m) => {
-        if (m.initConductorBridge()) console.log("[STARTUP] Conductor bridge started");
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.warn("[STARTUP] Conductor bridge failed to start (non-fatal):", msg);
-      }),
+      import("@/lib/conductor/boot")
+        .then((m) => {
+          if (m.initConductorBridge()) console.log("[STARTUP] Conductor bridge started");
+        })
+        .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn("[STARTUP] Conductor bridge failed to start (non-fatal):", msg);
+        }),
 
       // Proactive connection-cooldown recovery (#8): re-validate connections whose
       // transient `rate_limited_until` window has elapsed OUTSIDE the request hot path,
@@ -643,6 +708,7 @@ export async function registerNodejs(): Promise<void> {
       import("@/lib/quota/connectionRecovery")
         .then((m) => m.initConnectionRecoveryScheduler())
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] Connection recovery scheduler failed to start (non-fatal):", msg);
         }),
@@ -655,6 +721,7 @@ export async function registerNodejs(): Promise<void> {
           if (started) console.log("[STARTUP] Arena ELO sync initialized");
         })
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] Arena ELO sync failed to start (non-fatal):", msg);
         }),
@@ -668,6 +735,7 @@ export async function registerNodejs(): Promise<void> {
           if (started) console.log("[STARTUP] Radar sync scheduler initialized");
         })
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] Radar sync scheduler failed to start (non-fatal):", msg);
         }),
@@ -677,6 +745,7 @@ export async function registerNodejs(): Promise<void> {
       import("@/lib/pricingSync")
         .then((m) => m.initPricingSync())
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] Pricing sync failed to start (non-fatal):", msg);
         }),
@@ -690,6 +759,7 @@ export async function registerNodejs(): Promise<void> {
           if (started) console.log("[STARTUP] OpenRouter provider stats sync initialized");
         })
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn(
             "[STARTUP] OpenRouter provider stats sync failed to start (non-fatal):",
@@ -702,6 +772,7 @@ export async function registerNodejs(): Promise<void> {
       import("@/lib/modelsDevSync")
         .then((m) => m.initModelsDevSync())
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] models.dev sync failed to start (non-fatal):", msg);
         }),
@@ -711,6 +782,7 @@ export async function registerNodejs(): Promise<void> {
       import("@/lib/contextWindowResolver")
         .then((m) => m.startContextWindowReconcile())
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] context-window reconcile failed to start (non-fatal):", msg);
         }),
@@ -721,6 +793,7 @@ export async function registerNodejs(): Promise<void> {
       import("@/lib/memory/typedDecay")
         .then((m) => m.startMemoryDecaySweep())
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] memory decay sweep failed to start (non-fatal):", msg);
         }),
@@ -733,6 +806,7 @@ export async function registerNodejs(): Promise<void> {
       import("@/lib/memory/index")
         .then((m) => m.initMemoryBackends())
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] memory backend initialization failed (non-fatal):", msg);
         }),
@@ -744,6 +818,7 @@ export async function registerNodejs(): Promise<void> {
       import("@/lib/jobs/backupScheduleJob")
         .then((m) => m.startBackupScheduleJob())
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn("[STARTUP] backup schedule job failed to start (non-fatal):", msg);
         }),
@@ -756,6 +831,7 @@ export async function registerNodejs(): Promise<void> {
           console.log("[STARTUP] Live dashboard WebSocket daemon bootstrap invoked");
         })
         .catch((err: unknown) => {
+          if (isRuntimePolicyError(err)) throw err;
           const msg = err instanceof Error ? err.message : String(err);
           console.warn(
             "[STARTUP] Live dashboard WebSocket daemon failed to start (non-fatal):",
@@ -763,6 +839,9 @@ export async function registerNodejs(): Promise<void> {
           );
         }),
     ]);
+    for (const result of serviceResults) {
+      if (result.status === "rejected" && isRuntimePolicyError(result.reason)) throw result.reason;
+    }
   }
 
   markServerReady();

@@ -1,3 +1,4 @@
+import { getRuntimePolicy, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { getVersionManagerTool } from "@/lib/db/versionManager";
 import { getSettings } from "@/lib/db/settings";
 import { markAllUnavailable } from "@/lib/db/serviceModels";
@@ -118,6 +119,8 @@ function buildSpawnArgsFactory(
 }
 
 export async function bootstrapEmbeddedServices(): Promise<void> {
+  // Locked v1 has no embedded-service grant. Do not provision keys or auto-start.
+  if (getRuntimePolicy().mode === "locked") return;
   for (const cfg of SERVICES) {
     if (getSupervisor(cfg.tool)) continue;
 
@@ -125,7 +128,10 @@ export async function bootstrapEmbeddedServices(): Promise<void> {
     if (!row || row.status === "not_installed") continue;
 
     const apiKey = cfg.needsApiKey
-      ? await getOrCreateApiKey(cfg.tool).catch(() => "placeholder")
+      ? await getOrCreateApiKey(cfg.tool).catch((error: unknown) => {
+          if (isRuntimePolicyError(error)) throw error;
+          return "placeholder";
+        })
       : "";
     // CLIProxyAPI's generated key is management-only; /v1/models uses its dedicated data-plane key.
     const modelSyncApiKey =
@@ -161,6 +167,7 @@ export async function bootstrapEmbeddedServices(): Promise<void> {
 
     if (row.autoStart) {
       supervisor.start().catch((err: unknown) => {
+        if (isRuntimePolicyError(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[Services] Auto-start failed for ${cfg.tool}: ${msg}`);
       });

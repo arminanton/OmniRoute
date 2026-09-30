@@ -26,6 +26,7 @@ import {
   type UpscaleLogger,
 } from "./shared.ts";
 import { sanitizeErrorMessage } from "../../utils/error.ts";
+import { RemoteMediaFetchError } from "@/shared/network/remoteImageFetch";
 
 const UPSCALE_ENDPOINTS: Record<string, string> = {
   fast: "/v2beta/stable-image/upscale/fast",
@@ -57,6 +58,7 @@ export async function handleStabilityImageUpscale({
   credentials,
   log,
   fetchImpl = fetch,
+  signal,
 }: {
   model: string;
   provider: string;
@@ -65,6 +67,7 @@ export async function handleStabilityImageUpscale({
   credentials: UpscaleCredentials;
   log?: UpscaleLogger;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<UpscaleHandlerResult> {
   const startTime = Date.now();
   const endpoint = UPSCALE_ENDPOINTS[model];
@@ -123,7 +126,8 @@ export async function handleStabilityImageUpscale({
   if (creativity !== null) requestSummary.creativity = creativity;
 
   try {
-    const imageSource = await resolveUpscaleImageSource(source);
+    signal?.throwIfAborted();
+    const imageSource = await resolveUpscaleImageSource(source, signal);
 
     const formData = new FormData();
     formData.append(
@@ -152,7 +156,9 @@ export async function handleStabilityImageUpscale({
     );
 
     const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
+    signal?.throwIfAborted();
     const response = await fetchImpl(`${baseUrl}${endpoint}`, {
+      signal,
       method: "POST",
       headers: { Accept: "application/json", Authorization: `Bearer ${token}` },
       body: formData,
@@ -182,6 +188,7 @@ export async function handleStabilityImageUpscale({
         baseUrl,
         token,
         id: payload.id,
+        signal,
         timeoutMs: normalizePositiveNumber(body.timeout_ms, DEFAULT_RESULT_TIMEOUT_MS),
         fetchImpl,
         log,
@@ -234,6 +241,13 @@ export async function handleStabilityImageUpscale({
       },
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return {
+        success: false,
+        status: signal?.aborted ? 499 : (err as RemoteMediaFetchError).status,
+        error: "Remote image could not be loaded",
+      };
+    }
     const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
     log?.error?.("IMAGE", `${provider} stability upscale exception: ${errorText}`);
     return saveUpscaleErrorResult({
@@ -253,6 +267,7 @@ async function pollStabilityResult(opts: {
   token: string;
   id: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   fetchImpl: typeof fetch;
   log?: UpscaleLogger;
 }): Promise<Record<string, unknown>> {
@@ -261,10 +276,12 @@ async function pollStabilityResult(opts: {
 
   while (Date.now() < deadline) {
     attempt += 1;
+    opts.signal?.throwIfAborted();
     const response = await opts.fetchImpl(
       `${opts.baseUrl}/v2beta/results/${encodeURIComponent(opts.id)}`,
       {
         method: "GET",
+        signal: opts.signal,
         headers: { Accept: "application/json", Authorization: `Bearer ${opts.token}` },
       }
     );
@@ -293,7 +310,9 @@ async function pollStabilityResult(opts: {
 }
 
 function normalizeOutputFormat(value: unknown): string {
-  const raw = String(value ?? "").trim().toLowerCase();
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase();
   if (raw === "jpg") return "jpeg";
   return ALLOWED_OUTPUT_FORMATS.includes(raw) ? raw : "png";
 }

@@ -1,6 +1,6 @@
 const CALL_LOG_ATTEMPT_SEPARATOR = "::attempt::";
 
-/** Keep each physical attempt unique while retaining its logical request id as a lookup prefix. */
+/** Stable per-dispatch lookup alias; each save receives a separate physical row ID. */
 export function buildCallLogAttemptId(logicalRequestId: unknown, attemptId: unknown): string {
   return `${String(logicalRequestId)}${CALL_LOG_ATTEMPT_SEPARATOR}${String(attemptId)}`;
 }
@@ -12,4 +12,10 @@ export function buildCallLogAttemptLookupPattern(logicalRequestId: string): stri
     .replaceAll("%", "\\%")
     .replaceAll("_", "\\_");
   return `${escaped}${CALL_LOG_ATTEMPT_SEPARATOR}%`;
+}
+
+/** Recover the local pending/group ID from a dispatch alias, not from a physical save ID. */
+export function getCallLogLogicalRequestId(lookupId: string): string {
+  const separator = lookupId.indexOf(CALL_LOG_ATTEMPT_SEPARATOR);
+  return separator < 0 ? lookupId : lookupId.slice(0, separator);
 }

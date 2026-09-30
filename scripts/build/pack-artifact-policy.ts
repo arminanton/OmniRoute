@@ -32,6 +32,8 @@ export const APP_STAGING_REMOVAL_PATHS: string[] = [
 ];
 
 export const APP_STAGING_ALLOWED_EXACT_PATHS: string[] = [
+  // Required raw authority; do not grant a broad build/ prefix to arbitrary loaders.
+  "build/runtime-policy.mjs",
   ".env.example",
   "BUILD_SHA",
   "docs/openapi.yaml",
@@ -153,6 +155,8 @@ export const PACK_ARTIFACT_ROOT_ALLOWED_EXACT_PATHS: string[] = [
   "scripts/build/fixPlaywrightAndroid.mjs",
   // #5227: imported at runtime by bin/cli/commands/serve.mjs (heap auto-calibration).
   "scripts/build/runtime-env.mjs",
+  "scripts/build/runtime-policy.mjs",
+  "scripts/build/runtime-policy.d.mts",
   // #10382: imported at runtime by bin/cli/commands/packs.mjs (optional ML/browser
   // runtime pack management) — shipped via package.json "files", so must be allowed.
   "scripts/packs/optionalPackInstaller.mjs",
@@ -185,6 +189,7 @@ export const PACK_ARTIFACT_ROOT_ALLOWED_PATH_PREFIXES: string[] = [
 ];
 
 export const PACK_ARTIFACT_REQUIRED_PATHS: string[] = [
+  "dist/build/runtime-policy.mjs",
   "dist/open-sse/services/compression/engines/rtk/filters/generic-output.json",
   "dist/src/lib/usage/callLogArtifactWorker.js",
   "dist/open-sse/vendor/codex-chatgpt-web/adapters/chatgpt-web/mcp-server.js",
@@ -241,6 +246,8 @@ export const PACK_ARTIFACT_REQUIRED_PATHS: string[] = [
   "scripts/build/postinstallSupport.mjs",
   "scripts/build/colocateOptionals.mjs",
   "scripts/build/runtime-env.mjs",
+  "scripts/build/runtime-policy.mjs",
+  "scripts/build/runtime-policy.d.mts",
   "scripts/build/wreqJsNative.mjs",
   // #10382: runtime imports of bin/cli/commands/packs.mjs (optional packs CLI) —
   // listed REQUIRED so their absence from the tarball fails loudly.

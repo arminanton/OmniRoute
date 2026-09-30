@@ -1,0 +1,18 @@
+{
+  "name": "@omniroute/docker-npm-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Locked npm runtime and nested security overlay for the Docker image.",
+  "packageManager": "npm@12.1.0",
+  "engines": {
+    "node": "26.10.0",
+    "npm": "12.1.0"
+  },
+  "dependencies": {
+    "npm": "12.1.0",
+    "brace-expansion": "5.0.9",
+    "ip-address": "10.5.0",
+    "tar": "7.5.22",
+    "undici": "6.28.0"
+  }
+}

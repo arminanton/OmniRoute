@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { assertNotLockedCapability } from "@/shared/runtimePolicy";
 import { DATA_DIR } from "@/lib/db/core";
 import { findHeadroomBinary } from "./detect";
 
@@ -90,6 +91,7 @@ function safePort(port: unknown): number {
 }
 
 export async function startHeadroomProxy(opts: { port?: number } = {}): Promise<StartResult> {
+  assertNotLockedCapability("headroom-proxy");
   const binary = findHeadroomBinary();
   if (!binary) {
     throw new HeadroomError("Headroom CLI not installed", "NOT_INSTALLED");

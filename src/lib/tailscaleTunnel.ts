@@ -4,6 +4,11 @@ import fsPromises from "fs/promises";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
+import {
+  assertNotLockedCapability,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+} from "@/shared/runtimePolicy";
 import { getSettings, updateSettings } from "@/lib/db/settings";
 import { resolveDataDir } from "@/lib/dataPaths";
 import { getRuntimePorts } from "@/lib/runtime/ports";
@@ -265,7 +270,7 @@ async function resolvePathCommand(command: string) {
   }
 }
 
-async function resolveBinary(): Promise<BinaryResolution> {
+async function resolveBinary(allowPathLookup = true): Promise<BinaryResolution> {
   const envPath = toNonEmptyString(process.env.TAILSCALE_BIN);
   if (envPath && fs.existsSync(envPath)) {
     return { binaryPath: envPath, installSource: "env", managedInstall: false };
@@ -276,7 +281,7 @@ async function resolveBinary(): Promise<BinaryResolution> {
     return { binaryPath: managedPath, installSource: "managed", managedInstall: true };
   }
 
-  const pathBinary = await resolvePathCommand("tailscale");
+  const pathBinary = allowPathLookup ? await resolvePathCommand("tailscale") : null;
   if (pathBinary) {
     return { binaryPath: pathBinary, installSource: "path", managedInstall: false };
   }
@@ -501,6 +506,34 @@ async function getLiveTunnelUrl(binaryPath: string | null) {
 }
 
 export async function getTailscaleCheckStatus(): Promise<TailscaleCheckStatus> {
+  if (getRuntimePolicy().mode !== "locked") return probeTailscaleCheckStatus();
+
+  // A status read must not run/adopt a system CLI in locked mode. Report only local evidence.
+  const [resolution, state, pid] = await Promise.all([
+    resolveBinary(false),
+    readStateFile(),
+    readPidFile(),
+  ]);
+  const tunnelUrl = toNonEmptyString(state.tunnelUrl);
+  return {
+    supported: false,
+    installed: Boolean(resolution.binaryPath),
+    managedInstall: resolution.managedInstall,
+    installSource: resolution.installSource,
+    binaryPath: resolution.binaryPath,
+    loggedIn: false,
+    daemonRunning: isProcessAlive(pid),
+    running: false,
+    tunnelUrl,
+    apiUrl: getTailscaleApiUrl(tunnelUrl),
+    platform: os.platform(),
+    brewAvailable: false,
+    lastError: getLastError(state),
+    pid,
+  };
+}
+
+async function probeTailscaleCheckStatus(): Promise<TailscaleCheckStatus> {
   const resolution = await resolveBinary();
   const [state, statusPayload, funnelPayload, brewAvailable] = await Promise.all([
     readStateFile(),
@@ -534,7 +567,15 @@ export async function getTailscaleCheckStatus(): Promise<TailscaleCheckStatus> {
 }
 
 export async function getTailscaleTunnelStatus(): Promise<TailscaleTunnelStatus> {
-  const [check, settings] = await Promise.all([getTailscaleCheckStatus(), getSettings()]);
+  // Validate before scheduling the settings read alongside status.
+  getRuntimePolicy();
+  return readTailscaleTunnelStatus(getTailscaleCheckStatus());
+}
+
+async function readTailscaleTunnelStatus(
+  checkStatus: Promise<TailscaleCheckStatus>
+): Promise<TailscaleTunnelStatus> {
+  const [check, settings] = await Promise.all([checkStatus, getSettings()]);
   const storedSettingUrl =
     typeof settings.tailscaleUrl === "string" && settings.tailscaleUrl.trim()
       ? settings.tailscaleUrl
@@ -576,6 +617,7 @@ export async function startTailscaleDaemon({
 }: {
   sudoPassword?: string;
 } = {}) {
+  assertNotLockedCapability("tailscale-tunnel");
   const resolution = await resolveBinary();
   if (!resolution.binaryPath) {
     throw new Error("Tailscale is not installed");
@@ -663,6 +705,7 @@ export async function startTailscaleLogin({
 }: {
   hostname?: string;
 } = {}): Promise<TailscaleLoginResult> {
+  assertNotLockedCapability("tailscale-tunnel");
   const resolution = await resolveBinary();
   if (!resolution.binaryPath) {
     throw new Error("Tailscale is not installed");
@@ -752,6 +795,7 @@ async function resetTailscaleFunnel(binaryPath: string) {
 export async function startTailscaleFunnel(
   port = getRuntimePorts().apiPort
 ): Promise<TailscaleFunnelResult> {
+  assertNotLockedCapability("tailscale-tunnel");
   const resolution = await resolveBinary();
   if (!resolution.binaryPath) {
     throw new Error("Tailscale is not installed");
@@ -957,6 +1001,7 @@ export async function enableTailscaleTunnel({
   hostname?: string;
   port?: number;
 } = {}): Promise<TailscaleEnableResult> {
+  assertNotLockedCapability("tailscale-tunnel");
   const normalizedPassword = toNonEmptyString(sudoPassword) || getCachedPassword() || "";
   if (normalizedPassword) {
     setCachedPassword(normalizedPassword);
@@ -1016,6 +1061,7 @@ export async function enableTailscaleTunnel({
       status: await getTailscaleTunnelStatus(),
     };
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     const message = error instanceof Error ? error.message : "Failed to enable Tailscale Funnel";
     await updateStateFile({ lastError: message });
     throw error;
@@ -1045,7 +1091,7 @@ export async function disableTailscaleTunnel({
     });
     return {
       success: true,
-      status: await getTailscaleTunnelStatus(),
+      status: await readTailscaleTunnelStatus(probeTailscaleCheckStatus()),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to disable Tailscale Funnel";
@@ -1253,6 +1299,7 @@ export async function installTailscale({
   sudoPassword?: string;
   onProgress?: (message: string) => void;
 } = {}) {
+  assertNotLockedCapability("tailscale-tunnel");
   if (!isSupportedPlatform()) {
     throw new Error(`Unsupported platform for Tailscale install: ${os.platform()}`);
   }
@@ -1281,6 +1328,7 @@ export async function installTailscale({
     onProgress?.("Ensuring the Tailscale daemon is available...");
     await startTailscaleDaemon({ sudoPassword: password });
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     onProgress?.(
       `Install completed, but the daemon still needs manual attention: ${
         error instanceof Error ? error.message : String(error)

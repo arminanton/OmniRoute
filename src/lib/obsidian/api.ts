@@ -1,5 +1,5 @@
 import { getDbInstance } from "@/lib/db/core";
-import { safeOutboundFetch } from "@/shared/network/safeOutboundFetch";
+import { safeOutboundFetch, SafeOutboundFetchError } from "@/shared/network/safeOutboundFetch";
 
 const DEFAULT_OBSIDIAN_BASE_URL = "http://127.0.0.1:27123";
 const MAX_RETRIES = 2;
@@ -33,11 +33,6 @@ export class ObsidianTimeoutError extends Error {
   }
 }
 
-type ObsidianResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
-
 function classifyObsidianError(status: number, message: string): Error {
   switch (status) {
     case 401:
@@ -61,15 +56,15 @@ function obsidianFetch(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const mergedSignal = options.signal
-    ? combineSignals(options.signal, controller.signal)
+    ? AbortSignal.any([options.signal, controller.signal])
     : controller.signal;
-
-  let lastError: Error | null = null;
 
   const attempt = async (retryCount: number): Promise<unknown> => {
     try {
-      // Allow legitimate local/LAN/Tailscale vaults, but never metadata or
-      // link-local targets; never follow a redirect off the configured base.
+      // Explicit admin-configured local/LAN/Tailscale vaults remain a valid policy.
+      // Deny metadata/link-local in every DNS answer and pin the approved address.
+      // Never follow redirects or bypass a configured proxy. Deployment firewalls
+      // may still block private networks (including the residential-egress deployment).
       const response = await safeOutboundFetch(url, {
         ...options,
         headers: {
@@ -78,20 +73,19 @@ function obsidianFetch(
         },
         signal: mergedSignal,
         guard: "block-metadata",
+        pinDns: true,
+        maxBytes: 20 * 1024 * 1024,
         allowRedirect: false,
         retry: false,
         timeoutMs: TIMEOUT_MS,
       });
 
-      clearTimeout(timeout);
-
       if (!response.ok) {
-        const body = await response.json().catch(() => ({})) as Record<string, unknown>;
+        const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
         const msg = (body?.message as string) ?? `HTTP ${response.status}`;
         const error = classifyObsidianError(response.status, msg);
 
         if (error instanceof ObsidianServerError && retryCount < MAX_RETRIES - 1) {
-          lastError = error;
           await sleep(Math.pow(2, retryCount) * 200);
           return attempt(retryCount + 1);
         }
@@ -105,11 +99,18 @@ function obsidianFetch(
       }
       return response.text();
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
+      if (
+        mergedSignal.aborted ||
+        (err instanceof SafeOutboundFetchError && err.code === "TIMEOUT")
+      ) {
         clearTimeout(timeout);
         throw new ObsidianTimeoutError("Obsidian API request timed out after 30s");
       }
-      if (err instanceof ObsidianAuthError || err instanceof ObsidianNotFoundError) {
+      if (
+        (err instanceof SafeOutboundFetchError && !err.isRetryable) ||
+        err instanceof ObsidianAuthError ||
+        err instanceof ObsidianNotFoundError
+      ) {
         clearTimeout(timeout);
         throw err;
       }
@@ -117,13 +118,12 @@ function obsidianFetch(
         clearTimeout(timeout);
         throw new ObsidianServerError(
           `Cannot reach Obsidian at ${baseUrl}. Ensure the Local REST API plugin is running ` +
-          `and using the correct port. The REST API uses HTTP on port 27123 — do not use ` +
-          `port 27124 (that is a separate MCP endpoint with HTTPS). If connecting via ` +
-          `Tailscale, use http://<tailscale-ip>:27123.`
+            `and using the correct port. The REST API uses HTTP on port 27123 — do not use ` +
+            `port 27124 (that is a separate MCP endpoint with HTTPS). If connecting via ` +
+            `Tailscale, use http://<tailscale-ip>:27123.`
         );
       }
       if (retryCount < MAX_RETRIES - 1) {
-        lastError = err instanceof Error ? err : new ObsidianServerError(String(err));
         await sleep(Math.pow(2, retryCount) * 200);
         return attempt(retryCount + 1);
       }
@@ -132,19 +132,7 @@ function obsidianFetch(
     }
   };
 
-  return attempt(0);
-}
-
-function combineSignals(...signals: AbortSignal[]): AbortSignal {
-  const controller = new AbortController();
-  for (const signal of signals) {
-    if (signal.aborted) {
-      controller.abort(signal.reason);
-      return controller.signal;
-    }
-    signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
-  }
-  return controller.signal;
+  return attempt(0).finally(() => clearTimeout(timeout));
 }
 
 function sleep(ms: number): Promise<void> {
@@ -183,11 +171,7 @@ export function createObsidianClient(apiKey: string, baseUrl?: string) {
       });
     },
 
-    async readNote(
-      path: string,
-      targetType?: TargetType,
-      target?: string
-    ): Promise<unknown> {
+    async readNote(path: string, targetType?: TargetType, target?: string): Promise<unknown> {
       const headers: Record<string, string> = {};
       if (targetType) headers["Target-Type"] = targetType;
       if (target) headers["Target"] = encodeURIComponent(target);
@@ -321,25 +305,44 @@ const SYNC_TOKEN_KEY = "omniroute_sync_token";
 export function getSyncToken(): string | null {
   try {
     const db = getDbInstance();
-    const row = db.prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?").get("sync", SYNC_TOKEN_KEY) as { value?: string } | undefined;
+    const row = db
+      .prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?")
+      .get("sync", SYNC_TOKEN_KEY) as { value?: string } | undefined;
     return typeof row?.value === "string" ? JSON.parse(row.value) : null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 export function setSyncToken(token: string | null): void {
   try {
     const db = getDbInstance();
     if (token === null) {
-      db.prepare("DELETE FROM key_value WHERE namespace = ? AND key = ?").run("sync", SYNC_TOKEN_KEY);
+      db.prepare("DELETE FROM key_value WHERE namespace = ? AND key = ?").run(
+        "sync",
+        SYNC_TOKEN_KEY
+      );
     } else {
-      const existing = db.prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?").get("sync", SYNC_TOKEN_KEY);
+      const existing = db
+        .prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?")
+        .get("sync", SYNC_TOKEN_KEY);
       if (existing) {
-        db.prepare("UPDATE key_value SET value = ? WHERE namespace = ? AND key = ?").run(JSON.stringify(token), "sync", SYNC_TOKEN_KEY);
+        db.prepare("UPDATE key_value SET value = ? WHERE namespace = ? AND key = ?").run(
+          JSON.stringify(token),
+          "sync",
+          SYNC_TOKEN_KEY
+        );
       } else {
-        db.prepare("INSERT INTO key_value (namespace, key, value) VALUES (?, ?, ?)").run("sync", SYNC_TOKEN_KEY, JSON.stringify(token));
+        db.prepare("INSERT INTO key_value (namespace, key, value) VALUES (?, ?, ?)").run(
+          "sync",
+          SYNC_TOKEN_KEY,
+          JSON.stringify(token)
+        );
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 export interface SyncServerStatus {
@@ -379,13 +382,22 @@ export function createSyncServerClient(syncToken: string, baseUrl?: string) {
     async getStatus(): Promise<SyncServerStatus> {
       return request<SyncServerStatus>("/vault/sync/status");
     },
-    async triggerSync(): Promise<{ ok: boolean; pulled: number; pushed: number; deleted: number; conflicts: number }> {
+    async triggerSync(): Promise<{
+      ok: boolean;
+      pulled: number;
+      pushed: number;
+      deleted: number;
+      conflicts: number;
+    }> {
       return request("/vault/sync/trigger", { method: "POST" });
     },
     async getConflicts(): Promise<{ conflicts: SyncConflict[] }> {
       return request("/vault/sync/conflicts");
     },
-    async resolveConflict(path: string, resolution: "local" | "remote" | "keep-both"): Promise<unknown> {
+    async resolveConflict(
+      path: string,
+      resolution: "local" | "remote" | "keep-both"
+    ): Promise<unknown> {
       return request("/vault/sync/resolve", {
         method: "POST",
         body: JSON.stringify({ path, resolution }),

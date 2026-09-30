@@ -42,7 +42,9 @@ test("Codex app-server builds the same CLI-bearing image as the cli profile", ()
     .split("\n")
     .filter((line) => !line.trimStart().startsWith("#"))
     .join("\n");
-  assert.match(cliInstructions, /npm install -g[^;]*@openai\/codex@\d+/s);
+  assert.match(cliInstructions, /from=cli-dependencies,source=\/tmp\/docker-cli-tree/);
+  assert.match(cliInstructions, /node \/opt\/omniroute-docker-build\/install-docker-cli-tree\.mjs/);
+  assert.match(cliInstructions, /RUN --network=none node \/opt\/omniroute-docker-build\/verify-docker-clis\.mjs/);
   assert.deepEqual(sidecar.entrypoint, ["/bin/sh", "-c"]);
   const command = sidecar.command?.join("\n") ?? "";
   assert.match(command, /exec codex app-server/);
@@ -54,7 +56,7 @@ test("Codex app-server builds the same CLI-bearing image as the cli profile", ()
     /RUN mkdir -p \/app\/data \/run\/codex-appserver \/home\/node\/\.codex/,
     "a fresh Docker named volume must inherit node-owned mount directory metadata"
   );
-  assert.match(dockerfile, /chown -R node:node \/app \/run\/codex-appserver \/home\/node\/\.codex/);
+  assert.match(dockerfile, /chown node:node \/app \/app\/data \/run\/codex-appserver \/home\/node\/\.codex/);
   assert.equal(sidecar.ports, undefined, "the authenticated sidecar must remain internal-only");
 });
 

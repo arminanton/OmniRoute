@@ -415,7 +415,7 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     parseResponse: (data) => data.data || [],
   },
   gemini: {
-    url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+    url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=300",
     method: "GET",
     headers: { "Content-Type": "application/json" },
     authQuery: "key", // Use query param for API key
@@ -460,6 +460,13 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
       return out;
     },
     parseResponse: (data: any) => (Array.isArray(data) ? data : data?.data || data?.models || []),
+  },
+  "uc-direct": {
+    // Public catalog: never attach Developer keys or Persona credentials.
+    url: "https://api.uncensored.com/api/v1/models",
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    parseResponse: (data) => data.data || data.models || [],
   },
   openai: {
     url: "https://api.openai.com/v1/models",

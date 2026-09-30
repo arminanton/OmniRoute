@@ -9,7 +9,13 @@
  *
  * See _tasks/superpowers/plans/2026-07-03-blocoJ-combo-hotpath-decomposition.md (Task 1).
  */
-import { buildErrorBody, errorResponse, sanitizeErrorMessage } from "../../utils/error.ts";
+import {
+  buildErrorBody,
+  errorResponse,
+  runtimePolicyErrorResponse,
+  sanitizeErrorMessage,
+} from "../../utils/error.ts";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import {
   COMBO_HEDGE_CANCELLED_REASON,
   COMBO_PER_MODEL_TIMEOUT_REASON,
@@ -122,7 +128,9 @@ export function buildTargetTimeoutRunner(deps: {
         `Per-model combo timeout is DISABLED (effectiveTimeoutMs=${effectiveTimeoutMs}) for ${modelStr} — a hung upstream will hang this target until the combo loop safety timeout`
       );
       return handleSingleModel(b, modelStr, target).catch((err) =>
-        errorResponse(502, err?.message ?? "Upstream model error")
+        isRuntimePolicyError(err)
+          ? runtimePolicyErrorResponse()
+          : errorResponse(502, err?.message ?? "Upstream model error")
       );
     }
 
@@ -190,6 +198,7 @@ export function buildTargetTimeoutRunner(deps: {
       // "combo-per-model-timeout" in production logs.
       return await Promise.race([
         handleSingleModel(b, modelStr, targetWithSignal).catch((err) => {
+          if (isRuntimePolicyError(err)) return runtimePolicyErrorResponse();
           if (timedOut) {
             // Inner call rejected because we aborted it. The synthetic 504 from
             // timeoutPromise already wins the race; return an empty response so
@@ -200,10 +209,14 @@ export function buildTargetTimeoutRunner(deps: {
         }),
         timeoutPromise,
       ]).catch((raceErr) => {
+        if (isRuntimePolicyError(raceErr)) return runtimePolicyErrorResponse();
         // Defensive: should never fire — both race branches always resolve.
         // Include the error message so the root cause is not masked.
         const detail = raceErr instanceof Error ? raceErr.message : String(raceErr);
-        log.error?.("COMBO", `Unexpected rejection in combo timeout race for ${modelStr}: ${detail}`);
+        log.error?.(
+          "COMBO",
+          `Unexpected rejection in combo timeout race for ${modelStr}: ${detail}`
+        );
         return errorResponse(502, `Combo timeout dispatch error: ${detail}`);
       });
     } finally {

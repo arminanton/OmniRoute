@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import dns from "node:dns";
 
 import { handleImageGeneration } from "../../open-sse/handlers/imageGeneration.ts";
 import {
@@ -12,18 +11,11 @@ import { APIKEY_PROVIDERS, resolveProviderId } from "../../src/shared/constants/
 import { IMAGE_ONLY_PROVIDER_IDS } from "../../src/shared/constants/providers.ts";
 import { connectionBelongsToProviderPage } from "../../src/app/(dashboard)/dashboard/providers/providerPageUtils.ts";
 
-// Stub DNS for fetchRemoteImage/direct-fetch DNS-rebinding guards, mirroring
-// tests/unit/nanobanana-image-handler.test.ts.
-const originalDnsLookup = dns.promises.lookup;
-(dns.promises as { lookup: unknown }).lookup = (async (
-  _hostname: string,
-  options?: { all?: boolean }
-) => {
-  const record = { address: "203.0.113.1", family: 4 };
-  return options && options.all ? [record] : record;
-}) as typeof dns.promises.lookup;
-process.on("exit", () => {
-  (dns.promises as { lookup: unknown }).lookup = originalDnsLookup;
+// Real pinned download transport, fake DNS/socket responses only.
+import { installMockedPinnedMedia } from "../helpers/mockedPinnedMedia.ts";
+test.beforeEach((t) => {
+  assert.ok("mock" in t, "pinned media setup requires a TestContext");
+  installMockedPinnedMedia(t);
 });
 
 test("magnific provider is registered (registry shape)", () => {

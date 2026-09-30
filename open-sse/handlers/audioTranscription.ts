@@ -26,10 +26,14 @@ import { vertexTranscribe } from "../executors/vertexMedia.ts";
 import { errorResponse } from "../utils/error.ts";
 import { isJsonObject } from "../utils/kieTask.ts";
 import { handleOpenRouterTranscription } from "./openrouterTranscription.ts";
+import { transcribeMaxaiAudio } from "../executors/maxai/transcription.ts";
 
 type TranscriptionCredentials = {
   apiKey?: string;
   accessToken?: string;
+  refreshToken?: string;
+  connectionId?: string;
+  providerSpecificData?: Record<string, unknown>;
 };
 
 /**
@@ -744,11 +748,13 @@ export async function handleAudioTranscription({
   credentials,
   resolvedProvider = null,
   resolvedModel = null,
+  signal,
 }: {
   formData: FormData;
   credentials?: TranscriptionCredentials | null;
   resolvedProvider?: AudioProvider | null;
   resolvedModel?: string | null;
+  signal?: AbortSignal | null;
 }): Promise<Response> {
   const model = formData.get("model");
   if (typeof model !== "string" || !model) {
@@ -782,6 +788,28 @@ export async function handleAudioTranscription({
     providerConfig.authType === "none" ? null : credentials?.apiKey || credentials?.accessToken;
   if (providerConfig.authType !== "none" && !token) {
     return errorResponse(401, `No credentials for transcription provider: ${providerConfig.id}`);
+  }
+
+  // MaxAI uses the captured multipart protocol, not a generic Whisper request.
+  if (providerConfig.format === "maxai-stt") {
+    if (modelId !== "speech-to-text") return errorResponse(400, "Unsupported MaxAI transcription model");
+    if (!credentials?.connectionId) return errorResponse(400, "MaxAI transcription requires a connection");
+    const responseFormat = formData.get("response_format");
+    if (responseFormat && responseFormat !== "json" && responseFormat !== "text") {
+      return errorResponse(400, "MaxAI transcription supports json or text responses");
+    }
+    const result = await transcribeMaxaiAudio({
+      file,
+      connectionId: credentials.connectionId,
+      providerSpecificData: credentials.providerSpecificData,
+      accessToken: credentials.accessToken || credentials.apiKey,
+      refreshToken: credentials.refreshToken,
+      signal,
+    });
+    if (!result.ok) return errorResponse(result.status, result.error);
+    return formData.get("response_format") === "text"
+      ? new Response(result.text, { headers: { ...CORS_HEADERS, "Content-Type": "text/plain" } })
+      : Response.json({ text: result.text }, { headers: { ...CORS_HEADERS } });
   }
 
   // Route to provider-specific handler

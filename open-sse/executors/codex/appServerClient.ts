@@ -18,6 +18,8 @@
  * JSON-RPC error so the id is always settled and the turn never hangs.
  */
 
+import { assertLocalHelper } from "../../../src/shared/runtimePolicy.ts";
+
 // wreq-js WebSocket surface (mirrors the private type in codex.ts:71-77).
 export type CodexWreqWebSocket = {
   send: (data: string) => void;
@@ -118,6 +120,7 @@ export class CodexAppServerClient {
    * app-server wants only the Authorization header.
    */
   async connect(url: string, token: string): Promise<void> {
+    assertLocalHelper({ role: "codex-app-server", endpoint: url, phase: "connect" });
     if (!this.websocketFn) {
       throw new Error("Codex app-server websocket transport unavailable");
     }

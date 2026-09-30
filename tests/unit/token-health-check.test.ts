@@ -247,16 +247,25 @@ async function withHttpServer(handler, fn) {
   }
 }
 
-async function withConnectProxyServer(fn) {
+async function withConnectProxyServer(
+  fn,
+  options: { expectedAuthority: string; targetHost: string; targetPort: number }
+) {
+  assert.equal(options.targetHost, "127.0.0.1");
+  const connectRequests: string[] = [];
   const server = http.createServer((_req, res) => {
     res.writeHead(501);
     res.end("CONNECT only");
   });
 
   server.on("connect", (req, clientSocket, head) => {
-    const [host, portText] = String(req.url || "").split(":");
-    const targetPort = Number(portText || 80);
-    const upstreamSocket = net.connect(targetPort, host, () => {
+    const authority = String(req.url || "");
+    connectRequests.push(authority);
+    if (authority !== options.expectedAuthority) {
+      clientSocket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    const upstreamSocket = net.connect(options.targetPort, options.targetHost, () => {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head && head.length > 0) {
         upstreamSocket.write(head);
@@ -287,6 +296,7 @@ async function withConnectProxyServer(fn) {
       host: "127.0.0.1",
       port: address.port,
       url: `http://127.0.0.1:${address.port}`,
+      connectRequests,
     });
   } finally {
     await new Promise((resolve, reject) => {
@@ -414,50 +424,59 @@ test("checkConnection uses the resolved proxy payload when refreshing tokens", a
       });
     },
     async (tokenServer) => {
-      await withConnectProxyServer(async (proxy) => {
-        await withPatchedProvider(
-          providerId,
-          {
-            tokenUrl: `${tokenServer.url}/token`,
-            clientId: "healthcheck-client-id",
-            clientSecret: "healthcheck-client-secret",
-          },
-          async () => {
-            const connection = await providersDb.createProviderConnection({
-              provider: providerId,
-              authType: "oauth",
-              name: "Healthcheck Proxy Account",
-              email: "healthcheck@example.com",
-              accessToken: "stale-access-token",
-              refreshToken: "refresh-token-123",
-              isActive: true,
-            });
+      const tokenAuthority = `healthcheck-refresh.example.test:${tokenServer.port}`;
+      await withConnectProxyServer(
+        async (proxy) => {
+          await withPatchedProvider(
+            providerId,
+            {
+              tokenUrl: `http://${tokenAuthority}/token`,
+              clientId: "healthcheck-client-id",
+              clientSecret: "healthcheck-client-secret",
+            },
+            async () => {
+              const connection = await providersDb.createProviderConnection({
+                provider: providerId,
+                authType: "oauth",
+                name: "Healthcheck Proxy Account",
+                email: "healthcheck@example.com",
+                accessToken: "stale-access-token",
+                refreshToken: "refresh-token-123",
+                isActive: true,
+              });
 
-            await settingsDb.setProxyForLevel("key", (connection as any).id, {
-              type: "http",
-              host: proxy.host,
-              port: proxy.port,
-            });
+              await settingsDb.setProxyForLevel("key", (connection as any).id, {
+                type: "http",
+                host: proxy.host,
+                port: proxy.port,
+              });
 
-            await tokenHealthCheck.checkConnection(connection);
+              await tokenHealthCheck.checkConnection(connection);
 
-            const updated = await providersDb.getProviderConnectionById((connection as any).id);
+              const updated = await providersDb.getProviderConnectionById((connection as any).id);
 
-            assert.equal(refreshRequests.length, 1);
-            assert.equal(refreshRequests[0].method, "POST");
-            assert.equal(refreshRequests[0].url, "/token");
-            assert.match(refreshRequests[0].body, /grant_type=refresh_token/);
-            assert.match(refreshRequests[0].body, /refresh_token=refresh-token-123/);
-            assert.equal(updated?.accessToken, "new-access-token");
-            assert.equal(updated?.refreshToken, "new-refresh-token");
-            assert.equal(updated?.testStatus, "active");
-            assert.equal(updated?.lastError ?? null, null);
-            assert.ok(updated?.tokenExpiresAt);
-            assert.ok(updated?.expiresAt);
-            assert.equal(updated?.expiresAt, updated?.tokenExpiresAt);
-          }
-        );
-      });
+              assert.deepEqual(proxy.connectRequests, [tokenAuthority]);
+              assert.equal(refreshRequests.length, 1);
+              assert.equal(refreshRequests[0].method, "POST");
+              assert.equal(refreshRequests[0].url, "/token");
+              assert.match(refreshRequests[0].body, /grant_type=refresh_token/);
+              assert.match(refreshRequests[0].body, /refresh_token=refresh-token-123/);
+              assert.equal(updated?.accessToken, "new-access-token");
+              assert.equal(updated?.refreshToken, "new-refresh-token");
+              assert.equal(updated?.testStatus, "active");
+              assert.equal(updated?.lastError ?? null, null);
+              assert.ok(updated?.tokenExpiresAt);
+              assert.ok(updated?.expiresAt);
+              assert.equal(updated?.expiresAt, updated?.tokenExpiresAt);
+            }
+          );
+        },
+        {
+          expectedAuthority: tokenAuthority,
+          targetHost: tokenServer.host,
+          targetPort: tokenServer.port,
+        }
+      );
     }
   );
 });

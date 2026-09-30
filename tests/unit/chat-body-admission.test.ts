@@ -611,6 +611,9 @@ test("pre-aborted early keepalive cancels the eventual handler body and releases
     new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 200)),
   ]);
   assert.equal(cancelledBeforeTimeout, true, "pre-aborted signal must cancel the handler body");
+  // The cancel callback fires before its promise settles. Capacity is released
+  // only after that settlement, not when cancellation was merely requested.
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(admissionController.activeHeavy, 0, "pre-abort must not retain admission");
   await outer.body?.cancel();
 });
@@ -671,13 +674,11 @@ function selfLoopChatRequest(
   const headers: Record<string, string> = {
     "content-type": "application/json",
     "x-omniroute-admission-bypass": "internal",
-    // Follows the resolved self-loop bearer (the sentinel in these tests — each
-    // test wraps itself in withSelfLoopEnv({}) so it is deterministic even when
-    // the developer's shell has OMNIROUTE_API_KEY set).
+    // Process-local random proof, separate from ordinary API-key authentication.
     authorization: `Bearer ${resolveSelfLoopBearer()}`,
   };
   if (contentLength !== null) headers["content-length"] = contentLength;
-  return new Request("http://x/v1/chat/completions", {
+  return new Request(`http://localhost:${process.env.PORT || "20128"}/v1/chat/completions`, {
     method: "POST",
     headers,
     body,
@@ -832,39 +833,40 @@ test("external clients cannot use the bypass header without a trusted self-loop 
   }
 });
 
-// ── self-loop bearer resolution (env-key aware, #1350) ─────────────────
+// ── random self-loop proof is independent of ordinary API credentials ──
 
-test("resolveSelfLoopBearer falls back to sk_omniroute when no env key is set", () => {
+test("resolveSelfLoopBearer uses process-random proof when no env key is set", () => {
   const restore = withSelfLoopEnv({});
   try {
-    assert.equal(resolveSelfLoopBearer(), "sk_omniroute");
+    assert.match(resolveSelfLoopBearer(), /^[a-f0-9]{64}$/);
   } finally {
     restore();
   }
 });
 
-test("resolveSelfLoopBearer prefers OMNIROUTE_API_KEY over ROUTER_API_KEY", () => {
+test("resolveSelfLoopBearer never reuses configured operator credentials", () => {
   const restore = withSelfLoopEnv({
     OMNIROUTE_API_KEY: "omni-key",
     ROUTER_API_KEY: "router-key",
   });
   try {
-    assert.equal(resolveSelfLoopBearer(), "omni-key");
+    assert.notEqual(resolveSelfLoopBearer(), "omni-key");
+    assert.notEqual(resolveSelfLoopBearer(), "router-key");
   } finally {
     restore();
   }
 });
 
-test("resolveSelfLoopBearer uses ROUTER_API_KEY when OMNIROUTE_API_KEY is unset", () => {
+test("resolveSelfLoopBearer does not use ROUTER_API_KEY when OMNIROUTE_API_KEY is unset", () => {
   const restore = withSelfLoopEnv({ ROUTER_API_KEY: "router-key" });
   try {
-    assert.equal(resolveSelfLoopBearer(), "router-key");
+    assert.notEqual(resolveSelfLoopBearer(), "router-key");
   } finally {
     restore();
   }
 });
 
-test("env-key bearer is honored as a self-loop admission bypass (REQUIRE_API_KEY deployment)", async () => {
+test("env-key bearer cannot bypass admission even on an own-listener URL", async () => {
   const restore = withSelfLoopEnv({ OMNIROUTE_API_KEY: "env-key" });
   try {
     const controller = new ChatAdmissionController(1);
@@ -876,24 +878,29 @@ test("env-key bearer is honored as a self-loop admission bypass (REQUIRE_API_KEY
       model: "cmd/xiaomi/mimo-v2.5",
       messages: [{ role: "user", content: "x".repeat(512 * 1024) }],
     });
-    const request = new Request("http://x/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-omniroute-admission-bypass": "internal",
-        authorization: "Bearer env-key",
-        "content-length": String(body.length),
-      },
-      body,
-    });
+    const request = new Request(
+      `http://localhost:${process.env.PORT || "20128"}/v1/chat/completions`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-omniroute-admission-bypass": "internal",
+          authorization: "Bearer env-key",
+          "content-length": String(body.length),
+        },
+        body,
+      }
+    );
     const result = await admitChatRequest(request, {
       controller,
       largeBodyBytes: 32,
       hardMaxBytes: 10 * 1024 * 1024,
+      heapPressureCheck: () => true,
     });
 
-    assert.equal(result.admit, true, "env-key describe call must bypass when capacity is busy");
-    assert.equal(controller.activeHeavy, 1, "bypass must not reserve a second lease");
+    assert.equal(result.admit, false, "ordinary API auth is not admission-bypass proof");
+    if (!result.admit) assert.equal(result.response.status, 503);
+    assert.equal(controller.activeHeavy, 1, "rejected request must not reserve a second lease");
     parentLease.release();
   } finally {
     restore();
@@ -910,8 +917,8 @@ test("sk_omniroute sentinel is rejected once an env key is configured (REQUIRE_A
 
     const body = JSON.stringify({ model: "cmd/xiaomi/mimo-v2.5", messages: [] });
     // The sentinel is a well-known public value; in a REQUIRE_API_KEY=true
-    // deployment the ONLY trusted self-loop credential is the operator's env
-    // key. Presenting the sentinel must NOT bypass — otherwise anyone who knows
+    // deployment only the process-random proof can bypass admission, not API
+    // credentials. Presenting the sentinel must NOT bypass — otherwise anyone who knows
     // the sentinel could bypass admission on a hardened deployment.
     const request = new Request("http://x/v1/chat/completions", {
       method: "POST",

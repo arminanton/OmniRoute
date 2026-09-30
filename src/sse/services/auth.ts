@@ -1,5 +1,13 @@
 import { randomUUID } from "crypto";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
+import {
+  assertRuntimeProviderSupported,
+  bindRuntimeProviderData,
+  validateProviderConnectionCandidate,
+} from "@/shared/runtimePolicyEntrypoints";
+import { assertRuntimePolicyConnectionProxyConfig } from "@/shared/runtimePolicyProxyConfig";
 import { nodeTypeFromId } from "@/lib/db/providerNodeSelect";
+import { hydrateCompatibleNodeBaseUrl } from "./compatibleNodeBaseUrl.ts";
 import { extractGoogApiKeyHeader } from "./googApiKeyAuth.ts";
 import { describeUpstreamFailure } from "@/shared/utils/upstreamError";
 import { buildAllExpiredCredentials } from "./authExpiredCredentials.ts";
@@ -1053,7 +1061,19 @@ async function materializeConnection(
   options: CredentialSelectionOptions,
   extra: DeferredLeaseSelection & { exclusiveLease?: ExclusiveConnectionLease } = {}
 ) {
-  const providerSpecificData = await hydrateAccountProxyReferences(connection.providerSpecificData);
+  const providerSpecificData = await hydrateCompatibleNodeBaseUrl(
+    connection.provider,
+    bindRuntimeProviderData(await hydrateAccountProxyReferences(connection.providerSpecificData), {
+      kind: "connection",
+      providerId: connection.provider,
+      connectionId: connection.id,
+    })
+  );
+  validateProviderConnectionCandidate({
+    id: connection.id,
+    provider: connection.provider,
+    providerSpecificData,
+  });
   const apiKeyHealth = providerSpecificData.apiKeyHealth as Record<string, KeyHealth> | undefined;
   if (apiKeyHealth) syncHealthFromDB(connection.id, apiKeyHealth);
   const releaseOAuthSession =
@@ -1151,6 +1171,7 @@ export async function getProviderCredentials(
   requestedModel: string | null = null,
   options: CredentialSelectionOptions = {}
 ) {
+  assertRuntimeProviderSupported(resolveProviderId(provider));
   if (isMicrosoftDesignerWebRetiredProviderId(provider)) {
     invalidateManagedLease(options, "AUTHORIZATION_CHANGED");
     log.warn("AUTH", "Retired provider credential selection denied");
@@ -1232,6 +1253,9 @@ export async function getProviderCredentials(
       providersToSearch.map((p) => getCachedRawProviderConnections({ provider: p, isActive: true }))
     );
     const connectionsRaw = connectionResults.filter(Array.isArray).flat();
+    // Validate before the lazy view drops proxy-selection fields. No credentials
+    // are decrypted by the pure projection. Runtime proxy resolution checks again.
+    for (const candidate of connectionsRaw) assertRuntimePolicyConnectionProxyConfig(candidate);
 
     let connections = (Array.isArray(connectionsRaw) ? connectionsRaw : [])
       .map(createLazyConnectionView)
@@ -2977,6 +3001,16 @@ export async function markAccountUnavailable(
     }
 
     if (provider && resolveProviderId(provider) === "grok-web" && status === 403 && model) {
+      // Wait for admitted persistence before applying a mode lockout or returning.
+      // Ordinary write failures remain best-effort; policy denials are terminal.
+      await updateProviderConnection(connectionId, {
+        lastErrorType: "forbidden",
+        lastError: `Mode ${model} forbidden for this Grok account`,
+        lastErrorAt: new Date().toISOString(),
+        errorCode: status,
+      }).catch((error) => {
+        if (isRuntimePolicyError(error)) throw error;
+      });
       const lockout = recordModelLockoutFailure(
         provider,
         connectionId,
@@ -2987,12 +3021,6 @@ export async function markAccountUnavailable(
         effectiveProviderProfile,
         { maxCooldownMs: mlSettings.maxCooldownMs }
       );
-      updateProviderConnection(connectionId, {
-        lastErrorType: "forbidden",
-        lastError: `Mode ${model} forbidden for this Grok account`,
-        lastErrorAt: new Date().toISOString(),
-        errorCode: status,
-      }).catch(() => {});
       log.info(
         "AUTH",
         `Mode-only lockout for ${provider}:${model} — 403 forbidden ${Math.ceil(lockout.cooldownMs / 1000)}s (connection stays active)`
@@ -3089,6 +3117,16 @@ export async function markAccountUnavailable(
       string | undefined;
 
     if (isLocalProvider(connBaseUrl) && status === 404 && provider && model) {
+      // Wait for admitted persistence before applying a model lockout or returning.
+      // Ordinary write failures remain best-effort; policy denials are terminal.
+      await updateProviderConnection(connectionId, {
+        lastErrorType: "not_found",
+        lastError: `Model ${model} not_found`,
+        lastErrorAt: new Date().toISOString(),
+        errorCode: status,
+      }).catch((error) => {
+        if (isRuntimePolicyError(error)) throw error;
+      });
       const lockout = recordModelLockoutFailure(
         provider,
         connectionId,
@@ -3101,12 +3139,6 @@ export async function markAccountUnavailable(
         effectiveProviderProfile,
         { maxCooldownMs: mlSettings.maxCooldownMs }
       );
-      updateProviderConnection(connectionId, {
-        lastErrorType: "not_found",
-        lastError: `Model ${model} not_found`,
-        lastErrorAt: new Date().toISOString(),
-        errorCode: status,
-      }).catch(() => {});
       log.info(
         "AUTH",
         `Model-only lockout for ${provider}:${model} — 404 not_found ${Math.ceil(lockout.cooldownMs / 1000)}s (failureCount=${lockout.failureCount}, connection stays active)`

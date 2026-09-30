@@ -14,6 +14,7 @@ import { rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID, createHash } from "crypto";
+import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { logger } from "../../../open-sse/utils/logger.ts";
 import type { PluginManifestWithDefaults, Permission } from "./manifest";
 import type { Plugin, PluginContext, PluginResult } from "./index";
@@ -159,6 +160,7 @@ export async function loadPlugin(
   manifest: PluginManifestWithDefaults,
   options: LoadPluginOptions = {}
 ): Promise<LoadedPlugin> {
+  assertNotLockedCapability("plugin-execution");
   const hookTimeoutMs = options.hookTimeoutMs ?? DEFAULT_HOOK_TIMEOUT;
   // Integrity check: if the manifest declares an integrity field, verify the entry point.
   // Missing integrity is OK for backward compatibility; mismatched integrity is a fatal error.
@@ -168,6 +170,7 @@ export async function loadPlugin(
     try {
       source = await readFile(entryPoint, "utf-8");
     } catch (err: unknown) {
+      if (isRuntimePolicyError(err)) throw err;
       throw new Error(
         `Plugin '${manifest.name}' integrity check failed: cannot read entry point — ${err instanceof Error ? err.message : String(err)}`
       );
@@ -274,6 +277,9 @@ export async function loadPlugin(
   // Call a hook in the child process with a timeout. Blocking/lifecycle hooks escalate
   // SIGTERM → SIGKILL on timeout; NOTIFICATION_HOOKS only drop the pending call.
   const callHook = (hook: string, payload: unknown, timeout = hookTimeoutMs): Promise<unknown> => {
+    if (hook !== "onDeactivate" && hook !== "onUninstall") {
+      assertNotLockedCapability("plugin-execution");
+    }
     return new Promise((resolve, reject) => {
       const id = String(++callCounter);
       const timer = setTimeout(() => {
@@ -322,6 +328,7 @@ export async function loadPlugin(
         const result = await callHook("onRequest", ctx);
         return result as PluginResult | void;
       } catch (err: unknown) {
+        if (isRuntimePolicyError(err)) throw err;
         log.error("plugin.onRequest_error", {
           name: manifest.name,
           error: err instanceof Error ? err.message : String(err),
@@ -336,6 +343,7 @@ export async function loadPlugin(
       try {
         return await callHook("onResponse", { ctx, response });
       } catch (err: unknown) {
+        if (isRuntimePolicyError(err)) throw err;
         log.error("plugin.onResponse_error", {
           name: manifest.name,
           error: err instanceof Error ? err.message : String(err),
@@ -350,6 +358,7 @@ export async function loadPlugin(
       try {
         return await callHook("onError", { ctx, error: error.message });
       } catch (err: unknown) {
+        if (isRuntimePolicyError(err)) throw err;
         log.error("plugin.onError_error", {
           name: manifest.name,
           error: err instanceof Error ? err.message : String(err),
@@ -380,6 +389,7 @@ export async function loadPlugin(
         try {
           await callHook(key, payload);
         } catch (err: unknown) {
+          if (isRuntimePolicyError(err)) throw err;
           log.error(`plugin.${key}_error`, {
             name: manifest.name,
             error: err instanceof Error ? err.message : String(err),

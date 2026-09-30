@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 export const dynamic = "force-dynamic";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
 import {
   clearReasoningCacheAll,
-  deleteReasoningCacheEntry,
+  deleteReasoningCacheStorageEntryForAdmin,
   getReasoningCacheServiceEntries,
   getReasoningCacheServiceStats,
 } from "@omniroute/open-sse/services/reasoningCache.ts";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+
+const storageKeySchema = z.string().regex(/^rc2h:[a-f0-9]{64}$/);
 
 function errorMessage(error: unknown): string {
   return sanitizeErrorMessage(error);
@@ -49,7 +52,8 @@ export async function GET(req: NextRequest) {
  * DELETE /api/cache/reasoning
  *
  * Clears reasoning cache entries.
- * Query params: ?toolCallId=call_abc (single entry), ?provider=deepseek, or no params.
+ * toolCallId must be an opaque rc2h ID returned by GET, not a client tool ID.
+ * Query params: ?toolCallId=rc2h:... (single entry), ?provider=deepseek, or no params.
  */
 export async function DELETE(req: NextRequest) {
   if (!(await isAuthenticated(req))) {
@@ -58,11 +62,14 @@ export async function DELETE(req: NextRequest) {
 
   try {
     const { searchParams } = new URL(req.url);
-    const toolCallId = searchParams.get("toolCallId") || undefined;
+    const toolCallId = searchParams.get("toolCallId");
     const provider = searchParams.get("provider") || undefined;
 
-    if (toolCallId) {
-      const cleared = deleteReasoningCacheEntry(toolCallId);
+    if (toolCallId !== null) {
+      if (!storageKeySchema.safeParse(toolCallId).success) {
+        return NextResponse.json({ error: "Invalid reasoning cache storage ID" }, { status: 400 });
+      }
+      const cleared = deleteReasoningCacheStorageEntryForAdmin(toolCallId);
       return NextResponse.json({
         ok: true,
         cleared,

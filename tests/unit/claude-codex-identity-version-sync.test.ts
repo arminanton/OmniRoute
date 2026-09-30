@@ -85,11 +85,12 @@ async function withEnv<T>(
   }
 }
 
-test("Codex client version locksteps Dockerfile @openai/codex", () => {
-  const dockerfile = fs.readFileSync(path.join(process.cwd(), "Dockerfile"), "utf8");
-  const match = dockerfile.match(/@openai\/codex@([0-9]+\.[0-9]+\.[0-9]+)/);
-  assert.ok(match, "Dockerfile must pin @openai/codex@x.y.z");
-  const pinned = match[1];
+test("Codex client version locksteps the Docker CLI lock", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), "docker/cli/package.json"), "utf8"));
+  const lock = JSON.parse(fs.readFileSync(path.join(process.cwd(), "docker/cli/package-lock.json"), "utf8"));
+  const pinned = manifest.dependencies["@openai/codex"];
+  assert.match(pinned, /^[0-9]+\.[0-9]+\.[0-9]+$/);
+  assert.equal(lock.packages["node_modules/@openai/codex"].version, pinned);
   assert.notEqual(pinned, "0.149.0");
   assert.equal(codexCfg.DEFAULT_CODEX_CLIENT_VERSION, pinned);
   assert.equal(codexCfg.getCodexClientVersion(), pinned);

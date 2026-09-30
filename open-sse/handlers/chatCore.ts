@@ -230,9 +230,11 @@ import {
   toPositiveInteger,
 } from "../services/reasoningTokenBuffer.ts";
 import { normalizeThinkingForModel } from "@/shared/constants/modelSpecs.ts";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import {
   buildErrorBody,
   createErrorResult,
+  runtimePolicyErrorResponse,
   parseUpstreamError,
   formatProviderError,
   sanitizeErrorMessage,
@@ -370,6 +372,7 @@ import {
   cacheReasoningFromAssistantMessage,
   requiresReasoningReplay,
 } from "../services/reasoningCache.ts";
+import type { ReasoningCacheContext } from "../services/reasoningCacheContext.ts";
 import { isCompactResponsesEndpoint } from "../executors/codex.ts";
 import { persistCodexChildQuotaResponse } from "../services/codexAccount/index.ts";
 import { invalidateCodexQuotaCache } from "../services/codexQuotaFetcher.ts";
@@ -494,6 +497,7 @@ export async function handleChatCore({
   clientRawRequest,
   connectionId,
   apiKeyInfo = null,
+  reasoningCacheContext = null as ReasoningCacheContext | null,
   userAgent,
   comboName,
   comboStrategy = null,
@@ -612,6 +616,19 @@ export async function handleChatCore({
       errorCode: code,
     };
   };
+  const runtimePolicyFailureResult = (originalError?: unknown, response?: Response) => ({
+    ...createErrorResult(
+      response?.status ?? 403,
+      "Request denied by runtime policy.",
+      null,
+      "OMNI_RUNTIME_POLICY_DENIED"
+    ),
+    response: response ?? runtimePolicyErrorResponse(),
+    originalError,
+  });
+  // Readiness adapters may rebuild a failed stream response. Retain local policy
+  // provenance across that boundary, including a denial on a recovery send.
+  let runtimePolicyStreamDenial: unknown = null;
   let tokensCompressed: number | null = null;
   body = injectSystemPrompt(body);
   // ── Per-endpoint custom system prompt (port of upstream #2063) ──
@@ -1058,12 +1075,14 @@ export async function handleChatCore({
           "x-omniroute-session-id"
         )) || null;
   const pipelineSessionId = explicitSessionIdHeader || skillRequestId;
-  const reasoningReplaySessionKey = sessionAffinityKey || explicitSessionIdHeader;
+  // This is only a transcript/session discriminator, never an authenticator.
+  // Prefer the explicit stable session for capture and replay alike. Tool IDs
+  // stay principal-only so inferred session drift cannot break continuation.
+  const reasoningReplaySessionKey = explicitSessionIdHeader || sessionAffinityKey;
   const skipReasoningReplay = Boolean(managedLease);
   const reasoningCacheScope =
-    !skipReasoningReplay && reasoningReplaySessionKey
-      ? `api-key:${String(apiKeyInfo?.id ?? "local")}\x1f${String(reasoningReplaySessionKey)}`
-      : null;
+    !skipReasoningReplay && reasoningReplaySessionKey ? String(reasoningReplaySessionKey) : null;
+  if (skipReasoningReplay) reasoningCacheContext = null;
   // persistAttemptLogs extracted to chatCore/attemptLogging.ts (#3501); bind the per-request context
   // once so the 16 call sites keep passing only the per-attempt args (byte-identical).
   const persistAttemptLogs = (args: PersistAttemptLogsArgs) =>
@@ -2339,6 +2358,7 @@ export async function handleChatCore({
             preserveDeveloperRole,
             preserveCacheControl,
             copilotClient: copilotCompatibleReasoning,
+            reasoningCacheContext,
             reasoningCacheScope,
             skipReasoningReplay,
           }
@@ -2517,6 +2537,7 @@ export async function handleChatCore({
           preserveCacheControl,
           signatureNamespace: connectionId,
           copilotClient: copilotCompatibleReasoning,
+          reasoningCacheContext,
           reasoningCacheScope,
           skipReasoningReplay,
           ...(preCompressionBody ? { preCompressionBody } : {}),
@@ -3204,6 +3225,10 @@ export async function handleChatCore({
                 streamController.signal
               );
               const res = normalizeExecutorResult(rawExecutorResult);
+              if (isRuntimePolicyResponse(res.response)) {
+                releaseAccountSemaphore();
+                return { ...res, _executionCredentials: execCreds };
+              }
               trace("post_executor", { status: res?.response?.status });
 
               if (
@@ -3381,6 +3406,7 @@ export async function handleChatCore({
                           ),
                       });
                       const retryRes = normalizeExecutorResult(retryRaw);
+                      if (isRuntimePolicyResponse(retryRes.response)) throw retryRes.response;
                       const retryOk =
                         retryRes.response.status >= 200 && retryRes.response.status < 300;
                       if (retryOk && retryRes.response.body) {
@@ -3388,7 +3414,11 @@ export async function handleChatCore({
                       }
                       await retryRes.response.body?.cancel().catch(() => {});
                       return null;
-                    } catch {
+                    } catch (error) {
+                      if (isRuntimePolicyError(error) || isRuntimePolicyResponse(error)) {
+                        runtimePolicyStreamDenial = error;
+                        throw error;
+                      }
                       return null;
                     }
                   };
@@ -3464,7 +3494,7 @@ export async function handleChatCore({
           }
         })();
 
-        if (stream) {
+        if (stream || isRuntimePolicyResponse(rawResult.response)) {
           return rawResult;
         }
 
@@ -3537,6 +3567,7 @@ export async function handleChatCore({
       if (dedupResult.wasDeduplicated) {
         log?.debug?.("DEDUP", `Joined in-flight request hash=${dedupHash}`);
       }
+      if (isRuntimePolicyResponse(dedupResult.result.response)) return dedupResult.result;
       return materializeDeduplicatedExecutionResult(dedupResult.result);
     }
 
@@ -4189,6 +4220,10 @@ export async function handleChatCore({
       pipelineRecovered = true;
       currentModel = pipelineOutcome.model;
       if (pipelineOutcome.kind === "error") {
+        if (isRuntimePolicyResponse(pipelineOutcome.result.response)) {
+          trackPendingRequest(model, provider, connectionId, false);
+          return runtimePolicyFailureResult(undefined, pipelineOutcome.result.response);
+        }
         providerResponse = pipelineOutcome.result.response;
         providerUrl = "";
         providerHeaders = normalizeHeaders(pipelineOutcome.result.response.headers);
@@ -4243,6 +4278,7 @@ export async function handleChatCore({
       }
     } catch (error) {
       trackPendingRequest(model, provider, connectionId, false);
+      if (isRuntimePolicyError(error)) return runtimePolicyFailureResult(error);
       if (isManagedLeaseFenceError(error)) return managedLeaseFenceErrorResult(error);
       if (isSemaphoreCapacityError(error)) {
         appendRequestLog({
@@ -4496,6 +4532,10 @@ export async function handleChatCore({
             )
           );
 
+          if (isRuntimePolicyResponse(retryResult.response)) {
+            trackPendingRequest(model, provider, connectionId, false);
+            return runtimePolicyFailureResult(undefined, retryResult.response);
+          }
           if (retryResult.response.ok) {
             providerResponse = retryResult.response;
             providerUrl = retryResult.url;
@@ -4513,6 +4553,10 @@ export async function handleChatCore({
             upstreamErrorParsed = false; // Let it be parsed downstream
           }
         } catch (retryErr) {
+          if (isRuntimePolicyError(retryErr)) {
+            trackPendingRequest(model, provider, connectionId, false);
+            return runtimePolicyFailureResult(retryErr);
+          }
           if (isManagedLeaseFenceError(retryErr)) return managedLeaseFenceErrorResult(retryErr);
           // Refresh succeeded but the retry leg failed (network blip, AbortError,
           // executor throw). Don't swallow — the operator-visible signal "the user
@@ -4614,6 +4658,10 @@ export async function handleChatCore({
           });
       if (!pipelineRecovered && signatureRecovery.attempted && signatureRecovery.execution) {
         providerResponse = signatureRecovery.execution.response;
+        if (isRuntimePolicyResponse(providerResponse)) {
+          trackPendingRequest(model, provider, connectionId, false);
+          return runtimePolicyFailureResult(undefined, providerResponse);
+        }
         if (signatureRecovery.succeeded) {
           providerUrl = signatureRecovery.execution.url;
           providerHeaders = signatureRecovery.execution.headers;
@@ -4725,6 +4773,10 @@ export async function handleChatCore({
           // Re-execute with the fallback model
           try {
             const fallbackResult = await executeProviderRequest(nextModel, false);
+            if (isRuntimePolicyResponse(fallbackResult.response)) {
+              trackPendingRequest(model, provider, connectionId, false);
+              return runtimePolicyFailureResult(undefined, fallbackResult.response);
+            }
             if (fallbackResult.response.ok) {
               providerResponse = fallbackResult.response;
               providerUrl = fallbackResult.url;
@@ -4761,7 +4813,11 @@ export async function handleChatCore({
                 { passthrough: sourceFormat === FORMATS.CLAUDE }
               );
             }
-          } catch {
+          } catch (error) {
+            if (isRuntimePolicyError(error)) {
+              trackPendingRequest(model, provider, connectionId, false);
+              return runtimePolicyFailureResult(error);
+            }
             persistAttemptLogs({
               status: statusCode,
               error: errMsg,
@@ -4818,6 +4874,10 @@ export async function handleChatCore({
           );
           try {
             const fallbackResult = await executeProviderRequest(nextModel, false);
+            if (isRuntimePolicyResponse(fallbackResult.response)) {
+              trackPendingRequest(model, provider, connectionId, false);
+              return runtimePolicyFailureResult(undefined, fallbackResult.response);
+            }
             if (fallbackResult.response.ok) {
               providerResponse = fallbackResult.response;
               providerUrl = fallbackResult.url;
@@ -4853,7 +4913,11 @@ export async function handleChatCore({
                 { passthrough: sourceFormat === FORMATS.CLAUDE }
               );
             }
-          } catch {
+          } catch (error) {
+            if (isRuntimePolicyError(error)) {
+              trackPendingRequest(model, provider, connectionId, false);
+              return runtimePolicyFailureResult(error);
+            }
             persistAttemptLogs({
               status: statusCode,
               error: errMsg,
@@ -5057,6 +5121,7 @@ export async function handleChatCore({
         translatedBody: translatedBody as Record<string, unknown>,
         toolNameMap,
         requestToolIdentityMap,
+        reasoningCacheContext,
         reasoningCacheScope,
         skipReasoningReplay,
         clientHeaders: clientRawRequest?.headers ?? null,
@@ -5065,6 +5130,18 @@ export async function handleChatCore({
       });
 
       if (legResult.kind === "error") {
+        if (
+          isRuntimePolicyError(legResult.result.originalError) ||
+          isRuntimePolicyResponse(legResult.result.response)
+        ) {
+          trackPendingRequest(model, provider, connectionId, false);
+          return runtimePolicyFailureResult(
+            legResult.result.originalError,
+            isRuntimePolicyResponse(legResult.result.response)
+              ? legResult.result.response
+              : undefined
+          );
+        }
         // Normalize a local fence throw, then use the same accounting/pending
         // cleanup tail as any first-leg failure. Never report a provider 502.
         const err = isManagedLeaseFenceError(legResult.result.originalError)
@@ -5205,6 +5282,7 @@ export async function handleChatCore({
               preserveCacheControl,
               signatureNamespace: connectionId,
               copilotClient: copilotCompatibleReasoning,
+              reasoningCacheContext,
               reasoningCacheScope,
               skipReasoningReplay,
             }
@@ -5231,6 +5309,7 @@ export async function handleChatCore({
                 translatedBody: translatedBody as Record<string, unknown>,
                 toolNameMap,
                 requestToolIdentityMap,
+                reasoningCacheContext,
                 reasoningCacheScope,
                 skipReasoningReplay,
                 clientHeaders: clientRawRequest?.headers ?? null,
@@ -5242,6 +5321,20 @@ export async function handleChatCore({
             )
           );
           if (nextLeg.kind === "error") {
+            if (
+              isRuntimePolicyError(nextLeg.result.originalError) ||
+              isRuntimePolicyResponse(nextLeg.result.response)
+            ) {
+              return {
+                ...nextLeg,
+                result: runtimePolicyFailureResult(
+                  nextLeg.result.originalError,
+                  isRuntimePolicyResponse(nextLeg.result.response)
+                    ? nextLeg.result.response
+                    : undefined
+                ),
+              };
+            }
             if (isManagedLeaseFenceError(nextLeg.result.originalError)) {
               return {
                 ...nextLeg,
@@ -5708,6 +5801,7 @@ export async function handleChatCore({
       };
     } catch (error) {
       trackPendingRequest(model, provider, connectionId, false);
+      if (isRuntimePolicyError(error)) return runtimePolicyFailureResult(error);
       if (isManagedLeaseFenceError(error)) return managedLeaseFenceErrorResult(error);
       if (isSemaphoreCapacityError(error)) {
         appendRequestLog({
@@ -5769,6 +5863,15 @@ export async function handleChatCore({
     model,
     log,
   });
+  if (runtimePolicyStreamDenial) {
+    trackPendingRequest(model, provider, connectionId, false);
+    return runtimePolicyFailureResult(
+      isRuntimePolicyError(runtimePolicyStreamDenial) ? runtimePolicyStreamDenial : undefined,
+      isRuntimePolicyResponse(runtimePolicyStreamDenial)
+        ? (runtimePolicyStreamDenial as Response)
+        : undefined
+    );
+  }
   if (streamReadiness.ok === false) {
     const { response: failureResponse, reason } = streamReadiness;
     const { classificationReason, upstreamDiagnostic } = streamReadiness;
@@ -5896,7 +5999,7 @@ export async function handleChatCore({
         const historyMessages = (translatedBody as { messages?: unknown[] } | null | undefined)
           ?.messages;
         if (!skipReasoningReplay && requiresReasoningReplay({ provider, model })) {
-          cacheReasoningFromAssistantMessage(msg, provider, model, {
+          cacheReasoningFromAssistantMessage(msg, provider, model, reasoningCacheContext, {
             scope: reasoningCacheScope,
             historyMessages: Array.isArray(historyMessages) ? historyMessages : [],
           });
@@ -6096,7 +6199,12 @@ export async function handleChatCore({
     isStreamCompletionRecorded: () => streamCompletionRecorded,
     onStreamComplete,
     persistFailureUsage,
-    onStreamFailure,
+    onStreamFailure: onStreamFailure
+      ? (failure) => {
+          if (runtimePolicyStreamDenial) return;
+          return onStreamFailure(failure);
+        }
+      : undefined,
   });
   const handleStreamFailure = streamFailureFinalizers.handleStreamFailure;
   onPipelineStreamError = streamFailureFinalizers.onPipelineStreamError;

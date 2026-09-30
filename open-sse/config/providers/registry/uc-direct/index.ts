@@ -26,7 +26,10 @@ export const ucDirectProvider: RegistryEntry = {
   alias: "ucd",
   format: "openai",
   executor: "default",
-  baseUrl: "https://api.uncensored.com/api/v1",
+  // Named default-executor providers require the complete chat endpoint.
+  baseUrl: "https://api.uncensored.com/api/v1/chat/completions",
+  // Public catalog discovery is separate from metered chat requests.
+  modelsUrl: "https://api.uncensored.com/api/v1/models",
   authType: "apikey",
   // UC standardises on X-api-key (never-expiring uai_sk_live_ key), NOT Bearer.
   // The default executor resolves "x-api-key" to the X-API-Key header.

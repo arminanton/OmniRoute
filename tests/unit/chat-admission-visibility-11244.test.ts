@@ -189,14 +189,14 @@ test("#11244 (b): the process-wide snapshot exposes shed counters next to the li
   assert.deepEqual(snap.shedsByReason, { queue_timeout: 2, queued_bytes_budget: 1 });
 });
 
-test("#11244 (c): each shed logs one structured warn with the session fingerprint, never the raw key", async () => {
+test("#11244 (c): each pre-auth shed logs one structured warn with a shared lane, never the raw key", async () => {
   const rawKey = "visRAWSECRETtoken11244xyz"; // matches no logRedaction pattern — a leak would show verbatim
   const fingerprint = resolveSessionId(
     new Request("http://localhost/v1/chat/completions", {
       headers: { authorization: `Bearer ${rawKey}` },
     })
   );
-  assert.ok(fingerprint.startsWith("key_"), "resolveSessionId returns the HMAC fingerprint");
+  assert.equal(fingerprint, "anonymous", "unverified tokens must not create independent lanes");
   assert.ok(!fingerprint.includes(rawKey));
 
   // Default sink (no injected onShed): the shed must go through the shared pino logger.

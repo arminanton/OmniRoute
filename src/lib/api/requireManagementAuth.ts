@@ -1,4 +1,5 @@
 import { isAuthRequired, isDashboardSessionAuthenticated } from "@/shared/utils/apiAuth";
+import { requiresLockedManagementAuth } from "@/shared/runtimePolicy";
 import { createErrorResponse } from "@/lib/api/errorResponse";
 import { extractApiKey, isValidApiKey } from "@/sse/services/auth";
 import { getApiKeyMetadata } from "@/lib/db/apiKeys";
@@ -50,13 +51,19 @@ export async function requireManagementAuth(
   request?: Request | null,
   options: RequireManagementAuthOptions = {}
 ): Promise<Response | null> {
-  // Direct in-process invocation without a Request (unit/integration tests call
-  // route handlers as plain functions) is a trusted local caller — Next.js always
-  // supplies a real Request on the HTTP path, so this branch is unreachable there.
+  const lockedManagementAuth = requiresLockedManagementAuth();
+  // Preserve standalone direct-call compatibility, but an absent Request is
+  // not an authenticated identity in a locked deployment.
   if (request === undefined || request === null) {
-    return null;
+    return lockedManagementAuth
+      ? createErrorResponse({
+          status: 401,
+          message: "Authentication required",
+          type: "invalid_request",
+        })
+      : null;
   }
-  if (!options.alwaysRequireAuth && !(await isAuthRequired(request))) {
+  if (!lockedManagementAuth && !options.alwaysRequireAuth && !(await isAuthRequired(request))) {
     return null;
   }
 

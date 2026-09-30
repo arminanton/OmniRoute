@@ -1,5 +1,10 @@
 import type { NextRequest } from "next/server";
 import { runAuthzPipeline } from "./server/authz/pipeline";
+import { getRuntimePolicy } from "./shared/runtimePolicy";
+
+// Independent from instrumentation's bundle. A torn required activation must
+// reject module initialization, not vanish into the optional DB warmup catch.
+getRuntimePolicy();
 
 // #10627: the proxy runs in its own Next.js runtime and never executes
 // instrumentation-node.ts's startup warm-ups, so its FIRST request used to

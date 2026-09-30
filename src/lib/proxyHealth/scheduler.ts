@@ -22,6 +22,7 @@
  *                               same threshold, not independently tunable.
  */
 
+import { assertNoApplicationProxy, getRuntimePolicy } from "@/shared/runtimePolicy";
 import { deleteProxyById, listProxies, updateProxy } from "@/lib/db/proxies";
 import { isProxyLogIncludeIps } from "@/lib/proxyLogger";
 import {
@@ -188,6 +189,7 @@ async function testOneProxy(proxy: {
 }
 
 async function sweep(): Promise<void> {
+  assertNoApplicationProxy("configured");
   // #10677: anonymous egress-sharing signal from persisted proxy_logs (no live
   // probes). Logged only when sharing exists — the sweep line is a warning
   // signal, not a heartbeat. Runs before the empty-registry early return so
@@ -288,6 +290,7 @@ function scheduleSweep(): void {
 }
 
 export function initProxyHealthCheck(): void {
+  if (getRuntimePolicy().mode === "locked") return;
   if (!isEnabled() || isBuildProcess() || isBackgroundServicesDisabled()) return;
   if (globalThis.__proxyHealthInterval) return;
 

@@ -23,24 +23,15 @@ function makeRequest(headers: Record<string, string>, body = "{}"): Request {
   return new Request("http://x/v1/chat/completions", { method: "POST", headers: h, body });
 }
 
-test("resolveSessionId hashes bearer token into opaque key", () => {
-  const req = makeRequest({ authorization: "Bearer sk-secret-key-123" });
-  const sid = resolveSessionId(req);
-  assert.ok(sid.startsWith("key_"));
-  assert.equal(sid.length, "key_".length + 16);
-  // Same key → same hash
-  const req2 = makeRequest({ authorization: "Bearer sk-secret-key-123" });
-  assert.equal(resolveSessionId(req2), sid);
-  // Different key → different hash
-  const req3 = makeRequest({ authorization: "Bearer sk-different-key-456" });
-  assert.notEqual(resolveSessionId(req3), sid);
+test("resolveSessionId keeps all unverified bearer tokens in one anonymous lane", () => {
+  const first = resolveSessionId(makeRequest({ authorization: "Bearer sk-secret-key-123" }));
+  const second = resolveSessionId(makeRequest({ authorization: "Bearer sk-different-key-456" }));
+  assert.equal(first, "anonymous");
+  assert.equal(second, first);
 });
 
-test("resolveSessionId hashes x-api-key header (Anthropic-style)", () => {
-  const req = makeRequest({ "x-api-key": "anthropic-key-xyz" });
-  const sid = resolveSessionId(req);
-  assert.ok(sid.startsWith("key_"));
-  assert.equal(sid.length, "key_".length + 16);
+test("resolveSessionId does not treat a presented x-api-key as authenticated", () => {
+  assert.equal(resolveSessionId(makeRequest({ "x-api-key": "anthropic-key-xyz" })), "anonymous");
 });
 
 test("resolveSessionId returns 'anonymous' for no auth", () => {

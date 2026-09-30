@@ -165,7 +165,7 @@ test("#12150 P2 surface 2: persistAttemptLogs marks the call_logs row video_cont
   const marker = coreDb
     .getDbInstance()
     .prepare("SELECT video_content_removed FROM call_logs WHERE id = ?")
-    .get(id) as { video_content_removed: number };
+    .get(row.id) as { video_content_removed: number };
   assert.equal(marker.video_content_removed, 1);
 });
 
@@ -180,7 +180,7 @@ test("#12150 P2 surface 2: the marker defaults to 0 for an ordinary (non-video) 
   const marker = coreDb
     .getDbInstance()
     .prepare("SELECT video_content_removed FROM call_logs WHERE id = ?")
-    .get(id) as { video_content_removed: number };
+    .get(row.id) as { video_content_removed: number };
   assert.equal(marker.video_content_removed, 0);
 });
 

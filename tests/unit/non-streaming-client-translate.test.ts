@@ -1,17 +1,28 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { NonStreamingClientTranslateInput } from "../../open-sse/handlers/chatCore/nonStreamingClientTranslate.ts";
 
-import {
-  translateNonStreamingClientResponse,
-  type NonStreamingClientTranslateInput,
-} from "../../open-sse/handlers/chatCore/nonStreamingClientTranslate.ts";
-import { FORMATS } from "../../open-sse/translator/formats.ts";
-import {
-  buildAssistantMessageCacheKey,
-  clearReasoningCacheAll,
-  lookupReasoning,
-} from "../../open-sse/services/reasoningCache.ts";
-import { invalidateBufferTokensCache } from "../../open-sse/utils/usageTracking.ts";
+const dataDir = mkdtempSync(join(tmpdir(), "omniroute-nonstream-client-"));
+process.env.DATA_DIR = dataDir;
+process.env.API_KEY_SECRET = "nonstream-client-test-server-secret";
+const { translateNonStreamingClientResponse } =
+  await import("../../open-sse/handlers/chatCore/nonStreamingClientTranslate.ts");
+const { FORMATS } = await import("../../open-sse/translator/formats.ts");
+const { buildAssistantMessageCacheKey, clearReasoningCacheAll, lookupReasoning } =
+  await import("../../open-sse/services/reasoningCache.ts");
+const { createLocalReasoningCacheContext } =
+  await import("../../open-sse/services/reasoningCacheContext.ts");
+const { invalidateBufferTokensCache } = await import("../../open-sse/utils/usageTracking.ts");
+const { resetDbInstance } = await import("../../src/lib/db/core.ts");
+const reasoningCacheContext = createLocalReasoningCacheContext();
+test.after(() => {
+  clearReasoningCacheAll();
+  resetDbInstance();
+  rmSync(dataDir, { recursive: true, force: true });
+});
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
@@ -39,6 +50,7 @@ function baseInput(
     requestBody: { messages: [{ role: "user", content: "hi" }] },
     responseToolNameMap: null,
     requestToolIdentityMap: null,
+    reasoningCacheContext,
     reasoningCacheScope: null,
     clientHeaders: null,
     isClaudeCodeCompatible: false,
@@ -167,7 +179,7 @@ test("reasoning replay: no-tool history comes from historyMessages, not requestB
     historyMessages.length
   );
   assert.equal(
-    lookupReasoning(cacheKey),
+    lookupReasoning(cacheKey, reasoningCacheContext),
     "let me think...",
     "must cache against translatedBody.messages, not finalBody.input"
   );

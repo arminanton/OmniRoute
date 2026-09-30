@@ -383,7 +383,9 @@ export class GlmExecutor extends DefaultExecutor {
       credentials,
       this.provider,
       null,
-      { preserveCacheControl: false }
+      // Main request translation already handled replay with the trusted caller.
+      // This secondary conversion has no authenticated request context.
+      { preserveCacheControl: false, skipReasoningReplay: true, reasoningCacheContext: null }
     );
 
     // Inject effort and thinking for the Anthropic transport.

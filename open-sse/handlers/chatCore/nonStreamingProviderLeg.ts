@@ -24,6 +24,7 @@ import { extractUsageFromResponse } from "../usageExtractor.ts";
 import { sanitizeUsagePayloadForRequest } from "../../utils/usageTracking.ts";
 import { createErrorResult, formatProviderError } from "../../utils/error.ts";
 import { isLocalStreamLifecycleError } from "@/shared/utils/circuitBreaker";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import { projectProviderErrorIdentifier } from "./providerFailureProvenance.ts";
 import { isVerifiedProxyFetchExhaustedError } from "../../utils/proxyFetch.ts";
 import { unwrapClinepassEnvelope } from "../../utils/clinepassEnvelope.ts";
@@ -37,6 +38,7 @@ import {
 } from "../../services/modelFamilyFallback.ts";
 import { isEmptyContentResponse } from "../../services/errorClassifier.ts";
 import { FORMATS } from "../../translator/formats.ts";
+import type { ReasoningCacheContext } from "../../services/reasoningCacheContext.ts";
 
 /* -- exported types -------------------------------------------------------- */
 
@@ -90,6 +92,7 @@ export interface ProviderLegInput {
   translatedBody?: Record<string, unknown>;
   toolNameMap?: Map<string, string> | null;
   requestToolIdentityMap?: Map<string, { namespace?: string; name: string }> | null;
+  reasoningCacheContext?: ReasoningCacheContext | null;
   reasoningCacheScope?: string | null;
   skipReasoningReplay?: boolean;
   clientHeaders?: Headers | Record<string, unknown> | null;
@@ -287,6 +290,7 @@ function finishOk(
       ?.messages,
     responseToolNameMap,
     requestToolIdentityMap: input.requestToolIdentityMap ?? null,
+    reasoningCacheContext: input.reasoningCacheContext ?? null,
     reasoningCacheScope: input.reasoningCacheScope ?? null,
     skipReasoningReplay: input.skipReasoningReplay,
     clientHeaders: input.clientHeaders ?? null,
@@ -340,6 +344,31 @@ export async function runNonStreamingProviderLeg(
   const clientResponseFormat = input.clientResponseFormat ?? "openai";
   const connectionId = input.connectionId ?? "unknown";
   const log = input.log;
+  const policyResponse = (response: Response): NonStreamingProviderLegResult => ({
+    kind: "error",
+    result: {
+      ...legError(
+        response.status,
+        "Request denied by runtime policy.",
+        undefined,
+        null,
+        "OMNI_RUNTIME_POLICY_DENIED"
+      ),
+      response,
+    },
+    receipt: buildReceipt(input, {
+      httpStatus: response.status,
+      errorType: null,
+      usage: null,
+      termination: "provider_error",
+      latencyMs: Date.now() - startMs,
+      startedAt,
+      endedAt: new Date().toISOString(),
+      connectionId,
+      model: currentModel,
+    }),
+    usage: null,
+  });
 
   // -- Phase policy: follow-up blocks rotation and fallback -------------------
   const allowAccountRotation = input.phase === "follow-up" ? false : input.allowAccountRotation;
@@ -383,6 +412,8 @@ export async function runNonStreamingProviderLeg(
         translatedBody: (input.translatedBody ?? input.sourceBody) as Record<string, unknown>,
       });
       if (outcome.kind === "error") {
+        if (isRuntimePolicyResponse(outcome.result.response))
+          return policyResponse(outcome.result.response);
         if (
           outcome.result.status === 409 &&
           outcome.result.errorCode === "LEASE_CONNECTION_MISMATCH"
@@ -461,6 +492,7 @@ export async function runNonStreamingProviderLeg(
       );
     }
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     if (
       !!error &&
       typeof error === "object" &&
@@ -516,6 +548,7 @@ export async function runNonStreamingProviderLeg(
   }
 
   const providerResponse = executorResult.response;
+  if (isRuntimePolicyResponse(providerResponse)) return policyResponse(providerResponse);
   const finalBody = executorResult.transformedBody as Record<string, unknown> | null;
 
   // -- Connection mismatch check ----------------------------------------------
@@ -608,6 +641,8 @@ export async function runNonStreamingProviderLeg(
           if (mismatchBefore) return mismatchBefore;
 
           const fallbackResult = await input.executeProviderRequest(nextModel, false);
+          if (isRuntimePolicyResponse(fallbackResult.response))
+            return policyResponse(fallbackResult.response);
 
           // Connection check after fallback executor
           const mismatchAfter = checkConnectionIdentity(
@@ -653,7 +688,8 @@ export async function runNonStreamingProviderLeg(
               });
             }
           }
-        } catch {
+        } catch (error) {
+          if (isRuntimePolicyError(error)) throw error;
           // fallback also failed - fall through to standard error
         }
       }
@@ -687,6 +723,8 @@ export async function runNonStreamingProviderLeg(
           if (mismatchBefore) return mismatchBefore;
 
           const fallbackResult = await input.executeProviderRequest(nextModel, false);
+          if (isRuntimePolicyResponse(fallbackResult.response))
+            return policyResponse(fallbackResult.response);
 
           // Connection check after fallback executor
           const mismatchAfter = checkConnectionIdentity(
@@ -732,7 +770,8 @@ export async function runNonStreamingProviderLeg(
               });
             }
           }
-        } catch {
+        } catch (error) {
+          if (isRuntimePolicyError(error)) throw error;
           // fallback also failed - fall through to standard error
         }
       }
@@ -878,6 +917,8 @@ export async function runNonStreamingProviderLeg(
         if (mismatchBefore) return mismatchBefore;
 
         const retryResult = await input.executeProviderRequest(currentModel, false);
+        if (isRuntimePolicyResponse(retryResult.response))
+          return policyResponse(retryResult.response);
 
         // Connection check after retry executor
         const mismatchAfter = checkConnectionIdentity(
@@ -933,7 +974,8 @@ export async function runNonStreamingProviderLeg(
             }
           }
         }
-      } catch {
+      } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         // retry failed, fall through
       }
     }
@@ -995,6 +1037,8 @@ export async function runNonStreamingProviderLeg(
           if (mismatchBefore) return mismatchBefore;
 
           const fallbackResult = await input.executeProviderRequest(nextModel, false);
+          if (isRuntimePolicyResponse(fallbackResult.response))
+            return policyResponse(fallbackResult.response);
 
           // Connection check after fallback executor
           const mismatchAfter = checkConnectionIdentity(
@@ -1090,7 +1134,8 @@ export async function runNonStreamingProviderLeg(
               usage: null,
             };
           }
-        } catch {
+        } catch (error) {
+          if (isRuntimePolicyError(error)) throw error;
           const receipt = buildReceipt(input, {
             httpStatus: 502,
             errorType: "empty_content",

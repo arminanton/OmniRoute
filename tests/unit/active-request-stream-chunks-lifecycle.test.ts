@@ -301,14 +301,10 @@ test("streamChunks survive the full lifecycle: in-flight → completed → persi
   assert.ok(dbEntry, "should find persisted call log by the same ID");
   assert.ok(dbEntry.pipelinePayloads, "persisted entry should have pipelinePayloads");
 
-  // The pipelinePayloads in the DB may have been compacted/truncated.
-  // streamChunks may or may not be there depending on captureStreamChunks,
-  // but the ID must match so the API can find it.
-  assert.equal(
-    (dbEntry as Record<string, unknown>).id,
-    requestId,
-    "DB entry ID should match the original request ID"
-  );
+  // The pending ID remains a repeatable alias; the immutable physical link
+  // resolves the same completed row and its bounded pipeline payload.
+  assert.deepEqual(await callLogs.getCallLogById(dbEntry.id), dbEntry);
+  assert.equal((await callLogs.getCallLogById(requestId))?.id, dbEntry.id);
 });
 
 test("streamChunksText renders progressive updates correctly", () => {
@@ -692,9 +688,5 @@ test("streamChunks in completedDetails survives beyond the logs polling window",
 
   const dbEntry2 = await callLogs.getCallLogById(requestId);
   assert.ok(dbEntry2, "DB should still have the entry after the polling gap");
-  assert.equal(
-    (dbEntry2 as Record<string, unknown>).id,
-    requestId,
-    "DB entry ID should match the original request ID"
-  );
+  assert.equal(dbEntry2.id, dbEntry1.id, "pending alias must remain stable across repeated reads");
 });

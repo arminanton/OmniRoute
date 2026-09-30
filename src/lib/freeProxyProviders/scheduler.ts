@@ -21,6 +21,7 @@
  *                                        sources without their own TTL guard)
  */
 
+import { assertNoApplicationProxy, getRuntimePolicy } from "@/shared/runtimePolicy";
 import { getEnabledProviders } from "@/lib/freeProxyProviders";
 import { getFreeProxyStats } from "@/lib/db/freeProxies";
 import { runFreeProxySyncCycle, type FreeProxySyncCycleResult } from "./syncCycle";
@@ -66,6 +67,7 @@ function isBackgroundServicesDisabled(): boolean {
 }
 
 async function runCycle(): Promise<void> {
+  assertNoApplicationProxy("configured");
   if (isRunning) {
     console.log(`${LOG_PREFIX} Skipping cycle — previous run still in progress`);
     return;
@@ -107,6 +109,7 @@ async function computeInitialDelayMs(intervalMs: number): Promise<number> {
 
 /** Guarded entrypoint — auto-called at module bottom, matching `proxyHealth/scheduler.ts`. */
 export function initFreeProxyAutoSync(): void {
+  if (getRuntimePolicy().mode === "locked") return;
   if (!isFreeProxyAutoSyncEnabled() || isBuildProcess() || isBackgroundServicesDisabled()) return;
   if (globalThis.__freeProxyAutoSyncInterval || globalThis.__freeProxyAutoSyncStartupTimer) return;
 

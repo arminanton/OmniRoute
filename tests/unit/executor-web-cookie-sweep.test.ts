@@ -17,16 +17,29 @@
  * The duckduckgo-web executor was the first known case. To prevent any
  * future executor from regressing on the same contract, this sweep test
  * imports every executor in `WEB_COOKIE_PROVIDERS` + `NOAUTH_PROVIDERS`
- * (26 web-cookie + 2 noauth = 28 total), calls `execute()` with a minimal
- * but valid input, and asserts the wrapper shape. Tests use the
- * pre-aborted signal path or empty-creds path so no real upstream call
- * is needed.
+ * (including newly added entries), calls `execute()` with a minimal input,
+ * and asserts the wrapper shape. Tests use empty credentials, explicit
+ * in-memory 401 fixtures, or the pre-aborted path. Socket, DNS, subprocess,
+ * and native TLS tripwires fail even if an executor swallows the error.
  *
  * If this file ever flags a missing executor, the fix is in the executor
  * — the contract is the executor's responsibility.
  */
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
+import dns from "node:dns";
+import dgram from "node:dgram";
+import http from "node:http";
+import https from "node:https";
+import net from "node:net";
+import tls from "node:tls";
+import { syncBuiltinESMExports } from "node:module";
+import { TlsClient } from "../../open-sse/utils/tlsClient.ts";
+import { tlsClientModule as grokTls } from "../../open-sse/services/grokTlsClient.ts";
+import { tlsClientModule as perplexityTls } from "../../open-sse/services/perplexityTlsClient.ts";
+import { tlsClientModule as claudeTls } from "../../open-sse/services/claudeTlsClient.ts";
+import { tlsClientModule as lmarenaTls } from "../../open-sse/services/lmarenaTlsClient.ts";
 import { getExecutor } from "../../open-sse/executors/index.ts";
 import { WEB_COOKIE_PROVIDERS, NOAUTH_PROVIDERS } from "../../src/shared/constants/providers.ts";
 
@@ -37,33 +50,119 @@ const WEB_COOKIE_IDS = Object.keys(WEB_COOKIE_PROVIDERS) as WebCookieId[];
 const NOAUTH_IDS = Object.keys(NOAUTH_PROVIDERS) as NoauthId[];
 
 /**
- * Per-provider fake-credential strings that pass the executor's own
- * input-validation gate without making a real upstream call succeed.
- * Each executor parses a different cookie/header — the goal is only
- * to short-circuit the network call with a synthetic 401/403/4xx/5xx,
- * not to actually authenticate.
+ * Empty credentials exercise local validation where available. Providers that
+ * accept guest/empty credentials get only the exact denied requests below.
+ * Native TLS calls have separate seams; a global fetch mock alone is not enough.
  */
-const FAKE_CREDS: Record<string, string> = {
-  "grok-web": "sso=fake-audit-sweep",
-  "gemini-web": "__Secure-1PSID=fake-audit-sweep",
-  "perplexity-web": "__Secure-next-auth.session-token=fake-audit-sweep",
-  "blackbox-web": "__Secure-authjs.session-token=fake-audit-sweep",
-  "muse-spark-web": "ecto_1_sess=fake-audit-sweep",
-  "claude-web": "sessionKey=fake-audit-sweep",
-  "deepseek-web": "userToken=fake-audit-sweep",
-  "copilot-web": "fake-audit-sweep",
-  "t3-web": "fake-audit-sweep",
-  "inner-ai": "fake-audit-sweep user@example.com",
-  "adapta-web": "__client=fake-audit-sweep",
-  huggingchat: "hf-chat=fake-audit-sweep",
-  "poe-web": "p-b=fake-audit-sweep",
-  "venice-web": "fake-audit-sweep",
-  "v0-vercel-web": "fake-audit-sweep",
-  "kimi-web": "fake-audit-sweep",
-  "doubao-web": "sessionid=fake-audit-sweep; ttwid=fake-audit-sweep; s_v_web_id=verify_fake",
-  "duckduckgo-web": "",
-  "veoaifree-web": "",
+const EXPECTED_REQUESTS: Record<string, string[]> = {
+  "grok-web": ["tls POST https://grok.com/rest/app-chat/conversations/new"],
+  "perplexity-web": ["tls POST https://www.perplexity.ai/rest/sse/perplexity_ask"],
+  "blackbox-web": [
+    "fetch GET https://app.blackbox.ai/api/auth/session",
+    "fetch POST https://app.blackbox.ai/api/chat",
+  ],
+  "copilot-web": ["fetch POST https://copilot.microsoft.com/c/api/start"],
+  "poe-web": ["fetch POST https://www.poe.com/api/gql_POST"],
+  "venice-web": ["fetch POST https://venice.ai/api/chat"],
+  "v0-vercel-web": ["fetch POST https://v0.dev/api/chat"],
+  // Catalog lookup precedes the executor's abort check. Simulate fetch's abort locally.
+  "duckduckgo-web": ["fetch GET https://duck.ai/duckchat/v1/models"],
 };
+
+const DENIED_BODY = JSON.stringify({ error: { message: "offline fixture: unauthorized" } });
+
+async function withOfflineExecutor(
+  t: TestContext,
+  provider: string,
+  run: () => Promise<void>
+) {
+  const expected = EXPECTED_REQUESTS[provider] ?? [];
+  const requests: string[] = [];
+  const unexpected: string[] = [];
+  const patches: { mock: { restore: () => void } }[] = [];
+  const tlsModules = [grokTls, perplexityTls, claudeTls, lmarenaTls];
+  const deny = (channel: string) => (): never => {
+    unexpected.push(channel);
+    throw new Error(`[${provider}] unexpected unmocked transport: ${channel}`);
+  };
+  const record = (channel: string, url: string, method: string) => {
+    const request = `${channel} ${method} ${url}`;
+    const next = expected[requests.length];
+    requests.push(request);
+    if (request !== next) deny(request)();
+  };
+
+  try {
+    // Tripwires also record attempts: an executor catch must not hide real I/O.
+    patches.push(t.mock.method(net.Socket.prototype, "connect", deny("socket.connect")));
+    patches.push(t.mock.method(net, "connect", deny("net.connect")));
+    patches.push(t.mock.method(net, "createConnection", deny("net.createConnection")));
+    patches.push(t.mock.method(tls, "connect", deny("tls.connect")));
+    patches.push(t.mock.method(dgram, "createSocket", deny("dgram.createSocket")));
+    for (const method of ["lookup", "resolve", "resolve4", "resolve6"] as const) {
+      patches.push(t.mock.method(dns, method, deny(`dns.${method}`)));
+      patches.push(t.mock.method(dns.promises, method, deny(`dns.promises.${method}`)));
+    }
+    for (const method of ["request", "get"] as const) {
+      patches.push(t.mock.method(http, method, deny(`http.${method}`)));
+      patches.push(t.mock.method(https, method, deny(`https.${method}`)));
+    }
+    for (const method of [
+      "spawn",
+      "spawnSync",
+      "exec",
+      "execSync",
+      "execFile",
+      "execFileSync",
+      "fork",
+    ] as const) {
+      patches.push(t.mock.method(childProcess, method, deny(`child_process.${method}`)));
+    }
+    patches.push(t.mock.method(TlsClient.prototype, "fetch", deny("native TLS client")));
+    syncBuiltinESMExports();
+
+    patches.push(
+      t.mock.method(globalThis, "fetch", async (input, init) => {
+        const url = input instanceof Request ? input.url : String(input);
+        record("fetch", url, init?.method ?? (input instanceof Request ? input.method : "GET"));
+        if (provider === "duckduckgo-web") {
+          const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+          if (!signal?.aborted) deny("DuckDuckGo fetch without pre-aborted signal")();
+          throw signal.reason;
+        }
+        return new Response(DENIED_BODY, {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      })
+    );
+    for (const module of tlsModules) {
+      module.__setTlsFetchOverrideForTesting(async (url, options) => {
+        // Only the current provider's own TLS seam may consume its expected request.
+        if (
+          (provider !== "grok-web" || module !== grokTls) &&
+          (provider !== "perplexity-web" || module !== perplexityTls)
+        ) {
+          deny(`native TLS ${url}`)();
+        }
+        record("tls", url, options.method ?? "GET");
+        return {
+          status: 401,
+          headers: new Headers({ "Content-Type": "application/json" }),
+          text: DENIED_BODY,
+          body: null,
+        };
+      });
+    }
+    await run();
+  } finally {
+    for (const module of tlsModules) module.__setTlsFetchOverrideForTesting(null);
+    for (const patch of patches.reverse()) patch.mock.restore();
+    syncBuiltinESMExports();
+    assert.deepEqual(unexpected, [], `[${provider}] no unmocked transport attempts`);
+    assert.deepEqual(requests, expected, `[${provider}] exact offline fixture requests`);
+  }
+}
 
 const VALID_BODY = {
   model: "test",
@@ -113,87 +212,108 @@ function assertExecutorWrapperShape(
   );
 }
 
-describe("web-cookie + noauth executor wrapper contract sweep", () => {
-  describe("WEB_COOKIE_PROVIDERS (26)", () => {
+describe("web-cookie + noauth executor wrapper contract sweep", { concurrency: false }, () => {
+  describe("WEB_COOKIE_PROVIDERS", () => {
     for (const providerId of WEB_COOKIE_IDS) {
-      it(`${providerId} executor returns wrapper shape`, async () => {
-        const executor = await getExecutor(providerId);
-        assert.ok(executor, `[${providerId}] getExecutor must return an executor`);
+      it(`${providerId} executor returns wrapper shape`, async (t) => {
+        await withOfflineExecutor(t, providerId, async () => {
+          const executor = await getExecutor(providerId);
+          assert.ok(executor, `[${providerId}] getExecutor must return an executor`);
 
-        const result = await executor.execute({
-          model: providerId,
-          body: VALID_BODY,
-          stream: false,
-          credentials: { apiKey: FAKE_CREDS[providerId] ?? "fake" },
-          signal: null,
-        } as never);
+          const result = await executor.execute({
+            model: providerId,
+            body: VALID_BODY,
+            stream: false,
+            credentials: { apiKey: "" },
+            signal: null,
+          } as never);
 
-        assertExecutorWrapperShape(result, providerId);
+          assertExecutorWrapperShape(result, providerId);
+          if (providerId === "tencent-aistudio-web") {
+            assert.equal(result.response.status, 401, "missing Tencent cookie must reject locally");
+            assert.equal(result.url, "https://aistudio.tencent.ai/api/chat/HunyuanDefault");
+            assert.deepEqual(result.headers, {});
+            assert.strictEqual(result.transformedBody, VALID_BODY);
+          }
+          if (EXPECTED_REQUESTS[providerId]) {
+            assert.equal(result.response.status, providerId === "copilot-web" ? 502 : 401);
+          }
 
-        // Result should never be a JS TypeError. Real executor returns
-        // a proper Response with a JSON error body for invalid creds.
-        // If a regression introduces a raw Response return, the shape
-        // assertion above will fail.
-        const body = await result.response.text();
-        // Most executors return JSON error bodies for invalid creds.
-        // We don't require JSON, but we DO require the body to be a
-        // non-empty string (not the literal "[object Response]" or
-        // a TypeError stack trace).
-        assert.ok(body.length > 0, `[${providerId}] response body must be non-empty`);
-        // And it must NOT be the duckduckgo-web regression signature.
-        assert.doesNotMatch(
-          body,
-          /Cannot read properties of undefined \(reading 'status'\)/,
-          `[${providerId}] must not surface the chatCore-side TypeError`
-        );
+          // Result should never be a JS TypeError. Real executor returns
+          // a proper Response with a JSON error body for invalid creds.
+          // If a regression introduces a raw Response return, the shape
+          // assertion above will fail.
+          const body = await result.response.text();
+          // Most executors return JSON error bodies for invalid creds.
+          // We don't require JSON, but we DO require the body to be a
+          // non-empty string (not the literal "[object Response]" or
+          // a TypeError stack trace).
+          assert.ok(body.length > 0, `[${providerId}] response body must be non-empty`);
+          assert.notEqual(body, "[object Response]", `[${providerId}] body must not stringify Response`);
+          if (providerId === "tencent-aistudio-web") {
+            assert.equal(JSON.parse(body).error.code, "missing_cookie");
+          }
+          // And it must NOT be the duckduckgo-web regression signature.
+          assert.doesNotMatch(
+            body,
+            /Cannot read properties of undefined \(reading 'status'\)/,
+            `[${providerId}] must not surface the chatCore-side TypeError`
+          );
+        });
       });
     }
   });
 
-  describe("NOAUTH_PROVIDERS (4 total; 2 require cookie='') ", () => {
+  describe("NOAUTH_PROVIDERS (credential-free targets)", () => {
     // Only noauth providers that should be probed without creds:
     // duckduckgo-web and veoaifree-web. opencode/notice have dedicated
     // executor tests already (executor-opencode.test.ts / executor-notice.test.ts).
     const TARGETS = NOAUTH_IDS.filter((id) => id === "duckduckgo-web" || id === "veoaifree-web");
 
     for (const providerId of TARGETS) {
-      it(`${providerId} noauth executor returns wrapper shape`, async () => {
-        const executor = await getExecutor(providerId);
-        assert.ok(executor, `[${providerId}] getExecutor must return an executor`);
+      it(`${providerId} noauth executor returns wrapper shape`, async (t) => {
+        await withOfflineExecutor(t, providerId, async () => {
+          const executor = await getExecutor(providerId);
+          assert.ok(executor, `[${providerId}] getExecutor must return an executor`);
 
-        // Use a pre-aborted signal so the executor short-circuits via
-        // its AbortError path before any real network call.
-        const controller = new AbortController();
-        controller.abort();
+          // Keep the abort branch. Any preliminary fetch is also mocked and counted.
+          const controller = new AbortController();
+          controller.abort();
 
-        const result = await executor.execute({
-          model: providerId,
-          body: VALID_BODY,
-          stream: false,
-          credentials: { apiKey: "" },
-          signal: controller.signal,
-        } as never);
+          const result = await executor.execute({
+            model: providerId,
+            body: VALID_BODY,
+            stream: false,
+            credentials: { apiKey: "" },
+            signal: controller.signal,
+          } as never);
 
-        // duckduckgo-web may legitimately short-circuit with a bare
-        // 499 Response on a pre-aborted signal; chatCore's
-        // normalizeExecutorResult already accepts both shapes. Only
-        // insist on the full wrapper for executors that are expected
-        // to produce one.
-        if (result instanceof Response) {
-          assert.ok(
-            result.status >= 100 && result.status < 600,
-            `[${providerId}] bare Response must have a valid HTTP status, got ${result.status}`
+          // duckduckgo-web may legitimately short-circuit with a bare
+          // 499 Response on a pre-aborted signal; chatCore's
+          // normalizeExecutorResult already accepts both shapes. Only
+          // insist on the full wrapper for executors that are expected
+          // to produce one.
+          if (result instanceof Response) {
+            assert.equal(providerId, "duckduckgo-web", "only DuckDuckGo's abort path is bare");
+            assert.equal(result.status, 499, "DuckDuckGo must preserve cancellation status");
+            assert.ok(
+              result.status >= 100 && result.status < 600,
+              `[${providerId}] bare Response must have a valid HTTP status, got ${result.status}`
+            );
+          } else {
+            assertExecutorWrapperShape(result, providerId);
+          }
+          const response = result instanceof Response ? result : result.response;
+          assert.equal(response.status, providerId === "duckduckgo-web" ? 499 : 502);
+          const body = await response.text();
+          assert.ok(body.length > 0, `[${providerId}] response body must be non-empty`);
+          assert.notEqual(body, "[object Response]", `[${providerId}] body must not stringify Response`);
+          assert.doesNotMatch(
+            body,
+            /Cannot read properties of undefined \(reading 'status'\)/,
+            `[${providerId}] must not surface the chatCore-side TypeError`
           );
-        } else {
-          assertExecutorWrapperShape(result, providerId);
-        }
-        const body = await (result instanceof Response ? result : result.response).text();
-        assert.ok(body.length > 0, `[${providerId}] response body must be non-empty`);
-        assert.doesNotMatch(
-          body,
-          /Cannot read properties of undefined \(reading 'status'\)/,
-          `[${providerId}] must not surface the chatCore-side TypeError`
-        );
+        });
       });
     }
   });

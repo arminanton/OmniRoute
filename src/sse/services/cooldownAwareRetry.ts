@@ -1,5 +1,6 @@
 import { formatRetryAfter } from "@omniroute/open-sse/services/accountFallback.ts";
 import { resolveResilienceSettings } from "@/lib/resilience/settings";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import { isExhaustedNetworkFailure } from "./networkFailure";
 
 const MAX_REQUEST_RETRY = 10;
@@ -112,6 +113,8 @@ export function getCooldownAwareRetryDecision({
   budgetLeftMs,
   failureCode,
   failureText,
+  originalError,
+  response,
 }: {
   retryAfter: unknown;
   settings: CooldownAwareRetrySettings;
@@ -120,6 +123,9 @@ export function getCooldownAwareRetryDecision({
   failureCode?: unknown;
   /** Sanitized failure text fallback for older persisted cooldown records. */
   failureText?: unknown;
+  /** Local provenance only; public error strings never prove a policy denial. */
+  originalError?: unknown;
+  response?: Response;
   /**
    * Remaining cumulative wait budget (ms) for this request. Defaults to
    * settings.budgetMs when omitted (single-call-site backward compat) —
@@ -136,6 +142,8 @@ export function getCooldownAwareRetryDecision({
   const closest = computeClosestRetryAfter(retryAfter);
   const effectiveBudgetLeftMs = budgetLeftMs ?? settings.budgetMs;
   if (
+    isRuntimePolicyError(originalError) ||
+    isRuntimePolicyResponse(response) ||
     isExhaustedNetworkFailure(failureCode, failureText) ||
     !settings.enabled ||
     settings.maxRetries <= 0 ||

@@ -11,6 +11,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { installPinnedTransport } from "../helpers/pinnedTransport.ts";
 
 const { directHttpsRequest } = await import("../../src/lib/providers/validation/headers.ts");
 
@@ -21,7 +22,13 @@ const METADATA_TARGETS = [
 ];
 
 for (const url of METADATA_TARGETS) {
-  test(`SSRF: directHttpsRequest blocks cloud-metadata target ${url}`, async () => {
+  test(`SSRF: directHttpsRequest blocks cloud-metadata target ${url}`, async (t) => {
+    const transport = installPinnedTransport(t.mock, {
+      reply() {
+        assert.fail("blocked metadata target must not open a native socket");
+      },
+    });
+    t.after(transport.restore);
     await assert.rejects(
       () => directHttpsRequest(url, { method: "GET" }, 2000),
       (err: unknown) => {
@@ -32,23 +39,59 @@ for (const url of METADATA_TARGETS) {
         return true;
       }
     );
+    assert.equal(transport.resolutions.length, 0);
+    assert.equal(transport.dials.length, 0);
   });
 }
 
-test("SSRF: a normal public provider host is NOT blocked by the guard", async () => {
-  // block-metadata permits public + LAN hosts; only IMDS/link-local are refused.
-  // We use an unroutable TEST-NET-1 address (RFC 5737) so no real traffic leaves,
-  // and assert the failure is a network error (guard passed), never a guard block.
+test("SSRF: directHttpsRequest rejects reserved documentation addresses before transport", async (t) => {
+  const transport = installPinnedTransport(t.mock, {
+    reply() {
+      assert.fail("reserved target must not open a native socket");
+    },
+  });
+  t.after(transport.restore);
   await assert.rejects(
     () => directHttpsRequest("http://192.0.2.1:9/models", { method: "GET" }, 1500),
     (err: unknown) => {
       const msg = String((err as Error)?.message ?? err);
-      assert.doesNotMatch(
-        msg,
-        /url_guard_blocked|guard blocked|metadata/i,
-        `public host must pass the guard, got a guard block: ${msg}`
-      );
+      assert.match(msg, /guard|metadata|blocked|not allowed|URL/i, `expected guard block, got: ${msg}`);
       return true;
     }
   );
+  assert.equal(transport.resolutions.length, 0);
+  assert.equal(transport.dials.length, 0);
+});
+
+test("SSRF: a normal public provider host is NOT blocked by the guard", async (t) => {
+  // Unlike TEST-NET-1, this is a public literal. The strict native socket fixture
+  // returns the response in memory, so this test cannot send real network traffic.
+  const transport = installPinnedTransport(t.mock, {
+    reply(socket, dial) {
+      assert.equal(dial.protocol, "http:");
+      assert.equal(dial.options.host, "93.184.216.34");
+      assert.equal(Number(dial.options.port), 8080);
+      assert.match(socket.request, /^GET \/models HTTP\/1\.1\r\n/);
+      socket.respond({
+        headers: { "content-type": "application/json" },
+        body: '{"data":[]}',
+      });
+    },
+  });
+  t.after(transport.restore);
+  let patchedFetchCalls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    patchedFetchCalls++;
+    assert.fail("direct provider validation must use native transport");
+  });
+  const response = await directHttpsRequest("http://93.184.216.34:8080/models", { method: "GET" }, 1500);
+  assert.equal(response.ok, true);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), '{"data":[]}');
+  assert.equal(patchedFetchCalls, 0);
+  assert.equal(transport.resolutions.length, 0);
+  assert.equal(transport.dials.length, 1);
+  transport.restore();
+  await transport.sockets[0].closedPromise;
+  assert.equal(transport.sockets[0].destroyed, true);
 });

@@ -3,6 +3,7 @@
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { getServiceRow, updateServiceField, setToolStatus } from "@/lib/db/versionManager";
 import { RingBuffer } from "./ringBuffer";
@@ -96,6 +97,7 @@ export class ServiceSupervisor extends EventEmitter {
   }
 
   async start(): Promise<ServiceStatus> {
+    assertNotLockedCapability("embedded-service-start");
     return this.withLock(async () => {
       if (this.state === "running" || this.state === "starting") {
         return this.getStatus();
@@ -163,6 +165,7 @@ export class ServiceSupervisor extends EventEmitter {
       try {
         child = spawn(command, args, buildServiceSpawnOptions(env, cwd));
       } catch (err) {
+        if (isRuntimePolicyError(err)) throw err;
         this.checker.stop();
         this.spawnFailed = true;
         const msg = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
@@ -250,6 +253,7 @@ export class ServiceSupervisor extends EventEmitter {
   }
 
   async restart(): Promise<ServiceStatus> {
+    assertNotLockedCapability("embedded-service-start");
     await this.stop();
     return this.start();
   }

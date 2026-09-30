@@ -11,6 +11,11 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import {
+  assertNotLockedCapability,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+} from "@/shared/runtimePolicy";
 import { isCodexDiscoveryModelExcluded } from "@/shared/services/codexDiscoveryPolicy";
 import {
   getSyncedAvailableModelsForConnection,
@@ -166,6 +171,7 @@ export async function waitForLoopbackHttpReady(options?: {
   maxWaitMs?: number;
   pollMs?: number;
 }): Promise<void> {
+  assertNotLockedCapability("codex-catalog-revalidation");
   const maxWaitMs = options?.maxWaitMs ?? 15_000;
   const pollMs = options?.pollMs ?? 50;
   const { fetchModelSyncInternal, resolveModelSyncInternalBaseUrl } =
@@ -185,6 +191,7 @@ export async function waitForLoopbackHttpReady(options?: {
       );
       if (res.status >= 200 && res.status < 600) return;
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       lastErr = err;
     }
     await new Promise((r) => setTimeout(r, pollMs));
@@ -200,6 +207,7 @@ export async function waitForLoopbackHttpReady(options?: {
 export async function liveResyncCodexConnections(
   apiBaseUrl?: string
 ): Promise<{ attempted: number; succeeded: number }> {
+  assertNotLockedCapability("codex-catalog-revalidation");
   const connections = await listActiveCodexConnectionIds();
   if (connections.length === 0) {
     return { attempted: 0, succeeded: 0 };
@@ -228,6 +236,11 @@ export async function liveResyncCodexConnections(
     })
   );
 
+  for (const result of results) {
+    if (result.status === "rejected" && isRuntimePolicyError(result.reason)) {
+      throw result.reason;
+    }
+  }
   const succeeded = results.filter((r) => r.status === "fulfilled").length;
   return { attempted: connections.length, succeeded };
 }
@@ -237,7 +250,8 @@ async function readPreviousVersionMarker(): Promise<string | null> {
     const settings = await getSettings();
     const raw = settings?.[CODEX_CATALOG_REVALIDATED_VERSION_KEY];
     return typeof raw === "string" && raw.trim() ? raw.trim() : null;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }
@@ -246,7 +260,8 @@ async function writeVersionMarker(appVersion: string): Promise<boolean> {
   try {
     await updateSettings({ [CODEX_CATALOG_REVALIDATED_VERSION_KEY]: appVersion });
     return true;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return false;
   }
 }
@@ -265,11 +280,13 @@ export async function executeCodexCatalogRevalidation(options: {
   writeMarker: (appVersion: string) => Promise<boolean>;
   logSuccess: () => void;
 }): Promise<CodexCatalogRevalidationOutcome> {
+  assertNotLockedCapability("codex-catalog-revalidation");
   await options.scrub();
 
   try {
     await options.waitForReady();
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return { complete: false, attempted: 0, succeeded: 0 };
   }
 
@@ -299,6 +316,7 @@ export function createCodexCatalogRevalidationCoordinator(
   let queuedInit: CodexCatalogRevalidationRequest | null = null;
 
   return (options) => {
+    assertNotLockedCapability("codex-catalog-revalidation");
     if (activeRun !== null) {
       if (options.reason === "init" && activeReason !== "init") {
         queuedInit = options;
@@ -316,6 +334,10 @@ export function createCodexCatalogRevalidationCoordinator(
           try {
             await run(current);
           } catch (error) {
+            if (isRuntimePolicyError(error)) {
+              queuedInit = null;
+              throw error;
+            }
             firstError ??= error;
           }
           current = queuedInit;
@@ -359,6 +381,7 @@ const requestCodexCatalogRevalidation = createCodexCatalogRevalidationCoordinato
 );
 
 export function revalidateCodexCatalogs(options: CodexCatalogRevalidationRequest): Promise<void> {
+  assertNotLockedCapability("codex-catalog-revalidation");
   return requestCodexCatalogRevalidation(options);
 }
 
@@ -366,6 +389,7 @@ export function revalidateCodexCatalogs(options: CodexCatalogRevalidationRequest
 export async function revalidateCodexCatalogsOnStartup(options?: {
   apiBaseUrl?: string;
 }): Promise<void> {
+  if (getRuntimePolicy().mode === "locked") return;
   const appVersion = resolveCodexCatalogAppVersion();
   const previousVersion = await readPreviousVersionMarker();
   const reason = appVersion
@@ -376,8 +400,11 @@ export async function revalidateCodexCatalogsOnStartup(options?: {
 }
 
 function scheduleRun(run: () => Promise<void>): void {
+  if (getRuntimePolicy().mode === "locked") return;
   const timer = setTimeout(() => {
-    void run().catch(() => {
+    if (getRuntimePolicy().mode === "locked") return;
+    void run().catch((error: unknown) => {
+      if (isRuntimePolicyError(error)) throw error;
       // silent — success line only on full success
     });
   }, 0);

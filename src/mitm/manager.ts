@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
 import fs from "fs";
+import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { resolveMitmDataDir } from "./dataDir.ts";
 import {
   removeDNSEntry,
@@ -158,6 +159,7 @@ function readStoredUpstreamCaPath(): string | null {
  * declarative target hosts are persisted — no runtime paths, no shell escapes.
  */
 export function writeTargetsJson(targets: MitmTarget[] = ALL_TARGETS): void {
+  assertNotLockedCapability("mitm-provisioning");
   const dir = path.join(resolveMitmDataDir(), "mitm");
   try {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -189,6 +191,7 @@ export function writeTargetsJson(targets: MitmTarget[] = ALL_TARGETS): void {
  * Hard Rule #13: no shell interpolation, file only.
  */
 export function writeBypassJson(userPatterns?: string[]): void {
+  assertNotLockedCapability("mitm-provisioning");
   const dir = path.join(resolveMitmDataDir(), "mitm");
   try {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -442,6 +445,7 @@ export async function startMitm(
   sudoPassword: string,
   options: { port?: number } = {}
 ): Promise<{ running: true; pid: number | null; certTrusted: boolean }> {
+  assertNotLockedCapability("mitm-start");
   // Check if already running
   if (serverProcess && !serverProcess.killed) {
     throw new Error("MITM proxy is already running");
@@ -478,6 +482,7 @@ async function startMitmInternal(
   try {
     writeTargetsJson();
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     log.error({ err }, "Failed to write targets.json (continuing)");
   }
 
@@ -487,6 +492,7 @@ async function startMitmInternal(
   try {
     writeBypassJson();
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     log.error({ err }, "Failed to write bypass.json (continuing)");
   }
 
@@ -500,6 +506,7 @@ async function startMitmInternal(
       log.info({ caPath: activeCaPath }, "Upstream CA certificate configured");
     }
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     log.error(
       { err },
       `AGENTBRIDGE_UPSTREAM_CA_CERT path invalid: ${(err as Error).message ?? err} (continuing without custom CA)`
@@ -525,6 +532,7 @@ async function startMitmInternal(
       try {
         await generateCert();
       } catch (err) {
+        if (isRuntimePolicyError(err)) throw err;
         log.error({ err }, "Failed to generate SSL certificate");
         throw err;
       }
@@ -535,6 +543,7 @@ async function startMitmInternal(
       const ca = await loadOrCreateMitmCa(certDir);
       certPath = ca.certPath;
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       log.error({ err }, "Failed to load/generate MITM root CA");
       throw err;
     }
@@ -562,6 +571,7 @@ async function startMitmInternal(
           );
         }
       } catch (err) {
+        if (isRuntimePolicyError(err)) throw err;
         log.error(
           { err },
           "installCertResult threw unexpectedly (continuing without trusted cert)"
@@ -580,6 +590,7 @@ async function startMitmInternal(
       try {
         await provisionDnsEntries(sudoPassword);
       } catch (err) {
+        if (isRuntimePolicyError(err)) throw err;
         log.error({ err }, "DNS provisioning threw unexpectedly (continuing)");
       }
     }
@@ -607,6 +618,7 @@ async function startMitmInternal(
         ingestToken = ingestMod.getIngestTokenForBootstrap();
       }
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       log.warn({ err }, "Could not resolve inspector ingest token; capture disabled");
     }
   }
@@ -636,6 +648,7 @@ async function startMitmInternal(
     try {
       fs.writeFileSync(PID_FILE, String(serverPid));
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       log.error({ err, pid: serverPid }, "Failed to write MITM PID file (continuing)");
     }
   }

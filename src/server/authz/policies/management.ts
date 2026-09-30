@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { requiresLockedManagementAuth } from "../../../shared/runtimePolicy";
 import { isModelSyncInternalRequest } from "../../../shared/services/modelSyncScheduler";
 import { isAuthRequired, isDashboardSessionAuthenticated } from "../../../shared/utils/apiAuth";
 import type { AuthOutcome, PolicyContext, RoutePolicy } from "../context";
@@ -67,10 +68,28 @@ function isValidWsBridgeRequest(ctx: PolicyContext): boolean {
 // dashboard cookie. See the carve-out in evaluate() below.
 const INSPECTOR_INGEST_PATH = "/api/tools/traffic-inspector/internal/ingest";
 
+function isValidInspectorIngestRequest(ctx: PolicyContext): boolean {
+  if (ctx.request.method !== "POST") return false;
+  const expected = process.env.INSPECTOR_INTERNAL_INGEST_TOKEN || "";
+  // Match the route's configured-token contract. An unconfigured, route-local
+  // random token cannot establish an identity here; locked mode fails closed.
+  if (expected.length < 16) return false;
+  const authorization = ctx.request.headers.get("authorization") || "";
+  const provided = authorization.startsWith("Bearer ") ? authorization.slice(7) : "";
+  if (!provided) return false;
+  return timingSafeEqual(
+    createHash("sha256").update(expected).digest(),
+    createHash("sha256").update(provided).digest()
+  );
+}
+
 export const managementPolicy: RoutePolicy = {
   routeClass: "MANAGEMENT",
   async evaluate(ctx: PolicyContext): Promise<AuthOutcome> {
     const path = ctx.classification.normalizedPath;
+    // Read the protected authority before every credential or bypass branch.
+    // A malformed required policy must not become an authenticated success.
+    const lockedManagementAuth = requiresLockedManagementAuth();
 
     // Codex Responses-over-WS bridge: honor the per-process bridge secret before
     // the loopback/auth gates so the proxy's internal calls aren't 401'd (which
@@ -176,7 +195,11 @@ export const managementPolicy: RoutePolicy = {
     // not also need a dashboard session / management key. The LOCAL_ONLY gate
     // above already rejected any non-loopback caller; we additionally require a
     // strict loopback request here so a LAN peer cannot reach it without auth.
-    if (path === INSPECTOR_INGEST_PATH && isLoopbackRequest(ctx)) {
+    if (
+      path === INSPECTOR_INGEST_PATH &&
+      isLoopbackRequest(ctx) &&
+      (!lockedManagementAuth || isValidInspectorIngestRequest(ctx))
+    ) {
       return allow({
         kind: "management_key",
         id: "inspector-ingest",
@@ -250,8 +273,13 @@ export const managementPolicy: RoutePolicy = {
       }
     }
 
-    // Tier 2: always-protected routes skip the requireLogin=false bypass.
-    if (!isAlwaysProtectedPath(path) && !(await isAuthRequired(ctx.request))) {
+    // Locked management never takes the mutable requireLogin/bootstrap bypass.
+    // Standalone retains the existing Tier 2 always-protected behavior.
+    if (
+      !lockedManagementAuth &&
+      !isAlwaysProtectedPath(path) &&
+      !(await isAuthRequired(ctx.request))
+    ) {
       return allow({ kind: "anonymous", id: "anonymous", label: "auth-disabled" });
     }
 

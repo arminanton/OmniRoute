@@ -311,7 +311,7 @@ test("combo health route aggregates target history without changing latest targe
   core
     .getDbInstance()
     .prepare("UPDATE call_logs SET duration = NULL WHERE id = ?")
-    .run("combo-aggregate-1");
+    .run((await callLogs.getCallLogById("combo-aggregate-1"))!.id);
 
   const response = await route.GET(
     new Request(`http://localhost/api/usage/combo-health?range=24h&comboId=${combo.id}`)

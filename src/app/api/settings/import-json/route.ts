@@ -7,7 +7,12 @@ import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
 import { runJsonMigration, type LegacyJsonData } from "@/lib/db/jsonMigration";
 import { getSettings } from "@/lib/db/settings";
 import { setSystemPromptConfig } from "@omniroute/open-sse/services/systemPrompt.ts";
-import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import { sanitizeErrorMessage, buildErrorBody } from "@omniroute/open-sse/utils/error";
+import {
+  assertNotLockedCapability,
+  isRuntimePolicyError,
+  markRuntimePolicyResponse,
+} from "@/shared/runtimePolicy";
 
 /**
  * POST /api/settings/import-json
@@ -27,6 +32,9 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Whole-backup admission is not supported in locked v1. Reject before body
+    // parsing, backup, DB writes or cache updates; standalone import is unchanged.
+    assertNotLockedCapability("settings-json-import");
     let rawText: string | null = null;
     const contentType = request.headers.get("content-type") ?? "";
 
@@ -92,6 +100,17 @@ export async function POST(request: Request) {
       ...counts,
     });
   } catch (err) {
+    if (isRuntimePolicyError(err)) {
+      return markRuntimePolicyResponse(
+        NextResponse.json(
+          buildErrorBody(403, "Runtime policy denied this operation", undefined, {
+            code: err.code,
+            reason: err.reason,
+          }),
+          { status: 403 }
+        )
+      );
+    }
     console.error("[API] Error importing JSON backup:", err);
     return NextResponse.json(
       { error: sanitizeErrorMessage(err instanceof Error ? err.message : String(err)) },

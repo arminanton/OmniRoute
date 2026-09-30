@@ -18,11 +18,18 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 
+import {
+  assertLocalHelper,
+  assertNotLockedCapability,
+  isRuntimePolicyError,
+} from "../../src/shared/runtimePolicy.ts";
+
 export interface ObscuraConnection {
   /** Playwright Browser connected over CDP to the shared Obscura server. */
   browser: import("playwright").Browser;
   /** The spawned `obscura serve` process, or null when an external endpoint is used. */
   child: ChildProcess | null;
+  endpoint: string;
 }
 
 let shared: { child: ChildProcess | null; endpoint: string } | null = null;
@@ -67,6 +74,7 @@ async function obscuraBinaryPath(): Promise<string | null> {
 }
 
 async function waitForCdpEndpoint(endpoint: string, timeoutMs: number): Promise<boolean> {
+  assertLocalHelper({ role: "browser-cdp", endpoint, phase: "connect" });
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -78,7 +86,8 @@ async function waitForCdpEndpoint(endpoint: string, timeoutMs: number): Promise<
       const res = await fetch(probe, { signal: controller.signal });
       clearTimeout(timer);
       if (res.ok) return true;
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       /* not up yet */
     }
     await new Promise((r) => setTimeout(r, 250));
@@ -86,20 +95,36 @@ async function waitForCdpEndpoint(endpoint: string, timeoutMs: number): Promise<
   return false;
 }
 
+/**
+ * Endpoint approval does not approve Playwright's redirecting attach transport.
+ * Locked v1 has no reviewed no-redirect CDP adapter. Standalone is unchanged.
+ */
+export async function resolveBrowserCdpEndpoint(endpoint: string): Promise<string> {
+  assertLocalHelper({ role: "browser-cdp", endpoint, phase: "connect" });
+  assertNotLockedCapability("browser-cdp-attach");
+  return endpoint;
+}
+
 /** Ensure the shared Obscura server is up; returns its endpoint or null. */
 export async function ensureObscuraServer(): Promise<{
   child: ChildProcess | null;
   endpoint: string;
 } | null> {
+  const endpoint = process.env.OBSCURA_CDP_ENDPOINT;
+  if (endpoint) assertLocalHelper({ role: "browser-cdp", endpoint, phase: "configured" });
+  if (shared) {
+    assertLocalHelper({ role: "browser-cdp", endpoint: shared.endpoint, phase: "connect" });
+    if (shared.child) assertNotLockedCapability("local-browser-launch");
+  }
   if (!isObscuraUsable()) return null;
   if (shared) return shared;
   if (starting) return starting;
   starting = (async () => {
-    const endpoint = process.env.OBSCURA_CDP_ENDPOINT;
     if (endpoint) {
       shared = { child: null, endpoint };
       return shared;
     }
+    assertNotLockedCapability("local-browser-launch");
     const bin = await obscuraBinaryPath();
     if (!bin) return null;
     const port = Number(process.env.OBSCURA_PORT) || (await findFreePort());
@@ -136,16 +161,19 @@ export async function ensureObscuraServer(): Promise<{
 /**
  * Connect Playwright to the shared Obscura server. Returns null when Obscura
  * is disabled, not installed, or the server could not start (callers fall
- * back to their previous Chromium strategy).
+ * back to their previous Chromium strategy). Locked CDP attach is unavailable;
+ * policy denials propagate rather than selecting a fallback transport.
  */
 export async function connectObscuraBrowser(): Promise<ObscuraConnection | null> {
   const server = await ensureObscuraServer();
   if (!server) return null;
   try {
+    const endpoint = await resolveBrowserCdpEndpoint(server.endpoint);
     const { chromium } = await import("playwright");
-    const browser = await chromium.connectOverCDP(server.endpoint);
-    return { browser, child: server.child };
-  } catch {
+    const browser = await chromium.connectOverCDP(endpoint);
+    return { browser, child: server.child, endpoint: server.endpoint };
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }

@@ -105,12 +105,23 @@ test("#8510 v1 image edit POST uploads Adobe Firefly reference images and dispat
     }
     if (stringUrl === ADOBE_FIREFLY_IMAGE_SUBMIT_URL) {
       submitBody = JSON.parse(String(init.body || "{}"));
-      return new Response(JSON.stringify({ links: { result: "https://poll.example/job/img1" } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          links: {
+            result:
+              "https://bks-epo8552.adobe.io/v2/jobs/result/img1?host=firefly-epo855232.adobe.io",
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }
+      );
     }
-    if (stringUrl === "https://poll.example/job/img1") {
+    if (
+      stringUrl ===
+      "https://bks-epo8552.adobe.io/v2/jobs/result/img1?host=firefly-epo855232.adobe.io"
+    ) {
       return new Response(
         JSON.stringify({
           status: "COMPLETED",

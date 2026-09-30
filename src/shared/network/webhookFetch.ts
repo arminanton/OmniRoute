@@ -6,7 +6,7 @@ import {
   type DnsLookupResult,
 } from "@/shared/network/dnsPinnedFetch";
 import {
-  isCloudMetadataHost,
+  isForbiddenNetworkHost,
   isPrivateHost,
   OutboundUrlGuardError,
   parseOutboundUrl,
@@ -14,6 +14,13 @@ import {
 } from "@/shared/network/outboundUrlGuard";
 import { arePrivateProviderUrlsAllowed } from "@/shared/network/outboundUrlGuardPolicy";
 import { isIP } from "node:net";
+import { assertPinnedTransportAllowed } from "./pinnedTransportPolicy";
+import {
+  createOutboundDeadline,
+  withOutboundAbort,
+  cancelOutboundBody,
+  boundOutboundResponse,
+} from "./guardedPinnedFetch";
 
 /**
  * #12569 — DNS-resolve-then-pin fetch for webhook outbound calls (custom webhook delivery +
@@ -35,6 +42,8 @@ export interface WebhookFetchOptions {
   fetchImpl?: typeof fetch;
   maxRedirects?: number;
   signal?: AbortSignal;
+  timeoutMs?: number;
+  maxBytes?: number;
 }
 
 export interface WebhookFetchResult {
@@ -70,25 +79,15 @@ function isPrivateDestinationAllowed(url: URL): boolean {
   return arePrivateProviderUrlsAllowed() && (isPrivateHost(hostname) || !hostname.includes("."));
 }
 
-/** Link-local / multicast addresses have no valid webhook use even with private opt-in. */
-function isForbiddenSpecialHost(hostname: string): boolean {
-  const address = hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  if (isCloudMetadataHost(address)) return true;
-  if (isIP(address) === 6) {
-    const first = Number.parseInt(address.split(":", 1)[0], 16);
-    return (first >= 0xfe80 && first <= 0xfebf) || (first >= 0xff00 && first <= 0xffff);
-  }
-  if (isIP(address) === 4) return Number(address.split(".", 1)[0]) >= 224;
-  return false;
-}
-
 /** Reject the entire DNS answer set if any A or AAAA address is invalid or disallowed. */
 function assertAddressesAllowed(addresses: DnsLookupResult[], url: URL): boolean {
   let sawPrivate = false;
   for (const { address, family } of addresses) {
     if (
+      (family !== 4 && family !== 6) ||
       isIP(address) !== family ||
-      isForbiddenSpecialHost(address) ||
+      address.includes("%") ||
+      isForbiddenNetworkHost(address) ||
       (isPrivateHost(address) && !isPrivateDestinationAllowed(url))
     ) {
       throw new OutboundUrlGuardError(PROVIDER_URL_BLOCKED_MESSAGE, {
@@ -121,17 +120,28 @@ async function resolveWithAbort(hostname: string, lookup: DnsLookup, signal?: Ab
 async function resolveHop(
   currentUrl: string | URL,
   lookup: DnsLookup,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  beforeResolve?: (url: URL) => Promise<void>
 ): Promise<{ url: URL; addresses: DnsLookupResult[]; redactBody: boolean }> {
   const url = parseOutboundUrl(currentUrl);
   // Preserve the existing literal-hostname block on every hop, not only the resolved-IP
   // block. In particular, metadata.google.internal stays forbidden even if DNS returns
   // a public address. Exact operator-approved private hosts may bypass the old opt-in.
   if (
-    isForbiddenSpecialHost(url.hostname) ||
+    isForbiddenNetworkHost(url.hostname) ||
     (isPrivateHost(url.hostname) && !isPrivateDestinationAllowed(url))
   ) {
     throw new OutboundUrlGuardError(PROVIDER_URL_BLOCKED_MESSAGE, {
+      code: "OUTBOUND_URL_GUARD_BLOCKED",
+      url: url.toString(),
+      hostname: url.hostname,
+    });
+  }
+  try {
+    await beforeResolve?.(url);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    throw new OutboundUrlGuardError("Pinned webhook transport blocked by proxy policy", {
       code: "OUTBOUND_URL_GUARD_BLOCKED",
       url: url.toString(),
       hostname: url.hostname,
@@ -236,40 +246,80 @@ export async function fetchWebhookUrl(
 ): Promise<WebhookFetchResult> {
   const lookup = options.lookup ?? defaultDnsLookup;
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
+  const maxBytes = options.maxBytes ?? 64 * 1024;
+  if (
+    !Number.isSafeInteger(maxRedirects) ||
+    maxRedirects < 0 ||
+    maxRedirects > 10 ||
+    !Number.isSafeInteger(maxBytes) ||
+    maxBytes < 1
+  )
+    throw new Error("Invalid webhook limits");
+  const deadline = createOutboundDeadline(
+    options.signal ?? init.signal ?? undefined,
+    options.timeoutMs ?? 10000
+  );
+  let handedOff = false;
   let currentUrl: string | URL = input;
   let currentInit = init;
   let redactBody = false;
 
-  for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
-    const hop = await resolveHop(currentUrl, lookup, options.signal ?? init.signal ?? undefined);
-    redactBody = redactBody || hop.redactBody;
-    const fetchImpl = pickFetchImpl(options.fetchImpl, hop.addresses);
-    const response = await fetchImpl(hop.url.toString(), {
-      ...currentInit,
-      redirect: "manual",
-      signal: options.signal ?? currentInit.signal,
-    });
+  try {
+    for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount++) {
+      const hop = await resolveHop(
+        currentUrl,
+        lookup,
+        deadline.signal,
+        options.fetchImpl
+          ? undefined
+          : (url) => withOutboundAbort(() => assertPinnedTransportAllowed(url), deadline.signal)
+      );
+      redactBody = redactBody || hop.redactBody;
+      const fetchImpl = pickFetchImpl(options.fetchImpl, hop.addresses);
+      const response = await withOutboundAbort(
+        () =>
+          fetchImpl(hop.url.toString(), {
+            ...currentInit,
+            redirect: "manual",
+            signal: deadline.signal,
+          }),
+        deadline.signal,
+        cancelOutboundBody
+      );
 
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      try {
-        const next = nextRedirectUrl(response, hop.url, redirectCount, maxRedirects);
-        currentInit = redirectRequest(currentInit, response, hop.url, next);
-        currentUrl = next;
-      } finally {
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
         try {
-          await response.body?.cancel();
-        } catch {
-          /* preserve redirect/guard failure */
+          const next = nextRedirectUrl(response, hop.url, redirectCount, maxRedirects);
+          // The payload and arbitrary custom headers may contain credentials too.
+          // Do not replay them to another origin, even after stripping known auth headers.
+          if (next.origin !== hop.url.origin) {
+            throw new OutboundUrlGuardError("Cross-origin webhook redirect blocked", {
+              code: "OUTBOUND_URL_GUARD_BLOCKED",
+              url: hop.url.toString(),
+            });
+          }
+          currentInit = redirectRequest(currentInit, response, hop.url, next);
+          currentUrl = next;
+        } finally {
+          try {
+            await response.body?.cancel();
+          } catch {
+            /* preserve redirect/guard failure */
+          }
         }
+        continue;
       }
-      continue;
+
+      const boundedResponse = boundOutboundResponse(response, maxBytes, deadline);
+      handedOff = true;
+      return { response: boundedResponse, finalUrl: hop.url.toString(), redactBody };
     }
 
-    return { response, finalUrl: hop.url.toString(), redactBody };
+    throw new OutboundUrlGuardError(`Webhook exceeded ${maxRedirects} redirect limit`, {
+      code: "OUTBOUND_URL_GUARD_BLOCKED",
+      url: String(input),
+    });
+  } finally {
+    if (!handedOff) deadline.dispose();
   }
-
-  throw new OutboundUrlGuardError(`Webhook exceeded ${maxRedirects} redirect limit`, {
-    code: "OUTBOUND_URL_GUARD_BLOCKED",
-    url: String(input),
-  });
 }

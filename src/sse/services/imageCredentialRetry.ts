@@ -1,4 +1,5 @@
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 
 import { getProviderCredentialsWithQuotaPreflight } from "./auth";
 import { checkAndRefreshToken } from "./tokenRefresh";
@@ -8,6 +9,8 @@ interface ImageGenerationResult {
   success: boolean;
   status?: number;
   error?: unknown;
+  originalError?: unknown;
+  response?: Response;
   data?: unknown;
   // #8307: opt-in signal a provider handler can set (via
   // saveImageErrorResult's `retryable` option) when a non-401 failure is
@@ -94,6 +97,7 @@ export async function executeImageWithCredentialFallback({
     try {
       currentCredentials = await checkAndRefreshToken(provider, currentCredentials);
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       log.warn("IMAGE", "Credential refresh failed; trying another image-provider account", {
         provider,
         connectionId,
@@ -110,6 +114,13 @@ export async function executeImageWithCredentialFallback({
 
     lastCredentials = currentCredentials;
     lastResult = await execute(currentCredentials);
+    if (
+      isRuntimePolicyError(lastResult.error) ||
+      isRuntimePolicyError(lastResult.originalError) ||
+      isRuntimePolicyResponse(lastResult.response)
+    ) {
+      return { credentials: lastCredentials, result: lastResult };
+    }
     const isAuthFailure = Number(lastResult.status) === 401 || lastResult.retryable === true;
     if (lastResult.success || !isAuthFailure || !connectionId) {
       return { credentials: lastCredentials, result: lastResult };

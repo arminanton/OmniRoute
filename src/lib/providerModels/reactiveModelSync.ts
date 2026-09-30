@@ -15,6 +15,7 @@
  * stays the backstop).
  */
 
+import { getRuntimePolicy, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import {
   getModelSyncInternalBaseUrl,
   syncConnectionModels,
@@ -42,6 +43,7 @@ let syncFn: SyncFn = defaultSyncFn;
  * a sync was scheduled (fire-and-forget), false when the call was a no-op.
  */
 export function maybeTriggerReactiveModelSync(provider: string, connectionId: string): boolean {
+  if (getRuntimePolicy().mode === "locked") return false;
   const providerId = provider.trim().toLowerCase();
   const connection = connectionId.trim();
   if (!REACTIVE_SYNC_PROVIDERS.has(providerId) || !connection) return false;
@@ -63,6 +65,7 @@ export function maybeTriggerReactiveModelSync(provider: string, connectionId: st
         } after upstream model-not-found`
       );
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       console.warn(
         `[ReactiveModelSync] ${providerId} (${connection.slice(0, 8)}): sync error —`,
         (err as Error).message

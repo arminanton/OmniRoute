@@ -76,19 +76,25 @@ async function withHttpServer(handler, fn) {
   }
 }
 
-async function withConnectProxyServer(fn, options = {}) {
-  const connectRequests = [];
+async function withConnectProxyServer(
+  fn,
+  options: { expectedAuthority: string; targetHost: string; targetPort: number }
+) {
+  assert.equal(options.targetHost, "127.0.0.1");
+  const connectRequests: string[] = [];
   const server = http.createServer((_req, res) => {
     res.writeHead(501);
     res.end("CONNECT only");
   });
 
   server.on("connect", (req, clientSocket, head) => {
-    connectRequests.push(String(req.url || ""));
-    const [host, portText] = String(req.url || "").split(":");
-    const targetHost = options.targetHost || host;
-    const targetPort = Number(options.targetPort || portText || 80);
-    const upstreamSocket = net.connect(targetPort, targetHost, () => {
+    const authority = String(req.url || "");
+    connectRequests.push(authority);
+    if (authority !== options.expectedAuthority) {
+      clientSocket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+      return;
+    }
+    const upstreamSocket = net.connect(options.targetPort, options.targetHost, () => {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head && head.length > 0) {
         upstreamSocket.write(head);
@@ -360,7 +366,11 @@ test("OAuth refresh prefers connection proxy over provider proxy", async () => {
             }
           );
         },
-        { targetHost: tokenServer.host, targetPort: tokenServer.port }
+        {
+          expectedAuthority: `oauth-refresh.example.test:${tokenServer.port}`,
+          targetHost: tokenServer.host,
+          targetPort: tokenServer.port,
+        }
       );
     }
   );
@@ -382,41 +392,50 @@ test("provider-specific refresh helper accepts connection proxy context", async 
       );
     },
     async (tokenServer) => {
-      await withConnectProxyServer(async (accountProxy) => {
-        const originalAnthropicTokenUrl = OAUTH_ENDPOINTS.anthropic.token;
-        OAUTH_ENDPOINTS.anthropic.token = `${tokenServer.url}/token`;
-        let connectionId: string | undefined;
-        try {
-          const connection = await providersDb.createProviderConnection({
-            provider: "claude",
-            authType: "oauth",
-            name: "Claude Connection Proxy OAuth",
-            accessToken: "old-access",
-            refreshToken: "refresh-claude-via-account-proxy",
-          });
-          connectionId = (connection as any).id;
+      const tokenAuthority = `claude-refresh.example.test:${tokenServer.port}`;
+      await withConnectProxyServer(
+        async (accountProxy) => {
+          const originalAnthropicTokenUrl = OAUTH_ENDPOINTS.anthropic.token;
+          OAUTH_ENDPOINTS.anthropic.token = `http://${tokenAuthority}/token`;
+          let connectionId: string | undefined;
+          try {
+            const connection = await providersDb.createProviderConnection({
+              provider: "claude",
+              authType: "oauth",
+              name: "Claude Connection Proxy OAuth",
+              accessToken: "old-access",
+              refreshToken: "refresh-claude-via-account-proxy",
+            });
+            connectionId = (connection as any).id;
 
-          await settingsDb.setProxyForLevel("key", connectionId, {
-            type: "http",
-            host: accountProxy.host,
-            port: accountProxy.port,
-          });
+            await settingsDb.setProxyForLevel("key", connectionId, {
+              type: "http",
+              host: accountProxy.host,
+              port: accountProxy.port,
+            });
 
-          const result = await tokenRefresh.refreshClaudeOAuthToken(
-            "refresh-claude-via-account-proxy",
-            { connectionId }
-          );
+            const result = await tokenRefresh.refreshClaudeOAuthToken(
+              "refresh-claude-via-account-proxy",
+              { connectionId }
+            );
 
-          assert.equal(result.accessToken, "claude-connection-proxy-access");
-          assert.equal(refreshRequests.length, 1);
-          assert.deepEqual(refreshRequests[0], { method: "POST", url: "/token" });
-        } finally {
-          if (connectionId) {
-            await settingsDb.deleteProxyForLevel("key", connectionId);
+            assert.deepEqual(accountProxy.connectRequests, [tokenAuthority]);
+            assert.equal(result.accessToken, "claude-connection-proxy-access");
+            assert.equal(refreshRequests.length, 1);
+            assert.deepEqual(refreshRequests[0], { method: "POST", url: "/token" });
+          } finally {
+            if (connectionId) {
+              await settingsDb.deleteProxyForLevel("key", connectionId);
+            }
+            OAUTH_ENDPOINTS.anthropic.token = originalAnthropicTokenUrl;
           }
-          OAUTH_ENDPOINTS.anthropic.token = originalAnthropicTokenUrl;
+        },
+        {
+          expectedAuthority: tokenAuthority,
+          targetHost: tokenServer.host,
+          targetPort: tokenServer.port,
         }
-      });
+      );
     }
   );
 });

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as nodeModule from "node:module";
 import { getTlsClientTimeoutConfig } from "@/shared/utils/runtimeTimeouts";
+import { assertNoApplicationProxy, isRuntimePolicyError } from "@/shared/runtimePolicy";
 
 const runtimeRequire = nodeModule.createRequire(import.meta.url);
 
@@ -169,6 +170,7 @@ class WreqTransportPool {
   private getRuntime(): Promise<WreqTransportRuntime> {
     if (!this.runtimePromise) {
       const pending = this.runtimeLoader().catch((error: unknown) => {
+        if (isRuntimePolicyError(error)) throw error;
         if (this.runtimePromise === pending) this.runtimePromise = null;
         throw new WreqRuntimeUnavailableError(
           error instanceof Error && error.message
@@ -272,6 +274,17 @@ class WreqTransportPool {
           invalidated: false,
         };
         const request = (async () => {
+          // Check the effective selection before loading native code or reusing
+          // a pooled transport. No public flag or transport name proves directness.
+          assertNoApplicationProxy(
+            options.proxyUrl == null || options.proxyUrl === ""
+              ? getProxyFromEnv()
+                ? "configured"
+                : "none"
+              : typeof options.proxyUrl === "string"
+                ? "configured"
+                : "opaque"
+          );
           const runtime = await this.getRuntime();
           if (lease.released) throw new Error("wreq-js request lease was released before dispatch");
 
@@ -325,7 +338,7 @@ class WreqTransportPool {
             method: options.method,
             headers: options.headers,
             body: options.body,
-            redirect: "follow",
+            redirect: options.redirect ?? "follow",
             timeout: options.timeoutMilliseconds,
             signal: options.signal,
             transport,
@@ -457,6 +470,7 @@ type SafeWreqError = Error & {
 };
 
 function sanitizeWreqError(error: unknown, message: string): SafeWreqError {
+  if (isRuntimePolicyError(error)) return error;
   const sanitized = new Error(message) as SafeWreqError;
   if (!error || typeof error !== "object") return sanitized;
   if ("code" in error && typeof error.code === "string" && /^[A-Z0-9_:-]{1,64}$/.test(error.code)) {
@@ -495,6 +509,7 @@ function toNativeResponse(
     onFinalize();
   };
   const safeBodyError = (error: unknown): unknown => {
+    if (isRuntimePolicyError(error)) return error;
     if (signal?.aborted) {
       return signal.reason ?? new DOMException("The operation was aborted", "AbortError");
     }
@@ -901,7 +916,7 @@ export class TlsClient {
         this.sessions.set(key, session);
         this.sessionLastUsed.set(key, ++this.accessSequence);
         this.evictSessionsIfNeeded(key);
-        console.log("[TlsClient] Session created (Chrome 124 TLS fingerprint)");
+        console.log("[TlsClient] Session created (TLS fingerprint)");
         return session;
       })
       .finally(() => {
@@ -917,6 +932,15 @@ export class TlsClient {
   /** Fetch with Chrome 124 TLS fingerprint and an account-scoped persistent cookie jar. */
   async fetch(url: string, options: TlsFetchOptions = {}): Promise<Response> {
     const resolvedProxy = this.resolveProxy(options.proxy);
+    assertNoApplicationProxy(
+      resolvedProxy == null || resolvedProxy === ""
+        ? getProxyFromEnv()
+          ? "configured"
+          : "none"
+        : typeof resolvedProxy === "string"
+          ? "configured"
+          : "opaque"
+    );
     const key = this.getSessionKey(resolvedProxy, options.sessionScope);
     if (!this.checkCircuit(key)) {
       const state = this.circuits.get(key);
@@ -967,6 +991,11 @@ export class TlsClient {
       this.recordSuccess(key);
       return response;
     } catch (err) {
+      if (isRuntimePolicyError(err)) {
+        releaseSession();
+        this.releaseHalfOpen(key);
+        throw err; // A local denial is not a provider/session health failure.
+      }
       const isCallerAbort = options.signal?.aborted === true;
       const sessionHadCookies = !isCallerAbort && this.hasSessionCookies(session, url);
       releaseSession();

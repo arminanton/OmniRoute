@@ -1,3 +1,9 @@
+import {
+  assertNoApplicationProxy,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+  RuntimePolicyError,
+} from "@/shared/runtimePolicy";
 // Proxy scope pool rotation & alive-pool resolution (#6365).
 //
 // Extracted from ../proxies.ts (#7046 file-size follow-up): this module holds the
@@ -232,12 +238,14 @@ function resolveScopePoolInternal(
     options.scopeIdFilter ?? null,
     options.matchAnyScopeId === true
   );
+  assertNoApplicationProxy(rows.length > 0 ? "configured" : "none");
   if (rows.length === 0) return null;
   const picked = pickFromCandidates(db, scope, options.rotationScopeId, rows);
   return toRegistryProxyResolution(picked, scope, levelId);
 }
 
 export async function resolveProxyForConnectionFromRegistry(connectionId: string) {
+  assertNoApplicationProxy("none");
   try {
     const db = getDbInstance();
 
@@ -267,6 +275,8 @@ export async function resolveProxyForConnectionFromRegistry(connectionId: string
 
     return null;
   } catch (error: unknown) {
+    if (isRuntimePolicyError(error)) throw error;
+    if (getRuntimePolicy().mode === "locked") throw new RuntimePolicyError("proxy-forbidden");
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes("no such table")) return null;
     throw error;
@@ -274,6 +284,7 @@ export async function resolveProxyForConnectionFromRegistry(connectionId: string
 }
 
 export async function resolveProxyForScopeFromRegistry(scope: string, scopeId?: string | null) {
+  assertNoApplicationProxy("none");
   try {
     const db = getDbInstance();
     const normalizedScope = normalizeScope(scope);
@@ -293,6 +304,8 @@ export async function resolveProxyForScopeFromRegistry(scope: string, scopeId?: 
       scopeIdFilter: normalizedScopeId,
     });
   } catch (error: unknown) {
+    if (isRuntimePolicyError(error)) throw error;
+    if (getRuntimePolicy().mode === "locked") throw new RuntimePolicyError("proxy-forbidden");
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes("no such table")) return null;
     throw error;

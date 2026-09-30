@@ -1,79 +1,75 @@
-/**
- * #6700 — Dokploy (and some other self-hosted) Docker builds ended up with a
- * broken/mismatched better-sqlite3 native binding under npm 11. The `builder`
- * stage installed dependencies with `npm ci --ignore-scripts` (deliberate — it
- * closes the supply-chain surface where a transitive dep's install script runs
- * arbitrary code) and then re-enabled the native build for the one package that
- * needs it via `npm rebuild better-sqlite3`. `npm rebuild` re-runs the package's
- * own install script indirectly, which depends on npm's script-allowlist
- * machinery correctly re-enabling that single package's script — some
- * self-hosted build environments hit a broken build via that indirection.
- *
- * Fix: invoke `node-gyp rebuild` directly inside `node_modules/better-sqlite3`,
- * bypassing npm's script-running layer entirely, so the compile step is
- * deterministic regardless of npm version or ignore-scripts allowlist behavior.
- *
- * This guards the mechanism (the direct node-gyp invocation replaces the
- * `npm rebuild` indirection, and a smoke-load still follows it); the end-to-end
- * "the Dokploy build now produces a working binding" proof is a successful
- * `docker build` in that environment (tracked as a live-validation follow-up —
- * this sandbox has no accessible Docker daemon to run the real build).
+/** #6700: a scripts-denied install must still ship a working SQLite binding.
+ * SQLite13 now packages GNU N-API prebuilts; its old gyp step is stamp-only.
+ * Replace that step with strict offline load/query gates, never broad hooks.
  */
-import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { test } from "node:test";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const dockerfile = fs.readFileSync(path.join(repoRoot, "Dockerfile"), "utf-8");
-const lines = dockerfile.split("\n");
-
-/** Line indices that bound the `builder` stage (from its FROM to the next FROM). */
-function builderStageRange(): { start: number; end: number } {
-  const start = lines.findIndex((l) => /^FROM\s+\S+\s+AS\s+builder\b/i.test(l.trim()));
-  assert.ok(start >= 0, "Dockerfile must declare a `builder` stage");
-  const after = lines.slice(start + 1).findIndex((l) => /^FROM\s+/i.test(l.trim()));
-  const end = after === -1 ? lines.length : start + 1 + after;
-  return { start, end };
+const docker = fs.readFileSync(new URL("../../Dockerfile", import.meta.url), "utf8");
+const logical = docker
+  .split(/\r?\n/)
+  .filter((line) => !line.trim().startsWith("#"))
+  .join("\n")
+  .replace(/\\\r?\n\s*/g, " ")
+  .split(/\r?\n/)
+  .map((line) => line.trim())
+  .filter(Boolean);
+function stage(name: string) {
+  const start = logical.findIndex((line) => new RegExp(`^FROM \\S+ AS ${name}$`, "i").test(line));
+  assert.ok(start >= 0, `missing ${name} stage`);
+  const next = logical.findIndex((line, index) => index > start && /^FROM /i.test(line));
+  return logical.slice(start, next < 0 ? undefined : next);
 }
+const lock = JSON.parse(
+  fs.readFileSync(new URL("../../package-lock.json", import.meta.url), "utf8")
+);
 
-test("#6700 builder stage compiles better-sqlite3 via a direct node-gyp rebuild, not `npm rebuild`", () => {
-  const { start, end } = builderStageRange();
-  const stage = lines.slice(start, end).join("\n");
-
-  assert.match(
-    stage,
-    /cd node_modules\/better-sqlite3\s*(\\\s*)?&&\s*(npx\s+(--yes\s+)?node-gyp|node \/usr\/local\/lib\/node_modules\/npm\/node_modules\/node-gyp\/bin\/node-gyp\.js) rebuild/,
-    "builder stage must compile better-sqlite3 by invoking node-gyp directly inside its " +
-      "package directory (bypasses npm's rebuild-script indirection)"
+test("#6700 locked SQLite13 and wreq3.2 require an offline native load gate after scripts-denied ci", () => {
+  const deps = stage("dependencies");
+  const ci = deps.findIndex((line) => /^RUN .*npm ci\b/.test(line));
+  const gate = deps.indexOf(
+    "RUN --network=none node scripts/build/verify-docker-native-deps.mjs --project-root=/app --node-root=/usr/local"
   );
+  assert.ok(ci >= 0 && gate > ci);
+  for (const flag of ["--ignore-scripts", "--include=optional", "--legacy-peer-deps"])
+    assert.ok(deps[ci].includes(flag));
   assert.doesNotMatch(
-    stage,
-    /npm rebuild better-sqlite3/,
-    "builder stage must not fall back to `npm rebuild better-sqlite3` — that indirection " +
-      "is the #6700 Dokploy build failure mode"
+    deps.join("\n"),
+    /npm rebuild|npx|node-gyp\.js.*rebuild|--ignore-scripts=false|--omit=optional/
   );
+  assert.ok(
+    deps.some((line) => /^COPY scripts\/build\/verify-docker-native-deps\.mjs /.test(line))
+  );
+  for (const [name, version] of [
+    ["better-sqlite3", "13.0.3"],
+    ["wreq-js", "3.2.0"],
+  ]) {
+    const entry = lock.packages[`node_modules/${name}`];
+    assert.equal(entry.version, version);
+    assert.match(entry.integrity, /^sha512-[A-Za-z0-9+/]{86}==$/);
+  }
 });
 
-test("#6700 the better-sqlite3 rebuild happens after `npm ci --ignore-scripts` and before the smoke-load", () => {
-  const { start, end } = builderStageRange();
-  // Ignore comment lines (`#…`) so prose that merely mentions these commands
-  // (e.g. explaining *why* in a comment above the RUN step) is not mistaken
-  // for the real instruction when checking ordering.
-  const stage = lines.slice(start, end).filter((l) => !l.trim().startsWith("#"));
-
-  const ignoreScriptsIdx = stage.findIndex((l) => /npm ci\b.*--ignore-scripts/.test(l));
-  const rebuildIdx = stage.findIndex((l) => /node-gyp(\.js)? rebuild/.test(l));
-  const smokeLoadIdx = stage.findIndex((l) =>
-    /node -e ".*require\('better-sqlite3'\)\(':memory:'\)\.close\(\)"/.test(l)
+test("#6700 final SQLite package and UID1000 memory query are independent of optional hook policy", () => {
+  const runner = stage("runner-base");
+  const copy = runner.indexOf(
+    "COPY --from=builder --chown=node:node /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3"
   );
-
-  assert.ok(ignoreScriptsIdx >= 0, "builder stage must run `npm ci --ignore-scripts`");
-  assert.ok(rebuildIdx >= 0, "builder stage must run the better-sqlite3 node-gyp rebuild");
-  assert.ok(smokeLoadIdx >= 0, "builder stage must smoke-load better-sqlite3 after the rebuild");
-  assert.ok(
-    ignoreScriptsIdx <= rebuildIdx && rebuildIdx <= smokeLoadIdx,
-    "order must be: npm ci --ignore-scripts -> node-gyp rebuild -> smoke-load"
+  const user = runner.indexOf("USER node");
+  const smoke = runner.findIndex(
+    (line) =>
+      /^RUN --network=none node -e /.test(line) &&
+      line.includes("require('better-sqlite3')(':memory:')")
+  );
+  assert.ok(copy >= 0 && copy < user && user < smoke);
+  assert.match(runner[smoke], /better-sqlite3\/package\.json.*13\.0\.3/);
+  assert.match(runner[smoke], /SELECT 1 AS ok/);
+  assert.match(runner[smoke], /db\.close\(\)/);
+  assert.doesNotMatch(runner[smoke], /\|\||process\.exit\(0\)/);
+  const builder = stage("builder").join("\n");
+  assert.match(
+    builder,
+    /cp -a \/app\/node_modules\/better-sqlite3 \/app\/\.build\/next\/standalone\/node_modules\/better-sqlite3.*--require-tproxy --standalone-root=/
   );
 });

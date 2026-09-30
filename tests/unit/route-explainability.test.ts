@@ -64,7 +64,10 @@ test("route explainability builds a direct-route explanation from call logs", as
   assert.equal(explanation.modelUsed, "openai/gpt-4o-mini");
   assert.equal(explanation.selectedTarget.status, 200);
   assert.equal(explanation.decisionReplay.runtime.exact, true);
-  assert.equal(explanation.decisionReplay.runtime.selectedCallLogId, "direct-route-1");
+  assert.equal(
+    explanation.decisionReplay.runtime.selectedCallLogId,
+    (await callLogs.getCallLogById("direct-route-1"))!.id
+  );
   assert.equal(explanation.decisionReplay.recompute, null);
   assert.equal(explanation.resilience?.provider.circuitBreakerState, "CLOSED");
   assert.equal(
@@ -176,7 +179,10 @@ test("route explainability surfaces nearby combo fallback evidence", async () =>
     false
   );
   assert.equal(explanation.fallbacksTriggered.length, 1);
-  assert.equal(explanation.fallbacksTriggered[0].id, "combo-failed-step");
+  assert.equal(
+    explanation.fallbacksTriggered[0].id,
+    (await callLogs.getCallLogById("combo-failed-step"))!.id
+  );
   assert.equal(explanation.targetStats.successRate, 100);
 });
 
@@ -317,7 +323,7 @@ test("route explainability API returns a routing decision document", async () =>
   const body = (await response.json()) as RouteExplainabilityResponse;
 
   assert.equal(response.status, 200);
-  assert.equal(body.requestId, "api-route-1");
+  assert.equal(body.requestId, (await callLogs.getCallLogById("api-route-1"))!.id);
   assert.equal(body.decision.providerSelected, "openai");
   assert.equal(Array.isArray(body.decision.factors), true);
 });

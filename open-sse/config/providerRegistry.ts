@@ -326,3 +326,49 @@ export function getClaudeCodeDefaultModels(): {
     haiku: find(/haiku/i),
   };
 }
+
+/** Never send a custom node's credentials to a native provider fallback. */
+export function requireCompatibleBaseUrl(
+  provider: string | null | undefined,
+  providerSpecificData: { baseUrl?: unknown } | null | undefined
+): string {
+  void provider;
+  const baseUrl = providerSpecificData?.baseUrl;
+  if (typeof baseUrl === "string" && /^https?:\/\//i.test(baseUrl.trim())) {
+    try {
+      const value = baseUrl.trim();
+      const hasControl = [...value].some(
+        (char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127
+      );
+      const parsed = new URL(value);
+      if (
+        (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+        parsed.hostname &&
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.hash &&
+        !hasControl &&
+        !/[\\\s]/.test(value)
+      ) {
+        return baseUrl.trim();
+      }
+    } catch {
+      /* Report only a fixed error below, never the URL or credentials. */
+    }
+  }
+  throw new Error("Compatible provider node has no valid baseUrl; check its stored configuration");
+}
+
+/** A custom path or normalizer must not change the credential destination. */
+export function guardCompatibleUrl(baseUrl: string, candidate: string): string {
+  try {
+    const base = new URL(baseUrl);
+    const target = new URL(candidate);
+    if (target.origin === base.origin && !target.username && !target.password && !target.hash) {
+      return candidate;
+    }
+  } catch {
+    /* Use a fixed error without echoing operator credentials or URL. */
+  }
+  throw new Error("Compatible provider node has an invalid endpoint path");
+}

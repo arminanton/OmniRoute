@@ -4,6 +4,11 @@ import { promisify } from "util";
 import fs from "fs/promises";
 import fsSync from "fs";
 import path from "path";
+import {
+  assertNotLockedCapability,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+} from "@/shared/runtimePolicy";
 import proxyFetch from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { resolveDataDir } from "@/lib/dataPaths";
 import { getRuntimePorts } from "@/lib/runtime/ports";
@@ -647,7 +652,7 @@ async function resolvePathCommand(command: string) {
   }
 }
 
-async function resolveBinary(): Promise<BinaryResolution> {
+async function resolveBinary(allowPathLookup = true): Promise<BinaryResolution> {
   const envPath = String(process.env.CLOUDFLARED_BIN || "").trim();
   if (envPath && fsSync.existsSync(envPath)) {
     return { binaryPath: envPath, source: "env", managed: false };
@@ -658,7 +663,7 @@ async function resolveBinary(): Promise<BinaryResolution> {
     return { binaryPath: managedPath, source: "managed", managed: true };
   }
 
-  const pathBinary = await resolvePathCommand("cloudflared");
+  const pathBinary = allowPathLookup ? await resolvePathCommand("cloudflared") : null;
   if (pathBinary) {
     return { binaryPath: pathBinary, source: "path", managed: false };
   }
@@ -819,8 +824,13 @@ async function stopExistingTunnel() {
 }
 
 export async function getCloudflaredTunnelStatus(): Promise<CloudflaredTunnelStatus> {
+  return readCloudflaredTunnelStatus(getRuntimePolicy().mode === "locked");
+}
+
+// Cleanup calls this directly: policy admission must never prevent stopping a tunnel.
+async function readCloudflaredTunnelStatus(readOnly = false): Promise<CloudflaredTunnelStatus> {
   const state = await readStateFile();
-  const resolved = await resolveBinary();
+  const resolved = await resolveBinary(!readOnly);
   const pidFromState =
     tunnelPid || (isStateOwnedByCurrentProcess(state) ? state.pid || (await readPidFile()) : null);
   const running = isProcessAlive(pidFromState);
@@ -830,7 +840,7 @@ export async function getCloudflaredTunnelStatus(): Promise<CloudflaredTunnelSta
     ? buildStoppedState(state, !!resolved.binaryPath)
     : state;
 
-  if (needsColdStartReset) {
+  if (needsColdStartReset && !readOnly) {
     await writeStateFile(effectiveState);
   }
 
@@ -848,12 +858,12 @@ export async function getCloudflaredTunnelStatus(): Promise<CloudflaredTunnelSta
             : "stopped"
           : "not_installed";
 
-  if (!running && state.pid) {
+  if (!running && state.pid && !readOnly) {
     await clearPidFile();
   }
 
   return {
-    supported: !!(getCloudflaredAssetSpec() || resolved.binaryPath),
+    supported: !readOnly && !!(getCloudflaredAssetSpec() || resolved.binaryPath),
     installed: !!resolved.binaryPath,
     managedInstall: resolved.managed,
     installSource: resolved.source,
@@ -863,13 +873,14 @@ export async function getCloudflaredTunnelStatus(): Promise<CloudflaredTunnelSta
     publicUrl,
     apiUrl: publicUrl ? getTunnelApiUrl(publicUrl) : null,
     targetUrl: effectiveState.targetUrl || getLocalTargetUrl(),
-    phase,
+    phase: readOnly ? "unsupported" : phase,
     lastError: running ? null : effectiveState.lastError || null,
     logPath: getLogFilePath(),
   };
 }
 
 export async function startCloudflaredTunnel(): Promise<CloudflaredTunnelStatus> {
+  assertNotLockedCapability("cloudflared-tunnel");
   const current = await getCloudflaredTunnelStatus();
   if (current.running) return current;
   if (startPromise) return startPromise;
@@ -1042,6 +1053,7 @@ export async function startCloudflaredTunnel(): Promise<CloudflaredTunnelStatus>
   try {
     return await startPromise;
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     const currentState = await readStateFile();
     const message = isSpecificCloudflaredError(currentState.lastError)
       ? currentState.lastError
@@ -1070,5 +1082,5 @@ export async function stopCloudflaredTunnel() {
   tunnelProcess = null;
   tunnelPid = null;
   await clearPidFile();
-  return getCloudflaredTunnelStatus();
+  return readCloudflaredTunnelStatus();
 }

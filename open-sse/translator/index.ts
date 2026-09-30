@@ -36,6 +36,7 @@ import {
   recordReplay,
   requiresReasoningReplay,
 } from "../services/reasoningCache.ts";
+import type { ReasoningCacheContext } from "../services/reasoningCacheContext.ts";
 import {
   normalizeResponsesReasoningEffort,
   RESPONSES_STORE_MARKER,
@@ -210,6 +211,7 @@ type OpenAIReplayOptions = {
   provider: string;
   model: string;
   reasoningCacheScope?: string | null;
+  reasoningCacheContext: ReasoningCacheContext | null;
   skipReasoningReplay?: boolean;
 };
 
@@ -265,7 +267,7 @@ function replayOpenAIReasoningMessage(
       : ""
     : buildAssistantMessageCacheKey(options.reasoningCacheScope, messages, messageIndex);
   if (cacheKey && !options.skipReasoningReplay) {
-    const cached = lookupReasoning(cacheKey);
+    const cached = lookupReasoning(cacheKey, options.reasoningCacheContext);
     if (cached) {
       message.reasoning_content = cached;
       recordReplay();
@@ -321,7 +323,9 @@ export function translateRequest(
     signatureNamespace?: string | null;
     preCompressionBody?: Record<string, unknown> | null;
     reasoningCacheScope?: string | null;
-    /** Managed leases must not read another owner's global tool-ID reasoning. */
+    /** Trusted request identity. Missing context disables all cache replay. */
+    reasoningCacheContext?: ReasoningCacheContext | null;
+    /** Managed leases must not read cached reasoning, even with a trusted context. */
     skipReasoningReplay?: boolean;
     /** UA-detected GitHub Copilot client. Forwarded to translators via the
      *  transient `_copilotClient` credential flag (see openai-responses → openai). */
@@ -329,6 +333,7 @@ export function translateRequest(
   }
 ) {
   let result = body;
+  const reasoningCacheContext = options?.reasoningCacheContext ?? null;
   const use9CharId = options?.normalizeToolCallId === true;
   const preserveDeveloperRole = options?.preserveDeveloperRole;
   const connectionCacheOverride = resolveConnectionCacheOverride(
@@ -430,6 +435,7 @@ export function translateRequest(
       provider: normalizedProvider,
       model: normalizedModel,
       reasoningCacheScope: options?.reasoningCacheScope,
+      reasoningCacheContext,
       skipReasoningReplay: options?.skipReasoningReplay,
     };
     for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
@@ -574,6 +580,7 @@ export function translateRequest(
     const preserveCache = isClaudePassthrough || options?.preserveCacheControl === true;
     result = prepareClaudeRequest(result, provider, preserveCache, model, {
       fallbackToHeuristicWhenNoMarkers: true,
+      reasoningCacheContext,
       skipReasoningReplay: options?.skipReasoningReplay,
     });
   }
@@ -715,7 +722,7 @@ export function translateRequest(
         // Client reasoning wins above. Otherwise try authentic replay before
         // retaining Kimi Code's empty protocol marker as the final fallback.
         if (firstToolUseId && !options?.skipReasoningReplay) {
-          const cached = lookupReasoning(firstToolUseId);
+          const cached = lookupReasoning(firstToolUseId, reasoningCacheContext);
           if (cached) {
             if (thinkingBlock) {
               thinkingBlock.type = "thinking";
@@ -758,6 +765,7 @@ export function translateRequest(
         provider: normalizedProvider,
         model: normalizedModel,
         reasoningCacheScope: options?.reasoningCacheScope,
+        reasoningCacheContext,
         skipReasoningReplay: options?.skipReasoningReplay,
       });
     }

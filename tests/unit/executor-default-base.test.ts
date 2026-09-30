@@ -603,6 +603,7 @@ test("DefaultExecutor.execute uses CC-compatible connection defaults to append 1
         apiKey: "cc-key",
         providerSpecificData: {
           ccSessionId: "session-1",
+          baseUrl: "https://cc.example.test/v1",
         },
       },
       clientHeaders: {
@@ -623,6 +624,7 @@ test("DefaultExecutor.execute uses CC-compatible connection defaults to append 1
         apiKey: "cc-key",
         providerSpecificData: {
           ccSessionId: "session-1",
+          baseUrl: "https://cc.example.test/v1",
           requestDefaults: { context1m: true, redactThinking: true },
         },
       },
@@ -658,6 +660,7 @@ test("DefaultExecutor.execute uses CC-compatible connection defaults to append 1
         apiKey: "cc-key",
         providerSpecificData: {
           ccSessionId: "session-1",
+          baseUrl: "https://cc.example.test/v1",
           requestDefaults: { context1m: true },
         },
       },
@@ -736,6 +739,7 @@ test("DefaultExecutor.execute reports the exact serialized provider request befo
           apiKey: "cc-key",
           providerSpecificData: {
             ccSessionId: "session-1",
+            baseUrl: "https://cc.example.test/v1",
           },
         },
       })
@@ -1312,7 +1316,7 @@ test("DefaultExecutor.refreshCredentials swallows refresh errors and logs them",
 
   try {
     const result = await executor.refreshCredentials(
-      { refreshToken: "refresh-me" },
+      { refreshToken: "refresh-error-fixture" },
       { error: (tag, message) => messages.push({ tag, message }) }
     );
     assert.equal(result, null);

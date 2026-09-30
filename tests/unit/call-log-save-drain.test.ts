@@ -44,7 +44,7 @@ test("call-log drain waits for artifact metadata and summary commit", async () =
       `SELECT detail_state, artifact_relpath, artifact_size_bytes, artifact_sha256
        FROM call_logs WHERE id = ?`
     )
-    .get(id) as {
+    .get((await callLogs.getCallLogById(id))!.id) as {
     detail_state: string;
     artifact_relpath: string | null;
     artifact_size_bytes: number | null;
@@ -78,7 +78,7 @@ test("forced close settles tracked saves before rejecting late saves", async () 
       `SELECT detail_state, artifact_relpath, artifact_size_bytes, artifact_sha256
        FROM call_logs WHERE id = ?`
     )
-    .get(pendingId) as {
+    .get((await callLogs.getCallLogById(pendingId))!.id) as {
     detail_state: string;
     artifact_relpath: string | null;
     artifact_size_bytes: number | null;
@@ -101,4 +101,5 @@ test("forced close settles tracked saves before rejecting late saves", async () 
     .prepare("SELECT COUNT(*) AS count FROM call_logs WHERE id = ?")
     .get("drain-late-save") as { count: number };
   assert.equal(lateCount.count, 0);
+  assert.equal(await callLogs.getCallLogById("drain-late-save"), null);
 });

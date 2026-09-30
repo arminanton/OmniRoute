@@ -1,3 +1,4 @@
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import type { ChatCoreErrorResult, ProviderLegUsage } from "@/lib/skills/toolLoopTypes.ts";
 import type { getProviderCredentials } from "@/sse/services/auth.ts";
 import type { updateFromHeaders, updateFromResponseBody } from "../../services/rateLimitManager.ts";
@@ -233,6 +234,23 @@ async function toOutcome(
   provider: string
 ): Promise<ProviderExecutionOutcome> {
   const status = attempt.response.status;
+  if (isRuntimePolicyResponse(attempt.response)) {
+    return {
+      kind: "error",
+      result: {
+        ...createErrorResult(
+          status,
+          "Request denied by runtime policy.",
+          null,
+          "OMNI_RUNTIME_POLICY_DENIED"
+        ),
+        response: attempt.response,
+      },
+      providerUsage: null,
+      model,
+      connectionId,
+    };
+  }
   if (status >= 200 && status < 300) {
     return {
       kind: "response",
@@ -362,7 +380,7 @@ export async function runProviderExecutionPipeline(
     if (after) return after;
 
     const status = attempt.response.status;
-    if (status >= 200 && status < 300) {
+    if (isRuntimePolicyResponse(attempt.response) || (status >= 200 && status < 300)) {
       return toOutcome(attempt, wire.currentModel, currentConnectionId(connection), target.provider);
     }
 
@@ -399,7 +417,10 @@ export async function runProviderExecutionPipeline(
         .getProviderCredentials("codex", null, null, wire.currentModel, {
           excludeConnectionIds: [...excludedIds],
         })
-        .catch(() => null);
+        .catch((error) => {
+          if (isRuntimePolicyError(error)) throw error;
+          return null;
+        });
       if (nextCreds && !nextCreds.allRateLimited && nextCreds.connectionId) {
         await state.onAuditAccountRotation?.({
           action: "codex.account_rotation",
@@ -437,7 +458,10 @@ export async function runProviderExecutionPipeline(
           .getProviderCredentials("antigravity", null, null, wire.currentModel, {
             excludeConnectionIds: [...excludedIds],
           })
-          .catch(() => null);
+          .catch((error) => {
+            if (isRuntimePolicyError(error)) throw error;
+            return null;
+          });
         if (nextCreds && !nextCreds.allRateLimited && nextCreds.connectionId) {
           connection.replaceCredentials(nextCreds as Record<string, unknown>);
           antigravityByopRotationPending = true;
@@ -502,7 +526,12 @@ export async function runProviderExecutionPipeline(
           };
         },
       });
-      if (signatureRecovery.attempted && signatureRecovery.succeeded && signatureRecovery.execution) {
+      if (
+        signatureRecovery.attempted &&
+        signatureRecovery.execution &&
+        (isRuntimePolicyResponse(signatureRecovery.execution.response) ||
+          signatureRecovery.succeeded)
+      ) {
         lastAttempt = {
           response: signatureRecovery.execution.response,
           url: signatureRecovery.execution.url ?? attempt.url,

@@ -1,4 +1,4 @@
-// Allow large audio/video file uploads — 5min for processing large files (up to 2GB)
+// Allow up to five minutes for providers; multipart uploads retain the shared audio limit.
 export const maxDuration = 300;
 import { handleAudioTranscription } from "@omniroute/open-sse/handlers/audioTranscription.ts";
 import {
@@ -28,6 +28,32 @@ import { getComboByName, getCombos } from "@/lib/db/combos";
 import { getDatabaseSettings } from "@/lib/db/databaseSettings";
 import { handleComboChat } from "@omniroute/open-sse/services/combo.ts";
 import { log } from "@omniroute/open-sse/utils/logger.ts";
+import { enforceClientApiRouteAuth } from "@/shared/utils/clientApiRouteAuth";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
+import { runtimePolicyErrorResponse } from "@omniroute/open-sse/utils/error.ts";
+import { runMaxaiConnectionTransport } from "@omniroute/open-sse/services/maxaiTransport.ts";
+import {
+  MAX_BODY_BYTES_AUDIO, readRequestBodyWithLimit, RequestBodyTooLargeError,
+} from "@/shared/middleware/bodySizeGuard";
+
+/** No generic proxy wrapper and no missing-account direct path. */
+async function runMaxaiTranscriptionTransport(
+  connectionId: string,
+  transcribe: () => Promise<Response>,
+  signal?: AbortSignal
+): Promise<Response> {
+  if (!connectionId?.trim()) return errorResponse(400, "MaxAI transcription requires a connection");
+  try {
+    signal?.throwIfAborted();
+    return await runMaxaiConnectionTransport(connectionId, async () => {
+      signal?.throwIfAborted();
+      return transcribe();
+    });
+  } catch (error) {
+    if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
+    return errorResponse(signal?.aborted ? 499 : 503, "MaxAI transcription unavailable");
+  }
+}
 
 /**
  * Copy a multipart body, swapping only the `model` field. Combo fan-out needs one
@@ -63,8 +89,12 @@ export async function OPTIONS() {
 async function transcribeWithModel(
   formData: FormData,
   modelStr: string,
-  startTime: number
+  startTime: number,
+  request: Request
 ): Promise<Response> {
+  // Combo targets must pass the same model restrictions as direct requests.
+  const targetPolicy = await enforceApiKeyPolicy(request, modelStr);
+  if (targetPolicy.rejection) return targetPolicy.rejection;
   // Provider nodes eligible for transcription: this route's own audio type plus
   // general chat/responses gateways. Remote hosts are opt-in (default OFF).
   const dynamicProviders = await resolveDynamicAudioProviders(
@@ -98,7 +128,7 @@ async function transcribeWithModel(
     // Prefix match wins (`deepgram/nova-3` → native Deepgram). If that
     // provider has no credentials, retry gateways that list the same nested
     // model id (e.g. OpenRouter's `deepgram/nova-3`).
-    if (!credentials) {
+    if (!credentials && provider !== "maxai") {
       const candidates = audioModelAliasCandidates(modelStr, provider, resolvedModel);
       const alternate = findAlternateAudioProvider(
         AUDIO_TRANSCRIPTION_PROVIDERS,
@@ -132,12 +162,16 @@ async function transcribeWithModel(
     }
   }
 
-  let response = await handleAudioTranscription({
+  const transcribe = () => handleAudioTranscription({
     formData,
     credentials,
     resolvedProvider: providerConfig,
     resolvedModel,
+    signal: request.signal,
   });
+  let response = provider === "maxai"
+    ? await runMaxaiTranscriptionTransport(credentials?.connectionId, transcribe, request.signal)
+    : await transcribe();
   if (response?.ok) {
     await clearRecoveredProviderState(credentials);
     // No text body / playback duration available from the multipart upload, so
@@ -157,11 +191,19 @@ async function transcribeWithModel(
  * POST /v1/audio/transcriptions — transcribe audio files
  * OpenAI Whisper API compatible (multipart/form-data)
  */
-export async function POST(request) {
-  let formData;
+export async function POST(request: Request) {
+  const authRejection = await enforceClientApiRouteAuth(request);
+  if (authRejection) return authRejection;
+  let formData: FormData;
   try {
-    formData = await request.formData();
-  } catch {
+    const bytes = await readRequestBodyWithLimit(request, MAX_BODY_BYTES_AUDIO);
+    request.signal.throwIfAborted();
+    formData = await new Response(bytes, {
+      headers: { "Content-Type": request.headers.get("content-type") || "" },
+    }).formData();
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) return errorResponse(413, "Audio upload exceeds the audio limit");
+    if (request.signal.aborted) return errorResponse(499, "Transcription request aborted");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid multipart form data");
   }
 
@@ -197,13 +239,13 @@ export async function POST(request) {
           body: { model: modelStr } as any,
           combo: combo as any,
           handleSingleModel: async (_reqBody: any, targetModelStr: string) =>
-            transcribeWithModel(withModel(formData, targetModelStr), targetModelStr, startTime),
+            transcribeWithModel(withModel(formData, targetModelStr), targetModelStr, startTime, request),
           isModelAvailable: undefined,
           log,
           settings,
           allCombos: allCombos as any,
           relayOptions: undefined,
-          signal: undefined,
+          signal: request.signal,
         } as any);
       }
     } catch (err) {
@@ -211,5 +253,5 @@ export async function POST(request) {
     }
   }
 
-  return transcribeWithModel(formData, modelStr, startTime);
+  return transcribeWithModel(formData, modelStr, startTime, request);
 }

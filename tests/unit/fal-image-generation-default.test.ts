@@ -1,22 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import dns from "node:dns";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "omniroute-fal-images-"));
 
-const originalDnsLookup = dns.promises.lookup;
-(dns.promises as { lookup: unknown }).lookup = (async (
-  _hostname: string,
-  options?: { all?: boolean }
-) => {
-  const record = { address: "203.0.113.1", family: 4 };
-  return options?.all ? [record] : record;
-}) as typeof dns.promises.lookup;
-process.on("exit", () => {
-  (dns.promises as { lookup: unknown }).lookup = originalDnsLookup;
+// Real pinned download transport, fake DNS/socket responses only.
+import { installMockedPinnedMedia } from "../helpers/mockedPinnedMedia.ts";
+test.beforeEach((t) => {
+  assert.ok("mock" in t, "pinned media setup requires a TestContext");
+  installMockedPinnedMedia(t);
 });
 
 const { handleImageGeneration } = await import("../../open-sse/handlers/imageGeneration.ts");

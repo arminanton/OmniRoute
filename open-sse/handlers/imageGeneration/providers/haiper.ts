@@ -3,8 +3,23 @@
 // Ref: see open-sse/handlers/imageGeneration.ts top-of-file comment for split rationale
 
 import { saveCallLog } from "@/lib/usageDb";
+import {
+  fetchRemoteImage,
+  RemoteMediaFetchError,
+  createRemoteMediaFailureResult,
+} from "@/shared/network/remoteImageFetch";
 import { sleep } from "../../../utils/sleep.ts";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
+
+interface HaiperGenerationParams {
+  model: string;
+  provider: string;
+  providerConfig: { baseUrl: string; statusUrl?: string };
+  body: Record<string, unknown>;
+  credentials: { apiKey?: string };
+  log?: { info: (tag: string, msg: string) => void; error: (tag: string, msg: string) => void };
+  signal?: AbortSignal;
+}
 
 export async function handleHaiperImageGeneration({
   model,
@@ -13,7 +28,8 @@ export async function handleHaiperImageGeneration({
   body,
   credentials,
   log,
-}) {
+  signal,
+}: HaiperGenerationParams) {
   const startTime = Date.now();
   const token = credentials?.apiKey || "";
   const prompt = typeof body.prompt === "string" ? body.prompt : String(body.prompt ?? "");
@@ -21,8 +37,10 @@ export async function handleHaiperImageGeneration({
     log.info("IMAGE", `${provider}/${model} (haiper) | prompt: "${prompt.slice(0, 60)}..."`);
   }
   try {
+    signal?.throwIfAborted();
     const res = await fetch(providerConfig.baseUrl, {
       method: "POST",
+      signal,
       headers: { "Content-Type": "application/json", HAIPER_KEY: token },
       body: JSON.stringify({ prompt, aspect_ratio: body.aspect_ratio || "16:9" }),
     });
@@ -44,21 +62,18 @@ export async function handleHaiperImageGeneration({
     while (Date.now() < deadline) {
       await sleep(5000);
       const statusRes = await fetch(`${providerConfig.statusUrl}/${job_id}`, {
+        signal,
         headers: { HAIPER_KEY: token },
       });
       const status = await statusRes.json();
       if (status.status === "completed" || status.status === "succeeded") {
         const imgUrl = status.creation_url || status.output?.image_url;
         if (imgUrl) {
-          const imgRes = await fetch(imgUrl);
-          if (!imgRes.ok) {
-            return {
-              success: false,
-              status: imgRes.status,
-              error: `Failed to download image: ${imgRes.status}`,
-            };
-          }
-          const buf = await imgRes.arrayBuffer();
+          const { buffer: buf } = await fetchRemoteImage(imgUrl, {
+            guard: "public-only",
+            pinDns: true,
+            signal,
+          });
           saveCallLog({
             method: "POST",
             path: "/v1/images/generations",
@@ -100,6 +115,9 @@ export async function handleHaiperImageGeneration({
     }).catch(() => {});
     return { success: false, status: 504, error: "Haiper image generation timed out" };
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (log) log.error("IMAGE", `${provider} haiper error: ${err.message}`);
     saveCallLog({
       method: "POST",
@@ -117,4 +135,3 @@ export async function handleHaiperImageGeneration({
     };
   }
 }
-

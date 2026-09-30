@@ -1,4 +1,5 @@
 /** Upstream proxy config persistence for upstream_proxy_config table. */
+import { assertNotLockedCapability } from "@/shared/runtimePolicy";
 import { getDbInstance } from "./core";
 import {
   isCloudMetadataHost,
@@ -148,8 +149,11 @@ export async function upsertUpstreamProxyConfig(data: {
   family?: string;
   fallbackBackend?: FallbackBackend;
 }) {
-  const db = getDbInstance();
   const mode = data.mode ?? "native";
+  if (data.enabled !== false && mode !== "native") {
+    assertNotLockedCapability("embedded-service-forwarding");
+  }
+  const db = getDbInstance();
   const cliproxyapiModelMapping =
     data.cliproxyapiModelMapping !== undefined
       ? JSON.stringify(data.cliproxyapiModelMapping)
@@ -191,12 +195,18 @@ export async function updateUpstreamProxyConfig(
   providerId: string,
   updates: Record<string, unknown>
 ) {
-  const db = getDbInstance();
   const current = await getUpstreamProxyConfig(providerId);
   if (!current) {
     throw new Error(`Provider ${providerId} not found`);
   }
 
+  const enabled = updates.enabled !== undefined ? updates.enabled === true : current.enabled;
+  const mode = updates.mode !== undefined ? updates.mode : current.mode;
+  if (enabled && mode !== "native") {
+    assertNotLockedCapability("embedded-service-forwarding");
+  }
+
+  const db = getDbInstance();
   const sets: string[] = ["updated_at = datetime('now')"];
   const params: unknown[] = [];
 
@@ -266,6 +276,9 @@ export async function getFallbackChainForProvider(providerId: string) {
   const chain: { executor: "native" | "cliproxyapi" | "dario"; priority: number }[] = [];
 
   if (config.enabled) {
+    if (config.mode !== "native") {
+      assertNotLockedCapability("embedded-service-forwarding");
+    }
     chain.push({ executor: "native", priority: config.nativePriority });
     if (config.mode === "cliproxyapi") {
       chain.push({ executor: "cliproxyapi", priority: config.cliproxyapiPriority });

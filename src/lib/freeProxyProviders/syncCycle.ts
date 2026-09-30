@@ -1,3 +1,4 @@
+import { assertNoApplicationProxy, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { getEnabledProviders } from "@/lib/freeProxyProviders";
 import {
   recordFreeProxySync,
@@ -25,6 +26,7 @@ export interface FreeProxySyncCycleResult {
 export async function runFreeProxySyncCycle(
   providers?: FreeProxyProvider[]
 ): Promise<FreeProxySyncCycleResult> {
+  assertNoApplicationProxy("configured");
   const resolvedProviders = providers ?? getEnabledProviders();
   const results: Record<string, unknown> = {};
 
@@ -33,6 +35,7 @@ export async function runFreeProxySyncCycle(
       results[provider.id] = await provider.sync();
       await clearFreeProxySyncErrors(provider.id);
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       // #5595: isolate per-source failures so one provider throwing doesn't
       // abort the whole sync — the other sources still populate the pool and
       // the failure is surfaced in `results` instead of a blanket 500.

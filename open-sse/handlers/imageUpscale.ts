@@ -34,11 +34,13 @@ export async function handleImageUpscale({
   credentials,
   log,
   fetchImpl,
+  signal,
 }: {
   body: Record<string, unknown>;
   credentials: UpscaleCredentials | null;
   log?: UpscaleLogger;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<UpscaleHandlerResult> {
   const requestedModel = typeof body.model === "string" ? body.model : "";
   const { provider, model } = parseUpscaleModel(requestedModel);
@@ -78,6 +80,7 @@ export async function handleImageUpscale({
         body,
         credentials: resolvedCredentials,
         log,
+        signal,
         ...(fetchImpl ? { fetchImpl } : {}),
       });
     case "stability-upscale":
@@ -88,6 +91,7 @@ export async function handleImageUpscale({
         body,
         credentials: resolvedCredentials,
         log,
+        signal,
         ...(fetchImpl ? { fetchImpl } : {}),
       });
     case "topaz-upscale":
@@ -98,6 +102,7 @@ export async function handleImageUpscale({
         body,
         credentials: resolvedCredentials,
         log,
+        signal,
         ...(fetchImpl ? { fetchImpl } : {}),
       });
     default:

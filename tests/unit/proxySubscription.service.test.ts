@@ -198,6 +198,12 @@ test("global→rule switch re-evaluates binding: drops global, binds the selecte
 
   // Start in GLOBAL mode and bind the pool to the global scope.
   insertSubscription(db, "s5", "global", { enabled: true });
+  // The binding fixture stubs fetch, not DNS. A literal loopback URL keeps the
+  // subscription's real SSRF preflight offline before it reaches that stub.
+  db.prepare("UPDATE proxy_subscriptions SET url = ? WHERE id = ?").run(
+    "http://127.0.0.1/subscription-fixture",
+    "s5"
+  );
   await sub.applySubscription("s5");
 
   const before = await proxies.resolveProxyForConnectionFromRegistry("connAny");
@@ -209,13 +215,25 @@ test("global→rule switch re-evaluates binding: drops global, binds the selecte
   // pool to the selected provider scope. Stub fetch so syncSubscription's
   // re-fetch returns a body that keeps node5 around.
   const realFetch = globalThis.fetch;
-  globalThis.fetch = (async () => ({
-    ok: true,
-    text: async () =>
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    return new Response(
       "proxies:\n  - name: node5\n    type: http\n    server: 10.0.0.5\n    port: 8080\n",
-  })) as unknown as typeof fetch;
+      { status: 200 }
+    );
+  };
   try {
-    await sub.updateSubscription("s5", { mode: "rule", ruleProviders: ["provA"] });
+    const updated = await sub.updateSubscription("s5", {
+      mode: "rule",
+      ruleProviders: ["provA"],
+    });
+    assert.equal(
+      updated?.status,
+      "ok",
+      `subscription re-sync must succeed before binding checks: ${updated?.error ?? "no error"}`
+    );
+    assert.equal(fetchCalls, 1, "rule-mode re-fetch should use the offline fetch fixture once");
   } finally {
     globalThis.fetch = realFetch;
   }

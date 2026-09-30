@@ -59,7 +59,7 @@ test("fetchRemoteImage rejects when any of multiple resolved IPs is private (mul
         },
         guard: "public-only",
         lookup: async () => [
-          { address: "203.0.113.5", family: 4 },
+          { address: "93.184.216.34", family: 4 },
           { address: "10.0.0.1", family: 4 },
         ],
       }),
@@ -76,7 +76,7 @@ test("fetchRemoteImage allows a public hostname that resolves to a public IP", a
         headers: { "content-type": "image/png" },
       }),
     guard: "public-only",
-    lookup: async () => [{ address: "203.0.113.5", family: 4 }],
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
   });
   assert.equal(result.buffer.toString("base64"), "AQID");
 });
@@ -85,7 +85,7 @@ test("fetchRemoteImage skips DNS resolution for IP-literal hosts (already string
   // IP literals are validated by parseAndValidatePublicUrl directly; the
   // resolver injection should not be invoked.
   let lookupCalled = false;
-  const result = await fetchRemoteImage("https://203.0.113.5/image.png", {
+  const result = await fetchRemoteImage("https://93.184.216.34/image.png", {
     fetchImpl: async () =>
       new Response(new Uint8Array([1]), {
         status: 200,
@@ -94,7 +94,7 @@ test("fetchRemoteImage skips DNS resolution for IP-literal hosts (already string
     guard: "public-only",
     lookup: async () => {
       lookupCalled = true;
-      return [{ address: "203.0.113.5", family: 4 }];
+      return [{ address: "93.184.216.34", family: 4 }];
     },
   });
   assert.equal(result.buffer.toString("base64"), "AQ==");

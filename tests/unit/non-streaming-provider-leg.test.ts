@@ -1,16 +1,29 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-
-import {
-  runNonStreamingProviderLeg,
-  type ChatCoreExecutorResult,
-  type ProviderLegInput,
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type {
+  ChatCoreExecutorResult,
+  ProviderLegInput,
 } from "../../open-sse/handlers/chatCore/nonStreamingProviderLeg.ts";
-import {
-  buildAssistantMessageCacheKey,
-  clearReasoningCacheAll,
-  lookupReasoning,
-} from "../../open-sse/services/reasoningCache.ts";
+
+const dataDir = mkdtempSync(join(tmpdir(), "omniroute-nonstream-leg-"));
+process.env.DATA_DIR = dataDir;
+process.env.API_KEY_SECRET = "nonstream-leg-test-server-secret";
+const { runNonStreamingProviderLeg } =
+  await import("../../open-sse/handlers/chatCore/nonStreamingProviderLeg.ts");
+const { buildAssistantMessageCacheKey, clearReasoningCacheAll, lookupReasoning } =
+  await import("../../open-sse/services/reasoningCache.ts");
+const { createLocalReasoningCacheContext } =
+  await import("../../open-sse/services/reasoningCacheContext.ts");
+const { resetDbInstance } = await import("../../src/lib/db/core.ts");
+const reasoningCacheContext = createLocalReasoningCacheContext();
+test.after(() => {
+  clearReasoningCacheAll();
+  resetDbInstance();
+  rmSync(dataDir, { recursive: true, force: true });
+});
 
 /* -- helpers --------------------------------------------------------------- */
 
@@ -66,6 +79,7 @@ function baseInput(overrides: Partial<ProviderLegInput> = {}): ProviderLegInput 
     provider: "openai",
     model: "gpt-4o",
     connectionId: "conn-test",
+    reasoningCacheContext,
     ...overrides,
   };
 }
@@ -860,11 +874,7 @@ test("dynamic connection: ID changes between initial and retry -> 409 on retry p
     assert.equal(result.result.status, 409);
     assert.equal(result.result.errorCode, "LEASE_CONNECTION_MISMATCH");
   }
-  assert.equal(
-    executorCallCount,
-    1,
-    "retry executor must not run after the lease already moved"
-  );
+  assert.equal(executorCallCount, 1, "retry executor must not run after the lease already moved");
 });
 
 /* -- fallback with real parsed response ----------------------------------- */
@@ -1070,7 +1080,11 @@ test("empty-content fallback with invalid SSE body is 502, not 200 empty", async
   });
   const result = await runNonStreamingProviderLeg(input);
   assert.ok(executorCallCount >= 2, "should attempt fallback");
-  assert.equal(result.kind, "error", "invalid SSE on fallback must not finishOk the empty original");
+  assert.equal(
+    result.kind,
+    "error",
+    "invalid SSE on fallback must not finishOk the empty original"
+  );
   if (result.kind !== "error") return;
   assert.equal(result.result.status, 502);
   assert.equal(result.result.errorCode, "invalid_sse_payload");
@@ -1106,7 +1120,7 @@ test("finishOk caches reasoning against translatedBody.messages, not Responses i
     historyMessages.length
   );
   assert.equal(
-    lookupReasoning(cacheKey),
+    lookupReasoning(cacheKey, reasoningCacheContext),
     "let me think...",
     "finishOk must pass historyMessages from translatedBody.messages"
   );

@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 
+import { assertLocalHelper, isRuntimePolicyError } from "../../../src/shared/runtimePolicy.ts";
+
 /**
  * Resolved connection config for the Codex app-server WS transport.
  *
@@ -45,12 +47,12 @@ function firstString(...values: unknown[]): string | null {
 function firstStringWithSource(
   psdValue: unknown,
   envValue: unknown
-): { value: string; source: ConfigSource } | null {
+): { value: string; literal: string; source: ConfigSource } | null {
   if (typeof psdValue === "string" && psdValue.trim().length > 0) {
-    return { value: psdValue.trim(), source: "psd" };
+    return { value: psdValue.trim(), literal: psdValue, source: "psd" };
   }
   if (typeof envValue === "string" && envValue.trim().length > 0) {
-    return { value: envValue.trim(), source: "env" };
+    return { value: envValue.trim(), literal: envValue, source: "env" };
   }
   return null;
 }
@@ -86,7 +88,8 @@ function readTokenFile(tokenFile: string): string | null {
   try {
     const contents = readFileSync(tokenFile, "utf8").trim();
     return contents.length > 0 ? contents : null;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }
@@ -156,7 +159,14 @@ export function isLocalAppServerHost(hostname: string): boolean {
  * psd-sourced token may go anywhere: whoever wrote the psd already knows it.
  */
 export function resolveAppServerConfig(psd: ProviderSpecificData): CodexAppServerConfig | null {
-  const urlRes = firstStringWithSource(psd?.codexAppServerUrl, process.env.OMNIROUTE_CODEX_APPSERVER_WS);
+  const urlRes = firstStringWithSource(
+    psd?.codexAppServerUrl,
+    process.env.OMNIROUTE_CODEX_APPSERVER_WS
+  );
+  if (urlRes) {
+    // Before scheme/token/SSRF checks can turn an unapproved helper into a fallback.
+    assertLocalHelper({ role: "codex-app-server", endpoint: urlRes.literal, phase: "configured" });
+  }
   if (!urlRes || !isWebSocketUrl(urlRes.value)) return null;
 
   const tokenRes = resolveTokenWithSource(psd);
@@ -180,7 +190,13 @@ export function resolveAppServerConfig(psd: ProviderSpecificData): CodexAppServe
     firstString(psd?.codexAppServerSandbox, process.env.OMNIROUTE_CODEX_APPSERVER_SANDBOX) ??
     undefined;
 
-  return { url, token, cwd, ...(approvalPolicy ? { approvalPolicy } : {}), ...(sandbox ? { sandbox } : {}) };
+  return {
+    url,
+    token,
+    cwd,
+    ...(approvalPolicy ? { approvalPolicy } : {}),
+    ...(sandbox ? { sandbox } : {}),
+  };
 }
 
 /**

@@ -75,7 +75,10 @@ test("F4.3: anthropic-compatible-cc-* relay → clear_tool_uses lands in the bod
       model: "claude-opus-4-8",
       body: { ...baseBody },
       stream: false,
-      credentials: { apiKey: "relay-key", baseUrl: "https://relay.example/v1" },
+      credentials: {
+        apiKey: "relay-key",
+        providerSpecificData: { baseUrl: "https://relay.example/v1" },
+      },
       contextEditing: { enabled: true },
     });
   } finally {
@@ -95,7 +98,10 @@ test("F4.3: generic anthropic-compatible-* (non-cc) relay → NO context_managem
       model: "claude-opus-4-8",
       body: { ...baseBody },
       stream: false,
-      credentials: { apiKey: "relay-key", baseUrl: "https://relay.example/v1" },
+      credentials: {
+        apiKey: "relay-key",
+        providerSpecificData: { baseUrl: "https://relay.example/v1" },
+      },
       contextEditing: { enabled: true },
     });
   } finally {
@@ -120,7 +126,10 @@ test("F4.2: upstream 400 rejecting context_management → strips it and retries 
       model: "claude-opus-4-8",
       body: { ...baseBody },
       stream: false,
-      credentials: { apiKey: "relay-key", baseUrl: "https://relay.example/v1" },
+      credentials: {
+        apiKey: "relay-key",
+        providerSpecificData: { baseUrl: "https://relay.example/v1" },
+      },
       contextEditing: { enabled: true },
     });
   } finally {
@@ -145,7 +154,10 @@ test("F4.2: an UNRELATED 400 does NOT strip context_management or retry", async 
       model: "claude-opus-4-8",
       body: { ...baseBody },
       stream: false,
-      credentials: { apiKey: "relay-key", baseUrl: "https://relay.example/v1" },
+      credentials: {
+        apiKey: "relay-key",
+        providerSpecificData: { baseUrl: "https://relay.example/v1" },
+      },
       contextEditing: { enabled: true },
     });
   } finally {

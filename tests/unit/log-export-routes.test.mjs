@@ -44,6 +44,10 @@ test("GET /api/logs/export returns explicit detailed payloads from artifact stor
     responseBody: { id: "resp-export", ok: true },
   });
 
+  const savedLog = await callLogs.getCallLogById("export-route-log");
+  assert.ok(savedLog, "the supplied alias must resolve to the persisted log");
+  assert.notEqual(savedLog.id, "export-route-log", "the physical ID must not reuse the alias");
+
   const response = await exportRoute.GET(
     new Request("http://localhost/api/logs/export?hours=24&type=call-logs")
   );
@@ -51,7 +55,7 @@ test("GET /api/logs/export returns explicit detailed payloads from artifact stor
 
   assert.equal(response.status, 200);
   assert.equal(body.count, 1);
-  assert.equal(body.logs[0].id, "export-route-log");
+  assert.equal(body.logs[0].id, savedLog.id);
   assert.deepEqual(body.logs[0].requestBody, {
     messages: [{ role: "user", content: "hello export" }],
   });

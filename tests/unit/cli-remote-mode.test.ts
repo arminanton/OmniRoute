@@ -16,13 +16,16 @@ let origDataDir: string | undefined;
 let origBaseUrl: string | undefined;
 let origApiKey: string | undefined;
 let origContext: string | undefined;
+let origKeychainDisabled: string | undefined;
 
 function writeConfig(cfg: unknown): void {
-  mkdirSync(tmpDir, { recursive: true });
-  writeFileSync(join(tmpDir, "config.json"), JSON.stringify(cfg, null, 2));
+  mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(tmpDir, "config.json"), JSON.stringify(cfg, null, 2), { mode: 0o600 });
 }
 
 test.before(() => {
+  origKeychainDisabled = process.env.OMNIROUTE_CONTEXT_KEYCHAIN_DISABLED;
+  process.env.OMNIROUTE_CONTEXT_KEYCHAIN_DISABLED = "1";
   tmpDir = mkdtempSync(join(tmpdir(), "omniroute-remote-test-"));
   origDataDir = process.env.DATA_DIR;
   origBaseUrl = process.env.OMNIROUTE_BASE_URL;
@@ -35,6 +38,8 @@ test.before(() => {
 });
 
 test.after(() => {
+  if (origKeychainDisabled === undefined) delete process.env.OMNIROUTE_CONTEXT_KEYCHAIN_DISABLED;
+  else process.env.OMNIROUTE_CONTEXT_KEYCHAIN_DISABLED = origKeychainDisabled;
   if (origDataDir === undefined) delete process.env.DATA_DIR;
   else process.env.DATA_DIR = origDataDir;
   if (origBaseUrl === undefined) delete process.env.OMNIROUTE_BASE_URL;

@@ -11,6 +11,7 @@
 
 import { spawn, ChildProcess } from "child_process";
 import { EventEmitter } from "events";
+import { assertNotLockedCapability } from "@/shared/runtimePolicy";
 import { hasRegisteredAgent } from "./registry";
 
 export interface AcpSession {
@@ -48,6 +49,7 @@ export class AcpManager extends EventEmitter {
     args: string[] = [],
     env: Record<string, string> = {}
   ): AcpSession {
+    assertNotLockedCapability("acp-execution");
     const normalizedAgentId = String(agentId || "")
       .trim()
       .toLowerCase();
@@ -106,6 +108,7 @@ export class AcpManager extends EventEmitter {
    * Send input to a running session's stdin.
    */
   sendInput(sessionId: string, input: string): boolean {
+    assertNotLockedCapability("acp-execution");
     const session = this.sessions.get(sessionId);
     if (!session?.alive || !session.process.stdin?.writable) return false;
 
@@ -118,6 +121,7 @@ export class AcpManager extends EventEmitter {
    * This is a higher-level method that handles the send/receive cycle.
    */
   async sendPrompt(sessionId: string, prompt: string, timeoutMs: number = 120000): Promise<string> {
+    assertNotLockedCapability("acp-execution");
     const session = this.sessions.get(sessionId);
     if (!session?.alive) throw new Error(`Session ${sessionId} is not alive`);
 

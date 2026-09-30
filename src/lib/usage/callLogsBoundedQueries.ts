@@ -1,4 +1,5 @@
 import { getDbInstance } from "../db/core";
+import { findReservedCallLogArtifactPaths } from "../db/callLogIdentities";
 
 // #5618 — node:sqlite's StatementSync.all() materializes the ENTIRE result set as
 // JS objects at once. On a large storage.sqlite (~170 MB+) an unbounded
@@ -61,14 +62,22 @@ export function findReferencedArtifacts(relativePaths: string[]): Set<string> {
   if (relativePaths.length === 0) return new Set();
 
   const db = getDbInstance();
-  const placeholders = relativePaths.map(() => "?").join(", ");
-  const rows = db
-    .prepare(
-      `SELECT DISTINCT artifact_relpath
-       FROM call_logs
-       WHERE artifact_relpath IN (${placeholders})
-       LIMIT ?`
-    )
-    .all(...relativePaths, relativePaths.length) as Array<{ artifact_relpath: string }>;
-  return new Set(rows.map((row) => row.artifact_relpath));
+  // Final rows and unpublished reservations must share a read snapshot. A
+  // concurrent publisher moves a file from one set to the other atomically;
+  // separate snapshots could miss it in both and delete a live artifact.
+  return db.transaction(() => {
+    const placeholders = relativePaths.map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT artifact_relpath
+         FROM call_logs
+         WHERE artifact_relpath IN (${placeholders})
+         LIMIT ?`
+      )
+      .all(...relativePaths, relativePaths.length) as Array<{ artifact_relpath: string }>;
+    return new Set([
+      ...rows.map((row) => row.artifact_relpath),
+      ...findReservedCallLogArtifactPaths(relativePaths),
+    ]);
+  })();
 }

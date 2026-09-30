@@ -27,7 +27,13 @@ import {
 import { persistCreditBalance, getAllPersistedCreditBalances } from "@/lib/db/creditBalance";
 import { setConnectionRateLimitUntil } from "@/lib/db/providers";
 import { markAntigravityModelQuotaExhausted } from "../services/antigravityFamilyCooldown.ts";
-import { getMitmAlias } from "@/lib/db/models";
+import { getMitmAlias, getSyncedAvailableModelsForConnection } from "@/lib/db/models";
+import {
+  splitAntigravityClaudeEffort,
+  isSelectedAntigravityClaudeModel,
+  getAntigravityClaudeThinkingLevel,
+} from "../config/antigravityClaudeEffort.ts";
+import { buildErrorBody } from "../utils/error.ts";
 import {
   MAX_ANTIGRAVITY_OUTPUT_TOKENS,
   resolveAntigravityOutputCap,
@@ -587,6 +593,23 @@ export class AntigravityExecutor extends BaseExecutor {
     return scrubProxyAndFingerprintHeaders(raw);
   }
 
+  protected async supportsAdaptiveClaudeForConnection(
+    model: string,
+    connectionId?: string
+  ): Promise<boolean> {
+    if (!connectionId || !isSelectedAntigravityClaudeModel(model)) return false;
+    const baseModel = splitAntigravityClaudeEffort(model).baseModel;
+    // agy and antigravity share this executor. Connection IDs keep the lookup
+    // account-scoped; never union another account's model capabilities.
+    for (const provider of ["agy", "antigravity"]) {
+      const models = await getSyncedAvailableModelsForConnection(provider, connectionId);
+      if (models.some((entry) => entry.id === baseModel && entry.supportsAdaptiveThinking === true)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async transformRequest(
     model: string,
     body: unknown,
@@ -715,7 +738,22 @@ export class AntigravityExecutor extends BaseExecutor {
       return resp as unknown as never;
     }
 
-    const upstreamModel = await cleanModelName(model, modelIdOverride);
+    const requestedClaude = splitAntigravityClaudeEffort(model);
+    const thinkingLevel = getAntigravityClaudeThinkingLevel(model, bodyRecord);
+    const adaptiveClaude = (requestedClaude.effort !== null || thinkingLevel !== null) &&
+      await this.supportsAdaptiveClaudeForConnection(model, credentials.connectionId);
+    if (requestedClaude.effort && (!adaptiveClaude || !thinkingLevel)) {
+      return new Response(JSON.stringify(buildErrorBody(400,
+        "Claude effort alias requires authenticated adaptive-thinking capability and a supported low/medium/high effort."
+      )), { status: 400, headers: { "Content-Type": "application/json" } });
+    }
+    const dispatchModel = adaptiveClaude ? requestedClaude.baseModel : model;
+    const upstreamModel = await cleanModelName(dispatchModel, modelIdOverride);
+    if (requestedClaude.effort && upstreamModel !== requestedClaude.baseModel) {
+      return new Response(JSON.stringify(buildErrorBody(400,
+        "Claude effort alias cannot be applied to a different upstream model."
+      )), { status: 400, headers: { "Content-Type": "application/json" } });
+    }
     const isClaude = upstreamModel.toLowerCase().includes("claude");
     // #10104: newer Gemini endpoints reject a request ending on a `model` turn with
     // HTTP 400 "Requests ending with a model turn are not supported" — the same
@@ -730,6 +768,13 @@ export class AntigravityExecutor extends BaseExecutor {
       ? stripCloudCodeThinkingConfig(baseBody)
       : baseBody;
     const normalizedRequest = asRecord(normalizedBody.request);
+    if (adaptiveClaude && thinkingLevel && normalizedRequest &&
+        upstreamModel === requestedClaude.baseModel) {
+      normalizedRequest.generationConfig = {
+        ...asRecord(normalizedRequest.generationConfig),
+        thinkingConfig: { thinkingLevel },
+      };
+    }
     const rawContents = Array.isArray(normalizedRequest?.contents)
       ? normalizedRequest.contents
       : [];

@@ -1,26 +1,45 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { getRegistryEntry } from "../../open-sse/config/providerRegistry.ts";
-import { supportsXHighEffort } from "../../open-sse/config/providerModels.ts";
-import { sanitizeReasoningEffortForProvider } from "../../open-sse/executors/base.ts";
-import { getExecutor, hasSpecializedExecutor } from "../../open-sse/executors/index.ts";
-import { MoonshotExecutor } from "../../open-sse/executors/moonshot.ts";
-import {
-  sanitizeOpenAIResponse,
-  sanitizeResponsesApiResponse,
-  sanitizeStreamingChunk,
-} from "../../open-sse/handlers/responseSanitizer.ts";
-import { normalizeMoonshotRequest } from "../../open-sse/executors/moonshot.ts";
-import {
+const previousDataDir = process.env.DATA_DIR;
+const previousApiKeySecret = process.env.API_KEY_SECRET;
+const dataDir = mkdtempSync(join(tmpdir(), "omniroute-translator-replay-"));
+process.env.DATA_DIR = dataDir;
+process.env.API_KEY_SECRET = "fabricated-translator-replay-test-secret";
+
+const { getRegistryEntry } = await import("../../open-sse/config/providerRegistry.ts");
+const { supportsXHighEffort } = await import("../../open-sse/config/providerModels.ts");
+const { sanitizeReasoningEffortForProvider } = await import("../../open-sse/executors/base.ts");
+const { getExecutor, hasSpecializedExecutor } = await import("../../open-sse/executors/index.ts");
+const { MoonshotExecutor, normalizeMoonshotRequest } =
+  await import("../../open-sse/executors/moonshot.ts");
+const { sanitizeOpenAIResponse, sanitizeResponsesApiResponse, sanitizeStreamingChunk } =
+  await import("../../open-sse/handlers/responseSanitizer.ts");
+const {
   cacheReasoning,
   cacheReasoningByKey,
   buildAssistantMessageCacheKey,
   deleteReasoningCacheEntry,
   requiresReasoningReplay,
-} from "../../open-sse/services/reasoningCache.ts";
-import { translateRequest } from "../../open-sse/translator/index.ts";
-import { getResolvedModelCapabilities } from "../../src/lib/modelCapabilities.ts";
+} = await import("../../open-sse/services/reasoningCache.ts");
+const { translateRequest } = await import("../../open-sse/translator/index.ts");
+const { getResolvedModelCapabilities } = await import("../../src/lib/modelCapabilities.ts");
+const { createLocalReasoningCacheContext } =
+  await import("../../open-sse/services/reasoningCacheContext.ts");
+const reasoningCacheContext = createLocalReasoningCacheContext();
+const { resetDbInstance } = await import("../../src/lib/db/core.ts");
+
+test.after(() => {
+  resetDbInstance();
+  rmSync(dataDir, { recursive: true, force: true });
+  if (previousDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = previousDataDir;
+  if (previousApiKeySecret === undefined) delete process.env.API_KEY_SECRET;
+  else process.env.API_KEY_SECRET = previousApiKeySecret;
+});
 
 const EXPECTED_MODELS = ["kimi-k3", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6"];
 
@@ -271,7 +290,13 @@ test("Moonshot keeps empty partial assistant prefixes without replaying reasonin
     },
   ];
   const cacheKey = buildAssistantMessageCacheKey(scope, messages, 0);
-  cacheReasoningByKey(cacheKey, "moonshot", "kimi-k3", "unrelated prior reasoning");
+  cacheReasoningByKey(
+    cacheKey,
+    "moonshot",
+    "kimi-k3",
+    "unrelated prior reasoning",
+    reasoningCacheContext
+  );
 
   try {
     const output = translateRequest(
@@ -283,7 +308,7 @@ test("Moonshot keeps empty partial assistant prefixes without replaying reasonin
       null,
       "moonshot",
       null,
-      { reasoningCacheScope: scope }
+      { reasoningCacheScope: scope, reasoningCacheContext }
     ) as { messages: Array<Record<string, unknown>> };
 
     assert.equal(output.messages.length, 1);
@@ -292,7 +317,7 @@ test("Moonshot keeps empty partial assistant prefixes without replaying reasonin
     assert.equal(output.messages[0].partial, true);
     assert.equal(Object.hasOwn(output.messages[0], "reasoning_content"), false);
   } finally {
-    deleteReasoningCacheEntry(cacheKey);
+    deleteReasoningCacheEntry(cacheKey, reasoningCacheContext);
   }
 });
 
@@ -325,7 +350,13 @@ test("Moonshot K3 and K2.7 replay only authentic reasoning content", () => {
     assert.equal(Object.hasOwn(withoutCache.messages[0], "reasoning_content"), false);
 
     const cachedId = `call_cached_${model.replace(/[^a-z0-9]/gi, "_")}`;
-    cacheReasoning(cachedId, "moonshot", model, `real reasoning for ${model}`);
+    cacheReasoning(
+      cachedId,
+      "moonshot",
+      model,
+      `real reasoning for ${model}`,
+      reasoningCacheContext
+    );
     try {
       const withCache = translateRequest(
         "openai",
@@ -348,11 +379,13 @@ test("Moonshot K3 and K2.7 replay only authentic reasoning content", () => {
         },
         false,
         null,
-        "moonshot"
+        "moonshot",
+        null,
+        { reasoningCacheContext }
       ) as { messages: Array<Record<string, unknown>> };
       assert.equal(withCache.messages[0].reasoning_content, `real reasoning for ${model}`);
     } finally {
-      deleteReasoningCacheEntry(cachedId);
+      deleteReasoningCacheEntry(cachedId, reasoningCacheContext);
     }
   }
 });

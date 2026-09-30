@@ -14,6 +14,7 @@ import { basename, join } from "node:path";
 
 import { unzipSync } from "fflate";
 
+import { assertNotLockedCapability } from "@/shared/runtimePolicy";
 import { atomicWriteFile, getConfigDir } from "../../vendor/codex-chatgpt-web/config.ts";
 
 export const CHATGPT_WEB_CODEX_TUNNEL_VERSION = "0.0.13";
@@ -139,6 +140,7 @@ function processIsAlive(pid: number): boolean {
 let ownsSupervisorLease = false;
 
 export function acquireTunnelSupervisorLease(): void {
+  assertNotLockedCapability("chatgpt-web-codex-tunnel");
   if (ownsSupervisorLease) return;
   const paths = tunnelClientPaths();
   mkdirSync(paths.root, { recursive: true, mode: 0o700 });
@@ -260,6 +262,7 @@ function restoreTunnelInstallation(
 }
 
 export async function ensureTunnelClientInstalled(): Promise<string> {
+  assertNotLockedCapability("chatgpt-web-codex-tunnel");
   const paths = tunnelClientPaths();
   const existing = inspectExistingTunnelInstallation(paths);
   if (existing?.action === "reuse") return paths.binary;
@@ -324,6 +327,7 @@ function validateRuntimeConfig(config: TunnelRuntimeConfig) {
 }
 
 export async function startTunnelRuntime(config: TunnelRuntimeConfig): Promise<ChildProcess> {
+  assertNotLockedCapability("chatgpt-web-codex-tunnel");
   validateRuntimeConfig(config);
   acquireTunnelSupervisorLease();
   const binary = await ensureTunnelClientInstalled();
@@ -426,6 +430,7 @@ export function buildTunnelRuntimeStopArgs(alias: string): string[] {
 export async function getTunnelRuntimeStatus(
   config: Pick<TunnelRuntimeConfig, "alias" | "profile">
 ): Promise<TunnelRuntimeStatus> {
+  assertNotLockedCapability("chatgpt-web-codex-tunnel");
   const binary = await ensureTunnelClientInstalled();
   const alias = config.alias ?? "omniroute-chatgpt-web-codex";
   const result = spawnSync(binary, buildTunnelRuntimeStatusArgs(alias), {
@@ -455,6 +460,7 @@ export function ensureTunnelRuntimeReady(
   config: TunnelRuntimeConfig,
   timeoutMs = 30_000
 ): Promise<void> {
+  assertNotLockedCapability("chatgpt-web-codex-tunnel");
   const identity = runtimeIdentity(config);
   const existing = connectedRuntimes.get(identity);
   if (existing) return existing;

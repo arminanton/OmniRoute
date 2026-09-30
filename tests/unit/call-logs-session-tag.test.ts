@@ -32,11 +32,12 @@ test("saveCallLog persists sessionTag when explicitly supplied", async () => {
     tokens: { in: 10, out: 5 },
     sessionTag: "sess-abc",
   });
+  const physicalId = (await callLogs.getCallLogById(testId))!.id;
 
   const db = core.getDbInstance();
   const row = db
     .prepare("SELECT id, session_tag FROM call_logs WHERE id = ?")
-    .get(testId) as Record<string, unknown>;
+    .get(physicalId) as Record<string, unknown>;
   assert.ok(row, "row should exist in call_logs");
   assert.equal(row.session_tag, "sess-abc");
 });
@@ -54,11 +55,12 @@ test("saveCallLog stores NULL session_tag when absent (never synthesized)", asyn
     duration: 100,
     tokens: { in: 10, out: 5 },
   });
+  const physicalId = (await callLogs.getCallLogById(testId))!.id;
 
   const db = core.getDbInstance();
   const row = db
     .prepare("SELECT id, session_tag FROM call_logs WHERE id = ?")
-    .get(testId) as Record<string, unknown>;
+    .get(physicalId) as Record<string, unknown>;
   assert.ok(row, "row should exist in call_logs");
   assert.equal(row.session_tag, null, "session_tag must be null when no header was supplied");
 });
@@ -77,9 +79,10 @@ test("getCallLogs returns sessionTag on the mapped row", async () => {
     tokens: { in: 10, out: 5 },
     sessionTag: "sess-roundtrip",
   });
+  const physicalId = (await callLogs.getCallLogById(testId))!.id;
 
   const logs = await callLogs.getCallLogs({ limit: 200 });
-  const found = logs.find((l: { id: string }) => l.id === testId);
+  const found = logs.find((l: { id: string }) => l.id === physicalId);
   assert.ok(found, "log entry should be found via getCallLogs");
   assert.equal(found.sessionTag, "sess-roundtrip");
 });
@@ -111,10 +114,12 @@ test("getCallLogs filters by sessionTag (substring match, mirroring correlationI
     sessionTag: "unrelated-session",
   });
 
+  const physicalMatch = (await callLogs.getCallLogById(idMatch))!.id;
+  const physicalOther = (await callLogs.getCallLogById(idOther))!.id;
   const results = await callLogs.getCallLogs({ sessionTag: "customer-42" });
   const ids = results.map((r: { id: string }) => r.id);
-  assert.ok(ids.includes(idMatch), "matching sessionTag row must be returned");
-  assert.ok(!ids.includes(idOther), "non-matching sessionTag row must be excluded");
+  assert.ok(ids.includes(physicalMatch), "matching sessionTag row must be returned");
+  assert.ok(!ids.includes(physicalOther), "non-matching sessionTag row must be excluded");
 });
 
 test("schemaColumns self-heal ALTER for session_tag is idempotent", async () => {

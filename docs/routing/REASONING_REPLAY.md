@@ -27,19 +27,21 @@ But typical clients (Cursor, Cline, Roo Code, OpenAI SDK) strip `reasoning_conte
 Turn N (assistant generates):
   → response contains reasoning_content + tool_calls
   → if requiresReasoningReplay(provider, model): cacheReasoningFromAssistantMessage()
-      writes (memory + DB), keyed by every tool_call.id
+      writes (memory + DB), keyed by HMAC(trusted principal, tool_call.id)
   → forward response to client (which may or may not retain reasoning)
 
 Turn N+1 (client sends follow-up):
   → translator detects: requiresReasoningReplay(provider, model) === true
   → for each assistant message with tool_calls and no reasoning_content:
-      lookupReasoning(toolCalls[0].id) → memory → DB
+      lookupReasoning(toolCalls[0].id, trustedContext) → memory → DB
       hit  → msg.reasoning_content = cached; recordReplay()
       miss → msg.reasoning_content = "" (legacy fallback for older DeepSeek)
   → upstream sees consistent history → no 400
 ```
 
-Capture happens in `open-sse/handlers/chatCore.ts` (two sites, at the two `cacheReasoningFromAssistantMessage` call sites). Replay happens in `open-sse/translator/index.ts` after schema coercion but before dispatch.
+Capture happens in `open-sse/handlers/chatCore.ts` for streaming and
+`open-sse/handlers/chatCore/nonStreamingClientTranslate.ts` for non-streaming.
+Replay happens in `open-sse/translator/index.ts` and its Claude helper before dispatch.
 
 ## Storage — Hybrid Memory + SQLite
 
@@ -57,6 +59,27 @@ Writes go to both. Reads consult memory first, then fall back to DB (DB hits are
 - TTL: `2h` (`TTL_MS = 2 * 60 * 60 * 1000`)
 - Max memory entries: `200` (`MAX_MEMORY_ENTRIES`)
 - Eviction: oldest `createdAt` first
+
+## Principal Isolation
+
+Replay uses a trusted request context derived from the actual validated API credential.
+The credential fingerprint and every stored ID use domain-separated HMAC-SHA256 with
+`API_KEY_SECRET`. Both memory and SQLite store opaque `rc2h:<64-hex>` IDs, not raw tool IDs.
+Unknown, invalid, ambiguous, or missing trusted contexts disable cache reads and writes.
+A missing server secret also disables the cache. Anonymous/no-key HTTP requests do not
+use replay, even when API-key authentication is optional. A separate local principal is
+available only to explicit trusted in-process callers. Managed leases and the translator
+preview do not use replay.
+
+Tool IDs are isolated by principal, not session. Clients sharing one API credential share
+its replay namespace. No-tool assistant messages additionally need a nonempty session
+scope and matching transcript. Environment-key rotation or server-secret rotation causes
+safe cache misses. Existing raw rows are never replayed or migrated; they expire through
+the normal cleanup or an operator can clear them.
+
+New entries in the management listing return opaque IDs in `toolCallId`. Single-entry
+DELETE must use that exact returned ID; raw client IDs are rejected. Legacy entries can
+only expire or be removed by provider/global clear, which still removes all matching rows.
 
 ## Database Schema
 
@@ -119,7 +142,7 @@ The cache exposes two endpoints under `src/app/api/cache/reasoning/route.ts`. Bo
 | GET    | `/api/cache/reasoning?provider=deepseek&model=...&limit=` | Filtered listing (`limit` clamped to `[1, 200]`)         |
 | DELETE | `/api/cache/reasoning`                                    | Clear everything (memory + DB) and reset hit/miss counts |
 | DELETE | `/api/cache/reasoning?provider=deepseek`                  | Clear only entries for one provider                      |
-| DELETE | `/api/cache/reasoning?toolCallId=call_abc`                | Delete a single entry                                    |
+| DELETE | `/api/cache/reasoning?toolCallId=rc2h:...`                | Delete a single entry                                    |
 
 **GET response shape:**
 
@@ -141,7 +164,7 @@ The cache exposes two endpoints under `src/app/api/cache/reasoning/route.ts`. Bo
   },
   "entries": [
     {
-      "toolCallId": "call_abc",
+      "toolCallId": "rc2h:<64-hex>",
       "provider": "deepseek",
       "model": "deepseek-reasoner",
       "reasoning": "...",
@@ -158,7 +181,7 @@ The cache exposes two endpoints under `src/app/api/cache/reasoning/route.ts`. Bo
 - **Cleanup:** `cleanupReasoningCache()` purges expired memory entries and runs `DELETE FROM reasoning_cache WHERE expires_at <= unixepoch('now')`. Health-check workers call this periodically.
 - **Crash recovery:** After a restart, memory is empty but the DB still holds unexpired entries. The first lookup for a given `tool_call_id` is a DB hit; subsequent lookups are memory hits.
 - **No reasoning, no cache:** `cacheReasoningFromAssistantMessage` returns `0` when the assistant message has no `reasoning_content` / `reasoning` field, so non-thinking responses cost nothing.
-- **Write is gated too:** both call sites in `chatCore.ts` (non-streaming and streaming) only call `cacheReasoningFromAssistantMessage()` when `requiresReasoningReplay(provider, model)` is `true` — the same predicate the read side checks. Installs that never touch a replay provider stop paying for the write, the index update, and the try/catch on every reasoning-bearing response.
+- **Write is gated too:** streaming and non-streaming capture require a trusted context and are disabled for managed leases. Both check `requiresReasoningReplay({ provider, model })`, as the read side does. Non-replay providers do not write reasoning entries.
 - **Non-strict providers:** When `requiresReasoningReplay` is `false` and the target format is OpenAI, the translator **strips** any `reasoning_content` field from outgoing messages — OpenAI Chat Completions does not accept it.
 
 ## See Also

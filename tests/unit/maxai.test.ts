@@ -38,7 +38,17 @@ import {
   MAXAI_SIGNIN_EMAIL_PATH,
   MAXAI_VERIFY_CODE_PATH,
 } from "../../open-sse/executors/maxai/emailLogin.ts";
-import { discoverMaxaiModels } from "../../open-sse/services/maxaiModels.ts";
+import { discoverMaxaiModels as discoverMaxaiModelsActual } from "../../open-sse/services/maxaiModels.ts";
+
+function discoverMaxaiModels(input: Parameters<typeof discoverMaxaiModelsActual>[0]) {
+  return discoverMaxaiModelsActual(
+    { connectionId: "mock-discovery-connection", ...input },
+    {
+      runTransport: async (_connectionId, fn) => fn(),
+      ensureCredential: async ({ credential }) => credential,
+    }
+  );
+}
 import {
   __setMaxaiConstantsForTest,
   resetMaxaiConstantsMemo,
@@ -642,14 +652,19 @@ test("requestMaxaiEmailCode posts the signed signin request + treats status OK a
   assert.ok(headers["X-Authorization"] && headers["X-Authorization"].length > 0);
 });
 
-test("requestMaxaiEmailCode surfaces a non-OK detail as an error", async () => {
+test("requestMaxaiEmailCode redacts a non-OK upstream detail", async () => {
   const fakeFetch = (async () =>
     new Response(JSON.stringify({ data: { status: "FAIL", detail: "Invalid email" } }), {
       status: 200,
     })) as unknown as typeof fetch;
-  const r = await requestMaxaiEmailCode({ email: "x@y.z", deviceId: "dev", fetchImpl: fakeFetch });
+  const r = await requestMaxaiEmailCode({
+    email: "x@y.z",
+    deviceId: MOCK_DEVICE_ID,
+    fetchImpl: fakeFetch,
+  });
   assert.equal(r.ok, false);
-  assert.match(r.error ?? "", /Invalid email/);
+  assert.match(r.error ?? "", /sign-in failed/);
+  assert.doesNotMatch(r.error ?? "", /Invalid email/);
 });
 
 test("verifyMaxaiEmailCode returns the full credential from auth_user", async () => {
@@ -668,7 +683,7 @@ test("verifyMaxaiEmailCode returns the full credential from auth_user", async ()
             refreshToken,
             userId: USER_ID,
             email: "user@example.com",
-            clientUserId: "client-uuid-1",
+            clientUserId: "10000000-0000-4000-8000-000000000001",
           },
         },
       }),
@@ -679,8 +694,8 @@ test("verifyMaxaiEmailCode returns the full credential from auth_user", async ()
   const r = await verifyMaxaiEmailCode({
     email: "user@example.com",
     code: "123456",
-    deviceId: "device-uuid-1",
-    clientUserId: "client-uuid-1",
+    deviceId: MOCK_DEVICE_ID,
+    clientUserId: "10000000-0000-4000-8000-000000000001",
     fetchImpl: fakeFetch,
   });
 
@@ -690,8 +705,8 @@ test("verifyMaxaiEmailCode returns the full credential from auth_user", async ()
     refreshToken,
     userId: USER_ID,
     email: "user@example.com",
-    deviceId: "device-uuid-1",
-    clientUserId: "client-uuid-1",
+    deviceId: MOCK_DEVICE_ID,
+    clientUserId: "10000000-0000-4000-8000-000000000001",
   });
   assert.ok(nowSec > 0); // sanity anchor
 
@@ -703,10 +718,10 @@ test("verifyMaxaiEmailCode returns the full credential from auth_user", async ()
   assert.equal(body.secret_code, "123456");
   assert.equal(body.app, "maxai_webapp");
   assert.equal(body.env, "prod_co");
-  assert.equal(body.client_user_id, "client-uuid-1");
+  assert.equal(body.client_user_id, "10000000-0000-4000-8000-000000000001");
 });
 
-test("verifyMaxaiEmailCode maps code 10119 to an expired-code message", async () => {
+test("verifyMaxaiEmailCode redacts code 10119 to a fixed sign-in error", async () => {
   const fakeFetch = (async () =>
     new Response(JSON.stringify({ data: { status: "FAIL", code: 10119 } }), {
       status: 200,
@@ -714,15 +729,15 @@ test("verifyMaxaiEmailCode maps code 10119 to an expired-code message", async ()
   const r = await verifyMaxaiEmailCode({
     email: "x@y.z",
     code: "000000",
-    deviceId: "dev",
-    clientUserId: "cu",
+    deviceId: MOCK_DEVICE_ID,
+    clientUserId: "10000000-0000-4000-8000-000000000001",
     fetchImpl: fakeFetch,
   });
   assert.equal(r.ok, false);
-  assert.match(r.error ?? "", /expired|too many/i);
+  assert.match(r.error ?? "", /sign-in failed/);
 });
 
-test("verifyMaxaiEmailCode defaults to an invalid-code message otherwise", async () => {
+test("verifyMaxaiEmailCode returns a fixed sign-in error otherwise", async () => {
   const fakeFetch = (async () =>
     new Response(JSON.stringify({ data: { status: "FAIL" } }), {
       status: 200,
@@ -730,12 +745,12 @@ test("verifyMaxaiEmailCode defaults to an invalid-code message otherwise", async
   const r = await verifyMaxaiEmailCode({
     email: "x@y.z",
     code: "999999",
-    deviceId: "dev",
-    clientUserId: "cu",
+    deviceId: MOCK_DEVICE_ID,
+    clientUserId: "10000000-0000-4000-8000-000000000001",
     fetchImpl: fakeFetch,
   });
   assert.equal(r.ok, false);
-  assert.match(r.error ?? "", /Invalid code/);
+  assert.match(r.error ?? "", /sign-in failed/);
 });
 
 test("email login guards missing inputs", async () => {
@@ -749,6 +764,16 @@ test("email login guards missing inputs", async () => {
 // ── Tool calling (prompted <tool> protocol) ──────────────────────────────────
 
 import { MaxAiExecutor } from "../../open-sse/executors/maxai.ts";
+
+// Unit-only dependencies: production uses a verified connection-bound transport
+// and durable refresh store. These protocol tests never open an outbound socket.
+function mockExecutor() {
+  return new MaxAiExecutor({
+    fetchImpl: (...args: Parameters<typeof globalThis.fetch>) => globalThis.fetch(...args),
+    runTransport: async (_connectionId, fn) => fn(),
+    ensureCredential: async ({ credential }) => credential,
+  });
+}
 
 const TOOL_CRED = {
   providerSpecificData: {
@@ -796,7 +821,7 @@ async function runToolExecute(opts: {
     return new Response(opts.sseText, { status: 200 });
   }) as unknown as typeof fetch;
   try {
-    const executor = new MaxAiExecutor();
+    const executor = mockExecutor();
     const result = await executor.execute({
       model: "gpt-5.6-luna",
       stream: opts.stream,
@@ -896,7 +921,7 @@ async function runToolExecuteSeq(bodies: string[]): Promise<Response> {
     return new Response(body, { status: 200 });
   }) as unknown as typeof fetch;
   try {
-    const executor = new MaxAiExecutor();
+    const executor = mockExecutor();
     const result = await executor.execute({
       model: "maxai/deepseek-r1",
       stream: false,
@@ -942,7 +967,7 @@ test("executor does NOT retry a genuine no-tool answer (no narration signal)", a
     return new Response(maxaiSseBody("The weather in Ghent is mild and cloudy."), { status: 200 });
   }) as unknown as typeof fetch;
   try {
-    const executor = new MaxAiExecutor();
+    const executor = mockExecutor();
     const result = await executor.execute({
       model: "maxai/gpt-5.6",
       stream: false,
@@ -1069,7 +1094,7 @@ test("discoverMaxaiModels throws on non-200 and on missing chat_models", async (
       accessToken: DISCOVERY_CRED.accessToken,
       fetchImpl: err418,
     }),
-    /418/
+    /model discovery failed/
   );
 
   const noModels = (async () =>
@@ -1080,14 +1105,14 @@ test("discoverMaxaiModels throws on non-200 and on missing chat_models", async (
       accessToken: DISCOVERY_CRED.accessToken,
       fetchImpl: noModels,
     }),
-    /no chat_models/
+    /model discovery failed/
   );
 });
 
 test("discoverMaxaiModels refuses when the connection is unconfigured", async () => {
   await assert.rejects(
     discoverMaxaiModels({ providerSpecificData: {}, accessToken: "" }),
-    /not configured/
+    /model discovery failed/
   );
 });
 
@@ -1105,7 +1130,7 @@ test("executor classifies a MaxAI 'too long' rejection as context_length_exceede
       { status: 422 }
     )) as unknown as typeof fetch;
   try {
-    const executor = new MaxAiExecutor();
+    const executor = mockExecutor();
     const result = await executor.execute({
       model: "maxai/gpt-5.6",
       stream: false,

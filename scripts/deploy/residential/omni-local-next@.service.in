@@ -1,0 +1,41 @@
+# STAGED TEMPLATE ONLY. Do not copy/enable/start during source integration.
+[Unit]
+Description=OmniRoute isolated local-next %i workload (staged)
+Requires=omni-egress-controller.service
+BindsTo=omni-egress-topology.service omni-egress-controller.service
+After=omni-egress-topology.service omni-egress-controller.service
+ConditionArchitecture=arm64
+ConditionPathExists=/etc/omni-local-next/activation.json
+
+[Service]
+# This manager is trusted root so Podman can setns(). The OCI payload is NOT root:
+# launcher fixes UID10001, cap-drop ALL, NNP, seccomp, RO root and private PID/IPC.
+Type=exec
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/opt/omni-local-next/runtime
+ExecStart=/usr/bin/python3 -I /opt/omni-local-next/runtime/runtime_launcher.py execute %i
+ExecStop=/usr/bin/python3 -I /opt/omni-local-next/runtime/runtime_launcher.py stop %i
+KillMode=control-group
+TimeoutStartSec=30
+TimeoutStopSec=20
+# No start loop before fresh attestation/configuration review exists.
+Restart=no
+Delegate=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+RestrictSUIDSGID=yes
+RuntimeDirectory=omni-local-next
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=omni-local-next
+StateDirectoryMode=0700
+UnsetEnvironment=HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY http_proxy https_proxy all_proxy no_proxy DOCKER_HOST CONTAINER_HOST CONTAINERS_CONF_OVERRIDE PYTHONPATH LD_PRELOAD NODE_OPTIONS
+
+# Intentionally no [Install]. There is no automatic boot enablement in staging.

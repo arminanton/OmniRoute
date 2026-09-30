@@ -1371,3 +1371,70 @@ test("a hard timeout evicts and closes only the affected pooled transport", asyn
   assert.equal(created[0]?.closed, true);
   assert.equal(created[1]?.closed, false);
 });
+
+
+for (const redirect of [undefined, "follow", "manual", "error"] as const) {
+  test(`wreq transport adapter forwards ${redirect ?? "default"} redirect mode to native runtime`, async () => {
+    let sends = 0;
+    const client = createWreqTransportClient({
+      browser: "chrome_146",
+      os: "linux",
+      runtimeLoader: async () => ({
+        async createTransport() {
+          return { async close() {} };
+        },
+        async fetch(_url, options) {
+          sends++;
+          assert.equal(options.redirect, redirect ?? "follow");
+          assert.ok(
+            options.transport,
+            "the selected transport remains attached",
+          );
+          return new Response("fixture response");
+        },
+      }),
+    });
+    const request = client.request("https://fixture.example/token", {
+      method: "POST",
+      body: "refresh_token=fixture",
+      redirect,
+      proxyUrl: "http://fixture-proxy.example:8080",
+    });
+    try {
+      await request;
+      assert.equal(sends, 1);
+    } finally {
+      request.invalidateTransport();
+    }
+  });
+}
+
+for (const redirect of ["manual", "error"] as const) {
+  test(`active TlsClient separately forwards ${redirect} to createSession.fetch`, async () => {
+    let sends = 0;
+    const client = new TlsClient(async (sessionOptions) => {
+      assert.equal(sessionOptions.proxy, "http://fixture-proxy.example:8080");
+      return {
+        async fetch(_url, options) {
+          sends++;
+          assert.equal(options?.redirect, redirect);
+          return new Response("fixture session response");
+        },
+        async close() {},
+      };
+    });
+    try {
+      const response = await client.fetch("https://fixture.example/token", {
+        method: "POST",
+        body: "refresh_token=fixture",
+        redirect,
+        proxy: "http://fixture-proxy.example:8080",
+        sessionScope: "redirect-contract",
+      });
+      assert.equal(await response.text(), "fixture session response");
+      assert.equal(sends, 1);
+    } finally {
+      await client.closeAll();
+    }
+  });
+}

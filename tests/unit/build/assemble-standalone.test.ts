@@ -30,8 +30,16 @@ function listFiles(dir: string, rootDir: string = dir, out: string[] = []): stri
   return out.sort();
 }
 
+/** Seed the real raw authority module without loading the live policy reader. */
+function seedRuntimePolicySource(root: string) {
+  const target = path.join(root, "scripts", "build", "runtime-policy.mjs");
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(new URL("../../../scripts/build/runtime-policy.mjs", import.meta.url), target);
+}
+
 /** Build a synthetic projectRoot containing every sidecar source the assembler copies. */
 function seedSidecarSources(root: string) {
+  seedRuntimePolicySource(root);
   const files = [
     "node_modules/wreq-js/rust/lib.so",
     "node_modules/better-sqlite3/build/Release/better_sqlite3.node",
@@ -75,6 +83,7 @@ test("assembleStandalone copies standalone + static + public + sidecars into out
   fs.writeFileSync(path.join(distDir, "static", "x.js"), "x");
   fs.mkdirSync(path.join(tmp, "public"), { recursive: true });
   fs.writeFileSync(path.join(tmp, "public", "logo.svg"), "<svg/>");
+  seedRuntimePolicySource(tmp);
 
   assembleStandalone({
     distDir,

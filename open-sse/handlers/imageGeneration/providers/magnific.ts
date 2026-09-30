@@ -8,6 +8,11 @@
 // legacy api.freepik.com / x-freepik-api-key pair if needed.
 
 import { saveCallLog } from "@/lib/usageDb";
+import {
+  fetchRemoteImage,
+  RemoteMediaFetchError,
+  createRemoteMediaFailureResult,
+} from "@/shared/network/remoteImageFetch";
 import { sleep } from "../../../utils/sleep.ts";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
 
@@ -37,12 +42,14 @@ interface MagnificGenerationParams {
   body: Record<string, unknown>;
   credentials: MagnificCredentials;
   log?: { info: (tag: string, msg: string) => void; error: (tag: string, msg: string) => void };
+  signal?: AbortSignal;
 }
 
 interface MagnificImageResult {
   success: boolean;
   status?: number;
   error?: string;
+  retryable?: boolean;
   data?: { created: number; data: Array<{ b64_json: string }> };
 }
 
@@ -78,10 +85,12 @@ async function submitMysticTask(params: {
   model: string;
   prompt: string;
   body: Record<string, unknown>;
+  signal?: AbortSignal;
 }) {
-  const { providerConfig, token, model, prompt, body } = params;
+  const { providerConfig, token, model, prompt, body, signal } = params;
   return fetch(providerConfig.baseUrl, {
     method: "POST",
+    signal,
     headers: {
       "Content-Type": "application/json",
       ...magnificAuthHeader(providerConfig, token),
@@ -99,10 +108,12 @@ async function pollMysticTask(params: {
   providerConfig: MagnificProviderConfig;
   token: string;
   taskId: string;
+  signal?: AbortSignal;
 }): Promise<{ status: string; imageUrl?: string }> {
-  const { providerConfig, token, taskId } = params;
+  const { providerConfig, token, taskId, signal } = params;
   const statusBase = providerConfig.statusUrl || providerConfig.baseUrl;
   const res = await fetch(`${statusBase}/${taskId}`, {
+    signal,
     headers: { ...magnificAuthHeader(providerConfig, token) },
   });
   const json = await res.json();
@@ -112,19 +123,13 @@ async function pollMysticTask(params: {
   return { status, imageUrl: typeof generated[0] === "string" ? generated[0] : undefined };
 }
 
-async function downloadGeneratedImage(
-  imageUrl: string
-): Promise<{ state: "ok"; b64: string } | { state: "failed"; status: number; error: string }> {
-  const imgRes = await fetch(imageUrl);
-  if (!imgRes.ok) {
-    return {
-      state: "failed",
-      status: imgRes.status,
-      error: `Failed to download image: ${imgRes.status}`,
-    };
-  }
-  const buf = await imgRes.arrayBuffer();
-  return { state: "ok", b64: Buffer.from(buf).toString("base64") };
+async function downloadGeneratedImage(imageUrl: string, signal?: AbortSignal): Promise<string> {
+  const { buffer } = await fetchRemoteImage(imageUrl, {
+    guard: "public-only",
+    pinDns: true,
+    signal,
+  });
+  return buffer.toString("base64");
 }
 
 async function resolveCompletedResult(params: {
@@ -132,8 +137,9 @@ async function resolveCompletedResult(params: {
   model: string;
   startTime: number;
   imageUrl?: string;
+  signal?: AbortSignal;
 }): Promise<MagnificImageResult> {
-  const { provider, model, startTime, imageUrl } = params;
+  const { provider, model, startTime, imageUrl, signal } = params;
   if (!imageUrl) {
     return logAndFail({
       provider,
@@ -143,10 +149,7 @@ async function resolveCompletedResult(params: {
       error: "Magnific Mystic completed without a generated image URL",
     });
   }
-  const downloaded = await downloadGeneratedImage(imageUrl);
-  if (downloaded.state === "failed") {
-    return { success: false, status: downloaded.status, error: downloaded.error };
-  }
+  const b64 = await downloadGeneratedImage(imageUrl, signal);
   saveCallLog({
     method: "POST",
     path: "/v1/images/generations",
@@ -157,7 +160,7 @@ async function resolveCompletedResult(params: {
   }).catch(() => {});
   return {
     success: true,
-    data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: downloaded.b64 }] },
+    data: { created: Math.floor(Date.now() / 1000), data: [{ b64_json: b64 }] },
   };
 }
 
@@ -170,6 +173,7 @@ async function pollUntilDone(params: {
   startTime: number;
   pollIntervalMs: number;
   pollTimeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<MagnificImageResult> {
   const {
     providerConfig,
@@ -180,15 +184,16 @@ async function pollUntilDone(params: {
     startTime,
     pollIntervalMs,
     pollTimeoutMs,
+    signal,
   } = params;
   const deadline = Date.now() + pollTimeoutMs;
 
   while (Date.now() < deadline) {
     await sleep(pollIntervalMs);
-    const { status, imageUrl } = await pollMysticTask({ providerConfig, token, taskId });
+    const { status, imageUrl } = await pollMysticTask({ providerConfig, token, taskId, signal });
 
     if (status === "COMPLETED") {
-      return resolveCompletedResult({ provider, model, startTime, imageUrl });
+      return resolveCompletedResult({ provider, model, startTime, imageUrl, signal });
     }
     if (status === "FAILED") {
       return logAndFail({
@@ -218,9 +223,10 @@ async function submitAndGetTaskId(params: {
   body: Record<string, unknown>;
   provider: string;
   startTime: number;
+  signal?: AbortSignal;
 }): Promise<{ taskId: string } | { failed: MagnificImageResult }> {
-  const { providerConfig, token, model, prompt, body, provider, startTime } = params;
-  const res = await submitMysticTask({ providerConfig, token, model, prompt, body });
+  const { providerConfig, token, model, prompt, body, provider, startTime, signal } = params;
+  const res = await submitMysticTask({ providerConfig, token, model, prompt, body, signal });
   if (!res.ok) {
     const errorText = await res.text();
     return {
@@ -257,6 +263,7 @@ export async function handleMagnificImageGeneration({
   body,
   credentials,
   log,
+  signal,
 }: MagnificGenerationParams): Promise<MagnificImageResult> {
   const startTime = Date.now();
   const token = credentials?.apiKey || "";
@@ -271,6 +278,7 @@ export async function handleMagnificImageGeneration({
   }
 
   try {
+    signal?.throwIfAborted();
     const submitted = await submitAndGetTaskId({
       providerConfig,
       token,
@@ -279,6 +287,7 @@ export async function handleMagnificImageGeneration({
       body,
       provider,
       startTime,
+      signal,
     });
     if ("failed" in submitted) return submitted.failed;
 
@@ -291,8 +300,12 @@ export async function handleMagnificImageGeneration({
       startTime,
       pollIntervalMs,
       pollTimeoutMs,
+      signal,
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     const message = (err as Error)?.message || String(err);
     if (log) log.error("IMAGE", `${provider} magnific error: ${sanitizeErrorMessage(message)}`);
     return logAndFail({

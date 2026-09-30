@@ -55,6 +55,7 @@ export function translateNonStreamingClientResponse(
     requestBody,
     responseToolNameMap,
     requestToolIdentityMap,
+    reasoningCacheContext,
     reasoningCacheScope,
     skipReasoningReplay,
     clientHeaders,
@@ -113,7 +114,7 @@ export function translateNonStreamingClientResponse(
       ? input.historyMessages
       : (finalBody as { messages?: unknown[] } | null | undefined)?.messages;
     if (!skipReasoningReplay && requiresReasoningReplay({ provider, model })) {
-      cacheReasoningFromAssistantMessage(msg, provider, model, {
+      cacheReasoningFromAssistantMessage(msg, provider, model, reasoningCacheContext ?? null, {
         scope: reasoningCacheScope,
         historyMessages: Array.isArray(historyMessages) ? historyMessages : [],
       });

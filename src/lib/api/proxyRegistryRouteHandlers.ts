@@ -1,3 +1,5 @@
+import { isRuntimePolicyError, markRuntimePolicyResponse } from "@/shared/runtimePolicy";
+import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import {
   createProxy,
   createProxyAndAssign,
@@ -75,6 +77,11 @@ export async function handleProxyCreate(request: Request) {
     const created = await createProxy(proxyFields);
     return Response.json(created, { status: 201 });
   } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      return markRuntimePolicyResponse(
+        Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+      );
+    }
     return createErrorResponseFromUnknown(error, "Failed to create proxy");
   }
 }
@@ -118,6 +125,11 @@ export async function handleProxyUpdate(request: Request) {
 
     return Response.json(updated);
   } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      return markRuntimePolicyResponse(
+        Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+      );
+    }
     return createErrorResponseFromUnknown(error, "Failed to update proxy");
   }
 }
@@ -143,6 +155,11 @@ export async function handleProxyDelete(request: Request) {
 
     return Response.json({ success: true });
   } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      return markRuntimePolicyResponse(
+        Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+      );
+    }
     return createErrorResponseFromUnknown(error, "Failed to delete proxy");
   }
 }

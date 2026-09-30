@@ -17,8 +17,12 @@ import { getCircuitBreaker } from "../../../src/shared/utils/circuitBreaker";
 import { fisherYatesShuffle, getNextFromDeck } from "../../../src/shared/utils/shuffleDeck";
 import { handleFusionChat, type FusionTuning } from "../fusion.ts";
 import { getResolvedModelCapabilities } from "../modelCapabilities.ts";
-import { errorResponseWithComboDiagnostics } from "../../utils/error.ts";
+import {
+  errorResponseWithComboDiagnostics,
+  runtimePolicyErrorResponse,
+} from "../../utils/error.ts";
 import { parseModel } from "../model.ts";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
 import { handlePipelineChat, type PipelineStep } from "../pipeline.ts";
 import type { resolveComboSetupConfig } from "../comboConfig.ts";
@@ -343,13 +347,15 @@ export async function tryPinnedModelDispatch(args: {
         modelPinned: true,
       } as SingleModelTarget);
     } catch (pinErr) {
+      if (isRuntimePolicyError(pinErr)) return runtimePolicyErrorResponse();
       log.warn(
         "COMBO",
         `Pinned model ${pinnedModel} threw error: ${pinErr instanceof Error ? pinErr.message : String(pinErr)}, falling through to combo retry/fallback`
       );
     }
     if (pinnedResult) {
-      if (isExhaustedNetworkResponse(pinnedResult)) return pinnedResult;
+      if (isRuntimePolicyResponse(pinnedResult) || isExhaustedNetworkResponse(pinnedResult))
+        return pinnedResult;
       const accepted = await evaluatePinnedResponse({
         pinnedResult,
         pinnedModel,

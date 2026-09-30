@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { assertRuntimeExecutorEntrypoint } from "@/shared/runtimePolicyEntrypoints";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 
-import { BaseExecutor, type ExecuteInput } from "./base.ts";
+import { BaseExecutor, sanitizePath, type ExecuteInput } from "./base.ts";
 import { mapNvidiaGlm52ReasoningParams } from "./base/reasoningEffort.ts";
 import { PROVIDERS, OAUTH_ENDPOINTS } from "../config/constants.ts";
 import { getAccessToken } from "../services/tokenRefresh.ts";
@@ -11,7 +13,11 @@ import {
   joinClaudeCodeCompatibleUrl,
 } from "../services/claudeCodeCompatible.ts";
 import { getGigachatAccessToken } from "../services/gigachatAuth.ts";
-import { getRegistryEntry } from "../config/providerRegistry.ts";
+import {
+  getRegistryEntry,
+  requireCompatibleBaseUrl,
+  guardCompatibleUrl,
+} from "../config/providerRegistry.ts";
 import { getModelTargetFormat } from "../config/providerModels.ts";
 import {
   mergeClientAnthropicBeta,
@@ -226,34 +232,40 @@ export class DefaultExecutor extends BaseExecutor {
   }
 
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
+    assertRuntimeExecutorEntrypoint(this.provider, credentials);
     void model;
     void stream;
     void urlIndex;
     if (this.provider?.startsWith?.("openai-compatible-")) {
       const psd = credentials?.providerSpecificData;
-      const baseUrl = psd?.baseUrl || "https://api.openai.com/v1";
+      const baseUrl = requireCompatibleBaseUrl(this.provider, psd);
       const normalized = baseUrl.replace(/\/$/, "");
-      const customPath = typeof psd?.chatPath === "string" && psd.chatPath ? psd.chatPath : null;
-      if (customPath) return `${normalized}${customPath}`;
+      const rawPath = typeof psd?.chatPath === "string" ? psd.chatPath : null;
+      const customPath = rawPath && sanitizePath(rawPath) ? rawPath : null;
+      if (customPath) return guardCompatibleUrl(baseUrl, `${normalized}${customPath}`);
       const forceResponses = psd?._omnirouteForceResponsesUpstream === true;
       const path =
         forceResponses || getOpenAICompatibleType(this.provider, psd) === "responses"
           ? "/responses"
           : "/chat/completions";
-      return `${normalized}${path}`;
+      return guardCompatibleUrl(baseUrl, `${normalized}${path}`);
     }
     if (this.provider?.startsWith?.("anthropic-compatible-")) {
       const psd = credentials?.providerSpecificData;
-      const baseUrl = psd?.baseUrl || "https://api.anthropic.com/v1";
-      const customPath = typeof psd?.chatPath === "string" && psd.chatPath ? psd.chatPath : null;
+      const baseUrl = requireCompatibleBaseUrl(this.provider, psd);
+      const rawPath = typeof psd?.chatPath === "string" ? psd.chatPath : null;
+      const customPath = rawPath && sanitizePath(rawPath) ? rawPath : null;
       if (isClaudeCodeCompatible(this.provider)) {
-        return joinClaudeCodeCompatibleUrl(
+        return guardCompatibleUrl(
           baseUrl,
-          customPath || CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH
+          joinClaudeCodeCompatibleUrl(
+            baseUrl,
+            customPath || CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH
+          )
         );
       }
       const normalized = baseUrl.replace(/\/$/, "");
-      return `${normalized}${customPath || "/messages"}`;
+      return guardCompatibleUrl(baseUrl, `${normalized}${customPath || "/messages"}`);
     }
     // An alternate protocol selected on the connection carries a complete endpoint
     // URL, so it must bypass the per-provider normalizers in the switch below —
@@ -1106,6 +1118,7 @@ export class DefaultExecutor extends BaseExecutor {
    * race-condition protection (deduplication via refreshPromiseCache).
    */
   async refreshCredentials(credentials, log) {
+    assertRuntimeExecutorEntrypoint(this.provider, credentials);
     if (this.provider === "gigachat") {
       if (!credentials.apiKey) return null;
       try {
@@ -1113,6 +1126,7 @@ export class DefaultExecutor extends BaseExecutor {
           credentials: credentials.apiKey,
         });
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         log?.error?.("TOKEN", `gigachat refresh error: ${error.message}`);
         return null;
       }
@@ -1121,6 +1135,7 @@ export class DefaultExecutor extends BaseExecutor {
     try {
       return await getAccessToken(this.provider, credentials, log);
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       log?.error?.("TOKEN", `${this.provider} refresh error: ${error.message}`);
       return null;
     }
@@ -1135,6 +1150,7 @@ export class DefaultExecutor extends BaseExecutor {
   }
 
   async execute(input: ExecuteInput) {
+    assertRuntimeExecutorEntrypoint(this.provider, input.credentials);
     // #6846 Phase 1: per-connection concurrency cap for nvidia — no-op for every
     // other provider (returns null immediately, no semaphore key allocated).
     const releaseNvidiaSlot = await acquireNvidiaConcurrencySlot(
@@ -1165,7 +1181,7 @@ export class DefaultExecutor extends BaseExecutor {
       result = await super.execute(input);
     } catch (err) {
       if (session) {
-        pool.reportCooldown(session);
+        if (!isRuntimePolicyError(err)) pool.reportCooldown(session);
         session.release();
       }
       throw err;

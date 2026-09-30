@@ -10,6 +10,11 @@
 
 import { randomUUID } from "node:crypto";
 import { Agent, buildConnector, fetch as undiciFetch, type Dispatcher } from "undici";
+import {
+  assertNotLockedCapability,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+} from "@/shared/runtimePolicy";
 import { getSettings, updateSettings } from "@/lib/db/settings";
 import { isConnectionUnavailableToAuxiliaryActivity } from "@/lib/exclusiveLeaseIsolation";
 import { getRuntimePorts } from "@/lib/runtime/ports";
@@ -175,6 +180,7 @@ async function getAutoSyncConnections(): Promise<
     }
     return autoSyncConnections;
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     console.warn("[ModelSync] Failed to load connections:", (err as Error).message);
     return [];
   }
@@ -192,6 +198,7 @@ export async function syncConnectionModels(
   provider: string,
   baseUrl: string
 ): Promise<boolean> {
+  assertNotLockedCapability("model-sync");
   try {
     const res = await fetchModelSyncInternal(
       `${baseUrl}/api/providers/${connectionId}/sync-models`,
@@ -216,6 +223,7 @@ export async function syncConnectionModels(
     );
     return true;
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     console.warn(
       `[ModelSync] ${provider} (${connectionId.slice(0, 8)}): fetch failed —`,
       (err as Error).message
@@ -228,6 +236,7 @@ export async function syncConnectionModels(
  * Run one full model-sync cycle across all auto-sync connections.
  */
 async function runSyncCycle(apiBaseUrl: string): Promise<void> {
+  if (getRuntimePolicy().mode === "locked") return;
   if (isRunning) {
     console.log("[ModelSync] Skipping cycle — previous run still in progress");
     return;
@@ -251,6 +260,11 @@ async function runSyncCycle(apiBaseUrl: string): Promise<void> {
       )
     );
 
+    for (const result of results) {
+      if (result.status === "rejected" && isRuntimePolicyError(result.reason)) {
+        throw result.reason;
+      }
+    }
     const succeeded = results.filter((r) => r.status === "fulfilled" && r.value === true).length;
     console.log(
       `[ModelSync] Cycle complete: ${succeeded}/${connections.length} synced in ${Date.now() - start}ms`
@@ -259,7 +273,8 @@ async function runSyncCycle(apiBaseUrl: string): Promise<void> {
     // Record last sync time
     try {
       await updateSettings({ [MODEL_SYNC_SETTING_KEY]: new Date().toISOString() });
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       // Non-critical
     }
   } finally {
@@ -276,6 +291,7 @@ export function startModelSyncScheduler(
   apiBaseUrl = getModelSyncInternalBaseUrl(),
   intervalMs = DEFAULT_INTERVAL_MS
 ): void {
+  if (getRuntimePolicy().mode === "locked") return;
   if (schedulerTimer) {
     console.log("[ModelSync] Scheduler already running — skipping start");
     return;
@@ -298,7 +314,8 @@ export function startModelSyncScheduler(
     .then(({ scheduleCodexCatalogRevalidation }) => {
       scheduleCodexCatalogRevalidation({ apiBaseUrl: trustedApiBaseUrl });
     })
-    .catch(() => {
+    .catch((error: unknown) => {
+      if (isRuntimePolicyError(error)) throw error;
       // silent
     });
 
@@ -325,7 +342,8 @@ export async function getLastModelSyncTime(): Promise<string | null> {
   try {
     const settings = await getSettings();
     return (settings as Record<string, string>)[MODEL_SYNC_SETTING_KEY] ?? null;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }

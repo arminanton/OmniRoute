@@ -26,6 +26,13 @@
 
 import { Buffer } from "node:buffer";
 
+import {
+  assertLocalHelper,
+  assertNoApplicationProxy,
+  assertNotLockedCapability,
+  isRuntimePolicyError,
+  getRuntimePolicy,
+} from "../../src/shared/runtimePolicy.ts";
 import { connectObscuraBrowser } from "./obscura.ts";
 
 type Browser = import("playwright").Browser;
@@ -99,6 +106,7 @@ interface PoolState {
   browser: Browser | null;
   /** Engine backing the headless browser, for metrics and stealth detection. */
   engine: PoolEngine | null;
+  helperEndpoint: string | null;
   headedBrowser: Browser | null;
   contexts: Map<string, PooledContext>;
   pendingContexts: Map<string, PendingContextEntry>;
@@ -122,6 +130,7 @@ const DEFAULT_USER_AGENT =
 const state: PoolState = {
   browser: null,
   engine: null,
+  helperEndpoint: null,
   headedBrowser: null,
   contexts: new Map(),
   pendingContexts: new Map<string, { promise: Promise<PooledContext>; createdAt: number }>(),
@@ -153,7 +162,8 @@ async function resolveCloakLaunch(): Promise<((opts: unknown) => Promise<Browser
       launch?: (opts: unknown) => Promise<Browser>;
     };
     state.cloakLaunch = mod.launch ?? null;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     state.cloakLaunch = null;
   }
   return state.cloakLaunch;
@@ -237,6 +247,7 @@ export async function resolvePlaywrightProxy(
         return resolveProxyForProvider(id);
       });
     const p = await resolver(providerKey);
+    assertNoApplicationProxy(p ? "configured" : "none");
     if (!p?.host) return undefined;
     const scheme = p.type === "socks5" ? "socks5" : "http";
     // Build explicitly instead of a conditional object spread: the spread form
@@ -251,6 +262,7 @@ export async function resolvePlaywrightProxy(
     }
     return proxy;
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     console.warn("[BrowserPool] Failed to resolve proxy from DB:", err);
     return undefined;
   }
@@ -262,6 +274,20 @@ export async function resolveBrowserContextProxy(
   deps?: ResolvePlaywrightProxyDeps
 ): Promise<import("playwright").LaunchOptions["proxy"] | undefined> {
   return resolvePlaywrightProxy(options.proxyProviderKey ?? contextKey, deps);
+}
+
+function assertBrowserPoolRuntime(headless: boolean): void {
+  const endpoint = process.env.OBSCURA_CDP_ENDPOINT;
+  if (headless && endpoint) {
+    assertLocalHelper({ role: "browser-cdp", endpoint, phase: "configured" });
+  }
+  if (headless && state.helperEndpoint) {
+    assertLocalHelper({ role: "browser-cdp", endpoint: state.helperEndpoint, phase: "connect" });
+  } else if (!headless || state.browser || !endpoint) {
+    assertNotLockedCapability("local-browser-launch");
+  }
+  // Playwright follows websocket upgrade redirects; no reviewed bounded adapter exists.
+  assertNotLockedCapability("browser-cdp-attach");
 }
 
 function currentBrowser(headless: boolean): Browser | null {
@@ -312,6 +338,7 @@ async function launchBrowserInstance(
   // A headed browser must be a real windowed Chromium, so the engine
   // preference below applies to the headless path only.
   if (!headless) {
+    assertNotLockedCapability("local-browser-launch");
     const { chromium } = await import("playwright");
     return chromium.launch(resolvePlainBrowserLaunchOptions(options));
   }
@@ -323,9 +350,11 @@ async function launchBrowserInstance(
   const obscura = await connectObscuraBrowser();
   if (obscura) {
     state.engine = "obscura";
+    state.helperEndpoint = obscura.child ? null : obscura.endpoint;
     return obscura.browser;
   }
 
+  assertNotLockedCapability("local-browser-launch");
   const cloakLaunch = await resolveCloakLaunch();
   if (cloakLaunch) {
     state.engine = "cloakbrowser";
@@ -344,6 +373,7 @@ async function launchBrowserInstance(
 
 async function launchBrowser(options: BrowserPoolContextOptions): Promise<Browser> {
   const headless = options.headless !== false;
+  assertBrowserPoolRuntime(headless);
   const existing = currentBrowser(headless);
   if (existing) return existing;
   const pending = currentBrowserLaunch(headless);
@@ -471,7 +501,8 @@ async function createWarmupPage(
     // first chat request otherwise pays this cost on the hot path.
     await new Promise((resolve) => setTimeout(resolve, 1500));
     return page;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     await page?.close().catch(() => {});
     return null;
   }
@@ -487,6 +518,9 @@ export async function acquireBrowserContext(
     );
   }
   const headless = options.headless !== false;
+  assertBrowserPoolRuntime(headless);
+  const locked = getRuntimePolicy().mode === "locked";
+  const admittedProxy = locked ? await resolveBrowserContextProxy(key, options) : undefined;
   const poolKey = `${headless ? "headless" : "headed"}:${key}`;
   const existing = state.contexts.get(poolKey);
   if (existing) {
@@ -504,7 +538,7 @@ export async function acquireBrowserContext(
   const createPromise = (async (): Promise<PooledContext> => {
     const [browser, proxy] = await Promise.all([
       launchBrowser(options),
-      resolveBrowserContextProxy(key, options),
+      locked ? Promise.resolve(admittedProxy) : resolveBrowserContextProxy(key, options),
     ]);
     const isStealth = headless && (state.engine === "obscura" || state.cloakLaunch !== null);
     const context = await browser.newContext({
@@ -619,6 +653,7 @@ export async function shutdownPool(reason: string): Promise<void> {
   // executors (cloudflare-playground), so closing the pool's CDP connection is
   // enough — never kill the server here.
   state.engine = null;
+  state.helperEndpoint = null;
   state.lastActivity = Date.now();
   // Avoid unused-parameter lint: log reason via debug if anyone hooks
   // process.on('exit') and prints state.

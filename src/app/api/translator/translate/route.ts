@@ -13,6 +13,10 @@ import { isConnectionUnavailableToAuxiliaryActivity } from "@/lib/exclusiveLease
 import { translatorTranslateSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
+// This management preview has no validated inference caller principal. Never
+// consult another request's replay cache, even when client text supplies an ID.
+const previewTranslateOptions = { skipReasoningReplay: true, reasoningCacheContext: null };
+
 type JsonRecord = Record<string, unknown>;
 
 function asJsonRecord(value: unknown): JsonRecord {
@@ -103,7 +107,17 @@ export async function POST(request) {
       const tgt =
         reqTargetFormat || (provider ? getTargetFormat(provider, providerSpecificData) : "openai");
       const model = getModelId(asJsonRecord(body));
-      const translated = translateRequest(src, tgt, model, body, true, null, provider);
+      const translated = translateRequest(
+        src,
+        tgt,
+        model,
+        body,
+        true,
+        null,
+        provider,
+        null,
+        previewTranslateOptions
+      );
       return NextResponse.json({
         success: true,
         sourceFormat: src,
@@ -143,7 +157,9 @@ export async function POST(request) {
           actualBody,
           true,
           null,
-          provider
+          provider,
+          null,
+          previewTranslateOptions
         );
 
         result = {
@@ -169,7 +185,9 @@ export async function POST(request) {
           actualBody,
           true,
           null,
-          provider
+          provider,
+          null,
+          previewTranslateOptions
         );
 
         result = {

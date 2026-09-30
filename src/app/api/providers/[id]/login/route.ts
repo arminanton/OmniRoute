@@ -6,12 +6,16 @@
  * and persists extracted credentials to the provider connection.
  */
 
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { NextRequest, NextResponse } from "next/server";
 import { getCachedProviderConnectionById } from "@/lib/db/readCache";
 import { updateProviderConnection } from "@/lib/db/providers";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { clampLoginTimeoutMs } from "@/lib/api/loginTimeout";
-import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
+import {
+  runtimePolicyErrorResponse,
+  sanitizeErrorMessage,
+} from "@omniroute/open-sse/utils/error.ts";
 
 const ADOBE_FIREFLY_SLUGS = new Set(["adobe-firefly", "firefly"]);
 
@@ -159,42 +163,64 @@ async function loginAdobeFirefly(
 
 // --- MaxAI: browserless email device-pair login -----------------------------
 
-/**
- * MaxAI email login is a two-step, browserless device-pair flow (no browser /
- * camoufox / Google): step "request" emails a 6-digit code; step "verify"
- * exchanges the code for the full credential (access + ~1-year refresh token).
- *
- * The signature is bound to a client-minted device id, so we mint it in the
- * request step and persist it to the connection immediately, then read it back
- * in the verify step (the route itself is stateless across the two calls).
- */
+function maxaiLoginFailure(status: number): NextResponse {
+  // Upstream bodies, transport errors, and persistence exceptions can contain credentials.
+  return NextResponse.json(
+    { success: false, error: sanitizeErrorMessage("MaxAI sign-in failed. Please try again.") },
+    { status }
+  );
+}
+
+function maxaiIdentityData(psd: Record<string, unknown>): Record<string, unknown> {
+  const identity = { ...psd };
+  // Generic providerSpecificData is not encrypted. Legacy token aliases are read-only.
+  for (const key of ["maxaiAccessToken", "maxaiRefreshToken", "accessToken", "refreshToken"]) {
+    delete identity[key];
+  }
+  return identity;
+}
+
+/** Persist the login identity before sending a code; verify only that pending identity. */
 async function loginMaxaiEmail(
   connectionId: string,
-  connection: Record<string, unknown>,
-  body: { step?: unknown; email?: unknown; code?: unknown }
+  body: unknown,
+  signal: AbortSignal
 ): Promise<NextResponse> {
   const { randomUUID } = await import("node:crypto");
-  const { requestMaxaiEmailCode, verifyMaxaiEmailCode } = await import(
-    "@omniroute/open-sse/executors/maxai/emailLogin.ts"
-  );
+  const {
+    requestMaxaiEmailCode,
+    verifyMaxaiEmailCode,
+    maxaiLoginBodySchema,
+    maxaiLoginIdentitySchema,
+  } = await import("@omniroute/open-sse/executors/maxai/emailLogin.ts");
 
-  const psd = (connection.providerSpecificData ?? {}) as Record<string, unknown>;
-  const step = String(body.step || "request");
+  const parsed = maxaiLoginBodySchema.safeParse(body);
+  if (!parsed.success || signal.aborted) return maxaiLoginFailure(400);
+  const data = parsed.data;
+  const { getProviderConnectionById } = await import("@/lib/db/providers");
+  const connection = await getProviderConnectionById(connectionId);
+  if (
+    !connection ||
+    signal.aborted ||
+    !["maxai", "mx"].includes(resolveProviderSlug(connection as Record<string, unknown>))
+  )
+    return maxaiLoginFailure(400);
+  const rawPsd = connection.providerSpecificData;
+  const psd =
+    rawPsd && typeof rawPsd === "object" && !Array.isArray(rawPsd)
+      ? (rawPsd as Record<string, unknown>)
+      : {};
 
-  if (step === "request") {
-    const email = String(body.email || "").trim();
-    if (!email) {
-      return NextResponse.json(
-        { success: false, error: "An email address is required." },
-        { status: 400 }
-      );
-    }
-    // Mint (or reuse) the client identity and persist it BEFORE the request so
-    // the verify step signs with the same device id.
-    const deviceId = String(psd.maxaiDeviceId || psd.deviceId || randomUUID());
-    const clientUserId = String(psd.maxaiClientUserId || psd.clientUserId || randomUUID());
+  if (data.step === "request") {
+    const identity = maxaiLoginIdentitySchema.safeParse({
+      email: data.email,
+      deviceId: psd.maxaiDeviceId ?? psd.deviceId ?? randomUUID(),
+      clientUserId: psd.maxaiClientUserId ?? psd.clientUserId ?? randomUUID(),
+    });
+    if (!identity.success) return maxaiLoginFailure(400);
+    const { email, deviceId, clientUserId } = identity.data;
     try {
-      await updateProviderConnection(connectionId, {
+      const saved = await updateProviderConnection(connectionId, {
         providerSpecificData: {
           ...psd,
           maxaiDeviceId: deviceId,
@@ -202,86 +228,65 @@ async function loginMaxaiEmail(
           maxaiLoginEmail: email,
         },
       });
-    } catch {
-      /* non-fatal: fall through and still attempt the request */
+      // updateProviderConnection returns null if the row disappeared; no throw is not success.
+      if (!saved) return maxaiLoginFailure(500);
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
+      return maxaiLoginFailure(500);
     }
-
-    const result = await requestMaxaiEmailCode({ email, deviceId });
-    if (!result.ok) {
-      return NextResponse.json(
-        { success: false, error: result.error || "Failed to send the sign-in code." },
-        { status: result.status && result.status >= 400 ? result.status : 400 }
-      );
-    }
+    if (signal.aborted) return maxaiLoginFailure(400);
+    const result = await requestMaxaiEmailCode({ email, deviceId, signal });
+    if (!result.ok) return maxaiLoginFailure(400);
     return NextResponse.json({
       success: true,
       step: "request",
-      message: `A sign-in code was emailed to ${email}. Enter it to finish connecting.`,
+      message: "A sign-in code was emailed. Enter it to finish connecting.",
       email,
     });
   }
 
-  if (step === "verify") {
-    const code = String(body.code || "").trim();
-    const email = String(body.email || psd.maxaiLoginEmail || "").trim();
-    const deviceId = String(psd.maxaiDeviceId || psd.deviceId || "");
-    const clientUserId = String(psd.maxaiClientUserId || psd.clientUserId || "");
-    if (!code || !email || !deviceId) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: !deviceId
-            ? "No pending sign-in. Request a code first."
-            : "The email and the code are both required.",
-        },
-        { status: 400 }
-      );
-    }
+  const pending = maxaiLoginIdentitySchema.safeParse({
+    email: psd.maxaiLoginEmail,
+    deviceId: psd.maxaiDeviceId,
+    clientUserId: psd.maxaiClientUserId,
+  });
+  if (
+    !pending.success ||
+    !data.code ||
+    (data.email && data.email.toLowerCase() !== pending.data.email.toLowerCase())
+  )
+    return maxaiLoginFailure(400);
 
-    const result = await verifyMaxaiEmailCode({ email, code, deviceId, clientUserId });
-    if (!result.ok || !result.credential) {
-      return NextResponse.json(
-        { success: false, error: result.error || "Code verification failed." },
-        { status: result.status && result.status >= 400 ? result.status : 400 }
-      );
-    }
-
-    const cred = result.credential;
-    try {
-      await updateProviderConnection(connectionId, {
-        // The access token is replayed as `Authorization: Bearer` by the executor.
-        apiKey: cred.accessToken,
-        providerSpecificData: {
-          ...psd,
-          maxaiAccessToken: cred.accessToken,
-          maxaiRefreshToken: cred.refreshToken,
-          maxaiDeviceId: cred.deviceId,
-          maxaiUserId: cred.userId,
-          maxaiClientUserId: cred.clientUserId,
-          maxaiLoginEmail: cred.email,
-          signedInAt: Date.now(),
-        },
-      });
-    } catch (err) {
-      const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
-      return NextResponse.json(
-        { success: false, error: `Signed in but failed to persist: ${msg}` },
-        { status: 500 }
-      );
-    }
-    return NextResponse.json({
-      success: true,
-      step: "verify",
-      persisted: true,
-      account: cred.email,
-      message: `Connected as ${cred.email}.`,
+  const result = await verifyMaxaiEmailCode({ ...pending.data, code: data.code, signal });
+  if (!result.ok || !result.credential || signal.aborted) return maxaiLoginFailure(400);
+  const cred = result.credential;
+  try {
+    const saved = await updateProviderConnection(connectionId, {
+      // Only these top-level fields pass through credential encryption at rest.
+      apiKey: cred.accessToken,
+      accessToken: cred.accessToken,
+      refreshToken: cred.refreshToken,
+      providerSpecificData: {
+        ...maxaiIdentityData(psd),
+        maxaiDeviceId: pending.data.deviceId,
+        maxaiUserId: cred.userId,
+        maxaiClientUserId: pending.data.clientUserId,
+        maxaiLoginEmail: pending.data.email,
+        signedInAt: Date.now(),
+      },
     });
+    if (!saved) return maxaiLoginFailure(500);
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
+    return maxaiLoginFailure(500);
   }
-
-  return NextResponse.json(
-    { success: false, error: `Unknown login step: ${step}` },
-    { status: 400 }
-  );
+  return NextResponse.json({
+    success: true,
+    step: "verify",
+    persisted: true,
+    account: pending.data.email,
+    message: "MaxAI is connected.",
+  });
 }
 
 // --- POST: Start login flow -------------------------------------------------
@@ -289,7 +294,7 @@ async function loginMaxaiEmail(
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-): Promise<NextResponse> {
+): Promise<Response> {
   const auth = await requireManagementAuth(req);
   if (auth) return auth;
 
@@ -309,17 +314,12 @@ export async function POST(
   // {step:"request",email} emails a code; {step:"verify",code} mints + persists.
   if (providerSlug === "maxai" || providerSlug === "mx") {
     try {
-      return await loginMaxaiEmail(id, provider as Record<string, unknown>, body as {
-        step?: unknown;
-        email?: unknown;
-        code?: unknown;
-      });
-    } catch (err) {
-      const msg = sanitizeErrorMessage(err instanceof Error ? err.message : err);
-      return NextResponse.json(
-        { success: false, error: `MaxAI sign-in error: ${msg}` },
-        { status: 500 }
-      );
+      const { runMaxaiConnectionTransport } =
+        await import("@omniroute/open-sse/services/maxaiTransport.ts");
+      return await runMaxaiConnectionTransport(id, () => loginMaxaiEmail(id, body, req.signal));
+    } catch (error) {
+      if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
+      return maxaiLoginFailure(500);
     }
   }
 

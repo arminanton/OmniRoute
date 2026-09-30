@@ -1,5 +1,7 @@
 import { runWithProxyContext, getOriginalFetch } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { FetchTimeoutError, fetchWithTimeout } from "@/shared/utils/fetchTimeout";
+import { assertNoApplicationProxy, isRuntimePolicyError } from "@/shared/runtimePolicy";
+import { assertRuntimePolicyDispatcher } from "@omniroute/open-sse/utils/proxyDispatcher.ts";
 import {
   OutboundUrlGuardError,
   type OutboundUrlGuardMode,
@@ -7,6 +9,16 @@ import {
   parseAndValidatePublicUrl,
   parseOutboundUrl,
 } from "@/shared/network/outboundUrlGuard";
+
+import { createPinnedFetch, type DnsLookup } from "./dnsPinnedFetch";
+import { assertPinnedTransportAllowed } from "./pinnedTransportPolicy";
+import {
+  createOutboundDeadline,
+  withOutboundAbort,
+  resolveGuardedAddresses,
+  cancelOutboundBody,
+  readBoundedOutboundBody,
+} from "./guardedPinnedFetch";
 
 const DEFAULT_IDEMPOTENT_METHODS = ["GET", "HEAD", "OPTIONS", "PUT", "DELETE"];
 
@@ -24,11 +36,7 @@ const PROVIDER_PROBE_TIMEOUT_MS = resolveProbeTimeoutMs();
 
 export type SafeOutboundFetchGuard = OutboundUrlGuardMode;
 export type SafeOutboundFetchErrorCode =
-  | "INVALID_URL"
-  | "URL_GUARD_BLOCKED"
-  | "TIMEOUT"
-  | "REDIRECT_BLOCKED"
-  | "NETWORK_ERROR";
+  "INVALID_URL" | "URL_GUARD_BLOCKED" | "TIMEOUT" | "REDIRECT_BLOCKED" | "NETWORK_ERROR";
 
 export interface SafeOutboundFetchRetryOptions {
   attempts?: number;
@@ -43,6 +51,12 @@ export interface SafeOutboundFetchOptions extends RequestInit {
   retry?: SafeOutboundFetchRetryOptions | false;
   guard?: SafeOutboundFetchGuard;
   proxyConfig?: unknown;
+  /** Opt-in DNS pin + bounded buffering for admin endpoints such as Obsidian.
+   * Requires a real guard and disabled redirects. Proxy transport is fail-closed. */
+  pinDns?: boolean;
+  maxBytes?: number;
+  /** Resolver test seam; not accepted from API request bodies. */
+  lookup?: DnsLookup;
   /** Bypass the global proxy/TLS patched fetch and use the native Node.js
    *  fetch directly. Use when a provider endpoint has compatibility issues
    *  with the undici dispatcher layer. */
@@ -248,11 +262,32 @@ function normalizeFetchFailure(
   method: string,
   attempts: number
 ): SafeOutboundFetchError {
+  if (isRuntimePolicyError(error)) throw error;
   if (error instanceof SafeOutboundFetchError) {
     error.attempts = attempts;
     return error;
   }
 
+  if (error instanceof OutboundUrlGuardError) {
+    return new SafeOutboundFetchError(error.message, {
+      code: error.code === "OUTBOUND_URL_INVALID" ? "INVALID_URL" : "URL_GUARD_BLOCKED",
+      url: targetUrl,
+      method,
+      attempts,
+      isRetryable: false,
+      cause: error,
+    });
+  }
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return new SafeOutboundFetchError("Outbound request timed out", {
+      code: "TIMEOUT",
+      url: targetUrl,
+      method,
+      attempts,
+      isRetryable: false,
+      cause: error,
+    });
+  }
   if (error instanceof FetchTimeoutError) {
     return new SafeOutboundFetchError(error.message, {
       code: "TIMEOUT",
@@ -273,14 +308,122 @@ function normalizeFetchFailure(
     url: targetUrl,
     method,
     attempts,
-    isRetryable: code !== "PROXY_UNREACHABLE",
+    isRetryable: ![
+      "PROXY_UNREACHABLE",
+      "PROXY_REQUIRED_EGRESS",
+      "PINNED_PROXY_UNSUPPORTED",
+      "PINNED_TRANSPORT_PROXY_POLICY",
+    ].includes(code ?? ""),
     cause: error,
   });
 }
 
+async function pinnedOutboundResponse(
+  targetUrl: URL,
+  method: string,
+  options: SafeOutboundFetchOptions
+): Promise<Response> {
+  if (
+    !options.guard ||
+    options.guard === "none" ||
+    options.allowRedirect ||
+    options.bypassProxyPatch
+  ) {
+    throw new SafeOutboundFetchError(
+      "Pinned outbound fetch requires a guard and disabled redirects",
+      {
+        code: "URL_GUARD_BLOCKED",
+        url: targetUrl.toString(),
+        method,
+        attempts: 1,
+        isRetryable: false,
+      }
+    );
+  }
+  const deadline = createOutboundDeadline(options.signal ?? undefined, options.timeoutMs ?? 15000);
+  try {
+    await withOutboundAbort(
+      () => assertPinnedTransportAllowed(targetUrl, options.proxyConfig),
+      deadline.signal
+    );
+    const addresses = await resolveGuardedAddresses(
+      targetUrl,
+      options.guard,
+      deadline.signal,
+      options.lookup
+    );
+    const transport = createPinnedFetch(addresses[0].address, addresses[0].family);
+    const {
+      pinDns: _pinDns,
+      guard: _guard,
+      timeoutMs: _timeout,
+      maxBytes,
+      lookup: _lookup,
+      allowRedirect: _redirect,
+      retry: _retry,
+      proxyConfig: _proxy,
+      bypassProxyPatch: _bypass,
+      ...init
+    } = options;
+    const response = await withOutboundAbort(
+      () =>
+        transport(targetUrl, {
+          ...init,
+          method,
+          redirect: "manual",
+          signal: deadline.signal,
+        }),
+      deadline.signal,
+      cancelOutboundBody
+    );
+    if (response.status >= 300 && response.status < 400) {
+      cancelOutboundBody(response);
+      throw new SafeOutboundFetchError("Pinned outbound redirect blocked", {
+        code: "REDIRECT_BLOCKED",
+        url: targetUrl.toString(),
+        method,
+        attempts: 1,
+        status: response.status,
+        isRetryable: false,
+      });
+    }
+    const buffer = await readBoundedOutboundBody(
+      response,
+      maxBytes ?? 20 * 1024 * 1024,
+      deadline.signal
+    );
+    // The returned Response is detached from the socket and already byte/time bounded.
+    const headers = new Headers(response.headers);
+    headers.delete("content-encoding");
+    headers.delete("content-length");
+    return new Response(
+      [204, 205, 304].includes(response.status) || method === "HEAD" ? null : buffer,
+      {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      }
+    );
+  } catch (error) {
+    const normalized = normalizeFetchFailure(error, targetUrl.toString(), method, 1);
+    normalized.isRetryable = false; // Never replay credential-bearing pinned requests here.
+    throw normalized;
+  } finally {
+    deadline.dispose();
+  }
+}
+
 export async function safeOutboundFetch(url: string | URL, options: SafeOutboundFetchOptions = {}) {
+  // bypassProxyPatch is a native transport choice, not authority to discard a
+  // configured proxy. Pinned and patched paths use the same policy denial.
+  assertNoApplicationProxy(options.proxyConfig == null ? "none" : "configured");
+  // The pinned branch resolves DNS before constructing its dispatcher. Reject
+  // opaque caller transport selection here, before that first network operation.
+  assertRuntimePolicyDispatcher((options as RequestInit & { dispatcher?: unknown }).dispatcher);
   const targetUrl = normalizeUrl(url);
   const method = normalizeMethod(options.method);
+  applyUrlGuard(targetUrl, options.guard ?? "none", method);
+  if (options.pinDns) return pinnedOutboundResponse(targetUrl, method, options);
   const {
     timeoutMs,
     allowRedirect = false,
@@ -288,6 +431,9 @@ export async function safeOutboundFetch(url: string | URL, options: SafeOutbound
     guard = "none",
     proxyConfig,
     bypassProxyPatch = false,
+    pinDns: _pinDns,
+    maxBytes: _maxBytes,
+    lookup: _lookup,
     signal,
     ...fetchOptions
   } = options;

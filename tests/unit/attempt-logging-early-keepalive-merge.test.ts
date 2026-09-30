@@ -179,5 +179,6 @@ test("retry attempts remain distinct and the logical request id resolves to the 
 
   const logical = await pollForCallLog(pendingRequestId);
   assert.ok(logical, "the client-visible logical request id must remain durable");
-  assert.equal(logical.id, secondCallLogId, "the logical id must resolve to the latest attempt");
+  assert.notEqual(first.id, second.id, "each dispatch has a separate physical row");
+  assert.equal(logical.id, second.id, "the logical id must resolve to the latest attempt");
 });

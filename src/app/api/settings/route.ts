@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   getSettings,
   getSettingsRevision,
+  getRuntimePolicySettingsCandidate,
   updateSettings,
   SettingsRevisionConflictError,
 } from "@/lib/db/settings";
@@ -40,6 +41,14 @@ import {
   AUTHZ_HEADER_PEER_LOCALITY,
 } from "@/server/authz/headers";
 import { readSubjectFromHeaders } from "@/server/authz/assertAuth";
+import { assertRuntimePolicySettings } from "@/shared/runtimePolicySettings";
+import {
+  assertNotLockedCapability,
+  isRuntimePolicyError,
+  markRuntimePolicyResponse,
+  requiresLockedManagementAuth,
+} from "@/shared/runtimePolicy";
+import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 
 /**
  * Force this route to run dynamically per-request and never be cached/prerendered.
@@ -246,6 +255,7 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         ...safeSettings,
+        ...(requiresLockedManagementAuth() ? { requireLogin: true } : {}),
         settingsRevision,
         hasPassword: hasManagementPasswordConfigured(settings),
         runtimePorts,
@@ -316,6 +326,18 @@ export async function PATCH(request: Request) {
     }
     const body: typeof validation.data & { password?: string } = { ...validation.data };
 
+    // The schema strips some legacy forwarding fields, but they still trigger
+    // side effects below. Admit their raw presence BEFORE hashing or any write.
+    if (
+      ["cliproxyapi_url", "cliproxyapi_fallback_enabled", "cliproxyapi_model_mapping"].some(
+        (key) => rawBody[key] !== undefined
+      )
+    )
+      assertNotLockedCapability("upstream-proxy-settings");
+    if (requiresLockedManagementAuth()) {
+      assertRuntimePolicySettings(await getRuntimePolicySettingsCandidate(body));
+    }
+
     // Sanitize model lockout settings: clamp values to valid bounds.
     if (body.modelLockout) {
       body.modelLockout = resolveModelLockoutSettings({
@@ -366,6 +388,7 @@ export async function PATCH(request: Request) {
       // without a stored hash, so the Security tab's two-step flow (enable
       // requireLogin first, then set password) does not deadlock.
       const isColdBoot =
+        !requiresLockedManagementAuth() &&
         !storedPasswordHash &&
         (passwordState.settings.requireLogin === false || Boolean(body.newPassword));
       if (!isColdBoot) {
@@ -539,10 +562,26 @@ export async function PATCH(request: Request) {
     const { password, ...safeSettings } = settings;
     const settingsRevision = await getSettingsRevision();
     return NextResponse.json(
-      { ...safeSettings, settingsRevision },
+      {
+        ...safeSettings,
+        ...(requiresLockedManagementAuth() ? { requireLogin: true } : {}),
+        settingsRevision,
+      },
       { headers: settingsResponseHeaders(settingsRevision) }
     );
   } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      emitSettingsFailureAudit(request, actor, error.code, attemptedKeys);
+      return markRuntimePolicyResponse(
+        NextResponse.json(
+          buildErrorBody(403, "Runtime policy denied this operation", undefined, {
+            code: error.code,
+            reason: error.reason,
+          }),
+          { status: 403 }
+        )
+      );
+    }
     console.log("Error updating settings:", error);
     return NextResponse.json({ error: "Failed to update settings" }, { status: 500 });
   }

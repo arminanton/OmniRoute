@@ -3,6 +3,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import {
+  assertNotLockedCapability,
+  isRuntimePolicyError,
+} from "../../../../../src/shared/runtimePolicy.ts";
 import { notifyLauncherTurn, readLauncherBrowserHostDescriptor } from "../../launcher-browser-host";
 import { ChatGptWebAdapterError } from "./adapter-error";
 import type { CompiledChatGptWebPrompt } from "./prompt";
@@ -289,6 +293,7 @@ export class LauncherBrowserHelperClient {
   }
 
   private async ensureChild(): Promise<void> {
+    assertNotLockedCapability("launcher-browser-helper");
     if (
       this.child &&
       !this.child.killed &&
@@ -364,6 +369,7 @@ export class LauncherBrowserHelperClient {
     try {
       await this.ready;
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       if (this.child === child) {
         this.child = undefined;
         this.ready = undefined;

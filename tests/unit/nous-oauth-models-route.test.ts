@@ -78,7 +78,7 @@ test("Nous OAuth route labels only live zero-priced models and never sends beare
   assert.equal(result.source, "api");
   assert.equal(fetchCalls, 1);
   assert.deepEqual(
-    result.models.map((m: any) => [m.id, m.isFree]),
+    result.models.map((m: { id: string; isFree: boolean }) => [m.id, m.isFree]),
     [
       ["stealth/space-bunny-alpha", true],
       ["upstage/solar-pro4:free", true],
@@ -89,7 +89,7 @@ test("Nous OAuth route labels only live zero-priced models and never sends beare
   assert.match(result.models[0].name, /Free/);
   assert.doesNotMatch(result.models[2].name, /Free/);
   assert.equal(
-    result.models.some((m: any) => m.id === "Hermes-4-70B"),
+    result.models.some((m: { id: string }) => m.id === "Hermes-4-70B"),
     false
   );
 });

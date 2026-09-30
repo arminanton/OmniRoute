@@ -39,7 +39,7 @@ test("deliverWebhook clears the abort timer even when fetch rejects", async () =
       null,
       0, // maxRetries=0 → single attempt, no exponential-backoff timers
       {
-        lookup: async () => [{ address: "203.0.113.5", family: 4 }],
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
         // Non-timeout network failure — the exact path that previously skipped clearTimeout.
         fetchImpl: async () => {
           throw new Error("ECONNREFUSED");

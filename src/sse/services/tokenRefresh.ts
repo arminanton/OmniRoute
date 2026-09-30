@@ -5,8 +5,12 @@ import {
   NOUS_OAUTH_INFERENCE_PSD_KEY,
   validateNousOAuthInferenceBaseUrl,
 } from "@omniroute/open-sse/config/nousOAuth.ts";
-import { resolveProxyForConnection } from "@/lib/db/settings";
-import { resolveProxyForProvider } from "@/lib/db/proxies";
+import {
+  resolveGuardedProxyConfig,
+  withRequiredRefreshProxy,
+} from "@/lib/tokenHealthCheckProxyGuard";
+import { parseTokenExpiryMs } from "@omniroute/open-sse/utils/tokenExpiry.ts";
+import { isProbeContext } from "@/shared/utils/probeOrigin";
 import {
   TOKEN_EXPIRY_BUFFER_MS as BUFFER_MS,
   getRefreshLeadMs as _getRefreshLeadMs,
@@ -21,7 +25,6 @@ import {
   isSelfPersistedOAuthProvider,
   refreshTokenByProvider as _refreshTokenByProvider,
   formatProviderCredentials as _formatProviderCredentials,
-  getAllAccessTokens as _getAllAccessTokens,
 } from "@omniroute/open-sse/services/tokenRefresh.ts";
 
 // DEPRECATED: withConnectionRefreshMutex was removed. The per-connection mutex
@@ -34,15 +37,21 @@ import {
 
 export const TOKEN_EXPIRY_BUFFER_MS = BUFFER_MS;
 
-async function resolveProxyForCredentials(provider: string, credentials?: any) {
-  if (credentials?.connectionId) {
-    const resolved = await resolveProxyForConnection(credentials.connectionId);
-    if (resolved?.proxy) {
-      return resolved.proxy;
-    }
+export async function resolveProxyForCredentials(provider: string, credentials?: any) {
+  const { proxyConfig, blocked } = await resolveGuardedProxyConfig(
+    credentials?.connectionId,
+    provider
+  );
+  if (blocked) {
+    // Fixed message: resolver errors may contain proxy credentials or URLs.
+    throw Object.assign(
+      new Error("PROXY_ASSIGNED_UNAVAILABLE: refusing token refresh without its assigned proxy"),
+      {
+        code: "PROXY_ASSIGNED_UNAVAILABLE",
+      }
+    );
   }
-
-  return resolveProxyForProvider(provider);
+  return proxyConfig;
 }
 
 export const refreshAccessToken = async (
@@ -50,13 +59,16 @@ export const refreshAccessToken = async (
   refreshToken: string,
   credentials: any
 ) => {
+  if (provider === "maxai" || provider === "mx") return null;
   const proxy = await resolveProxyForCredentials(provider, credentials);
-  return _refreshAccessToken(provider, refreshToken, credentials, log, proxy);
+  return withRequiredRefreshProxy(proxy, () =>
+    _refreshAccessToken(provider, refreshToken, credentials, log, proxy)
+  );
 };
 
 export const refreshClaudeOAuthToken = async (refreshToken: string, credentials?: any) => {
   const proxy = await resolveProxyForCredentials("claude", credentials);
-  return _refreshClaudeOAuthToken(refreshToken, log, proxy);
+  return withRequiredRefreshProxy(proxy, () => _refreshClaudeOAuthToken(refreshToken, log, proxy));
 };
 
 export const refreshGoogleToken = async (
@@ -67,22 +79,24 @@ export const refreshGoogleToken = async (
   credentials?: any
 ) => {
   const proxy = await resolveProxyForCredentials(provider, credentials);
-  return _refreshGoogleToken(refreshToken, clientId, clientSecret, log, proxy);
+  return withRequiredRefreshProxy(proxy, () =>
+    _refreshGoogleToken(refreshToken, clientId, clientSecret, log, proxy)
+  );
 };
 
 export const refreshCodexToken = async (refreshToken: string, credentials?: any) => {
   const proxy = await resolveProxyForCredentials("codex", credentials);
-  return _refreshCodexToken(refreshToken, log, proxy);
+  return withRequiredRefreshProxy(proxy, () => _refreshCodexToken(refreshToken, log, proxy));
 };
 
 export const refreshQoderToken = async (refreshToken: string, credentials?: any) => {
   const proxy = await resolveProxyForCredentials("qoder", credentials);
-  return _refreshQoderToken(refreshToken, log, proxy);
+  return withRequiredRefreshProxy(proxy, () => _refreshQoderToken(refreshToken, log, proxy));
 };
 
 export const refreshGitHubToken = async (refreshToken: string, credentials?: any) => {
   const proxy = await resolveProxyForCredentials("github", credentials);
-  return _refreshGitHubToken(refreshToken, log, proxy);
+  return withRequiredRefreshProxy(proxy, () => _refreshGitHubToken(refreshToken, log, proxy));
 };
 
 export const refreshCopilotToken = async (
@@ -91,9 +105,11 @@ export const refreshCopilotToken = async (
   baseUrl?: string
 ) => {
   const proxy = await resolveProxyForCredentials("github", credentials);
-  return baseUrl
-    ? _refreshCopilotToken(githubAccessToken, log, proxy, baseUrl)
-    : _refreshCopilotToken(githubAccessToken, log, proxy);
+  return withRequiredRefreshProxy(proxy, () =>
+    baseUrl
+      ? _refreshCopilotToken(githubAccessToken, log, proxy, baseUrl)
+      : _refreshCopilotToken(githubAccessToken, log, proxy)
+  );
 };
 
 /**
@@ -118,19 +134,38 @@ export const getAccessToken = async (
   credentials: any,
   onPersist?: (result: any) => Promise<void>
 ) => {
+  if (provider === "maxai" || provider === "mx") return null;
   const proxy = await resolveProxyForCredentials(provider, credentials);
-  return _getAccessToken(provider, credentials, log, proxy, onPersist);
+  return withRequiredRefreshProxy(proxy, () =>
+    _getAccessToken(provider, credentials, log, proxy, onPersist)
+  );
 };
 
 export const refreshTokenByProvider = async (provider: string, credentials: any) => {
+  if (provider === "maxai" || provider === "mx") return null;
   const proxy = await resolveProxyForCredentials(provider, credentials);
-  return _refreshTokenByProvider(provider, credentials, log, proxy);
+  return withRequiredRefreshProxy(proxy, () =>
+    _refreshTokenByProvider(provider, credentials, log, proxy)
+  );
 };
 
 export const formatProviderCredentials = (provider: string, credentials: any) =>
   _formatProviderCredentials(provider, credentials, log);
 
-export const getAllAccessTokens = (userInfo: any) => _getAllAccessTokens(userInfo, log);
+export const getAllAccessTokens = async (userInfo: any) => {
+  const results: Record<string, unknown> = {};
+  for (const connection of Array.isArray(userInfo?.connections) ? userInfo.connections : []) {
+    if (!connection.isActive || !connection.provider) continue;
+    // Keep per-connection assignment and rotating-token identity instead of
+    // delegating to the legacy token-only bulk helper, which drops both.
+    const result = await getAccessToken(connection.provider, {
+      ...connection,
+      connectionId: connection.connectionId || connection.id,
+    });
+    if (result) results[connection.provider] = result;
+  }
+  return results;
+};
 
 // Local-specific: Update credentials in localDb
 export async function updateProviderCredentials(connectionId: string, newCredentials: any) {
@@ -203,6 +238,10 @@ export async function updateProviderCredentials(connectionId: string, newCredent
 
 // Local-specific: Check and refresh token proactively
 export async function checkAndRefreshToken(provider: string, credentials: any) {
+  // MaxAI is refreshed only INSIDE its verified connection transport by the
+  // chat/image/discovery caller. Do not spend or persist a rotating grant here.
+  // This is a pass-through, not a successful credential-health observation.
+  if (provider === "maxai" || provider === "mx") return { ...credentials };
   let updatedCredentials = { ...credentials };
 
   if (isSelfPersistedOAuthProvider(provider)) {
@@ -211,8 +250,13 @@ export async function checkAndRefreshToken(provider: string, credentials: any) {
     // the caller's old bearer after a concurrent rotation.
     if (!credentials?.connectionId) return null;
     const row = await getProviderConnectionById(credentials.connectionId);
-    if (row?.provider !== "nous-oauth" || row?.authType !== "oauth" ||
-        !row.accessToken || !row.refreshToken) return null;
+    if (
+      row?.provider !== "nous-oauth" ||
+      row?.authType !== "oauth" ||
+      !row.accessToken ||
+      !row.refreshToken
+    )
+      return null;
     const boundUrl = validateNousOAuthInferenceBaseUrl(
       row.providerSpecificData?.[NOUS_OAUTH_INFERENCE_PSD_KEY]
     );
@@ -226,11 +270,15 @@ export async function checkAndRefreshToken(provider: string, credentials: any) {
         [NOUS_OAUTH_INFERENCE_PSD_KEY]: boundUrl,
       },
     };
-    const until = new Date(freshest.expiresAt || 0).getTime();
+    const until = parseTokenExpiryMs(freshest.expiresAt);
     // Missing expiry is not a reason to burn a single-use grant hourly.
     // Reactive 401 handles unknown token lifetime with a failed bearer.
-    if (!Number.isFinite(until) || until <= 0 ||
-        until > Date.now() + _getRefreshLeadMs(provider, freshest.providerSpecificData)) {
+    if (
+      isProbeContext() ||
+      !Number.isFinite(until) ||
+      until <= 0 ||
+      until > Date.now() + _getRefreshLeadMs(provider, freshest.providerSpecificData)
+    ) {
       return freshest;
     }
     const rotated = await getAccessToken(provider, freshest);
@@ -250,16 +298,20 @@ export async function checkAndRefreshToken(provider: string, credentials: any) {
     return until > Date.now() + 30_000 ? freshest : null;
   }
 
+  // Probes use stored credentials and must not mint before the executor's guard.
+  // Keep the Nous persisted-row and inference-URL validation above this return.
+  if (isProbeContext()) return updatedCredentials;
+
   // Check regular token expiry. Use the provider-specific lead time so rotating-
   // token providers (Codex/OpenAI) refresh FAR ahead of access_token expiry. This
   // keeps the refresh_token "warm" — refreshed regularly enough that Auth0 doesn't
   // mark it as stale and revoke the token family on first use after long idle.
   if (updatedCredentials.expiresAt) {
-    const expiresAt = new Date(updatedCredentials.expiresAt).getTime();
+    const expiresAt = parseTokenExpiryMs(updatedCredentials.expiresAt);
     const now = Date.now();
     const refreshLead = _getRefreshLeadMs(provider, updatedCredentials.providerSpecificData);
 
-    if (expiresAt - now < refreshLead) {
+    if (expiresAt > 0 && expiresAt - now < refreshLead) {
       log.info("TOKEN_REFRESH", "Token expiring soon, refreshing proactively", {
         provider,
         expiresIn: Math.round((expiresAt - now) / 1000),
@@ -310,7 +362,9 @@ export async function checkAndRefreshToken(provider: string, credentials: any) {
     (provider === "github" || provider === "ghe-copilot") &&
     updatedCredentials.providerSpecificData?.copilotTokenExpiresAt
   ) {
-    const copilotExpiresAt = updatedCredentials.providerSpecificData.copilotTokenExpiresAt * 1000;
+    const copilotExpiresAt = parseTokenExpiryMs(
+      updatedCredentials.providerSpecificData.copilotTokenExpiresAt
+    );
     const now = Date.now();
 
     if (copilotExpiresAt - now < TOKEN_EXPIRY_BUFFER_MS) {

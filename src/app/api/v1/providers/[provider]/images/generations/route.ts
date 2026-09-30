@@ -1,5 +1,11 @@
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { handleImageGeneration } from "@omniroute/open-sse/handlers/imageGeneration.ts";
-import { errorResponse, unavailableResponse } from "@omniroute/open-sse/utils/error.ts";
+import { runMaxaiConnectionTransport } from "@omniroute/open-sse/services/maxaiTransport.ts";
+import {
+  errorResponse,
+  runtimePolicyErrorResponse,
+  unavailableResponse,
+} from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import {
   getProviderCredentialsWithQuotaPreflight,
@@ -31,7 +37,16 @@ export async function OPTIONS() {
 /**
  * POST /v1/providers/{provider}/images/generations
  */
-export async function POST(request, { params }) {
+export async function POST(request, context) {
+  try {
+    return await postHandler(request, context);
+  } catch (error) {
+    if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
+    throw error;
+  }
+}
+
+async function postHandler(request, { params }) {
   const { provider: rawProvider } = await params;
   const retirementResponse = rejectRetiredCommonChatGptWebProvider(rawProvider);
   if (retirementResponse) return retirementResponse;
@@ -101,14 +116,43 @@ export async function POST(request, { params }) {
     provider: rawProvider,
     requestedModel,
     credentials,
-    execute: (attemptCredentials) =>
-      runWithCallLogApiKeyContext(
-        {
-          apiKeyId: policy.apiKeyInfo?.id ?? null,
-          apiKeyName: policy.apiKeyInfo?.name ?? null,
-        },
-        () => handleImageGeneration({ body, credentials: attemptCredentials, log })
-      ),
+    execute: async (attemptCredentials) => {
+      const isMaxai = rawProvider === "maxai" || rawProvider === "mx";
+      const generateImage = () =>
+        runWithCallLogApiKeyContext(
+          {
+            apiKeyId: policy.apiKeyInfo?.id ?? null,
+            apiKeyName: policy.apiKeyInfo?.name ?? null,
+          },
+          () =>
+            handleImageGeneration({
+              body,
+              credentials: attemptCredentials,
+              log,
+              ...(isMaxai && { signal: request.signal }),
+            })
+        );
+      if (!isMaxai) return generateImage();
+      if (!attemptCredentials?.connectionId) {
+        return {
+          success: false,
+          status: 503,
+          error: "MaxAI image generation requires a connection.",
+        };
+      }
+      try {
+        request.signal?.throwIfAborted();
+        return await runMaxaiConnectionTransport(attemptCredentials.connectionId, generateImage);
+      } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
+        return {
+          success: false,
+          status: request.signal?.aborted ? 499 : 503,
+          error: "MaxAI image generation unavailable.",
+          retryable: !request.signal?.aborted,
+        };
+      }
+    },
   });
   credentials = execution.credentials;
   const result = execution.result;

@@ -10,6 +10,7 @@
 
 import { BaseGuardrail, type GuardrailContext, type GuardrailResult } from "./base";
 import { getSettings as defaultGetSettings } from "@/lib/db/settings";
+import { RemoteMediaFetchError } from "@/shared/network/remoteImageFetch";
 import { getResolvedModelCapabilities } from "@/lib/modelCapabilities";
 import {
   extractImageParts,
@@ -169,6 +170,17 @@ export interface VisionBridgeDependencies {
   hasUsableCredentials?: (model: string) => Promise<boolean | null>;
 }
 
+function blockedImageFetch(aborted = false): GuardrailResult<unknown> {
+  return {
+    block: true,
+    // Do not expose remote URLs, proxy settings, or the underlying error text.
+    message: aborted
+      ? "Vision image processing was aborted"
+      : "Vision image could not be fetched safely",
+    meta: { code: aborted ? "VISION_BRIDGE_ABORTED" : "REMOTE_MEDIA_FETCH_FAILED" },
+  };
+}
+
 export class VisionBridgeGuardrail extends BaseGuardrail {
   name = "vision-bridge";
   priority = 5;
@@ -278,6 +290,7 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     if (imageParts.length === 0) {
       return { block: false };
     }
+    if (context.signal?.aborted) return blockedImageFetch(true);
 
     // 9. Individual non-combo model with images → optionally REROUTE to best vision-capable model
     // instead of describing images through an intermediate vision call.
@@ -361,13 +374,21 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
           } else {
             // Claude-wire backends (minimax, zai, …) reject remote image URLs
             // (MiniMax 403 2013); resolve them to base64 before rerouting so
-            // the rerouted request can actually be processed upstream. Use
-            // undici fetch to bypass the runtime's hooked global fetch.
-            const rerouteBody = await ensureBase64ImagesForClaudeWire(
-              body as Parameters<typeof ensureBase64ImagesForClaudeWire>[0],
-              bestModel,
-              undiciFetch as unknown as typeof fetch
-            );
+            // the rerouted request can actually be processed upstream. URL
+            // downloads enforce DNS pinning and fail-closed proxy policy.
+            let rerouteBody: Awaited<ReturnType<typeof ensureBase64ImagesForClaudeWire>>;
+            try {
+              rerouteBody = await ensureBase64ImagesForClaudeWire(
+                body as Parameters<typeof ensureBase64ImagesForClaudeWire>[0],
+                bestModel,
+                undiciFetch as unknown as typeof fetch,
+                context.signal
+              );
+            } catch (error) {
+              if (error instanceof RemoteMediaFetchError) return blockedImageFetch();
+              throw error;
+            }
+            if (context.signal?.aborted) return blockedImageFetch(true);
             const modifiedBody = {
               ...(rerouteBody as Record<string, unknown>),
               model: bestModel,
@@ -416,6 +437,7 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
     // every describe. Tests inject their own callVisionModel.
     const describeConfig = {
       ...config,
+      signal: context.signal,
       prompt: composedPrompt,
       fetchImpl: undiciFetch as unknown as typeof fetch,
     };
@@ -458,6 +480,18 @@ export class VisionBridgeGuardrail extends BaseGuardrail {
         return `[Image ${i + 1}]: ${capped}`;
       })
     );
+
+    // These are admission/retrieval failures, not model failures. Never let the
+    // registry fail open, preserve a denied URL, or generate an unavailable stub.
+    if (context.signal?.aborted) return blockedImageFetch(true);
+    if (
+      results.some(
+        (result) => result.status === "rejected" && result.reason instanceof RemoteMediaFetchError
+      )
+    ) {
+      recordBridgeUse("vision", { failure: true });
+      return blockedImageFetch();
+    }
 
     // Collect descriptions maintaining original order. A failed describe yields
     // `null` so the original image is preserved downstream (#4012) — replacing it

@@ -11,6 +11,10 @@
 // See web_providers/adobe_atach_images.txt for live captures.
 
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
+import {
+  RemoteMediaFetchError,
+  createRemoteMediaFailureResult,
+} from "@/shared/network/remoteImageFetch";
 import { saveImageErrorResult, saveImageSuccessResult } from "../../imageGeneration.ts";
 import {
   AdobeFireflyError,
@@ -31,6 +35,7 @@ export async function handleAdobeFireflyImageGeneration({
   body,
   credentials,
   log,
+  signal,
   fetchImpl = fetch,
 }: {
   model: string;
@@ -64,6 +69,7 @@ export async function handleAdobeFireflyImageGeneration({
   };
   log?: { info?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void };
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }) {
   const startTime = Date.now();
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
@@ -78,6 +84,7 @@ export async function handleAdobeFireflyImageGeneration({
   }
 
   try {
+    signal?.throwIfAborted();
     // Durable session: JWT + Cookie once → auto-rebuild ARP from forter/arkose,
     // cache, optional Playwright warm-up. Submit path rotates ARP on 408.
     const session = await ensureAdobeFireflySession({
@@ -107,9 +114,11 @@ export async function handleAdobeFireflyImageGeneration({
       sessionCookie,
       arpSessionId,
       prompt,
+      signal,
       fetchImpl,
       log,
     });
+    signal?.throwIfAborted();
 
     log?.info?.(
       "IMAGE",
@@ -144,6 +153,9 @@ export async function handleAdobeFireflyImageGeneration({
       images: [{ url: result.url }],
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (err instanceof AdobeFireflyError) {
       log?.error?.("IMAGE", `${provider} adobe-firefly error ${err.status}: ${err.message}`);
       return saveImageErrorResult({

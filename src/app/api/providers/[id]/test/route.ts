@@ -1,4 +1,8 @@
 import { NextResponse } from "next/server";
+import { checkMaxaiConnection } from "@omniroute/open-sse/services/maxaiConnectionCheck.ts";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
+import { assertResolvedProviderConnectionEntrypoint } from "@/sse/services/compatibleNodeBaseUrl";
+import { runtimePolicyErrorResponse } from "@omniroute/open-sse/utils/error";
 import { z } from "zod";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { getCachedProviderConnectionById } from "@/lib/db/readCache";
@@ -118,6 +122,7 @@ async function getProviderRuntimeStatus(connection: any) {
       error: runtimeMessage,
     };
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     const runtimeMessage = `Failed to check local CLI runtime: ${toSafeMessage(
       error,
       "runtime_check_failed"
@@ -205,6 +210,7 @@ async function refreshOAuthToken(connection: any) {
     });
     return result; // { accessToken, expiresIn, refreshToken } or null
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     console.error(
       `Error refreshing ${provider} token:`,
       toSafeMessage(err, "Token refresh failed")
@@ -264,7 +270,8 @@ async function probeGitLabDuoPublicFallback(
       signal: AbortSignal.timeout(timeoutMs),
     });
     return fallbackRes.status !== 401 && fallbackRes.status !== 403;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     // Network/timeout failures on the probe are not an auth verdict either way —
     // fall through to the caller's existing 401/403 handling instead of masking them.
     return false;
@@ -282,6 +289,7 @@ async function syncToCloudIfEnabled() {
     const machineId = await getConsistentMachineId();
     await syncToCloud(machineId);
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     console.log(
       "Error syncing to cloud after token refresh:",
       toSafeMessage(error, "Cloud sync failed")
@@ -516,7 +524,8 @@ export async function testOAuthConnection(
         let retryRes: Response;
         try {
           retryRes = await fetch(retryUrl, retryInit);
-        } catch {
+        } catch (retryError) {
+          if (isRuntimePolicyError(retryError)) throw retryError;
           // Network failure on the retry: the refresh itself succeeded and
           // is persisted — report it as a (recoverable) upstream error with
           // the new tokens instead of surfacing a raw transport exception.
@@ -539,7 +548,10 @@ export async function testOAuthConnection(
           const retryInconclusiveBody = await retryRes
             .clone()
             .text()
-            .catch(() => "");
+            .catch((error) => {
+              if (isRuntimePolicyError(error)) throw error;
+              return "";
+            });
           const classification = classifyOAuthProbeInconclusive(
             config,
             connection.provider,
@@ -600,7 +612,10 @@ export async function testOAuthConnection(
         ? await res
             .clone()
             .text()
-            .catch(() => "")
+            .catch((error) => {
+              if (isRuntimePolicyError(error)) throw error;
+              return "";
+            })
         : "";
 
     const inconclusive = classifyOAuthProbeInconclusive(
@@ -695,7 +710,10 @@ export async function testOAuthConnection(
             ? await retryRes
                 .clone()
                 .text()
-                .catch(() => "")
+                .catch((error) => {
+                  if (isRuntimePolicyError(error)) throw error;
+                  return "";
+                })
             : "";
 
         const retryInconclusive = classifyOAuthProbeInconclusive(
@@ -735,7 +753,10 @@ export async function testOAuthConnection(
           };
         }
 
-        const retryBody = await retryRes.text().catch(() => "");
+        const retryBody = await retryRes.text().catch((error) => {
+          if (isRuntimePolicyError(error)) throw error;
+          return "";
+        });
 
         // #10365 / #10499: same fallback contract as the first attempt above — a
         // rejected direct_access exchange with a freshly-refreshed token is still
@@ -793,7 +814,10 @@ export async function testOAuthConnection(
       res.status === 403 ||
       connection.provider === "antigravity" ||
       connection.provider === "agy"
-        ? await res.text().catch(() => "")
+        ? await res.text().catch((error) => {
+            if (isRuntimePolicyError(error)) throw error;
+            return "";
+          })
         : "";
     const error = isGeoBlockedError(bodyText)
       ? "Egress location blocked by Google (User location is not supported). The Cloud Code API is not offered from this server's proxy exit region — route antigravity/agy through a proxy in a supported region (e.g. US/EU) or use a different provider. This is NOT an account problem."
@@ -813,6 +837,7 @@ export async function testOAuthConnection(
       diagnosis: classifyFailure({ error, statusCode: res.status }),
     };
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     // AbortSignal.timeout(...) surfaces as an AbortError/TimeoutError once the probe
     // exceeds its deadline (#1449). Report it with a clear, actionable message instead
     // of leaking the raw "The operation was aborted" text.
@@ -876,7 +901,7 @@ async function testApiKeyConnection(connection: any) {
  * @returns {Promise<object>} Test result (same shape as the JSON response)
  */
 export async function testSingleConnection(connectionId: string, validationModelId?: string) {
-  const connection = await getCachedProviderConnectionById(connectionId);
+  let connection = await getCachedProviderConnectionById(connectionId);
 
   if (!connection) {
     return { valid: false, error: "Connection not found", diagnosis: null, latencyMs: 0 };
@@ -900,6 +925,22 @@ export async function testSingleConnection(connectionId: string, validationModel
       testedAt: null,
     };
   }
+
+  if (connection.provider === "maxai" || connection.provider === "mx") {
+    const result = checkMaxaiConnection();
+    // Return before proxy/runtime probes and the generic skipped-result
+    // activation branch: unverified credentials must not change account health.
+    return {
+      ...result,
+      warning: result.error,
+      refreshed: false,
+      diagnosis: classifyFailure({ error: result.error, unsupported: true }),
+      latencyMs: 0,
+      testedAt: null,
+    };
+  }
+
+  connection = await assertResolvedProviderConnectionEntrypoint(connection);
 
   if (await isConnectionUnavailableToAuxiliaryActivity(connectionId)) {
     const error = "Connection test deferred while an exclusive session lease is active";
@@ -932,6 +973,7 @@ export async function testSingleConnection(connectionId: string, validationModel
   try {
     proxyInfo = await resolveProxyForConnection(connectionId);
   } catch (proxyErr: unknown) {
+    if (isRuntimePolicyError(proxyErr)) throw proxyErr;
     console.log(
       `[ConnectionTest] Failed to resolve proxy for ${connectionId}:`,
       toSafeMessage(proxyErr, "Proxy resolution failed")
@@ -1000,6 +1042,7 @@ export async function testSingleConnection(connectionId: string, validationModel
       try {
         await updateProviderConnection(connectionId, { isActive: true });
       } catch (activateError) {
+        if (isRuntimePolicyError(activateError)) throw activateError;
         console.log(
           `[ConnectionTest] Failed to activate unverifiable connection ${connectionId}:`,
           toSafeMessage(activateError, "Connection activation failed")
@@ -1182,6 +1225,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     return NextResponse.json(data);
   } catch (error) {
+    if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
     const retired = retirement.responseForError(error);
     if (retired) return retired;
     console.log("Error testing connection:", toSafeMessage(error, "Connection test failed"));

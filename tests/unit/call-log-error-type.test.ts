@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { getDbInstance } from "../../src/lib/db/core.ts";
 import { classifyCallLogError } from "../../src/lib/usage/callLogs/format.ts";
-import { saveCallLog } from "../../src/lib/usage/callLogs.ts";
+import { saveCallLog, getCallLogById } from "../../src/lib/usage/callLogs.ts";
 import { getErrorTypeBreakdown } from "../../src/lib/db/callLogStats.ts";
 
 test("call_logs table has error_type column", () => {
@@ -52,13 +52,14 @@ test("saveCallLog persists error_type from failure", async () => {
     duration: 100,
     tokens: { in: 10, out: 5 },
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
-  const row = db.prepare("SELECT error_type FROM call_logs WHERE id = ?").get(testId) as {
+  const row = db.prepare("SELECT error_type FROM call_logs WHERE id = ?").get(physicalId) as {
     error_type: string | null;
   };
   assert.equal(row.error_type, "quota_exhausted");
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("saveCallLog persists null error_type for success", async () => {
@@ -75,13 +76,14 @@ test("saveCallLog persists null error_type for success", async () => {
     duration: 100,
     tokens: { in: 10, out: 5 },
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
-  const row = db.prepare("SELECT error_type FROM call_logs WHERE id = ?").get(testId) as {
+  const row = db.prepare("SELECT error_type FROM call_logs WHERE id = ?").get(physicalId) as {
     error_type: string | null;
   };
   assert.equal(row.error_type, null);
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("saveCallLog normalizes Error object before classifying", async () => {
@@ -99,13 +101,14 @@ test("saveCallLog normalizes Error object before classifying", async () => {
     duration: 100,
     tokens: { in: 10, out: 5 },
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
-  const row = db.prepare("SELECT error_type FROM call_logs WHERE id = ?").get(testId) as {
+  const row = db.prepare("SELECT error_type FROM call_logs WHERE id = ?").get(physicalId) as {
     error_type: string | null;
   };
   assert.equal(row.error_type, "fingerprint_rejection");
 
-  db.prepare("DELETE FROM call_logs WHERE id = ?").run(testId);
+  db.prepare("DELETE FROM call_logs WHERE id = ?").run(physicalId);
 });
 
 test("getErrorTypeBreakdown groups failures by family, excludes successes", async () => {
@@ -173,8 +176,9 @@ test("getErrorTypeBreakdown groups failures by family, excludes successes", asyn
     tokens: { in: 1, out: 1 },
   });
 
-  const whereClause = `WHERE id IN (${ids.map((_, i) => `@id${i}`).join(", ")})`;
-  const params = Object.fromEntries(ids.map((id, i) => [`id${i}`, id]));
+  const physicalIds = await Promise.all(ids.map(async (id) => (await getCallLogById(id))!.id));
+  const whereClause = `WHERE id IN (${physicalIds.map((_, i) => `@id${i}`).join(", ")})`;
+  const params = Object.fromEntries(physicalIds.map((id, i) => [`id${i}`, id]));
   const breakdown = getErrorTypeBreakdown(whereClause, params);
 
   assert.deepEqual(breakdown, [
@@ -183,7 +187,7 @@ test("getErrorTypeBreakdown groups failures by family, excludes successes", asyn
     { errorType: "unclassified", count: 1 },
   ]);
 
-  ids.forEach((id) => db.prepare("DELETE FROM call_logs WHERE id = ?").run(id));
+  physicalIds.forEach((id) => db.prepare("DELETE FROM call_logs WHERE id = ?").run(id));
 });
 
 test("getErrorTypeBreakdown with empty whereClause does not crash", () => {

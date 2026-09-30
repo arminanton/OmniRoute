@@ -5,11 +5,14 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import "../../../open-sse/utils/proxyFetch.ts";
+import { installPinnedTransport } from "../../helpers/pinnedTransport.ts";
 
 const {
   isClaudeWireFormatModel,
   ensureBase64ImagesForClaudeWire,
 } = await import("../../../src/lib/guardrails/visionBridgeHelpers.ts");
+const { RemoteMediaFetchError } = await import("../../../src/shared/network/remoteImageFetch.ts");
 
 test("isClaudeWireFormatModel: true for anthropic and claude-format registry providers", () => {
   assert.strictEqual(isClaudeWireFormatModel("anthropic/claude-sonnet-4"), true);
@@ -60,70 +63,106 @@ test("ensureBase64ImagesForClaudeWire: keeps data-URI images as-is", async () =>
   assert.strictEqual(part.image_url.url, dataUri);
 });
 
-test("ensureBase64ImagesForClaudeWire: resolves remote URLs to base64 for claude-wire targets", async () => {
-  const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () =>
-    new Response(new Uint8Array(Buffer.from(pngBase64, "base64")), {
-      status: 200,
-      headers: { "content-type": "image/png" },
-    });
+test("ensureBase64ImagesForClaudeWire: resolves remote URLs to base64 for claude-wire targets", async (t) => {
+  const pngBase64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const transport = installPinnedTransport(t.mock, {
+    dnsLookup: async (hostname) => {
+      assert.equal(hostname, "example.com");
+      return [{ address: "93.184.216.34", family: 4 }];
+    },
+    reply(socket, dial) {
+      assert.equal(dial.protocol, "https:");
+      assert.equal(dial.options.host, "example.com");
+      assert.match(socket.request, /^GET \/cat\.png HTTP\/1\.1\r\n/);
+      assert.doesNotMatch(
+        socket.request,
+        /\r\n(?:authorization|proxy-authorization|cookie|x-api-key|apikey):/i
+      );
+      socket.respond({
+        headers: { "content-type": "image/png" },
+        body: Buffer.from(pngBase64, "base64"),
+      });
+    },
+  });
+  t.after(transport.restore);
+  let providerSends = 0;
+  const providerFetch: typeof fetch = async () => {
+    providerSends++;
+    assert.fail("media must not use the provider/self-hop fetch");
+  };
+  t.mock.method(globalThis, "fetch", providerFetch);
 
-  try {
-    const body = {
-      model: "zai/glm-5",
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "What is this?" },
-            { type: "image_url", image_url: { url: "https://example.com/cat.png" } },
-          ],
-        },
-      ],
-    };
-    const out = await ensureBase64ImagesForClaudeWire(
-      body,
-      "zai/glm-5",
-      async () =>
-        new Response(new Uint8Array(Buffer.from(pngBase64, "base64")), {
-          status: 200,
-          headers: { "content-type": "image/png" },
-        })
-    );
-    const part = out.messages[0].content[1];
-    assert.ok(
-      part.image_url.url.startsWith("data:image/png;base64,"),
-      "remote URL must be resolved to a base64 data URI"
-    );
-    assert.ok(part.image_url.url.includes(pngBase64));
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const body = {
+    model: "zai/glm-5",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "What is this?" },
+          { type: "image_url", image_url: { url: "https://example.com/cat.png" } },
+        ],
+      },
+    ],
+  };
+  const originalBody = structuredClone(body);
+  const out = await ensureBase64ImagesForClaudeWire(body, "zai/glm-5", providerFetch);
+  const part = out.messages[0].content[1];
+  assert.ok(
+    part.image_url.url.startsWith("data:image/png;base64,"),
+    "remote URL must be resolved to a base64 data URI"
+  );
+  assert.ok(part.image_url.url.includes(pngBase64));
+  assert.deepEqual(body, originalBody);
+  assert.equal(providerSends, 0);
+  assert.equal(transport.resolutions.length, 1);
+  assert.equal(transport.dials.length, 1);
+  assert.deepEqual(transport.lookups, [
+    { hostname: "example.com", all: true, address: "93.184.216.34", family: 4 },
+  ]);
+  await transport.sockets[0].closedPromise;
+  assert.equal(transport.sockets[0].destroyed, true);
 });
 
-test("ensureBase64ImagesForClaudeWire: fail-open when the remote fetch fails", async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
-    throw new Error("network down");
+test("ensureBase64ImagesForClaudeWire: fails closed on remote fetch failure without provider dispatch", async (t) => {
+  const transport = installPinnedTransport(t.mock, {
+    dnsLookup: async (hostname) => {
+      assert.equal(hostname, "example.com");
+      return [{ address: "93.184.216.34", family: 4 }];
+    },
+    connectError: new Error("fixture media connection failed"),
+  });
+  t.after(transport.restore);
+  let providerSends = 0;
+  const providerFetch: typeof fetch = async () => {
+    providerSends++;
+    assert.fail("failed media must not reach provider/self-hop fetch");
   };
+  t.mock.method(globalThis, "fetch", providerFetch);
 
-  try {
-    const body = {
-      model: "zai/glm-5",
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "image_url", image_url: { url: "https://example.com/cat.png" } }],
-        },
-      ],
-    };
-    const out = await ensureBase64ImagesForClaudeWire(body, "zai/glm-5", async () => {
-      throw new Error("network down");
-    });
-    const part = out.messages[0].content[0];
-    assert.strictEqual(part.image_url.url, "https://example.com/cat.png");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  const body = {
+    model: "zai/glm-5",
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "image_url", image_url: { url: "https://example.com/cat.png" } }],
+      },
+    ],
+  };
+  const originalBody = structuredClone(body);
+  await assert.rejects(
+    ensureBase64ImagesForClaudeWire(body, "zai/glm-5", providerFetch),
+    (error: unknown) => {
+      assert.ok(error instanceof RemoteMediaFetchError);
+      assert.equal(error.retryable, false);
+      assert.equal(error.status, 400);
+      return true;
+    }
+  );
+  assert.deepEqual(body, originalBody);
+  assert.equal(providerSends, 0);
+  assert.equal(transport.resolutions.length, 1);
+  assert.equal(transport.dials.length, 1);
+  await transport.sockets[0].closedPromise;
+  assert.equal(transport.sockets[0].destroyed, true);
 });

@@ -1,3 +1,9 @@
+import {
+  assertNoApplicationProxy,
+  isRuntimePolicyError,
+  markRuntimePolicyResponse,
+} from "@/shared/runtimePolicy";
+import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { z } from "zod";
 import { deleteProxyById, listProxies, updateProxy } from "@/lib/db/proxies";
 import { createErrorResponseFromUnknown } from "@/lib/api/errorResponse";
@@ -128,6 +134,14 @@ async function testSingleProxy(proxy: {
 export async function POST(request: Request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
+  try {
+    assertNoApplicationProxy("configured");
+  } catch (error) {
+    if (!isRuntimePolicyError(error)) throw error;
+    return markRuntimePolicyResponse(
+      Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+    );
+  }
 
   let rawBody: unknown;
   try {

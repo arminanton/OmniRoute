@@ -20,6 +20,12 @@
  *     reported but not routed.
  */
 import { randomUUID } from "crypto";
+import {
+  assertNoApplicationProxy,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+} from "@/shared/runtimePolicy";
+import { assertRuntimePolicyProxyConfig } from "@/shared/runtimePolicyProxyConfig";
 import { getDbInstance } from "../db/core";
 import { backupDbFile } from "../db/backup";
 import {
@@ -28,7 +34,7 @@ import {
   deleteProxyById,
   upsertProxy,
 } from "../db/proxies";
-import { bumpProxyConfigGeneration } from "../db/settings";
+import { bumpProxyConfigGeneration, getRuntimePolicySettingsCandidate } from "../db/settings";
 import { isSubscriptionDue } from "./due";
 import { isLocalCoreEndpointAllowed } from "./coreEndpoint";
 import { resolveTargetScopes } from "./scopes";
@@ -49,9 +55,7 @@ export type ProxySubscriptionStatus = "ok" | "error" | "empty";
  * column (as JSON) so the dashboard can localize them via i18n instead of
  * showing server-side strings. */
 export type ProxySubscriptionErrorCode =
-  | "LOCAL_CORE_ENDPOINT_INVALID"
-  | "NEEDS_CORE_NOT_CONFIGURED"
-  | "NO_USABLE_NODES";
+  "LOCAL_CORE_ENDPOINT_INVALID" | "NEEDS_CORE_NOT_CONFIGURED" | "NO_USABLE_NODES";
 
 /** Encode a user-facing error as `{ code, detail? }` for i18n on the client. */
 export function subscriptionErrorCode(code: ProxySubscriptionErrorCode, detail?: string): string {
@@ -166,6 +170,7 @@ export async function getSubscriptionById(id: string): Promise<ProxySubscription
 export async function createSubscription(
   payload: ProxySubscriptionPayload
 ): Promise<ProxySubscriptionRecord> {
+  assertNoApplicationProxy(payload.enabled === true ? "configured" : "none");
   const id = randomUUID();
   const now = new Date().toISOString();
   const enabled = payload.enabled === true ? 1 : 0;
@@ -204,14 +209,27 @@ export async function updateSubscription(
   const name = payload.name ?? existing.name;
   const url = payload.url ?? existing.url;
   const mode = payload.mode ?? existing.mode;
-  const ruleProviders = payload.ruleProviders !== undefined ? payload.ruleProviders : existing.ruleProviders;
+  const ruleProviders =
+    payload.ruleProviders !== undefined ? payload.ruleProviders : existing.ruleProviders;
   const localCoreEndpoint =
-    payload.localCoreEndpoint !== undefined ? payload.localCoreEndpoint : existing.localCoreEndpoint;
+    payload.localCoreEndpoint !== undefined
+      ? payload.localCoreEndpoint
+      : existing.localCoreEndpoint;
   const updateIntervalMinutes = payload.updateIntervalMinutes ?? existing.updateIntervalMinutes;
   const now = new Date().toISOString();
 
   const enabledChanged = payload.enabled !== undefined && payload.enabled !== existing.enabled;
-  const enabled = payload.enabled !== undefined ? (payload.enabled ? 1 : 0) : existing.enabled ? 1 : 0;
+  const enabled =
+    payload.enabled !== undefined ? (payload.enabled ? 1 : 0) : existing.enabled ? 1 : 0;
+  const willSync =
+    Boolean(enabled) &&
+    (enabledChanged ||
+      payload.mode !== undefined ||
+      payload.ruleProviders !== undefined ||
+      payload.url !== undefined ||
+      payload.localCoreEndpoint !== undefined);
+  assertNoApplicationProxy(willSync ? "configured" : "none");
+  if (!enabled) await assertSubscriptionCleanup(id);
 
   db.prepare(
     `UPDATE proxy_subscriptions
@@ -254,7 +272,10 @@ export async function updateSubscription(
   return getSubscriptionById(id);
 }
 
-export async function setSubscriptionEnabled(id: string, enabled: boolean): Promise<ProxySubscriptionRecord | null> {
+export async function setSubscriptionEnabled(
+  id: string,
+  enabled: boolean
+): Promise<ProxySubscriptionRecord | null> {
   return updateSubscription(id, { enabled });
 }
 
@@ -268,7 +289,8 @@ export async function deleteSubscription(id: string): Promise<boolean> {
   for (const r of rows) {
     try {
       await deleteProxyById(r.id, { force: true });
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       // ignore individual failures
     }
   }
@@ -388,7 +410,15 @@ async function fetchSubscriptionContent(url: string): Promise<string> {
 async function syncSubscriptionUnsafe(id: string): Promise<SyncResult> {
   const sub = await getSubscriptionById(id);
   if (!sub) {
-    return { subscriptionId: id, nodes: 0, needsCore: 0, boundProxies: 0, status: "error", error: "not found", applied: false };
+    return {
+      subscriptionId: id,
+      nodes: 0,
+      needsCore: 0,
+      boundProxies: 0,
+      status: "error",
+      error: "not found",
+      applied: false,
+    };
   }
 
   let body: string;
@@ -397,8 +427,23 @@ async function syncSubscriptionUnsafe(id: string): Promise<SyncResult> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const fetchConsec = (sub.consecutiveFailures || 0) + 1;
-    await updateSubscriptionStatus(id, "error", `Fetch failed: ${msg}`, null, new Date().toISOString(), fetchConsec);
-    return { subscriptionId: id, nodes: 0, needsCore: 0, boundProxies: 0, status: "error", error: msg, applied: false };
+    await updateSubscriptionStatus(
+      id,
+      "error",
+      `Fetch failed: ${msg}`,
+      null,
+      new Date().toISOString(),
+      fetchConsec
+    );
+    return {
+      subscriptionId: id,
+      nodes: 0,
+      needsCore: 0,
+      boundProxies: 0,
+      status: "error",
+      error: msg,
+      applied: false,
+    };
   }
 
   const parsed: ParsedSubscription = parseSubscription(body);
@@ -414,81 +459,103 @@ async function syncSubscriptionUnsafe(id: string): Promise<SyncResult> {
   // better-sqlite3, so instead we guard against an unexpected DB error so a
   // half-completed sync can never be left flagged "ok".
   try {
-  // Directly-usable nodes → upsert into the registry as a pool.
-  for (const node of parsed.nodes) {
-    const upserted = await upsertProxy({
-      name: node.name || `${sub.name} (${node.host}:${node.port})`,
-      type: node.type,
-      host: node.host,
-      port: node.port,
-      username: node.username,
-      password: node.password,
-      source: "subscription",
-      subscriptionId: id,
-      status: "active",
-    });
-    if (upserted.proxy?.id) keptIds.push(upserted.proxy.id);
-  }
+    // Directly-usable nodes → upsert into the registry as a pool.
+    for (const node of parsed.nodes) {
+      const upserted = await upsertProxy({
+        name: node.name || `${sub.name} (${node.host}:${node.port})`,
+        type: node.type,
+        host: node.host,
+        port: node.port,
+        username: node.username,
+        password: node.password,
+        source: "subscription",
+        subscriptionId: id,
+        status: "active",
+      });
+      if (upserted.proxy?.id) keptIds.push(upserted.proxy.id);
+    }
 
-  // needsCore nodes → bind the operator-supplied local core endpoint (single).
-  if (parsed.needsCore.length > 0) {
-    if (sub.localCoreEndpoint && isLocalCoreEndpointAllowed(sub.localCoreEndpoint)) {
-      try {
-        const coreUrl = new URL(sub.localCoreEndpoint);
-        const coreType = coreUrl.protocol === "https:" ? "https" : coreUrl.protocol === "socks5:" ? "socks5" : "http";
-        const upserted = await upsertProxy({
-          name: `${sub.name} (local core)`,
-          type: coreType,
-          host: coreUrl.hostname,
-          port: Number(coreUrl.port) || (coreType === "https" ? 443 : 8080),
-          username: coreUrl.username ? decodeURIComponent(coreUrl.username) : undefined,
-          password: coreUrl.password ? decodeURIComponent(coreUrl.password) : undefined,
-          source: "subscription",
-          subscriptionId: id,
-          status: "active",
-        });
-        if (upserted.proxy?.id) keptIds.push(upserted.proxy.id);
-      } catch {
-        warning = subscriptionErrorCode("LOCAL_CORE_ENDPOINT_INVALID");
+    // needsCore nodes → bind the operator-supplied local core endpoint (single).
+    if (parsed.needsCore.length > 0) {
+      if (sub.localCoreEndpoint && isLocalCoreEndpointAllowed(sub.localCoreEndpoint)) {
+        try {
+          const coreUrl = new URL(sub.localCoreEndpoint);
+          const coreType =
+            coreUrl.protocol === "https:"
+              ? "https"
+              : coreUrl.protocol === "socks5:"
+                ? "socks5"
+                : "http";
+          const upserted = await upsertProxy({
+            name: `${sub.name} (local core)`,
+            type: coreType,
+            host: coreUrl.hostname,
+            port: Number(coreUrl.port) || (coreType === "https" ? 443 : 8080),
+            username: coreUrl.username ? decodeURIComponent(coreUrl.username) : undefined,
+            password: coreUrl.password ? decodeURIComponent(coreUrl.password) : undefined,
+            source: "subscription",
+            subscriptionId: id,
+            status: "active",
+          });
+          if (upserted.proxy?.id) keptIds.push(upserted.proxy.id);
+        } catch {
+          warning = subscriptionErrorCode("LOCAL_CORE_ENDPOINT_INVALID");
+        }
+      } else {
+        const nodes = parsed.needsCore
+          .map((n) => `${n.rawProtocol}://${n.host ?? ""}${n.port ? ":" + n.port : ""}`)
+          .join(", ");
+        warning = subscriptionErrorCode("NEEDS_CORE_NOT_CONFIGURED", nodes);
+      }
+    }
+
+    // Remove stale subscription nodes no longer present in the fetched set.
+    if (keptIds.length > 0) {
+      const placeholders = keptIds.map(() => "?").join(",");
+      const stale = db
+        .prepare(
+          `SELECT id FROM proxy_registry WHERE subscription_id = ? AND id NOT IN (${placeholders})`
+        )
+        .all(id, ...keptIds) as Array<{ id: string }>;
+      for (const r of stale) {
+        try {
+          await deleteProxyById(r.id, { force: true });
+        } catch {
+          // ignore
+        }
       }
     } else {
-      const nodes = parsed.needsCore
-        .map((n) => `${n.rawProtocol}://${n.host ?? ""}${n.port ? ":" + n.port : ""}`)
-        .join(", ");
-      warning = subscriptionErrorCode("NEEDS_CORE_NOT_CONFIGURED", nodes);
-    }
-  }
-
-  // Remove stale subscription nodes no longer present in the fetched set.
-  if (keptIds.length > 0) {
-    const placeholders = keptIds.map(() => "?").join(",");
-    const stale = db
-      .prepare(`SELECT id FROM proxy_registry WHERE subscription_id = ? AND id NOT IN (${placeholders})`)
-      .all(id, ...keptIds) as Array<{ id: string }>;
-    for (const r of stale) {
-      try {
-        await deleteProxyById(r.id, { force: true });
-      } catch {
-        // ignore
+      const stale = db
+        .prepare("SELECT id FROM proxy_registry WHERE subscription_id = ?")
+        .all(id) as Array<{ id: string }>;
+      for (const r of stale) {
+        try {
+          await deleteProxyById(r.id, { force: true });
+        } catch {
+          // ignore
+        }
       }
     }
-  } else {
-    const stale = db
-      .prepare("SELECT id FROM proxy_registry WHERE subscription_id = ?")
-      .all(id) as Array<{ id: string }>;
-    for (const r of stale) {
-      try {
-        await deleteProxyById(r.id, { force: true });
-      } catch {
-        // ignore
-      }
-    }
-  }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     const writeConsec = (sub.consecutiveFailures || 0) + 1;
-    await updateSubscriptionStatus(id, "error", `Sync write failed: ${msg}`, null, new Date().toISOString(), writeConsec);
-    return { subscriptionId: id, nodes: 0, needsCore: 0, boundProxies: 0, status: "error", error: msg, applied: false };
+    await updateSubscriptionStatus(
+      id,
+      "error",
+      `Sync write failed: ${msg}`,
+      null,
+      new Date().toISOString(),
+      writeConsec
+    );
+    return {
+      subscriptionId: id,
+      nodes: 0,
+      needsCore: 0,
+      boundProxies: 0,
+      status: "error",
+      error: msg,
+      applied: false,
+    };
   }
 
   const lastNodes = redactedNodeSummary(parsed);
@@ -544,6 +611,7 @@ const syncInFlight = new Map<string, Promise<SyncResult>>();
 
 /** Public entry point: de-dupes concurrent syncs, then runs the unsafe body. */
 export async function syncSubscription(id: string): Promise<SyncResult> {
+  assertNoApplicationProxy("configured");
   const existing = syncInFlight.get(id);
   if (existing) return existing;
   const run = syncSubscriptionUnsafe(id).finally(() => {
@@ -579,6 +647,7 @@ async function updateSubscriptionStatus(
 
 /** Bind the subscription's synced proxy pool into the target scope(s). */
 export async function applySubscription(id: string): Promise<void> {
+  assertNoApplicationProxy("configured");
   const sub = await getSubscriptionById(id);
   if (!sub || !sub.enabled) return;
 
@@ -599,8 +668,24 @@ export async function applySubscription(id: string): Promise<void> {
   await setProxyEnabledFlag(true);
 }
 
+async function assertSubscriptionCleanup(id: string): Promise<void> {
+  if (getRuntimePolicy().mode !== "locked") return;
+  const db = getDbInstance();
+  const rows = db
+    .prepare("SELECT id FROM proxy_registry WHERE subscription_id = ?")
+    .all(id) as Array<{ id: string }>;
+  const ids = new Set(rows.map((row) => row.id));
+  const candidate = await getRuntimePolicySettingsCandidate();
+  const assignments = candidate.proxyAssignments as Array<{ proxyId: string }>;
+  assertRuntimePolicyProxyConfig({
+    ...candidate,
+    proxyAssignments: assignments.filter((entry) => !ids.has(entry.proxyId)),
+  });
+}
+
 /** Remove the subscription's proxies from their bound scope(s). */
 export async function unapplySubscription(id: string): Promise<void> {
+  await assertSubscriptionCleanup(id);
   const db = getDbInstance();
   const rows = db
     .prepare("SELECT id FROM proxy_registry WHERE subscription_id = ?")
@@ -638,6 +723,9 @@ async function hasNonSubscriptionGlobalProxy(): Promise<boolean> {
 }
 
 async function recomputeProxyEnabled(): Promise<void> {
+  // Locked cleanup must not implicitly re-enable an operator-disabled global
+  // toggle because unrelated subscription/registry rows still exist.
+  if (getRuntimePolicy().mode === "locked") return;
   const db = getDbInstance();
   // Must check for an ACTUALLY BOUND subscription proxy, not just an enabled
   // subscription row: unapplySubscription() detaches proxy_assignments without
@@ -659,6 +747,11 @@ async function recomputeProxyEnabled(): Promise<void> {
 }
 
 async function setProxyEnabledFlag(value: boolean): Promise<void> {
+  if (getRuntimePolicy().mode === "locked") {
+    assertRuntimePolicyProxyConfig(
+      await getRuntimePolicySettingsCandidate({ proxyEnabled: value })
+    );
+  }
   const db = getDbInstance();
   db.prepare(
     "INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES ('settings', 'proxyEnabled', ?)"
@@ -673,6 +766,7 @@ let schedulerTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Start a background ticker that refreshes enabled subscriptions on their interval. */
 export function startSubscriptionScheduler(): void {
+  if (getRuntimePolicy().mode === "locked") return;
   if (schedulerStarted) return;
   if (typeof window !== "undefined") return; // never in the browser
   if (process.env.NODE_ENV === "test") return; // no timers during tests
@@ -687,11 +781,15 @@ export function startSubscriptionScheduler(): void {
         try {
           await syncSubscription(s.id);
         } catch (e) {
-          console.warn(`[ProxySubscription] refresh failed for ${s.id}: ${e instanceof Error ? e.message : e}`);
+          console.warn(
+            `[ProxySubscription] refresh failed for ${s.id}: ${e instanceof Error ? e.message : e}`
+          );
         }
       }
     } catch (e) {
-      console.warn(`[ProxySubscription] scheduler tick error: ${e instanceof Error ? e.message : e}`);
+      console.warn(
+        `[ProxySubscription] scheduler tick error: ${e instanceof Error ? e.message : e}`
+      );
     }
   };
 

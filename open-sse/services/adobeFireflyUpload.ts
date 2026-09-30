@@ -5,6 +5,8 @@
  */
 
 import { sanitizeErrorMessage } from "../utils/error.ts";
+import { fetchRemoteImage, RemoteMediaFetchError } from "@/shared/network/remoteImageFetch";
+
 import {
   ADOBE_FIREFLY_MAX_UPLOAD_BYTES,
   buildAdobeUploadHeaders,
@@ -12,6 +14,10 @@ import {
 } from "./adobeFireflyArp.ts";
 import { ADOBE_FIREFLY_IMAGE_UPLOAD_URL } from "./adobeFireflyCatalog.ts";
 import { AdobeFireflyError, extractAdobeCookieHeader } from "./adobeFireflyCredentials.ts";
+
+function throwIfSourceAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new RemoteMediaFetchError(signal.reason, 499);
+}
 
 export function extractAdobeSourceImageSources(body: unknown, max = 4): string[] {
   if (!body || typeof body !== "object") return [];
@@ -188,12 +194,14 @@ export async function uploadAdobeFireflyImage(opts: {
   arpSessionId?: string;
   /** Used for deterministic x-nonce (optional). */
   prompt?: string;
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   log?: {
     info?: (...args: unknown[]) => void;
     error?: (...args: unknown[]) => void;
   };
 }): Promise<string> {
+  throwIfSourceAborted(opts.signal);
   const fetchImpl = opts.fetchImpl || fetch;
   const buffer = Buffer.isBuffer(opts.bytes) ? opts.bytes : Buffer.from(opts.bytes);
   if (!buffer.length) {
@@ -223,6 +231,7 @@ export async function uploadAdobeFireflyImage(opts: {
 
   const resp = await fetchImpl(ADOBE_FIREFLY_IMAGE_UPLOAD_URL, {
     method: "POST",
+    signal: opts.signal,
     headers: buildAdobeUploadHeaders(opts.accessToken, contentType, {
       arpSessionId,
       cookie: cookieHeader || undefined,
@@ -232,6 +241,7 @@ export async function uploadAdobeFireflyImage(opts: {
   });
 
   const text = await resp.text().catch(() => "");
+  throwIfSourceAborted(opts.signal);
   if (resp.status === 401 || resp.status === 403) {
     throw new AdobeFireflyError(
       "Adobe Firefly image upload unauthorized — paste a fresh IMS JWT",
@@ -279,27 +289,32 @@ export async function resolveAdobeSourceImageIds(opts: {
   /** Shared ARP for upload+generate (required for stable Firefly 3P). */
   arpSessionId?: string;
   prompt?: string;
+  signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   log?: {
     info?: (...args: unknown[]) => void;
     error?: (...args: unknown[]) => void;
   };
 }): Promise<string[]> {
+  throwIfSourceAborted(opts.signal);
   const max = Math.max(1, Math.min(8, opts.max ?? 4));
   const sources = extractAdobeSourceImageSources(opts.body, max);
   if (!sources.length) return [];
 
   const fetchImpl = opts.fetchImpl || fetch;
-  const ids: string[] = [];
+  const resolved: Array<string | { buffer: Buffer; contentType: string }> = [];
   // One ARP for all uploads in this request (browser reuses the same header).
   const arpSessionId =
     (opts.arpSessionId && String(opts.arpSessionId).trim()) ||
     resolveAdobeArpSessionId(opts.sessionCookie);
 
+  // Resolve every reference before uploading any bytes. A later unsafe reference
+  // must not leave a partially uploaded request or start a paid generation.
   for (const src of sources) {
+    throwIfSourceAborted(opts.signal);
     // Already a Firefly storage id (uuid)
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(src)) {
-      ids.push(src);
+      resolved.push(src);
       continue;
     }
 
@@ -307,20 +322,16 @@ export async function resolveAdobeSourceImageIds(opts: {
     let contentType = "image/png";
 
     if (/^https?:\/\//i.test(src)) {
-      const r = await fetchImpl(src, {
-        method: "GET",
-        headers: { accept: "image/*,*/*" },
+      // Provider credentials/transport are for the fixed Adobe upload endpoint,
+      // never for an untrusted source URL or the helper's test-only fetch seam.
+      const downloaded = await fetchRemoteImage(src, {
+        guard: "public-only",
+        pinDns: true,
+        maxBytes: ADOBE_FIREFLY_MAX_UPLOAD_BYTES,
+        signal: opts.signal,
       });
-      if (!r.ok) {
-        throw new AdobeFireflyError(
-          `Failed to download reference image (${r.status}): ${src.slice(0, 120)}`,
-          400,
-          "bad_image"
-        );
-      }
-      const ab = await r.arrayBuffer();
-      buffer = Buffer.from(ab);
-      const ct = r.headers.get("content-type") || "";
+      buffer = downloaded.buffer;
+      const ct = downloaded.contentType;
       if (ct.toLowerCase().startsWith("image/")) {
         contentType = ct.split(";")[0]!.trim();
       }
@@ -330,13 +341,24 @@ export async function resolveAdobeSourceImageIds(opts: {
       contentType = parsed.contentType;
     }
 
+    resolved.push({ buffer, contentType });
+  }
+
+  const ids: string[] = [];
+  for (const source of resolved) {
+    throwIfSourceAborted(opts.signal);
+    if (typeof source === "string") {
+      ids.push(source);
+      continue;
+    }
     const id = await uploadAdobeFireflyImage({
       accessToken: opts.accessToken,
-      bytes: buffer,
-      contentType,
+      bytes: source.buffer,
+      contentType: source.contentType,
       sessionCookie: opts.sessionCookie,
       arpSessionId,
       prompt: opts.prompt,
+      signal: opts.signal,
       fetchImpl,
       log: opts.log,
     });

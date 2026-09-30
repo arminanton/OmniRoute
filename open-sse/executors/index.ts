@@ -1,3 +1,4 @@
+import { assertRuntimeProviderSupported } from "@/shared/runtimePolicyEntrypoints";
 import { SEARCH_PROVIDERS } from "../config/searchRegistry.ts";
 import { getRegistryEntry } from "../config/providerRegistry.ts";
 import { assertMicrosoftDesignerWebProviderAvailable } from "@/shared/constants/designerWebRetirement";
@@ -222,6 +223,7 @@ const CHAT_UNSUPPORTED_CLOUD_AGENT_PROVIDERS = new Set(["jules"]);
 const CHAT_UNSUPPORTED_SEARCH_PROVIDERS = new Set(Object.keys(SEARCH_PROVIDERS));
 
 export async function getExecutor(provider: string): Promise<BaseExecutor> {
+  assertRuntimeProviderSupported(getRegistryEntry(provider)?.id ?? provider);
   assertMicrosoftDesignerWebProviderAvailable(provider);
   assertRuntimeProviderAvailable(provider);
   assertCommonChatGptWebProviderAvailable(provider);

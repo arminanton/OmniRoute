@@ -1,6 +1,10 @@
 // @ts-nocheck
 import { PROVIDERS } from "../config/constants.ts";
-import { getRegistryEntry } from "../config/providerRegistry.ts";
+import {
+  getRegistryEntry,
+  requireCompatibleBaseUrl,
+  guardCompatibleUrl,
+} from "../config/providerRegistry.ts";
 import { resolveAlternateFormat } from "../config/providers/alternateFormats.ts";
 import {
   buildClaudeCodeCompatibleHeaders,
@@ -291,18 +295,22 @@ export function buildProviderUrl(
   if (isOpenAICompatible(provider)) {
     const providerSpecificData = options?.providerSpecificData || null;
     const apiType = getOpenAICompatibleType(provider, providerSpecificData);
-    const baseUrl =
-      options?.baseUrl ||
-      (typeof providerSpecificData?.baseUrl === "string" ? providerSpecificData.baseUrl : null) ||
-      OPENAI_COMPATIBLE_DEFAULTS.baseUrl;
-    return buildOpenAICompatibleUrl(baseUrl, apiType);
+    const baseUrl = requireCompatibleBaseUrl(provider, {
+      baseUrl: options?.baseUrl ?? providerSpecificData?.baseUrl,
+    });
+    return guardCompatibleUrl(baseUrl, buildOpenAICompatibleUrl(baseUrl, apiType));
   }
   if (isAnthropicCompatible(provider)) {
-    const baseUrl = options?.baseUrl || ANTHROPIC_COMPATIBLE_DEFAULTS.baseUrl;
+    const baseUrl = requireCompatibleBaseUrl(provider, {
+      baseUrl: options?.baseUrl ?? options?.providerSpecificData?.baseUrl,
+    });
     if (isClaudeCodeCompatible(provider)) {
-      return joinClaudeCodeCompatibleUrl(baseUrl, CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH);
+      return guardCompatibleUrl(
+        baseUrl,
+        joinClaudeCodeCompatibleUrl(baseUrl, CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH)
+      );
     }
-    return buildAnthropicCompatibleUrl(baseUrl);
+    return guardCompatibleUrl(baseUrl, buildAnthropicCompatibleUrl(baseUrl));
   }
 
   const entry = getRegistryEntry(provider);

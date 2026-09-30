@@ -5,7 +5,7 @@
  * DB save/retrieve, and resolution order.
  */
 
-import { describe, it, before, after } from "node:test";
+import { describe, it, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import {
   transformModelsDevToPricing,
@@ -427,40 +427,138 @@ describe("modelsDevSync — mapProviderId", () => {
   });
 });
 
-describe("modelsDevSync — fetchModelsDev (live API)", () => {
-  it("fetches data from models.dev API", async () => {
+// Each case starts beyond the preceding cache TTL. No production reset hook is needed.
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+let fixtureTime = Date.UTC(2030, 0, 1);
+
+function installCatalogFetch(
+  t: TestContext,
+  respond: (init: RequestInit) => Response | Promise<Response> = () =>
+    new Response(JSON.stringify(MOCK_MODELS_DEV_DATA), {
+      headers: { "Content-Type": "application/json" },
+    })
+) {
+  fixtureTime += CACHE_TTL_MS + 1;
+  t.mock.method(Date, "now", () => fixtureTime);
+  // Node restores both mocks after each test, including failed assertions.
+  // This stub never forwards an unexpected request to a real transport.
+  return t.mock.method(globalThis, "fetch", async (input, init) => {
+    const url = input instanceof Request ? input.url : String(input);
+    assert.equal(url, "https://models.dev/api.json");
+    assert.equal(init?.method ?? "GET", "GET");
+    assert.ok(init?.signal instanceof AbortSignal, "fetch must have a bounded or caller signal");
+    return respond(init);
+  });
+}
+
+describe("modelsDevSync — fetchModelsDev (offline catalog)", { concurrency: false }, () => {
+  it("fetches and parses the exact fixture catalog", async (t) => {
+    const fetchMock = installCatalogFetch(t);
     const data = await fetchModelsDev();
-    assert.ok(typeof data === "object", "data should be an object");
 
-    const providerCount = Object.keys(data).length;
-    assert.ok(providerCount >= 100, `should have 100+ providers, got ${providerCount}`);
-
-    let modelCount = 0;
-    for (const provider of Object.values(data)) {
-      const p = provider;
-      if (p.models) {
-        modelCount += Object.keys(p.models).length;
-      }
-    }
-    assert.ok(modelCount >= 4000, `should have 4000+ models, got ${modelCount}`);
+    assert.deepEqual(data, MOCK_MODELS_DEV_DATA);
+    assert.notStrictEqual(data, MOCK_MODELS_DEV_DATA, "catalog must be parsed from response text");
+    assert.equal(Object.keys(data).length, 4);
+    assert.equal(
+      Object.values(data).reduce((count, provider) => count + Object.keys(provider.models).length, 0),
+      5
+    );
+    assert.equal(data.openai.models["gpt-4o"].name, "GPT-4o");
+    assert.equal(data.anthropic.models["claude-sonnet-4-20250514"].name, "Claude Sonnet 4");
+    assert.equal(fetchMock.mock.callCount(), 1);
   });
 
-  it("returns cached data on second call", async () => {
+  it("reuses the same cached reference until the 24-hour TTL", async (t) => {
+    const fetchMock = installCatalogFetch(t);
     const data1 = await fetchModelsDev();
+    fixtureTime += CACHE_TTL_MS - 1;
     const data2 = await fetchModelsDev();
+
     assert.strictEqual(data1, data2, "should return same cached reference");
+    assert.equal(fetchMock.mock.callCount(), 1, "fresh cache must not fetch again");
   });
 
-  it("has openai provider with gpt-4o model", async () => {
-    const data = await fetchModelsDev();
-    assert.ok(data.openai, "openai provider should exist");
-    assert.ok(data.openai.models["gpt-4o"], "gpt-4o model should exist");
+  it("refetches and replaces the cache at the TTL boundary", async (t) => {
+    const replacement = structuredClone(MOCK_MODELS_DEV_DATA);
+    replacement.openai.models["gpt-4o"].cost.input = 7;
+    let responseData = MOCK_MODELS_DEV_DATA;
+    const fetchMock = installCatalogFetch(t, () => new Response(JSON.stringify(responseData)));
+    const data1 = await fetchModelsDev();
+    fixtureTime += CACHE_TTL_MS;
+    responseData = replacement;
+    const data2 = await fetchModelsDev();
+
+    assert.notStrictEqual(data1, data2);
+    assert.deepEqual(data2, replacement);
+    assert.equal(fetchMock.mock.callCount(), 2);
+    assert.strictEqual(await fetchModelsDev(), data2);
+    assert.equal(fetchMock.mock.callCount(), 2, "replacement must also be cached");
   });
 
-  it("has anthropic provider with claude models", async () => {
-    const data = await fetchModelsDev();
-    assert.ok(data.anthropic, "anthropic provider should exist");
-    const claudeModels = Object.keys(data.anthropic.models).filter((m) => m.includes("claude"));
-    assert.ok(claudeModels.length > 0, "should have claude models");
+  it("rejects HTTP errors without caching the failed response", async (t) => {
+    let fail = true;
+    const fetchMock = installCatalogFetch(t, () =>
+      fail
+        ? new Response("fixture unavailable", { status: 503, statusText: "Service Unavailable" })
+        : new Response(JSON.stringify(MOCK_MODELS_DEV_DATA))
+    );
+
+    await assert.rejects(fetchModelsDev(), {
+      message: "models.dev fetch failed [503]: Service Unavailable",
+    });
+    assert.equal(fetchMock.mock.callCount(), 1);
+    fail = false;
+    assert.deepEqual(await fetchModelsDev(), MOCK_MODELS_DEV_DATA);
+    assert.equal(fetchMock.mock.callCount(), 2, "failed response must not populate the cache");
+  });
+
+  it("rejects invalid JSON with a bounded preview and retries on the next call", async (t) => {
+    const invalidText = "not-json:" + "x".repeat(150);
+    let responseText = invalidText;
+    const fetchMock = installCatalogFetch(t, () => new Response(responseText));
+
+    await assert.rejects(fetchModelsDev(), {
+      message: `models.dev returned invalid JSON (${invalidText.slice(0, 100)}...)`,
+    });
+    assert.equal(fetchMock.mock.callCount(), 1);
+    responseText = JSON.stringify(MOCK_MODELS_DEV_DATA);
+    assert.deepEqual(await fetchModelsDev(), MOCK_MODELS_DEV_DATA);
+    assert.equal(fetchMock.mock.callCount(), 2, "invalid JSON must not populate the cache");
+  });
+
+  it("propagates transport failures without caching them", async (t) => {
+    const transportError = Object.assign(new Error("fixture connection reset"), {
+      code: "ECONNRESET",
+    });
+    let fail = true;
+    const fetchMock = installCatalogFetch(t, () => {
+      if (fail) throw transportError;
+      return new Response(JSON.stringify(MOCK_MODELS_DEV_DATA));
+    });
+
+    await assert.rejects(fetchModelsDev(), (error) => error === transportError);
+    assert.equal(fetchMock.mock.callCount(), 1);
+    fail = false;
+    assert.deepEqual(await fetchModelsDev(), MOCK_MODELS_DEV_DATA);
+    assert.equal(fetchMock.mock.callCount(), 2);
+  });
+
+  it("passes the caller signal through and does not cache an aborted request", async (t) => {
+    const controller = new AbortController();
+    const abortError = new DOMException("fixture cancelled", "AbortError");
+    controller.abort(abortError);
+    const signals: (AbortSignal | null | undefined)[] = [];
+    const fetchMock = installCatalogFetch(t, (init) => {
+      signals.push(init.signal);
+      init.signal?.throwIfAborted();
+      return new Response(JSON.stringify(MOCK_MODELS_DEV_DATA));
+    });
+
+    await assert.rejects(fetchModelsDev(controller.signal), (error) => error === abortError);
+    assert.strictEqual(signals[0], controller.signal);
+    const retry = new AbortController();
+    assert.deepEqual(await fetchModelsDev(retry.signal), MOCK_MODELS_DEV_DATA);
+    assert.strictEqual(signals[1], retry.signal);
+    assert.equal(fetchMock.mock.callCount(), 2);
   });
 });

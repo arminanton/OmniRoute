@@ -38,6 +38,7 @@ import {
   type IngestBudgetAcquireResult,
 } from "./ingestByteAdmission";
 import {
+  checkResourcePressureGuard,
   getResourcePressureObservation,
   type PressureSeverity,
 } from "@omniroute/open-sse/utils/resourcePressure.ts";
@@ -217,10 +218,16 @@ export type ChatAdmissionShedReason =
   | "inflight_bytes_budget"
   | "resource_pressure";
 
-/** Read cached pressure severity; sampling failures must not cause false sheds. */
+/**
+ * Drive the throttled async sampler even while this first gate sheds requests.
+ * A passive cached read would starve the only recovery path once critical.
+ */
 export function defaultPressureSeverity(): PressureSeverity {
   try {
-    return getResourcePressureObservation().state.severity;
+    if (checkResourcePressureGuard()) return "critical";
+    const severity = getResourcePressureObservation().state.severity;
+    // check() is authoritative when its last observation has gone stale.
+    return severity === "critical" ? "high" : severity;
   } catch {
     return "normal";
   }
@@ -1114,56 +1121,7 @@ export async function admitChatRequest(
   return { admit: true, request: rebuildRequest(request, body), lease };
 }
 
-/** Release a lease if a handler rejects; otherwise bind it to the returned response lifecycle. */
-export async function releaseChatAdmissionAfterHandler(
-  responsePromise: Promise<Response>,
-  lease: ChatAdmissionLease | null
-): Promise<Response> {
-  try {
-    return releaseChatAdmissionWhenDone(await responsePromise, lease);
-  } catch (error) {
-    lease?.release();
-    throw error;
-  }
-}
-
-/** Hold a heavyweight lease through an SSE response without buffering the response body. */
-export function releaseChatAdmissionWhenDone(
-  response: Response,
-  lease: ChatAdmissionLease | null
-): Response {
-  if (!lease) return response;
-  const isStreaming = response.headers.get("content-type")?.includes("text/event-stream");
-  if (!isStreaming || !response.body) {
-    lease.release();
-    return response;
-  }
-
-  const reader = response.body.getReader();
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const { done, value } = await reader.read();
-        if (done) {
-          lease.release();
-          controller.close();
-        } else {
-          controller.enqueue(value);
-        }
-      } catch (error) {
-        lease.release();
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      lease.release();
-      await reader.cancel(reason).catch(() => undefined);
-    },
-  });
-
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
+export {
+  releaseChatAdmissionAfterHandler,
+  releaseChatAdmissionWhenDone,
+} from "./chatAdmissionRelease";

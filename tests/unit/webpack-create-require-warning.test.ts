@@ -79,6 +79,9 @@ async function compileRuntimeRequireModules(): Promise<string[]> {
         // has no repo tree, so treat the sibling as external instead of
         // erroring "Can't resolve './obscura.ts'".
         "./obscura.ts",
+        // The relocated parser fixtures do not include the policy dependency tree.
+        "../../src/shared/runtimePolicy.ts",
+        "@/shared/runtimePolicy",
       ],
       externalsPresets: { node: true },
       mode: "development",

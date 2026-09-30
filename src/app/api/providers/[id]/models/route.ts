@@ -1,4 +1,6 @@
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { NextResponse } from "next/server";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import {
   isClaudeCodeCompatibleProvider,
   isAnthropicCompatibleProvider,
@@ -12,6 +14,7 @@ import { getStaticModelsForProvider } from "@/lib/providers/staticModels";
 import { providerUsesCuratedModelsOnly } from "@/lib/providers/modelListingCapability";
 import { mergeModelsWithCustomPrecedence } from "@/lib/providers/modelMetadataPrecedence";
 import { getCachedProviderConnectionById } from "@/lib/db/readCache";
+import { assertResolvedProviderConnectionEntrypoint } from "@/sse/services/compatibleNodeBaseUrl";
 import { resolveProxyForProvider } from "@/lib/db/proxies";
 import {
   SAFE_OUTBOUND_FETCH_PRESETS,
@@ -23,7 +26,11 @@ import {
   getProviderOutboundGuard,
   getProviderValidationGuard,
 } from "@/shared/network/outboundUrlGuardPolicy";
-import { errorResponse, sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import {
+  errorResponse,
+  runtimePolicyErrorResponse,
+  sanitizeErrorMessage,
+} from "@omniroute/open-sse/utils/error";
 import { getStaticQoderModels } from "@omniroute/open-sse/services/qoderCli.ts";
 import { deriveConfigFromRegistryModelsUrl } from "./discoveryConfig";
 import { resolveZedModels } from "@omniroute/open-sse/shared/zedAuth.ts";
@@ -86,7 +93,10 @@ import {
 } from "@/lib/providerModels/modelDiscovery";
 import { buildProviderModelsUrl, getDiscoveryClientVersionOptions } from "./discoveryClientVersion";
 import { getAdobeModels } from "./adobeFireflyDiscovery";
-import { parseGeminiModelsList } from "@/lib/providerModels/geminiModelsParser";
+import {
+  discoverVertexModelsWithBearer,
+  discoverVertexModelsWithApiKey,
+} from "@/lib/providerModels/vertexModelDiscovery";
 import { getSyncedAvailableModels, getCustomModels, getModelIsHidden } from "@/lib/db/models";
 import { isConnectionUnavailableToAuxiliaryActivity } from "@/lib/exclusiveLeaseIsolation";
 import { fetchCursorAgentModels } from "@/lib/providerModels/cursorAgent";
@@ -138,6 +148,9 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> | { id: string } }
 ) {
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
+
   try {
     const params = await context.params;
     const { id } = params;
@@ -151,12 +164,15 @@ export async function GET(
       searchParams.get("chatOnly") === "true" ||
       request.headers.get("x-omniroute-model-surface")?.toLowerCase() === "chat";
 
-    const connection = await getCachedProviderConnectionById(id);
+    let connection = await getCachedProviderConnectionById(id);
+    if (connection) {
+      connection = await assertResolvedProviderConnectionEntrypoint(connection);
+    }
     const connectionProvider =
       typeof connection?.provider === "string" && connection.provider.trim().length > 0
         ? connection.provider
         : null;
-    const noAuthProviderId =
+    let noAuthProviderId =
       (NOAUTH_PROVIDERS as Record<string, { noAuth?: boolean }>)[id]?.noAuth === true
         ? id
         : connectionProvider &&
@@ -169,6 +185,14 @@ export async function GET(
     // and account-proxy metadata. That row must not turn public model discovery
     // into an API-key flow that expects a token.
     if (noAuthProviderId) {
+      if (!connection || noAuthProviderId !== connectionProvider) {
+        // A registry-known no-auth provider needs no invented connection identity.
+        const admitted = await assertResolvedProviderConnectionEntrypoint({
+          provider: noAuthProviderId,
+          providerSpecificData: {},
+        });
+        noAuthProviderId = admitted.provider;
+      }
       return buildNoAuthModelsResponse(
         noAuthProviderId,
         typeof connection?.id === "string" ? connection.id : id,
@@ -197,8 +221,10 @@ export async function GET(
     }
     const usesCuratedModelsOnly = providerUsesCuratedModelsOnly(provider);
 
-    // Resolve proxy for this provider (provider-level → global → direct)
-    const proxy = await resolveProxyForProvider(provider);
+    // MaxAI resolves only its selected account transport inside discovery.
+    // Other providers retain provider-level → global → direct proxy selection.
+    const proxy =
+      provider === "maxai" || provider === "mx" ? null : await resolveProxyForProvider(provider);
 
     // #6247 — user-added custom models live in key_value namespace
     // `customModels`. Merge them with explicit custom metadata taking precedence
@@ -632,7 +658,7 @@ export async function GET(
     // MaxAI: live catalog + per-model context windows from the signed
     // /models/get_config (the call the web app makes on load). Falls back to the
     // curated static registry catalog on any auth/transport/shape failure.
-    if (provider === "maxai") {
+    if (provider === "maxai" || provider === "mx") {
       const cachedResponse = maybeReturnCachedDiscovery();
       if (cachedResponse) return cachedResponse;
 
@@ -641,22 +667,18 @@ export async function GET(
 
       try {
         const discovery = await discoverMaxaiModels({
+          connectionId,
           providerSpecificData: connection.providerSpecificData as
             Record<string, unknown> | null | undefined,
-          accessToken: apiKey || accessToken,
-          fetchImpl: (url, init) =>
-            safeOutboundFetch(url, {
-              ...SAFE_OUTBOUND_FETCH_PRESETS.modelsDiscovery,
-              guard: getProviderOutboundGuard(),
-              proxyConfig: proxy,
-              ...init,
-            }),
+          accessToken: accessToken || apiKey,
+          refreshToken:
+            typeof connection.refreshToken === "string" ? connection.refreshToken : null,
+          signal: request.signal,
         });
-        return buildApiDiscoveryResponse(discovery.models, discovery.warning);
+        return await buildApiDiscoveryResponse(discovery.models, discovery.warning);
       } catch (error) {
-        console.log("Error fetching models from maxai", {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
+        console.log("MaxAI model discovery unavailable; using cached or curated catalog.");
         const fallback = buildDiscoveryFallbackResponse({
           cacheWarning: "MaxAI models/get_config failed — using cached catalog",
           localWarning: "MaxAI models/get_config failed — using curated catalog",
@@ -667,7 +689,6 @@ export async function GET(
           connectionId,
           models: MAXAI_REGISTRY_MODELS,
           source: "local_catalog",
-          intentional: true,
           warning: "MaxAI catalog unavailable — using curated model list",
         });
       }
@@ -1819,10 +1840,8 @@ export async function GET(
       const autoFetchDisabledResponse = maybeReturnAutoFetchDisabled();
       if (autoFetchDisabledResponse) return autoFetchDisabledResponse;
 
-      // Vertex AI lists models from the Generative Language `v1beta/models` endpoint, which both
-      // Express-mode API keys (via ?key=) and Service Account JSON (via a minted OAuth Bearer
-      // token) can reach. This surfaces the live catalog, including gemini-*-image models
-      // absent from the static registry list.
+      // Vertex credentials stay on aiplatform. Bearer credentials list publisher
+      // catalogs; Express keys use their supported Vertex check and a local catalog.
       const credential = (apiKey || "").trim();
       let queryKey: string | null = null;
       let bearerToken: string | null = null;
@@ -1870,110 +1889,56 @@ export async function GET(
         );
       }
 
-      const baseUrl = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000";
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
-
-      const allModels: any[] = [];
-      let pageUrl = queryKey ? `${baseUrl}&key=${encodeURIComponent(queryKey)}` : baseUrl;
-      let pageCount = 0;
-      const MAX_PAGES = 20;
-      const seenTokens = new Set<string>();
-
       try {
-        while (pageUrl && pageCount < MAX_PAGES) {
-          pageCount++;
-          const response = await safeOutboundFetch(pageUrl, {
+        const fetchImpl = (url: string, init: RequestInit) =>
+          safeOutboundFetch(url, {
             ...SAFE_OUTBOUND_FETCH_PRESETS.modelsPagination,
+            ...init,
+            signal: request.signal,
             guard: getProviderOutboundGuard(),
             proxyConfig: proxy,
-            method: "GET",
-            headers,
           });
-
-          if (!response.ok) {
-            // Avoid logging the raw upstream body (may contain sensitive data); status is enough.
-            console.log("[models] Vertex model discovery failed", {
-              provider,
-              status: response.status,
+        const discovery = bearerToken
+          ? await discoverVertexModelsWithBearer({ bearerToken, fetchImpl })
+          : await discoverVertexModelsWithApiKey({
+              apiKey: queryKey || "",
+              fetchImpl,
+              curatedModels: toLocalCatalogModels(),
             });
-            const fallback = buildDiscoveryFallbackResponse();
-            if (fallback) return fallback;
-            return NextResponse.json(
-              { error: `Failed to fetch Vertex models: ${response.status}` },
-              { status: response.status }
-            );
+
+        // Keep partial publisher catalogs rather than discarding successful pages.
+        if (discovery.models.length > 0) {
+          if (bearerToken) {
+            return await buildApiDiscoveryResponse(discovery.models, discovery.warning);
           }
-
-          const data = await response.json();
-          allModels.push(...parseGeminiModelsList(data));
-
-          const nextPageToken = data.nextPageToken;
-          if (!nextPageToken || seenTokens.has(nextPageToken)) break;
-          seenTokens.add(nextPageToken);
-          pageUrl = `${baseUrl}&pageToken=${encodeURIComponent(nextPageToken)}`;
-          if (queryKey) pageUrl += `&key=${encodeURIComponent(queryKey)}`;
+          return buildResponse({
+            provider,
+            connectionId,
+            models: discovery.models,
+            source: "local_catalog",
+            intentional: true,
+            warning: discovery.warning,
+          });
         }
+
+        const fallback = buildDiscoveryFallbackResponse({
+          cacheWarning: discovery.warning || "Vertex catalog unavailable — using cached catalog",
+          localWarning: discovery.warning || "Vertex catalog unavailable — using local catalog",
+        });
+        if (fallback) return fallback;
+        if (discovery.failureStatus || discovery.unavailable) {
+          return NextResponse.json(
+            { error: "Vertex model discovery unavailable" },
+            { status: discovery.failureStatus || 502 }
+          );
+        }
+        return buildResponse({ provider, connectionId, models: [], source: "api" });
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         const fallback = buildDiscoveryErrorFallbackResponse(error);
         if (fallback) return fallback;
         throw error;
       }
-
-      // Anthropic partner models via Model Garden publisher endpoint (Bearer only).
-      //
-      // Model Garden's publisher-model LIST is served by the v1beta1 API — the v1
-      // API does not support list operations (every /v1/.../publishers/anthropic/models
-      // path 404s at the Google Front End). The list is also global: it returns the
-      // full Anthropic Claude catalog regardless of the connection's project or
-      // region, so no project/region scoping is applied here (execution region is
-      // handled separately by the vertex executor at request time).
-      if (bearerToken) {
-        const anthropicModelsUrl =
-          "https://aiplatform.googleapis.com/v1beta1/publishers/anthropic/models";
-
-        try {
-          const anthropicResponse = await safeOutboundFetch(anthropicModelsUrl, {
-            ...SAFE_OUTBOUND_FETCH_PRESETS.modelsDiscovery,
-            guard: getProviderOutboundGuard(),
-            proxyConfig: proxy,
-            method: "GET",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${bearerToken}`,
-            },
-          });
-          if (anthropicResponse.ok) {
-            const anthropicData = await anthropicResponse.json();
-            const { parseVertexAnthropicModels } =
-              await import("@/lib/providerModels/vertexAnthropicModelsParser");
-            allModels.push(...parseVertexAnthropicModels(anthropicData));
-          } else {
-            console.log("[models] Vertex Anthropic partner discovery failed", {
-              provider,
-              status: anthropicResponse.status,
-            });
-          }
-        } catch (err) {
-          console.log("[models] Vertex Anthropic partner discovery error", {
-            provider,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      if (allModels.length > 0) {
-        return buildApiDiscoveryResponse(allModels);
-      }
-
-      const fallback = buildDiscoveryFallbackResponse();
-      if (fallback) return fallback;
-      return buildResponse({
-        provider,
-        connectionId,
-        models: [],
-        source: "api",
-      });
     }
 
     if (isAnthropicCompatibleProvider(provider)) {
@@ -2109,9 +2074,10 @@ export async function GET(
       }
     }
 
+    const discoveryConfigProvider = provider === "ucd" ? "uc-direct" : provider;
     const config =
-      provider in PROVIDER_MODELS_CONFIG
-        ? PROVIDER_MODELS_CONFIG[provider as keyof typeof PROVIDER_MODELS_CONFIG]
+      discoveryConfigProvider in PROVIDER_MODELS_CONFIG
+        ? PROVIDER_MODELS_CONFIG[discoveryConfigProvider as keyof typeof PROVIDER_MODELS_CONFIG]
         : deriveConfigFromRegistryModelsUrl(provider);
     if (provider === "codex") {
       // Auto-merge live/GitHub/local (future-proof discovery), then apply explicit
@@ -2249,9 +2215,9 @@ export async function GET(
     const autoFetchDisabledResponse = maybeReturnAutoFetchDisabled();
     if (autoFetchDisabledResponse) return autoFetchDisabledResponse;
 
-    // Get auth token
+    // UC Direct discovery is public, even when its chat credential is absent.
     const token = accessToken || apiKey;
-    if (!token) {
+    if (!token && provider !== "uc-direct" && provider !== "ucd") {
       const fallback = buildDiscoveryFallbackResponse({
         cacheWarning: "No token configured — using cached catalog",
         localWarning: "No token configured — using local catalog",
@@ -2438,6 +2404,7 @@ export async function GET(
 
     return buildApiDiscoveryResponse(allModels);
   } catch (error) {
+    if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
     if (error instanceof SafeOutboundFetchError && error.code === "URL_GUARD_BLOCKED") {
       return NextResponse.json({ error: sanitizeErrorMessage(error.message) }, { status: 400 });
     }

@@ -72,7 +72,9 @@ export function extractUpscaleSourceImage(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
   const b = body as Record<string, unknown>;
   const providerOptions =
-    b.provider_options && typeof b.provider_options === "object" && !Array.isArray(b.provider_options)
+    b.provider_options &&
+    typeof b.provider_options === "object" &&
+    !Array.isArray(b.provider_options)
       ? (b.provider_options as Record<string, unknown>)
       : {};
 
@@ -144,7 +146,11 @@ function firstImageCandidate(value: unknown): string | null {
 }
 
 /** Decode a data URL / http(s) URL / bare base64 string into bytes. */
-export async function resolveUpscaleImageSource(source: string): Promise<UpscaleImageSource> {
+export async function resolveUpscaleImageSource(
+  source: string,
+  signal?: AbortSignal
+): Promise<UpscaleImageSource> {
+  signal?.throwIfAborted();
   const trimmed = String(source || "").trim();
   if (!trimmed) throw new Error("Invalid image source");
 
@@ -162,7 +168,12 @@ export async function resolveUpscaleImageSource(source: string): Promise<Upscale
   }
 
   if (/^https?:\/\//i.test(trimmed)) {
-    const remote = await fetchRemoteImage(trimmed);
+    const remote = await fetchRemoteImage(trimmed, {
+      guard: "public-only",
+      pinDns: true,
+      maxBytes: MAX_UPSCALE_SOURCE_BYTES,
+      signal,
+    });
     assertSourceBytes(remote.buffer);
     // fetchRemoteImage falls back to application/octet-stream; sniff whenever the
     // server did not send a usable image/* type so multipart uploads stay correct.
@@ -215,11 +226,7 @@ export function sniffImageMime(buffer: Buffer): string {
  */
 export function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {
   try {
-    if (
-      buffer.length >= 24 &&
-      buffer[0] === 0x89 &&
-      buffer.toString("ascii", 1, 4) === "PNG"
-    ) {
+    if (buffer.length >= 24 && buffer[0] === 0x89 && buffer.toString("ascii", 1, 4) === "PNG") {
       // IHDR is always the first chunk: 8-byte signature + 4 length + 4 "IHDR".
       return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
     }
@@ -309,10 +316,7 @@ export function scaleDimensions(
   const source = readImageDimensions(buffer);
   if (!source || source.width <= 0 || source.height <= 0) return null;
   const safeFactor = Number.isFinite(factor) && factor > 0 ? factor : 2;
-  const scale = Math.min(
-    safeFactor,
-    maxEdge / Math.max(source.width, source.height)
-  );
+  const scale = Math.min(safeFactor, maxEdge / Math.max(source.width, source.height));
   return {
     width: Math.max(1, Math.round(source.width * Math.max(1, scale))),
     height: Math.max(1, Math.round(source.height * Math.max(1, scale))),

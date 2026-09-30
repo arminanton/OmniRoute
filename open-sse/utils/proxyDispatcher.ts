@@ -1,10 +1,10 @@
 import "./setupPolyfill.ts";
 import { Agent, ProxyAgent, type Dispatcher } from "undici";
+import { assertNoApplicationProxy } from "@/shared/runtimePolicy";
 import { getUpstreamTimeoutConfig } from "@/shared/utils/runtimeTimeouts";
 import { stripIpv6Brackets, detectIpLiteralFamily, parseProxyFamily } from "./proxyFamily.ts";
 import { createSocksDispatcherWithFamily } from "./socksConnectorWithFamily.ts";
 import {
-  clearDispatcherCache,
   createRoundRobinDispatcher,
   getDefaultCachedDispatcher,
   getDispatcherCache,
@@ -26,6 +26,25 @@ export const RELAY_TYPES: ReadonlySet<string> = new Set(["vercel", "deno", "clou
 export function isRelayType(type: string | undefined | null): boolean {
   return typeof type === "string" && RELAY_TYPES.has(type);
 }
+// Only these reviewed factories can admit an explicit direct dispatcher. Cache
+// location, class names and caller-supplied flags are not evidence of directness.
+// Share identity across duplicate bundles, as the dispatcher cache already does.
+const DIRECT_DISPATCHERS_KEY = Symbol.for("omniroute.runtimePolicy.directDispatchers");
+const directDispatcherGlobal = globalThis as typeof globalThis & {
+  [DIRECT_DISPATCHERS_KEY]?: WeakSet<object>;
+};
+const directDispatchers = (directDispatcherGlobal[DIRECT_DISPATCHERS_KEY] ??= new WeakSet());
+
+export function isKnownDirectDispatcher(dispatcher: unknown): boolean {
+  return dispatcher !== null && typeof dispatcher === "object" && directDispatchers.has(dispatcher);
+}
+
+export function assertRuntimePolicyDispatcher(dispatcher: unknown): void {
+  assertNoApplicationProxy(
+    dispatcher == null || isKnownDirectDispatcher(dispatcher) ? "none" : "opaque"
+  );
+}
+
 const DEFAULT_PROXY_DISPATCHER_CONNECTIONS = 32;
 const MAX_PROXY_DISPATCHER_CONNECTIONS = 256;
 
@@ -159,7 +178,9 @@ function createRoundRobinDirectDispatcher(connectionLimit: number): Dispatcher {
     pipelining: 0,
   };
   const dispatchers = Array.from({ length: connectionLimit }, () => new Agent(perAgentOptions));
-  return createRoundRobinDispatcher(dispatchers);
+  const dispatcher = createRoundRobinDispatcher(dispatchers);
+  directDispatchers.add(dispatcher);
+  return dispatcher;
 }
 
 export function getDefaultDispatcher(): Dispatcher {
@@ -168,6 +189,7 @@ export function getDefaultDispatcher(): Dispatcher {
     dispatcher = createRoundRobinDirectDispatcher(getDefaultDispatcherConnectionLimit());
     setDefaultCachedDispatcher(dispatcher);
   }
+  assertRuntimePolicyDispatcher(dispatcher);
   return dispatcher;
 }
 
@@ -193,8 +215,10 @@ export function getRetryDispatcher(): Dispatcher {
       keepAliveMaxTimeout: 1,
       pipelining: 0,
     });
+    directDispatchers.add(dispatcher);
     setRetryCachedDispatcher(dispatcher);
   }
+  assertRuntimePolicyDispatcher(dispatcher);
   return dispatcher;
 }
 
@@ -248,8 +272,7 @@ function normalizePort(port: string | number | null | undefined, protocol: strin
  * listen on these ports, so we must always include the port explicitly.
  */
 function buildProxyUrlString(parsed: URL, port: string): string {
-  const auth =
-    parsed.username || parsed.password ? `${parsed.username}:${parsed.password}@` : "";
+  const auth = parsed.username || parsed.password ? `${parsed.username}:${parsed.password}@` : "";
   return `${parsed.protocol}//${auth}${parsed.hostname}:${port}`;
 }
 
@@ -332,6 +355,7 @@ export function buildVercelRelayHeaders(
   targetUrl: string,
   relayAuth: string
 ): Record<string, string> {
+  assertNoApplicationProxy("configured");
   const parsed = new URL(targetUrl);
   return {
     "x-relay-target": `${parsed.protocol}//${parsed.host}`,
@@ -349,6 +373,14 @@ export function proxyConfigToUrl(
   proxyConfig: unknown,
   { allowSocks5 = isSocks5ProxyEnabled() } = {}
 ): string | null {
+  // Validate the selected value before malformed/empty objects can become null.
+  assertNoApplicationProxy(
+    proxyConfig == null || proxyConfig === ""
+      ? "none"
+      : typeof proxyConfig === "string"
+        ? "configured"
+        : "opaque"
+  );
   if (!proxyConfig) return null;
 
   if (typeof proxyConfig === "string") {
@@ -489,6 +521,7 @@ function buildProxyDispatcher(
 }
 
 export function createProxyDispatcher(proxyUrl: string): Dispatcher {
+  assertNoApplicationProxy("configured"); // Before cache lookup as well as construction.
   const normalizedUrl = normalizeProxyUrl(proxyUrl, "proxy dispatcher");
   const dispatcherCache = getDispatcherCache();
 
@@ -516,6 +549,7 @@ export function createProxyDispatcher(proxyUrl: string): Dispatcher {
  * of re-hitting the dead connection. Cached per normalized proxy URL.
  */
 export function getProxyRetryDispatcher(proxyUrl: string): Dispatcher {
+  assertNoApplicationProxy("configured");
   const normalizedUrl = normalizeProxyUrl(proxyUrl, "proxy dispatcher");
   const dispatcherCache = getDispatcherCache();
   const retryKey = `retry:${normalizedUrl}`;

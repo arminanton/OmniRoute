@@ -25,6 +25,7 @@
  * scripts/dev/head-response-guard.cjs -> outDir/head-respons  Y               Y           -    SHARED (extra module)
  * scripts/build/runtime-env.mjs -> outDir/build/runtime-env   Y               -           -    SHARED (extra module)
  * scripts/build/bootstrap-env.mjs -> outDir/build/bootstrap-  Y               -           -    SHARED (extra module)
+ * scripts/build/runtime-policy.mjs -> outDir/build/runtime-policy                            REQUIRED (raw module)
  * scripts/dev/healthcheck.mjs -> outDir/healthcheck.mjs       Y               -           -    SHARED (extra module)
  * playwright-core -> outDir/node_modules/playwright-core      Y               -           -    SHARED (extra module)
  * sqlite-vec -> outDir/node_modules/sqlite-vec                Y               -           -    SHARED (extra module)
@@ -111,7 +112,7 @@ export const NATIVE_ASSET_ENTRIES = [
   },
 ];
 
-/** @type {{label:string, src:string[], dest:string[]}[]} */
+/** @type {{label:string, src:string[], dest:string[], required?:boolean}[]} */
 const EXTRA_MODULE_ENTRIES = [
   {
     // tlsClient.ts intentionally resolves wreq-js through a runtime-dynamic
@@ -254,6 +255,13 @@ const EXTRA_MODULE_ENTRIES = [
     label: "bootstrap-env script",
     src: ["scripts", "build", "bootstrap-env.mjs"],
     dest: ["build", "bootstrap-env.mjs"],
+  },
+  {
+    // Shared plain-Node authority: do not bundle/transpile or silently omit it.
+    label: "runtime-policy module",
+    src: ["scripts", "build", "runtime-policy.mjs"],
+    dest: ["build", "runtime-policy.mjs"],
+    required: true,
   },
   {
     label: "normalizeBasePath helper",
@@ -416,10 +424,18 @@ async function syncExtraModulesToDir(projectRoot, outDir, fsImpl, log) {
 
   for (const entry of EXTRA_MODULE_ENTRIES) {
     const sourcePath = path.join(projectRoot, ...entry.src);
-    if (!(await exists(sourcePath))) continue;
+    if (entry.required) readRequiredModule(sourcePath, entry.label, "source");
+    else if (!(await exists(sourcePath))) continue;
 
     const destPath = path.join(outDir, ...entry.dest);
-    if (resolvesToSamePath(sourcePath, destPath)) continue;
+    // Required raw modules must be real files, not links into the source tree.
+    if (
+      entry.required
+        ? path.resolve(sourcePath) === path.resolve(destPath)
+        : resolvesToSamePath(sourcePath, destPath)
+    ) {
+      continue;
+    }
     clearStaleDest(destPath);
 
     const mkdir =
@@ -430,6 +446,7 @@ async function syncExtraModulesToDir(projectRoot, outDir, fsImpl, log) {
     changed = true;
   }
 
+  assertRequiredStandaloneModules(projectRoot, outDir);
   return changed;
 }
 
@@ -632,16 +649,44 @@ function clearStaleDest(dest) {
   fsSync.rmSync(dest, { recursive: true, force: true });
 }
 
+/** Read a required raw module; missing, empty, or nonregular files fail the build. */
+function readRequiredModule(filePath, label, stage) {
+  try {
+    const stat = fsSync.lstatSync(filePath);
+    if (!stat.isFile() || stat.size === 0) throw new Error("Not a nonempty regular file");
+    return fsSync.readFileSync(filePath);
+  } catch {
+    throw new Error(`[assembleStandalone] Required ${label} ${stage} is missing or invalid`);
+  }
+}
+
+/**
+ * Verify required raw assets after copying/pruning, before a build reports success.
+ * This build-only I/O check does not load the runtime authority or activation files.
+ */
+export function assertRequiredStandaloneModules(projectRoot, outDir) {
+  for (const entry of EXTRA_MODULE_ENTRIES) {
+    if (!entry.required) continue;
+    const source = readRequiredModule(path.join(projectRoot, ...entry.src), entry.label, "source");
+    const artifact = readRequiredModule(path.join(outDir, ...entry.dest), entry.label, "artifact");
+    if (!source.equals(artifact)) {
+      throw new Error(`[assembleStandalone] Required ${entry.label} artifact differs from source`);
+    }
+  }
+}
+
 /**
  * Copy native assets (better-sqlite3 and TPROXY) and extra runtime modules/sidecars
  * (wreq-js, pino, migrations, MITM server, helper scripts, sqlite-vec platform packages, …)
- * into the assembled bundle. Missing sources are skipped silently.
+ * into the assembled bundle. Only optional missing sources are skipped.
+ * Required modules are copied even when native/optional copies are disabled.
  *
  * @param {string} projectRoot
  * @param {string} resolvedOutDir
+ * @param {boolean} copyOptional
  */
-function copyNativeAssetsAndExtraModules(projectRoot, resolvedOutDir) {
-  for (const asset of NATIVE_ASSET_ENTRIES) {
+function copyNativeAssetsAndExtraModules(projectRoot, resolvedOutDir, copyOptional = true) {
+  for (const asset of copyOptional ? NATIVE_ASSET_ENTRIES : []) {
     const src = path.join(projectRoot, ...asset.src);
     if (!fsSync.existsSync(src)) continue;
     const dest = path.join(resolvedOutDir, ...asset.dest);
@@ -653,15 +698,20 @@ function copyNativeAssetsAndExtraModules(projectRoot, resolvedOutDir) {
   }
 
   for (const mod of EXTRA_MODULE_ENTRIES) {
+    if (!copyOptional && !mod.required) continue;
     const src = path.join(projectRoot, ...mod.src);
-    if (!fsSync.existsSync(src)) continue;
+    if (mod.required) readRequiredModule(src, mod.label, "source");
+    else if (!fsSync.existsSync(src)) continue;
     const dest = path.join(resolvedOutDir, ...mod.dest);
-    if (resolvesToSamePath(src, dest)) continue;
+    if (mod.required ? path.resolve(src) === path.resolve(dest) : resolvesToSamePath(src, dest)) {
+      continue;
+    }
     clearStaleDest(dest);
     fsSync.mkdirSync(path.dirname(dest), { recursive: true });
     fsSync.cpSync(src, dest, { recursive: true, force: true });
     console.log(`[assembleStandalone] Synced module: ${mod.label}`);
   }
+  assertRequiredStandaloneModules(projectRoot, resolvedOutDir);
 }
 
 /**
@@ -880,7 +930,7 @@ export function syncRebuiltNativeModuleIntoHashedEntries(rootModuleDir, nodeModu
  * @param {string} [opts.projectRoot]            - repo root; defaults to process.cwd()
  * @param {boolean} [opts.sanitizePaths]         - replace build-machine abs paths with "." (default false)
  * @param {boolean} [opts.patchTurbopackChunks]  - strip hashed externals from .next/server js files (default false)
- * @param {boolean} [opts.copyNatives]           - copy native assets + extra modules (default true)
+ * @param {boolean} [opts.copyNatives]           - copy native assets + optional modules (default true); required modules always copy
  * @param {boolean} [opts.materializeSymlinks]   - dereference Turbopack hashed-module symlinks in node_modules (default false)
  * @returns {void}
  */
@@ -944,9 +994,9 @@ export function assembleStandalone({
     }
   }
 
-  // 6. Optionally copy native assets + extra modules (synchronous)
+  // 6. Required raw modules always ship; native/optional copies remain configurable.
+  copyNativeAssetsAndExtraModules(projectRoot, resolvedOutDir, copyNatives);
   if (copyNatives) {
-    copyNativeAssetsAndExtraModules(projectRoot, resolvedOutDir);
     // Repair hollow externalized package dirs in BOTH locations Turbopack's standalone
     // tracer can populate: the top-level bundle node_modules, and — for projects with a
     // custom distDir (see next.config.mjs) — the nested <relDistDir>/node_modules mirrored

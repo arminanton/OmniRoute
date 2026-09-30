@@ -4,6 +4,7 @@ import { access } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { homedir } from "node:os";
+import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
 
 const execFileAsync = promisify(execFile);
 
@@ -166,17 +167,20 @@ export function getAutoUpdateConfig(env: NodeJS.ProcessEnv = process.env): AutoU
 export async function detectComposeCommand(
   execFileImpl: ExecFileLike = execFileAsync
 ): Promise<ComposeCommand | null> {
+  assertNotLockedCapability("auto-update");
   try {
     await execFileImpl("docker", ["compose", "version"], { timeout: 10_000 });
     return "docker compose";
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     // Fall through.
   }
 
   try {
     await execFileImpl("docker-compose", ["version"], { timeout: 10_000 });
     return "docker-compose";
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }
@@ -186,6 +190,7 @@ export async function validateAutoUpdateRuntime(
   execFileImpl: ExecFileLike = execFileAsync,
   existsImpl: (targetPath: string) => Promise<boolean> = pathExists
 ): Promise<AutoUpdateValidation> {
+  assertNotLockedCapability("auto-update");
   if (config.mode === "source") {
     const gitDir = path.join(PROJECT_ROOT, ".git");
     if (!(await existsImpl(gitDir))) {
@@ -198,7 +203,8 @@ export async function validateAutoUpdateRuntime(
 
     try {
       await execFileImpl("git", ["--version"], { timeout: 10_000 });
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       return {
         supported: false,
         reason: "git is not available. Install git to enable auto-update.",
@@ -243,7 +249,8 @@ export async function validateAutoUpdateRuntime(
 
   try {
     await execFileImpl("git", ["--version"], { timeout: 10_000 });
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return {
       supported: false,
       reason: "git is not available inside the OmniRoute container.",
@@ -269,12 +276,14 @@ export async function ensureGitTagExists(
   execFileImpl: ExecFileLike = execFileAsync,
   cwd = PROJECT_ROOT
 ): Promise<void> {
+  assertNotLockedCapability("auto-update");
   try {
     await execFileImpl("git", ["rev-parse", "-q", "--verify", `refs/tags/${targetTag}`], {
       timeout: 10_000,
       cwd,
     });
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     throw new Error(`Git tag not found: ${targetTag}`);
   }
 }
@@ -378,6 +387,7 @@ export async function launchAutoUpdate({
   spawnImpl?: SpawnLike;
   existsImpl?: (targetPath: string) => Promise<boolean>;
 }): Promise<AutoUpdateLaunchResult> {
+  assertNotLockedCapability("auto-update");
   const config = getAutoUpdateConfig(env);
   const validation = await validateAutoUpdateRuntime(config, execFileImpl, existsImpl);
 

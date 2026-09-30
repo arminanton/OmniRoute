@@ -9,6 +9,8 @@
  *   const proxyUrl = await resolveProxy("openai");
  */
 
+import { assertNoApplicationProxy, isRuntimePolicyError } from "@/shared/runtimePolicy";
+
 let _cachedConfig = null;
 let _cacheExpiry = 0;
 
@@ -24,7 +26,9 @@ async function getConfig() {
     _cachedConfig = await getProxyConfig();
     _cacheExpiry = now + 30_000; // Cache for 30s
     return _cachedConfig;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
+    assertNoApplicationProxy("opaque"); // An unreadable DB is not confirmed direct.
     return { global: null, providers: {} };
   }
 }
@@ -37,14 +41,17 @@ async function getConfig() {
 /** @returns {Promise<unknown>} */
 export async function resolveProxy(providerId) {
   const config = await getConfig();
+  if (!config || typeof config !== "object") assertNoApplicationProxy("opaque");
 
   // 1. Provider-specific proxy
   if (providerId && config.providers?.[providerId]) {
+    assertNoApplicationProxy("configured");
     return config.providers[providerId];
   }
 
   // 2. Global proxy
   if (config.global) {
+    assertNoApplicationProxy("configured");
     return config.global;
   }
 
@@ -60,9 +67,11 @@ export async function resolveProxy(providerId) {
         return null;
       }
     }
+    assertNoApplicationProxy("configured");
     return envProxy;
   }
 
+  assertNoApplicationProxy("none");
   return null;
 }
 

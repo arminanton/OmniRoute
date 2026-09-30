@@ -10,6 +10,8 @@
 import { jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { getSettings } from "@/lib/db/settings";
+import { classifyRoute } from "@/server/authz/classify";
+import { requiresLockedManagementAuth } from "@/shared/runtimePolicy";
 import { isPublicApiRoute } from "@/shared/constants/publicApiRoutes";
 import { extractApiKey } from "@/sse/services/auth";
 
@@ -209,7 +211,18 @@ async function validateBearerApiKeyForManagement(apiKey: string | null): Promise
   }
 }
 
+function isClientApiRequest(request: RequestLike | Request | null | undefined): boolean {
+  const pathname = getRequestPathname(request);
+  return (
+    !!pathname && classifyRoute(pathname, getRequestMethod(request)).routeClass === "CLIENT_API"
+  );
+}
+
 export function isManagementApiRequest(request: RequestLike | Request): boolean {
+  // Public routes remain public in the central pipeline. If their handler
+  // explicitly asks for auth (e.g. an OAuth credential write), locked mode
+  // requires a management credential rather than an inference-only key.
+  if (requiresLockedManagementAuth()) return !isClientApiRequest(request);
   const pathname = getRequestPathname(request);
   if (!pathname?.startsWith("/api/")) return false;
   if (pathname.startsWith("/api/v1/")) return false;
@@ -264,11 +277,12 @@ export async function isDashboardSessionAuthenticated(
  * @returns null if authenticated, error message string if not
  */
 export async function verifyAuth(request: any): Promise<string | null> {
+  // Read policy even when a valid dashboard cookie is present.
+  const isManagement = isManagementApiRequest(request);
   if (await isDashboardSessionAuthenticated(request)) {
     return null;
   }
 
-  const isManagement = isManagementApiRequest(request);
   const apiKey = getRequestApiKey(request, { allowUrl: !isManagement });
   if (isManagement) {
     if (await validateBearerApiKeyForManagement(apiKey)) {
@@ -290,8 +304,8 @@ export async function verifyAuth(request: any): Promise<string | null> {
  * Uses `cookies()` from next/headers (App Router compatible) and Bearer API key.
  * Returns true if authenticated, false otherwise.
  *
- * Unlike `verifyAuth`, this does NOT check `isAuthRequired()` — callers that
- * need to conditionally skip auth should check that separately.
+ * Unlike `verifyAuth`, this honors `isAuthRequired()` and its standalone
+ * bootstrap behavior. Locked management requests never skip auth.
  */
 export async function isAuthenticated(request: Request): Promise<boolean> {
   // If settings say login/auth is disabled, treat all requests as authenticated
@@ -324,10 +338,15 @@ export function isPublicRoute(pathname: string, method = "GET"): boolean {
  * If requireLogin is explicitly false, auth is skipped. Fresh installs without
  * a password keep their unauthenticated bootstrap path only on loopback
  * requests; exposed network requests must configure INITIAL_PASSWORD or log in.
+ * Locked management ignores both bypasses. Client API defaults are unchanged.
  */
 export async function isAuthRequired(
   request?: RequestLike | Request | null | undefined
 ): Promise<boolean> {
+  // Outside the settings catch: invalid required policy must propagate, not be
+  // downgraded to an ordinary auth decision. No request means management here.
+  if (requiresLockedManagementAuth() && !isClientApiRequest(request)) return true;
+
   try {
     const settings = await getSettings();
     if (settings.requireLogin === false) return false;

@@ -1,5 +1,13 @@
 import bcrypt from "bcryptjs";
-import { getSettings, updateSettings } from "@/lib/db/settings";
+import {
+  assertLockedManagementAuthProvisioned,
+  requiresLockedManagementAuth,
+  RuntimePolicyError,
+} from "@/shared/runtimePolicy";
+
+// Keep the provisioning contract available to auth callers without making the
+// DB-free settings composition import this password-persistence module.
+export { assertLockedManagementAuthProvisioned } from "@/shared/runtimePolicy";
 
 const BCRYPT_HASH_PATTERN = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
 const MANAGEMENT_PASSWORD_SALT_ROUNDS = 12;
@@ -46,6 +54,9 @@ export function isBcryptHash(value: unknown): value is string {
 }
 
 export async function hashManagementPassword(password: string) {
+  // Validate the raw replacement itself before hashing can hide a placeholder.
+  // Existing passwords, OIDC and INITIAL_PASSWORD must not supply a fallback.
+  assertLockedManagementAuthProvisioned({ password });
   return bcrypt.hash(password, MANAGEMENT_PASSWORD_SALT_ROUNDS);
 }
 
@@ -57,14 +68,30 @@ export async function verifyManagementPassword(password: string, hash: string) {
 export async function ensurePersistentManagementPasswordHash(
   options: EnsureManagementPasswordOptions = {}
 ): Promise<EnsuredManagementPassword> {
-  const settings = options.settings ?? ((await getSettings()) as JsonRecord);
+  const settings =
+    options.settings ?? ((await (await import("@/lib/db/settings")).getSettings()) as JsonRecord);
   const storedPassword = getStoredManagementPassword(settings);
 
   if (isBcryptHash(storedPassword)) {
+    const lockedManagementAuth = requiresLockedManagementAuth();
+    if (lockedManagementAuth) {
+      // Only the exact shipped placeholder is checked. A bcrypt-shaped value
+      // is not proof of password strength; other legacy credentials need review.
+      for (const placeholder of INSECURE_DEFAULT_PASSWORDS) {
+        if (await bcrypt.compare(placeholder, storedPassword)) {
+          throw new RuntimePolicyError("management-auth-required");
+        }
+      }
+    }
+    let nextSettings = settings;
+    if (settings.requireLogin === false && lockedManagementAuth) {
+      const { updateSettings } = await import("@/lib/db/settings");
+      nextSettings = (await updateSettings({ requireLogin: true })) as JsonRecord;
+    }
     return {
       hash: storedPassword,
       migrated: false,
-      settings,
+      settings: nextSettings,
       source: "stored_hash",
     };
   }
@@ -97,10 +124,13 @@ export async function ensurePersistentManagementPasswordHash(
   if (settings.setupComplete !== true) {
     updates.setupComplete = true;
   }
-  if (!storedPassword) {
+  // Locked provisioning cannot retain a mutable auth bypass while migrating
+  // legacy plaintext. Submit the normalized candidate to ordinary admission.
+  if (!storedPassword || requiresLockedManagementAuth()) {
     updates.requireLogin = true;
   }
 
+  const { updateSettings } = await import("@/lib/db/settings");
   const nextSettings = (await updateSettings(updates)) as JsonRecord;
   if (options.logger) {
     const context = options.source ? ` during ${options.source}` : "";

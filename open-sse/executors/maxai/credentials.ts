@@ -9,10 +9,10 @@
  * maxaiBrowserLogin), so the router is self-contained and never reads any
  * external (Hermes) token file.
  *
- * The access token is refreshed out-of-band by the browser-mint (the
- * `/oauth/refresh_access_token` endpoint is deep-TLS-gated and cannot be called
- * by any HTTP client — only a real browser passes), so this module only READS
- * the stored credential; it does not attempt an HTTP refresh.
+ * This module only resolves stored credentials. The shared refresh helper uses
+ * the selected MaxAI TLS transport and a durable generation CAS/lease before
+ * exchanging a refresh token. Canonical encrypted top-level tokens take priority
+ * over the legacy providerSpecificData token aliases.
  */
 
 export interface MaxaiCredential {
@@ -59,7 +59,9 @@ export function accessTokenExpiry(accessToken: string): number {
     if (!seg) return 0;
     const b64 = seg.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (seg.length % 4)) % 4);
     const claims = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
-    return typeof claims?.exp === "number" ? claims.exp : 0;
+    return typeof claims?.exp === "number" && Number.isFinite(claims.exp) && claims.exp > 0
+      ? claims.exp
+      : 0;
   } catch {
     return 0;
   }
@@ -73,7 +75,8 @@ export function accessTokenExpiry(accessToken: string): number {
  */
 export function resolveMaxaiCredential(
   psd: ProviderSpecificData,
-  accessTokenFromConnection?: string | null
+  accessTokenFromConnection?: string | null,
+  refreshTokenFromConnection?: string | null
 ): MaxaiCredential | null {
   const accessToken = firstString(
     accessTokenFromConnection,
@@ -85,12 +88,11 @@ export function resolveMaxaiCredential(
   const deviceId = firstString(psd?.maxaiDeviceId, psd?.deviceId);
   if (!deviceId) return null;
 
-  const userId =
-    firstString(psd?.maxaiUserId, psd?.userId) ?? userIdFromJwt(accessToken);
+  const userId = firstString(psd?.maxaiUserId, psd?.userId) ?? userIdFromJwt(accessToken);
   if (!userId) return null;
 
   const refreshToken =
-    firstString(psd?.maxaiRefreshToken, psd?.refreshToken) ?? undefined;
+    firstString(refreshTokenFromConnection, psd?.maxaiRefreshToken, psd?.refreshToken) ?? undefined;
 
   return { accessToken, deviceId, userId, refreshToken };
 }

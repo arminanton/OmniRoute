@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import vm from "node:vm";
+import ts from "typescript";
+import { RuntimePolicyError, isRuntimePolicyError } from "../../src/shared/runtimePolicy.ts";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-sse-auth-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
@@ -16,6 +19,203 @@ const auth = await import("../../src/sse/services/auth.ts");
 const quotaCache = await import("../../src/domain/quotaCache.ts");
 const fallback = await import("../../open-sse/services/accountFallback.ts");
 const oauthOccupancy = await import("../../open-sse/services/oauthSessionOccupancy.ts");
+
+// Source-only fixture for the persistence boundary. The full auth module runs
+// with synthetic dependencies; no additional app/DB/provider/helper is loaded.
+// The real facade supplies only its pure error constructor and brand predicate.
+function deferredLocal404Write() {
+  let resolve: () => void = () => assert.fail("deferred promise was not initialized");
+  let reject: (error: unknown) => void = () => assert.fail("deferred promise was not initialized");
+  const promise = new Promise<void>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
+function local404MarkFixture(settleWrite: (attempt: number) => Promise<void>) {
+  const filename = new URL("../../src/sse/services/auth.ts", import.meta.url);
+  const source = fs.readFileSync(filename, "utf8");
+  const parsed = ts.createSourceFile(filename.pathname, source, ts.ScriptTarget.Latest, true);
+  const imports: Record<string, unknown> = {};
+  for (const statement of parsed.statements) {
+    if (
+      (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteral(statement.moduleSpecifier)
+    ) {
+      // Unused static dependencies are inert, never passed to the real loader.
+      imports[statement.moduleSpecifier.text] = {};
+    }
+  }
+
+  const connection: Record<string, unknown> = {
+    id: "local404-write-fixture",
+    provider: "openai",
+    authType: "apikey",
+    isActive: true,
+    testStatus: "active",
+    rateLimitedUntil: null,
+    backoffLevel: 0,
+    providerSpecificData: { baseUrl: "http://127.0.0.1:8080/v1" },
+  };
+  const originalConnection = { ...connection };
+  const events: string[] = [];
+  const writes: Array<{ id: string; data: Record<string, unknown> }> = [];
+  const commits: Array<Record<string, unknown>> = [];
+  const lockouts: Array<Parameters<typeof fallback.recordModelLockoutFailure>> = [];
+  const invalidations: Array<{ provider: string; connectionId: string }> = [];
+  const profile = { baseCooldownMs: 250 };
+  const maxCooldownMs = 1_000;
+  const localUrls: unknown[] = [];
+  const unexpected = () => assert.fail("unexpected external effect in local404 write fixture");
+  const noop = () => {};
+
+  Object.assign(imports, {
+    "@/shared/runtimePolicy": { isRuntimePolicyError },
+    "@/lib/db/providers": {
+      getProviderConnections: async () => [connection],
+      updateProviderConnection: async (id: string, data: Record<string, unknown>) => {
+        const patch = { ...data };
+        writes.push({ id, data: patch });
+        const attempt = writes.length;
+        events.push(`write-start:${attempt}`);
+        try {
+          await settleWrite(attempt);
+        } catch (error) {
+          events.push(`write-rejected:${attempt}`);
+          throw error;
+        }
+        // Synthetic transaction boundary. A denied admission never reaches it.
+        commits.push(patch);
+        Object.assign(connection, patch);
+        events.push(`write-committed:${attempt}`);
+        return connection;
+      },
+    },
+    "@/lib/db/providers/lazyConnectionView": {
+      toProviderConnection: (row: Record<string, unknown>) => row,
+    },
+    "@/lib/db/readCache": {
+      getCachedSettings: async () => ({}),
+      getCachedProviderNodes: async () => [],
+    },
+    "@/lib/resilience/modelLockoutSettings": {
+      resolveModelLockoutSettings: () => ({ maxCooldownMs }),
+    },
+    "@omniroute/open-sse/services/accountFallback.ts": {
+      isProviderModelUnsupported400: () => false,
+      getRuntimeProviderProfile: async () => profile,
+      checkFallbackError: () => ({ shouldFallback: true, cooldownMs: 250, reason: "not_found" }),
+      hasPerModelQuota: () => false,
+      recordModelLockoutFailure: (
+        ...args: Parameters<typeof fallback.recordModelLockoutFailure>
+      ) => {
+        lockouts.push(args);
+        events.push(`lockout:${args[2]}`);
+        return {
+          cooldownMs: Math.min(args[5], args[7]?.maxCooldownMs ?? Infinity),
+          failureCount: 1,
+          resetAfterMs: 60_000,
+        };
+      },
+    },
+    "@omniroute/open-sse/config/constants.ts": {
+      COOLDOWN_MS: { notFoundLocal: 1_000 },
+      RateLimitReason: { QUOTA_EXHAUSTED: "quota_exhausted" },
+    },
+    "@omniroute/open-sse/config/providerErrorRules.ts": {
+      honorsRuleLockScope: () => false,
+      isEgressBucketedLockScope: () => false,
+    },
+    "@omniroute/open-sse/services/errorClassifier.ts": {
+      classifyProviderError: () => "not_found",
+      PROVIDER_ERROR_TYPES: { QUOTA_EXHAUSTED: "quota_exhausted" },
+    },
+    "@omniroute/open-sse/services/alibabaFreeTier.ts": {
+      rehydrateAlibabaFreeDrainedModelLocks: noop,
+      isAlibabaModelStudioProvider: () => false,
+    },
+    "@/shared/constants/providers": {
+      resolveProviderId: (provider: string) => provider,
+    },
+    "@/shared/utils/probeOrigin": { shouldIsolateProbeFailures: async () => false },
+    "./authTerminalStatus.ts": { resolveTerminalConnectionStatus: () => null },
+    "@omniroute/open-sse/config/providerRegistry.ts": {
+      isLocalProvider: (baseUrl: unknown) => {
+        localUrls.push(baseUrl);
+        return baseUrl === "http://127.0.0.1:8080/v1";
+      },
+    },
+    "./requestResourceHealth": { getResource404Bypass: () => null },
+    "../utils/logger": { info: noop, warn: noop, debug: noop, error: noop },
+    "@omniroute/open-sse/services/autoCombo/freeAccessQuota.ts": {
+      invalidateFreeAccessState: (provider: string, connectionId: string) => {
+        invalidations.push({ provider, connectionId });
+        events.push("free-access-invalidated");
+      },
+    },
+  });
+
+  const module: { exports: Pick<typeof auth, "markAccountUnavailable"> } = {
+    exports: { markAccountUnavailable: async () => unexpected() },
+  };
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2022,
+      esModuleInterop: true,
+    },
+  }).outputText;
+  vm.runInNewContext(
+    compiled,
+    {
+      module,
+      exports: module.exports,
+      process: { env: {} },
+      console: { log: noop, info: noop, warn: noop, error: noop },
+      fetch: unexpected,
+      setTimeout: unexpected,
+      setInterval: unexpected,
+      require: (id: string) => {
+        if (Object.hasOwn(imports, id)) return imports[id];
+        throw new Error(`Unexpected local404 fixture import: ${id}`);
+      },
+    },
+    { filename: filename.pathname }
+  );
+
+  return {
+    mark: module.exports.markAccountUnavailable,
+    connection,
+    originalConnection,
+    events,
+    writes,
+    commits,
+    lockouts,
+    invalidations,
+    profile,
+    maxCooldownMs,
+    localUrls,
+  };
+}
+
+function assertLocal404ModelLockout(
+  fixture: ReturnType<typeof local404MarkFixture>,
+  expectedModel = "local-model"
+) {
+  assert.equal(fixture.lockouts.length, 1);
+  const [provider, connectionId, model, reason, status, baseCooldown, profile, options] =
+    fixture.lockouts[0];
+  assert.equal(provider, "openai");
+  assert.equal(connectionId, fixture.connection.id);
+  assert.equal(model, expectedModel);
+  assert.equal(reason, "not_found");
+  assert.equal(status, 404);
+  assert.equal(baseCooldown, fixture.profile.baseCooldownMs);
+  assert.equal(profile, fixture.profile);
+  assert.equal(options?.maxCooldownMs, fixture.maxCooldownMs);
+}
 
 async function resetStorage() {
   core.resetDbInstance();
@@ -1269,6 +1469,177 @@ test("markAccountUnavailable uses configured cooldowns for local 404 model locko
   assert.equal(Number(updated.errorCode), 404);
 
   await settingsDb.updateSettings({ modelLockout: null });
+});
+
+test("Local404 waits for metadata persistence before model lockout and fallback", async () => {
+  const started = deferredLocal404Write();
+  const write = deferredLocal404Write();
+  const fixture = local404MarkFixture(async () => {
+    started.resolve();
+    await write.promise;
+  });
+  let settled = false;
+  const mark = fixture
+    .mark("local404-write-fixture", 404, "model not found", "openai", "local-model")
+    .then(
+      (result) => {
+        settled = true;
+        return result;
+      },
+      (error) => {
+        settled = true;
+        throw error;
+      }
+    );
+  await Promise.race([started.promise, mark.then(() => assert.fail("write was not reached"))]);
+  // Flush an already queued completion reaction; no timer or wall-clock wait.
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(fixture.writes.length, 1);
+  assert.deepEqual(fixture.localUrls, ["http://127.0.0.1:8080/v1"]);
+  assert.equal(fixture.commits.length, 0);
+  assert.equal(fixture.lockouts.length, 0);
+  assert.deepEqual(fixture.connection, fixture.originalConnection);
+  assert.deepEqual(fixture.events, ["free-access-invalidated", "write-start:1"]);
+
+  write.resolve();
+  const result = await mark;
+  assert.equal(result.shouldFallback, true);
+  assert.equal(result.cooldownMs, 250);
+  assert.equal(fixture.commits.length, 1);
+  assert.equal(fixture.writes[0].id, fixture.connection.id);
+  const patch = fixture.writes[0].data;
+  assert.ok(typeof patch.lastErrorAt === "string");
+  assert.ok(Number.isFinite(Date.parse(patch.lastErrorAt)));
+  assert.deepEqual(patch, {
+    lastErrorType: "not_found",
+    lastError: "Model local-model not_found",
+    lastErrorAt: patch.lastErrorAt,
+    errorCode: 404,
+  });
+  assert.deepEqual(fixture.connection, { ...fixture.originalConnection, ...patch });
+  assertLocal404ModelLockout(fixture);
+  assert.deepEqual(fixture.events, [
+    "free-access-invalidated",
+    "write-start:1",
+    "write-committed:1",
+    "lockout:local-model",
+  ]);
+});
+
+const local404PublicDenial = new RuntimePolicyError("entrypoint-unapproved");
+for (const failure of [
+  { label: "ordinary error", error: new Error("synthetic persistence failure") },
+  {
+    label: "unbranded public policy lookalike",
+    error: Object.assign(new Error(local404PublicDenial.message), {
+      name: local404PublicDenial.name,
+      code: local404PublicDenial.code,
+      reason: local404PublicDenial.reason,
+    }),
+  },
+]) {
+  test(`Local404 keeps best-effort lockout and fallback on ${failure.label}`, async () => {
+    assert.equal(isRuntimePolicyError(failure.error), false);
+    const fixture = local404MarkFixture(async () => {
+      throw failure.error;
+    });
+    let fallbackContinuations = 0;
+    const result = await fixture
+      .mark("local404-write-fixture", 404, "model not found", "openai", "local-model")
+      .then((value) => {
+        if (value.shouldFallback) fallbackContinuations++;
+        return value;
+      });
+    assert.equal(result.shouldFallback, true);
+    assert.equal(result.cooldownMs, 250);
+    assert.equal(fallbackContinuations, 1);
+    assert.equal(fixture.writes.length, 1);
+    assert.equal(fixture.commits.length, 0);
+    assert.deepEqual(fixture.connection, fixture.originalConnection);
+    assertLocal404ModelLockout(fixture);
+    assert.deepEqual(fixture.events, [
+      "free-access-invalidated",
+      "write-start:1",
+      "write-rejected:1",
+      "lockout:local-model",
+    ]);
+  });
+}
+
+test("Local404 denial preserves identity, skips fallback, and releases its mutex", async () => {
+  const denied = new RuntimePolicyError("entrypoint-unapproved");
+  assert.equal(isRuntimePolicyError(denied), true);
+  const firstStarted = deferredLocal404Write();
+  const nextStarted = deferredLocal404Write();
+  const firstWrite = deferredLocal404Write();
+  const nextWrite = deferredLocal404Write();
+  const fixture = local404MarkFixture(async (attempt) => {
+    if (attempt === 1) {
+      firstStarted.resolve();
+      await firstWrite.promise;
+    } else {
+      nextStarted.resolve();
+      await nextWrite.promise;
+    }
+  });
+  let fallbackContinuations = 0;
+  const mark = fixture
+    .mark("local404-write-fixture", 404, "model not found", "openai", "local-model")
+    .then((value) => {
+      // Model the caller's continuation after awaiting mark, not a chat E2E test.
+      if (value.shouldFallback) fallbackContinuations++;
+      return value;
+    });
+  await Promise.race([firstStarted.promise, mark.then(() => assert.fail("write was not reached"))]);
+  // This prior cache effect is intentionally preserved, not claimed to roll back.
+  assert.deepEqual(fixture.invalidations, [
+    { provider: "openai", connectionId: "local404-write-fixture" },
+  ]);
+  assert.equal(fixture.lockouts.length, 0);
+
+  // Queue another mark on the SAME connection before rejecting the first write.
+  // It must resume through the real finally release, without polling or timers.
+  const next = fixture.mark(
+    "local404-write-fixture",
+    404,
+    "model not found",
+    "openai",
+    "other-local-model"
+  );
+  const rejection = assert.rejects(mark, (error: unknown) => {
+    assert.equal(error, denied);
+    return true;
+  });
+  firstWrite.reject(denied);
+  await rejection;
+  await Promise.race([
+    nextStarted.promise,
+    next.then(() => assert.fail("next write was not reached")),
+  ]);
+  assert.equal(fallbackContinuations, 0);
+  assert.equal(fixture.writes.length, 2);
+  assert.equal(fixture.commits.length, 0, "no denied metadata transaction");
+  assert.equal(fixture.lockouts.length, 0, "no model penalty after the denial");
+  assert.deepEqual(fixture.connection, fixture.originalConnection);
+  assert.deepEqual(fixture.events, [
+    "free-access-invalidated",
+    "write-start:1",
+    "write-rejected:1",
+    "free-access-invalidated",
+    "write-start:2",
+  ]);
+
+  nextWrite.resolve();
+  const nextResult = await next;
+  assert.equal(nextResult.shouldFallback, true);
+  assert.equal(nextResult.cooldownMs, 250);
+  assert.equal(fixture.commits.length, 1);
+  assert.equal(fixture.connection.lastError, "Model other-local-model not_found");
+  assert.equal(fixture.connection.testStatus, "active");
+  assert.equal(fixture.connection.rateLimitedUntil, null);
+  assert.equal(fixture.connection.backoffLevel, 0);
+  assertLocal404ModelLockout(fixture, "other-local-model");
 });
 
 test("markAccountUnavailable applies a model-only lockout for Gemini 429 responses", async () => {

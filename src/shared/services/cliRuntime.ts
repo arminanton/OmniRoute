@@ -3,6 +3,7 @@ import fsSync from "fs";
 import os from "os";
 import path from "path";
 import { spawn, execFileSync } from "child_process";
+import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { getHermesHome } from "@/lib/cli-helper/config-generator/hermesHome";
 import { getCachedLoginShellPath, mergeShellPath } from "./loginShellPath";
 import { withSettingsFallback } from "./cliInstallFallback";
@@ -423,6 +424,7 @@ const runProcess = (
   } = {}
 ): Promise<any> =>
   new Promise((resolve) => {
+    assertNotLockedCapability("cli-runtime-probe");
     // Guard: reject commands with shell metacharacters — command comes from
     // server-controlled env vars/config, not HTTP input, but belt-and-suspenders.
     if (/[;&|`$<>\n\r]/.test(command)) {
@@ -565,6 +567,7 @@ const validateEnvPath = (value: string | undefined, allowedParents: string[]): s
  */
 let _npmGlobalPrefix: string | undefined;
 const getNpmGlobalPrefix = (): string => {
+  assertNotLockedCapability("cli-runtime-probe");
   if (_npmGlobalPrefix !== undefined) return _npmGlobalPrefix;
 
   const envPrefix = String(process.env.npm_config_prefix || "").trim();
@@ -590,7 +593,9 @@ const getNpmGlobalPrefix = (): string => {
       _npmGlobalPrefix = prefix;
       return _npmGlobalPrefix;
     }
-  } catch {}
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
+  }
 
   _npmGlobalPrefix = "";
   return _npmGlobalPrefix;
@@ -657,6 +662,7 @@ const getExtraPaths = () =>
  * Works on all platforms — Windows checks .cmd wrappers, Linux/macOS checks bare names.
  */
 export const getKnownToolPaths = (toolId: string): string[] => {
+  assertNotLockedCapability("cli-runtime-probe");
   toolId = normalizeCliToolId(toolId);
   const home = os.homedir();
   const paths: string[] = [];
@@ -796,6 +802,7 @@ const getNvmNodePath = (): string | null => {
 };
 
 export const getLookupEnv = () => {
+  assertNotLockedCapability("cli-runtime-probe");
   const env = { ...process.env };
   const extraPaths = getExtraPaths();
   const basePath = env.PATH || env.Path || "";
@@ -862,6 +869,7 @@ const checkExplicitPath = async (commandPath: string) => {
 };
 
 export const locateCommand = async (command: string, env: Record<string, string | undefined>) => {
+  assertNotLockedCapability("cli-runtime-probe");
   if (!command) {
     return { installed: false, commandPath: null, reason: "missing_command" };
   }
@@ -929,6 +937,7 @@ export const locateCommand = async (command: string, env: Record<string, string 
  * - Checks file size bounds (30B - 100MB) to detect suspicious binaries
  */
 export const checkKnownPath = async (commandPath: string) => {
+  assertNotLockedCapability("cli-runtime-probe");
   if (!path.isAbsolute(commandPath)) {
     return { installed: false, commandPath: null, reason: "not_absolute" };
   }
@@ -975,6 +984,7 @@ export const checkKnownPath = async (commandPath: string) => {
       return { installed: false, commandPath: null, reason: "suspicious_size" };
     }
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     const errorCode = (error as NodeJS.ErrnoException).code;
     if (errorCode === "ENOENT") {
       return { installed: false, commandPath: null, reason: "not_found" };
@@ -1000,6 +1010,7 @@ export const locateCommandCandidate = async (
   env: Record<string, string | undefined>,
   toolId?: string
 ) => {
+  assertNotLockedCapability("cli-runtime-probe");
   if (!Array.isArray(commands) || commands.length === 0) {
     return { command: null, installed: false, commandPath: null, reason: "missing_command" };
   }
@@ -1107,6 +1118,7 @@ export const ensureCliConfigWriteAllowed = (
   targetPath?: string,
   options: { containerDeps?: ContainerEnvDeps; toolLabel?: string; hostCommand?: string } = {}
 ) => {
+  assertNotLockedCapability("cli-runtime-configure");
   if (!isCliConfigWriteAllowed()) {
     return "CLI config writes are disabled (CLI_ALLOW_CONFIG_WRITES=false)";
   }
@@ -1214,6 +1226,7 @@ export const getCliPrimaryConfigPath = (toolId: string) => {
 };
 
 export const getCliRuntimeStatus = async (toolId: string) => {
+  assertNotLockedCapability("cli-runtime-probe");
   toolId = normalizeCliToolId(toolId);
   const tool = CLI_TOOLS[toolId];
   const runtimeMode = getRuntimeMode();

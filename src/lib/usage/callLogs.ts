@@ -10,6 +10,13 @@ import path from "node:path";
 import type { RequestPipelinePayloads } from "@omniroute/open-sse/utils/requestLogger.ts";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/errorSanitization.ts";
 import { getDbInstance } from "../db/core";
+import {
+  reserveCallLogIdentity,
+  publishCallLogIdentity,
+  releaseCallLogIdentity,
+  resolveCallLogAlias,
+  type CallLogIdentity,
+} from "../db/callLogIdentities";
 import { getRequestDetailLogByCallLogId } from "../db/detailedLogs";
 import { shouldPersistToDisk } from "./migrations";
 import { getCallLogApiKeyContext } from "./callLogApiKeyContext";
@@ -32,6 +39,7 @@ import { buildCallLogAttemptLookupPattern } from "@/shared/utils/callLogAttemptI
 import {
   CALL_LOGS_DIR,
   readCallArtifact,
+  deleteCallArtifact,
   type CallLogArtifact,
   type CallLogDetailState,
 } from "./callLogArtifacts";
@@ -130,13 +138,6 @@ type DeleteResult = {
   deletedRows: number;
   deletedArtifacts: number;
 };
-
-let logIdCounter = 0;
-
-function generateLogId() {
-  logIdCounter++;
-  return `${Date.now()}-${logIdCounter}`;
-}
 
 async function resolveAccountName(connectionId: string | null | undefined) {
   let account = connectionId ? connectionId.slice(0, 8) : "-";
@@ -446,6 +447,9 @@ function getLegacyInlineDetail(id: string) {
 }
 
 async function saveCallLogOperation(entry: any): Promise<void> {
+  let identity: CallLogIdentity | null = null;
+  let ownedArtifactRelPath: string | null = null;
+  let published = false;
   try {
     const apiKeyContext = getCallLogApiKeyContext();
     // `||` (not `??`): an empty-string apiKeyId/apiKeyName is "unattributed",
@@ -484,8 +488,11 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     const tokensReasoning = getReasoningTokensOrNull(entry.tokens);
     const reasoningObservation = resolveReasoningObservation(tokensReasoning, entry.responseBody);
     const errorType = classifyCallLogError(entry.status, entry.error, entry.provider);
+    // Reserve before dispatching an artifact job. Caller IDs are durable lookup
+    // aliases, never reused primary keys or filesystem paths.
+    identity = reserveCallLogIdentity(entry.id);
     const logEntry = {
-      id: typeof entry.id === "string" && entry.id.length > 0 ? entry.id : generateLogId(),
+      id: identity.id,
       timestamp: typeof entry.timestamp === "string" ? entry.timestamp : new Date().toISOString(),
       method: entry.method || "POST",
       path: entry.path || "/v1/chat/completions",
@@ -557,6 +564,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       if (artifactResult) {
         detailState = "ready";
         artifactRelPath = artifactResult.relPath;
+        ownedArtifactRelPath = artifactRelPath;
         artifactSizeBytes = artifactResult.sizeBytes;
         artifactSha256 = artifactResult.sha256;
       } else {
@@ -565,8 +573,10 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     }
 
     const db = getDbInstance();
-    db.prepare(
-      `
+    publishCallLogIdentity(identity, () =>
+      db
+        .prepare(
+          `
       INSERT INTO call_logs (
         id, timestamp, method, path, status, model, requested_model, provider,
         account, connection_id, duration, tokens_in, tokens_out,
@@ -592,21 +602,34 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         @videoContentRemoved
       )
     `
-    ).run({
-      ...logEntry,
-      errorSummary: toStoredErrorSummary(protectedError),
-      detailState,
-      artifactRelPath,
-      artifactSizeBytes,
-      artifactSha256,
-      hasRequestBody: protectedRequestBody !== null ? 1 : 0,
-      hasResponseBody: protectedResponseBody !== null ? 1 : 0,
-      hasPipelineDetails: protectedPipelinePayloads ? 1 : 0,
-      requestSummary,
-    });
+        )
+        .run({
+          ...logEntry,
+          errorSummary: toStoredErrorSummary(protectedError),
+          detailState,
+          artifactRelPath,
+          artifactSizeBytes,
+          artifactSha256,
+          hasRequestBody: protectedRequestBody !== null ? 1 : 0,
+          hasResponseBody: protectedResponseBody !== null ? 1 : 0,
+          hasPipelineDetails: protectedPipelinePayloads ? 1 : 0,
+          requestSummary,
+        })
+    );
+    published = true;
 
     scheduleCallLogRotation();
   } catch (error) {
+    if (identity && !published) {
+      try {
+        if (releaseCallLogIdentity(identity)) deleteCallArtifact(ownedArtifactRelPath);
+      } catch (cleanupError) {
+        console.error(
+          "[callLogs] Failed to release call-log identity:",
+          sanitizeErrorMessage(cleanupError)
+        );
+      }
+    }
     console.error(
       "[callLogs] Failed to save call log:",
       sanitizeErrorMessage(error) || "Call log persistence failed"
@@ -782,15 +805,31 @@ export async function getCallLogById(id: string) {
        LEFT JOIN provider_nodes pn ON pn.id = cl.provider
        LEFT JOIN provider_connections pc ON pc.id = cl.connection_id`;
   let row = db.prepare(`${detailSelect} WHERE cl.id = ?`).get(id) as CallLogSummaryRow | undefined;
-  if (!row) {
+  // Cloud memory/build modes intentionally skip persistent migrations and saves.
+  if (!row && shouldPersistToDisk) {
+    const physicalId = resolveCallLogAlias(id);
+    if (physicalId) {
+      row = db.prepare(`${detailSelect} WHERE cl.id = ?`).get(physicalId) as
+        CallLogSummaryRow | undefined;
+    }
+  }
+  // SQLite's legacy LIKE fallback has a 50,000-byte pattern limit. New aliases
+  // use bounded exact hash lookups above and do not need this historical scan.
+  if (!row && id.length < 50_000) {
+    const legacyPattern = buildCallLogAttemptLookupPattern(id);
+    if (Buffer.byteLength(legacyPattern) > 50_000) return null;
+    const unmappedOnly = shouldPersistToDisk
+      ? "AND NOT EXISTS (SELECT 1 FROM call_log_identities WHERE physical_id = cl.id)"
+      : "";
     row = db
       .prepare(
         `${detailSelect}
          WHERE cl.id LIKE ? ESCAPE '\\'
-         ORDER BY cl.timestamp DESC, cl.id DESC
+           ${unmappedOnly}
+         ORDER BY cl.timestamp DESC, cl.rowid DESC
          LIMIT 1`
       )
-      .get(buildCallLogAttemptLookupPattern(id)) as CallLogSummaryRow | undefined;
+      .get(legacyPattern) as CallLogSummaryRow | undefined;
   }
   if (!row) return null;
 

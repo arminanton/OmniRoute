@@ -26,12 +26,24 @@ data
 logs
 .sandbox
 
-# Local env files (inject at runtime via --env-file or -e)
+# Never send root or nested private env files to the builder.
+# Inject real values only at runtime via --env-file or -e. These four tracked,
+# reviewed examples contain placeholders/public defaults, not private values.
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+.env.*
+**/.env
+**/.env.*
+# Also exclude direnv-style files and named private env files at any depth.
+.env*
+**/.env*
+*.env
+**/*.env
+*.env.*
+**/*.env.*
+!.env.example
+!.env.devin-bridge.example
+!.env.homolog.example
+!contrib/vps/.env.example
 
 # Debug logs
 npm-debug.log*

@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import type { ReasoningCacheContext } from "@omniroute/open-sse/services/reasoningCacheContext.ts";
 import { resolveChatRequestBody } from "./requestBody";
 import * as chatAdmission from "./chatAdmission.ts";
 import { buildClientRawRequest, resolveDispatchClientRawRequest } from "./chat/clientRawRequest.ts";
@@ -27,7 +28,8 @@ import {
 import { getCombo, getComboForModel, getModelInfo } from "../services/model";
 import { stripContextWindowSuffix } from "@omniroute/open-sse/services/model.ts";
 import { resolveBareModelToConnectionDefault } from "@omniroute/open-sse/services/model.ts";
-import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
+import { errorResponse, runtimePolicyErrorResponse } from "@omniroute/open-sse/utils/error.ts";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import { getImageModelEntry } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { acceptHeaderForcesStream } from "@omniroute/open-sse/utils/aiSdkCompat.ts";
 import { applyNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias.ts";
@@ -681,6 +683,7 @@ async function handleChatImplementation(
     return policy.rejection;
   }
   const apiKeyInfo = policy.apiKeyInfo;
+  const reasoningCacheContext = policy.reasoningCacheContext;
   let managedLease: ManagedLeaseDispatchContext | null = null;
   if (isExclusiveLeaseManagedKey(apiKeyInfo)) {
     try {
@@ -758,7 +761,7 @@ async function handleChatImplementation(
     delete (body as { previous_response_id?: unknown }).previous_response_id;
   }
 
-  const admissionRejection = await admissionContext.acquire(apiKeyInfo?.id, request, body);
+  const admissionRejection = await admissionContext.acquire(reasoningCacheContext, request, body);
   if (admissionRejection) return admissionRejection;
   clientRawRequest = chatAdmission.resolveClientRawAfterAdmission(clientRawRequest, () =>
     deferredClientRawBody.withClientBody((clientBody) => buildClientRawRequest(request, clientBody))
@@ -1180,6 +1183,7 @@ async function handleChatImplementation(
             reasoningDecision,
             reasoningIntent,
             reasoningRequestTags: requestRoutingTags.tags,
+            reasoningCacheContext,
             managedLease,
             videoBridgeLog,
             // #7360 follow-up: without this, a target dispatch abandoned by
@@ -1215,7 +1219,10 @@ async function handleChatImplementation(
       signal: request?.signal ?? null,
       correlationId: reqId,
       // #9654 Wave 2: per-target lane-aware admission probe for combo fan-out.
-      perTargetAdmission: admissionContext.createPerTargetAdmissionHook(apiKeyInfo?.id, request),
+      perTargetAdmission: admissionContext.createPerTargetAdmissionHook(
+        reasoningCacheContext,
+        request
+      ),
     });
 
     for (const credentials of comboPreselectedCredentials.values()) {
@@ -1227,6 +1234,7 @@ async function handleChatImplementation(
     // If combo exhausted all models, try the global fallback before giving up.
     if (
       !response.ok &&
+      !isRuntimePolicyResponse(response) &&
       !isExhaustedNetworkResponse(response) &&
       [502, 503].includes(response.status) &&
       typeof (settings as any)?.globalFallbackModel === "string" &&
@@ -1252,12 +1260,14 @@ async function handleChatImplementation(
             emergencyFallbackTried: true,
             forceLiveComboTest: isComboLiveTest,
             conversationId,
+            reasoningCacheContext,
             managedLease,
             videoBridgeLog,
           },
           combo.strategy,
           true
         );
+        if (isRuntimePolicyResponse(fallbackResponse)) return fallbackResponse;
         if (fallbackResponse.ok) {
           log.info("GLOBAL_FALLBACK", `Global fallback ${fallbackModel} succeeded`);
           recordTelemetry(telemetry);
@@ -1271,6 +1281,7 @@ async function handleChatImplementation(
           `Global fallback ${fallbackModel} also failed (${fallbackResponse.status})`
         );
       } catch (err: any) {
+        if (isRuntimePolicyError(err)) return runtimePolicyErrorResponse();
         log.warn("GLOBAL_FALLBACK", `Global fallback error: ${err?.message || "unknown"}`);
       }
     }
@@ -1346,6 +1357,7 @@ async function handleChatImplementation(
       reasoningDecision,
       reasoningIntent,
       reasoningRequestTags: requestRoutingTags.tags,
+      reasoningCacheContext,
       managedLease,
       videoBridgeLog,
     },
@@ -1364,8 +1376,20 @@ async function handleChatImplementation(
 
 export const handleChat = chatAdmission.withChatAdmission(handleChatImplementation);
 
-/** Handle one resolved model through gates, credentials, and retry/fallback. */
+/** Preserve local denials before combo timeout/error adapters can reclassify a throw. */
 async function handleSingleModelChat(
+  ...args: Parameters<typeof handleSingleModelChatImplementation>
+) {
+  try {
+    return await handleSingleModelChatImplementation(...args);
+  } catch (error) {
+    if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
+    throw error;
+  }
+}
+
+/** Handle one resolved model through gates, credentials, and retry/fallback. */
+async function handleSingleModelChatImplementation(
   body: any,
   modelStr: string,
   clientRawRequest: any = null,
@@ -1395,6 +1419,7 @@ async function handleSingleModelChat(
     reasoningIntent?: ExtractedReasoningIntent | null;
     reasoningRequestTags?: string[];
     reasoningTransportFallback?: "skip" | "drop";
+    reasoningCacheContext?: ReasoningCacheContext | null;
     managedLease?: ManagedLeaseDispatchContext | null;
     /** #12150 P1b: video-bridge log/Memory shadow — undefined on every non-video request. */
     videoBridgeLog?: VideoBridgeLog;
@@ -1474,6 +1499,7 @@ async function handleSingleModelChat(
             reasoningTransportFallback:
               redirectCombo.config?.reasoningTransportFallback === "skip" ? "skip" : "drop",
             conversationId: runtimeOptions?.conversationId ?? null,
+            reasoningCacheContext: runtimeOptions.reasoningCacheContext ?? null,
             managedLease: runtimeOptions.managedLease ?? null,
             videoBridgeLog: runtimeOptions.videoBridgeLog,
             // #7360 follow-up — see the primary handleSingleModel closure above.
@@ -1491,7 +1517,7 @@ async function handleSingleModelChat(
       signal: request?.signal ?? null,
       // #9654 Wave 2: safety-net redirect — same per-target probe as the primary path.
       perTargetAdmission: chatAdmission.createPerTargetAdmissionHookForRequest(
-        apiKeyInfo?.id,
+        runtimeOptions.reasoningCacheContext ?? null,
         request
       ),
     });
@@ -1597,7 +1623,7 @@ async function handleSingleModelChat(
     resetTimeout: providerProfile.resetTimeoutMs,
     // #4602: a local WS-bridge "Controller is already closed" throw is not an
     // upstream outage — keep it from tripping the whole-provider breaker.
-    isFailure: (e) => !isLocalStreamLifecycleError(e),
+    isFailure: (e) => !isRuntimePolicyError(e) && !isLocalStreamLifecycleError(e),
     onStateChange: (name: string, from: string, to: string) =>
       log.info("CIRCUIT", `${name}: ${from} → ${to}`),
     ...(useHints429
@@ -1966,6 +1992,7 @@ async function handleSingleModelChat(
             routingComboId: runtimeOptions?.routingComboId ?? null,
             sessionAffinityKey: runtimeOptions.sessionAffinityKey ?? null,
             reasoningTransportFallback: runtimeOptions.reasoningTransportFallback ?? "drop",
+            reasoningCacheContext: runtimeOptions.reasoningCacheContext ?? null,
             managedLease: runtimeOptions.managedLease ?? null,
             videoBridgeLog: runtimeOptions.videoBridgeLog,
           },
@@ -1980,6 +2007,14 @@ async function handleSingleModelChat(
         return execution.localResourcePressureResult.response;
       }
       const { result, tlsFingerprintUsed } = execution;
+      // Policy denial is terminal, not provider health or exhausted network state.
+      if (isRuntimePolicyResponse(result.response) || isRuntimePolicyError(result.originalError)) {
+        releaseOAuthSession();
+        return withSelectedConnectionHeader(
+          isRuntimePolicyResponse(result.response) ? result.response : runtimePolicyErrorResponse(),
+          credentials.connectionId
+        );
+      }
       if (!result.success) releaseOAuthSession();
 
       const proxyLatency = Date.now() - proxyStartTime;
@@ -2283,7 +2318,7 @@ async function handleSingleModelChat(
               Boolean(comboName) // isCombo if comboName exists
             );
 
-            if (fallbackResponse.ok) {
+            if (isRuntimePolicyResponse(fallbackResponse) || fallbackResponse.ok) {
               return fallbackResponse;
             }
 

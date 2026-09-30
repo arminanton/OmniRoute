@@ -125,7 +125,13 @@ async function getCustomModelVideoPreset(
 /**
  * Handle video generation request
  */
-export async function handleVideoGeneration({ body, credentials, log, resolvedProvider = null }) {
+export async function handleVideoGeneration({
+  body,
+  credentials,
+  log,
+  resolvedProvider = null,
+  signal = null,
+}) {
   let { provider, model } = parseVideoModel(body.model);
   if (resolvedProvider) {
     provider = resolvedProvider;
@@ -316,6 +322,7 @@ export async function handleVideoGeneration({ body, credentials, log, resolvedPr
       body,
       credentials,
       log,
+      signal,
     });
   }
   if (resolvedProvider) {

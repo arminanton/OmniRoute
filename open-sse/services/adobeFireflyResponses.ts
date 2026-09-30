@@ -95,11 +95,11 @@ export function extractAdobeResultLink(
 ): string {
   const get = (name: string): string => {
     if (typeof (headers as Headers).get === "function") {
-      return String((headers as Headers).get(name) || "").trim();
+      return String((headers as Headers).get(name) || "");
     }
     const rec = headers as Record<string, string | null | undefined>;
     const key = Object.keys(rec).find((k) => k.toLowerCase() === name.toLowerCase());
-    return String((key ? rec[key] : "") || "").trim();
+    return String((key ? rec[key] : "") || "");
   };
 
   const override = get("x-override-status-link");
@@ -119,39 +119,7 @@ export function extractAdobeResultLink(
   return "";
 }
 
-/**
- * Rewrite Firefly EPO result links to the BKS poll endpoint used by the SPA.
- *
- * Live capture (adobe/status_check.txt):
- *   links.result = https://firefly-epo855232.adobe.io/jobs/result/{jobId}
- *   poll URL     = https://bks-epo8552.adobe.io/v2/jobs/result/{jobId}?host=firefly-epo855232.adobe.io
- *
- * BKS host uses the first 4 digits of the EPO id when the id is longer (855232 → 8552).
- */
-export function normalizeAdobePollUrl(rawUrl: string): string {
-  const url = String(rawUrl || "").trim();
-  if (!url) return url;
-  try {
-    const parsed = new URL(url);
-    const host = parsed.hostname.toLowerCase();
-    if (!host.startsWith("firefly-epo")) return url;
-
-    const path = parsed.pathname || "";
-    const isJobPath =
-      path.includes("/jobs/result/") || path.includes("/v2/status") || path.includes("/status/");
-    if (!isJobPath) return url;
-
-    const jobId = path.split("/").filter(Boolean).pop() || "";
-    if (!jobId || jobId === "status" || jobId === "result") return url;
-
-    const epoId = host.slice("firefly-epo".length).split(".")[0] || "";
-    // 855232 → 8552 (browser BKS host); short ids kept as-is.
-    const bksId = epoId.length > 4 ? epoId.slice(0, 4) : epoId;
-    return `https://bks-epo${bksId}.adobe.io/v2/jobs/result/${jobId}?host=${host}`;
-  } catch {
-    return url;
-  }
-}
+export { normalizeAdobePollUrl } from "./adobeFireflyPollUrl.ts";
 
 export function extractAdobeMediaUrl(latest: unknown, kind: "image" | "video"): string | null {
   const body = latest && typeof latest === "object" ? (latest as Record<string, unknown>) : {};

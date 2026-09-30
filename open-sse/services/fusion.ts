@@ -18,7 +18,8 @@
  * wired through OmniRoute's existing combo schema (combo.config.judgeModel /
  * combo.config.fusionTuning).
  */
-import { errorResponse, sanitizeErrorMessage } from "../utils/error.ts";
+import { errorResponse, runtimePolicyErrorResponse, sanitizeErrorMessage } from "../utils/error.ts";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import { isExhaustedNetworkResponse } from "./exhaustedNetworkResponse.ts";
 import { extractTextContent } from "../translator/helpers/geminiHelper.ts";
 import type { PerTargetAdmissionHook } from "./admission/types.ts";
@@ -393,6 +394,7 @@ export async function handleFusionChat({
       failures.push({ model, reason: "straggler_dropped" });
       continue;
     }
+    if (isRuntimePolicyResponse(res)) return res as Response;
     if (isExhaustedNetworkResponse(res)) return res;
     const sentinel = res as Sentinel;
     if (sentinel.__timeout) {
@@ -401,6 +403,7 @@ export async function handleFusionChat({
       continue;
     }
     if (sentinel.__error) {
+      if (isRuntimePolicyError(sentinel.__error)) return runtimePolicyErrorResponse();
       log.warn("FUSION", `Panel ${model} threw`, {
         error: sanitizeErrorMessage(sentinel.__error as Error),
       });

@@ -15,6 +15,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { DATA_DIR } from "@/lib/db/core";
 import { upsertVersionManagerTool } from "@/lib/db/versionManager";
 import { runNpm, InstallError } from "./utils";
@@ -59,6 +60,7 @@ export async function getInstalledVersion(): Promise<string | null> {
 }
 
 export async function getLatestVersion(): Promise<string | null> {
+  assertNotLockedCapability("embedded-service-install");
   if (latestVersionCache && latestVersionCache.expiresAt > Date.now()) {
     return latestVersionCache.value;
   }
@@ -69,7 +71,8 @@ export async function getLatestVersion(): Promise<string | null> {
       latestVersionCache = { value: version, expiresAt: Date.now() + VERSION_CACHE_TTL_MS };
     }
     return version || null;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }
@@ -79,6 +82,7 @@ export async function getLatestVersion(): Promise<string | null> {
  * Upserts the version_manager row with tool='mux'.
  */
 export async function install(version = "latest"): Promise<InstallResult> {
+  assertNotLockedCapability("embedded-service-install");
   const startMs = Date.now();
 
   // Create install dir + minimal package.json (idempotent) — same shape as ninerouter.ts.
@@ -157,6 +161,7 @@ export async function uninstall(): Promise<void> {
  * form), never as a CLI arg, so it never appears in `ps`/process listings.
  */
 export function resolveSpawnArgs(apiKey: string, port: number): SpawnArgs {
+  assertNotLockedCapability("embedded-service-provisioning");
   const serverPath = getServerPath();
   // MUX_ROOT is mux's documented override for its home/config/data directory
   // (defaults to ~/.mux otherwise) — scope it under DATA_DIR like every other

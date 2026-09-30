@@ -14,6 +14,9 @@ import {
 } from "@omniroute/open-sse/services/admission/runtime.ts";
 import type { PerTargetAdmissionHook } from "@omniroute/open-sse/services/admission/types.ts";
 
+import type { ReasoningCacheContext } from "@omniroute/open-sse/services/reasoningCacheContext.ts";
+import { resolveAuthenticatedAdmissionLane } from "@/shared/middleware/chatAdmissionIdentity";
+
 /** Single fairness bucket for unauthenticated / keyless traffic. Opaque; never a raw key. */
 export const ANONYMOUS_ADMISSION_TENANT_KEY = "anonymous";
 
@@ -23,7 +26,7 @@ export type ChatAdmissionContext = {
    * Returns a sanitized rejection Response, or null when admitted / already acquired.
    */
   acquire(
-    apiKeyId: string | null | undefined,
+    principal: ReasoningCacheContext | null | undefined,
     request: { signal?: AbortSignal | null },
     body: unknown
   ): Promise<Response | null>;
@@ -34,7 +37,7 @@ export type ChatAdmissionContext = {
    * tenantKey so it gates the same per-tenant lane as this request's lease.
    */
   createPerTargetAdmissionHook(
-    apiKeyId: string | null | undefined,
+    principal: ReasoningCacheContext | null | undefined,
     request: { signal?: AbortSignal | null }
   ): PerTargetAdmissionHook;
 };
@@ -108,16 +111,16 @@ export const createPerTargetAdmissionHook = createPerTargetAdmissionHookImpl;
 /**
  * Module-level convenience for paths without a ChatAdmissionContext in scope
  * (e.g. the safety-net combo redirect inside handleSingleModelChat). Resolves
- * the process-global runtime + tenant key from the API key id, like the
+ * the process-global runtime + tenant key from the authenticated principal, like the
  * context method does.
  */
 export function createPerTargetAdmissionHookForRequest(
-  apiKeyId: string | null | undefined,
+  principal: ReasoningCacheContext | null | undefined,
   request: { signal?: AbortSignal | null }
 ): PerTargetAdmissionHook {
   return createPerTargetAdmissionHookImpl(
     getAdaptiveAdmissionRuntime(),
-    resolveAdmissionTenantKey(apiKeyId),
+    resolveAdmissionTenantKey(principal),
     request?.signal ?? null
   );
 }
@@ -127,10 +130,8 @@ type AdmittedState = {
   admitted: AdaptiveAdmissionAdmitted;
 };
 
-export function resolveAdmissionTenantKey(apiKeyId: string | null | undefined): string {
-  return typeof apiKeyId === "string" && apiKeyId.length > 0
-    ? apiKeyId
-    : ANONYMOUS_ADMISSION_TENANT_KEY;
+export function resolveAdmissionTenantKey(principal: unknown): string {
+  return resolveAuthenticatedAdmissionLane(principal);
 }
 
 const CANCEL_NAMES = new Set(["AbortError"]);
@@ -246,7 +247,7 @@ export function createChatAdmissionContext(
 
   return {
     getAdmittedState: () => state,
-    async acquire(apiKeyId, request, body) {
+    async acquire(principal, request, body) {
       // Exactly once per logical request — never re-enter the runtime.
       if (state || acquireStarted) return null;
       acquireStarted = true;
@@ -256,7 +257,7 @@ export function createChatAdmissionContext(
         body !== null && typeof body === "object" && (body as { stream?: unknown }).stream === true;
 
       const result = await runtime.acquire({
-        tenantKey: resolveAdmissionTenantKey(apiKeyId),
+        tenantKey: resolveAdmissionTenantKey(principal),
         body,
         signal: request?.signal ?? undefined,
         streaming,
@@ -269,10 +270,10 @@ export function createChatAdmissionContext(
       state = { runtime, admitted: result };
       return null;
     },
-    createPerTargetAdmissionHook(apiKeyId, request) {
+    createPerTargetAdmissionHook(principal, request) {
       return createPerTargetAdmissionHookImpl(
         getRuntime(),
-        resolveAdmissionTenantKey(apiKeyId),
+        resolveAdmissionTenantKey(principal),
         request?.signal ?? null
       );
     },

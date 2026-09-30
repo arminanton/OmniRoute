@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { installPinnedTransport } from "../helpers/pinnedTransport.ts";
 
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "omniroute-aihorde-image-"));
 
@@ -155,8 +156,27 @@ test("a private-host R2 image URL is blocked by the SSRF guard, not fetched", as
   }
 });
 
-test("an oversized R2 image download is rejected instead of buffered whole", async () => {
+test("an oversized R2 image download is rejected instead of buffered whole", async (t) => {
   const originalFetch = globalThis.fetch;
+  const calls: Array<{ method: string; url: string }> = [];
+  const transport = installPinnedTransport(t.mock, {
+    reply(socket, dial) {
+      assert.equal(dial.protocol, "https:");
+      assert.equal(dial.options.host, "93.184.216.34");
+      assert.match(socket.request, /^GET \/huge\.png HTTP\/1\.1\r\n/);
+      assert.doesNotMatch(
+        socket.request,
+        /\r\n(?:authorization|proxy-authorization|cookie|x-api-key|apikey):/i
+      );
+      // respond() rewrites Content-Length. Keep this 30 MiB declaration raw and
+      // leave the body incomplete to prove the 25 MiB cap cancels before buffering.
+      socket.push(
+        "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n" +
+          `Content-Length: ${30 * 1024 * 1024}\r\n\r\nx`
+      );
+    },
+  });
+  t.after(transport.restore);
 
   aiHordeImageCatalog.replace([
     { name: "FLUX.1-schnell", count: 3, queued: 0, eta: 1, performance: 1, jobs: 0 },
@@ -165,6 +185,7 @@ test("an oversized R2 image download is rejected instead of buffered whole", asy
   globalThis.fetch = (async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     const method = (init?.method || "GET").toUpperCase();
+    calls.push({ method, url });
 
     if (url.includes("/v2/generate/async")) {
       return new Response(JSON.stringify({ id: "job-oversized" }), { status: 202 });
@@ -177,23 +198,15 @@ test("an oversized R2 image download is rejected instead of buffered whole", asy
         status: 200,
       });
     }
-    // A raw public IP literal (not a hostname) skips the SSRF guard's real DNS
-    // lookup entirely — this test only cares about the byte-cap, not the host
-    // resolution path (already covered by the private-host test above), and
-    // the sandboxed test env has no DNS egress.
+    // The public literal skips DNS, but media still uses the production pin
+    // connector and the fake native socket above, never this provider fetch.
     if (url.includes("/v2/generate/status/")) {
       return new Response(
         JSON.stringify({ generations: [{ img: "https://93.184.216.34/huge.png" }] }),
         { status: 200 }
       );
     }
-    if (url.includes("93.184.216.34")) {
-      return new Response("x", {
-        status: 200,
-        headers: { "content-length": String(30 * 1024 * 1024) },
-      });
-    }
-    return new Response("unexpected", { status: 500 });
+    throw new Error(`Unexpected provider URL: ${url}`);
   }) as typeof fetch;
 
   try {
@@ -206,6 +219,17 @@ test("an oversized R2 image download is rejected instead of buffered whole", asy
 
     assert.equal(result.success, false);
     assert.match(String(result.error), /exceeds|byte limit|too large/);
+    assert.match(String(result.error), /26214400 byte limit/); // Horde's 25 MiB override.
+    assert.equal(transport.resolutions.length, 0);
+    assert.equal(transport.dials.length, 1);
+    await transport.sockets[0].closedPromise;
+    assert.equal(transport.sockets[0].destroyed, true);
+    assert.deepEqual(calls, [
+      { method: "POST", url: "https://aihorde.net/api/v2/generate/async" },
+      { method: "GET", url: "https://aihorde.net/api/v2/generate/check/job-oversized" },
+      { method: "GET", url: "https://aihorde.net/api/v2/generate/status/job-oversized" },
+      { method: "DELETE", url: "https://aihorde.net/api/v2/generate/status/job-oversized" },
+    ]);
   } finally {
     globalThis.fetch = originalFetch;
   }

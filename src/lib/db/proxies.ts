@@ -4,6 +4,13 @@
 // types share the exact same x-relay-target / x-relay-path / x-relay-auth header spec; only the
 // deployment surface differs.
 import { randomUUID } from "crypto";
+import {
+  assertNoApplicationProxy,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+  RuntimePolicyError,
+} from "@/shared/runtimePolicy";
+import { assertRuntimePolicyProxyConfig } from "@/shared/runtimePolicyProxyConfig";
 import { getDbInstance } from "./core";
 import { backupDbFile } from "./backup";
 import type {
@@ -27,7 +34,7 @@ import {
   coerceProxyPayload,
   redactProxySecrets,
 } from "./proxies/mappers";
-import { isGlobalProxyEnabled, PROXY_ALIVE_PREDICATE } from "./proxies/guards";
+import { isGlobalProxyEnabled } from "./proxies/guards";
 import { bumpProxyRegistryGeneration } from "./proxies/registryGeneration";
 export {
   hasBlockingProxyAssignment,
@@ -55,6 +62,21 @@ export {
   resolveProxyForConnectionFromRegistry,
   resolveProxyForScopeFromRegistry,
 };
+
+// Validate cleanup against the remaining namespaces. A caller can first turn
+// proxyEnabled off to keep unrelated rows dormant while cleaning them up.
+async function assertProxyCleanupCandidate(
+  remove?: (assignment: ProxyAssignmentRecord) => boolean
+): Promise<void> {
+  if (getRuntimePolicy().mode !== "locked") return;
+  const { getRuntimePolicySettingsCandidate } = await import("./settings");
+  const candidate = await getRuntimePolicySettingsCandidate();
+  const assignments = candidate.proxyAssignments as ProxyAssignmentRecord[];
+  assertRuntimePolicyProxyConfig({
+    ...candidate,
+    proxyAssignments: remove ? assignments.filter((entry) => !remove(entry)) : assignments,
+  });
+}
 
 // Mutate legacy proxyConfig rows directly so these writes stay inside the same
 // SQLite transaction as the proxy registry row and assignment upsert.
@@ -120,12 +142,22 @@ function clearLegacyProxyForAssignment(
   return "cleared";
 }
 
+// Match PROXY_ALIVE_PREDICATE: only these states are excluded from selection.
+// Keep disabled rows available for safe edits/removal; never delete them en masse.
+function assertProxyRowCandidate(status: unknown): void {
+  const dormant =
+    typeof status === "string" &&
+    ["inactive", "error", "disabled", "dead", "down"].includes(status.toLowerCase());
+  assertNoApplicationProxy(dormant ? "none" : "configured");
+}
+
 function insertProxyRow(
   db: ReturnType<typeof getDbInstance>,
   id: string,
   payload: ProxyPayload,
   now: string
 ) {
+  assertProxyRowCandidate(payload.status);
   db.prepare(
     `INSERT INTO proxy_registry
       (id, name, type, host, port, username, password, region, notes, status, source, family, subscription_id, created_at, updated_at)
@@ -202,6 +234,7 @@ function upsertAssignmentRow(
   proxyId: string,
   now: string
 ) {
+  assertNoApplicationProxy("configured");
   const normalizedScope = normalizeScope(assignment.scope);
   const normalizedScopeId = normalizeAssignmentScopeId(normalizedScope, assignment.scopeId);
   if (normalizedScope !== "global" && !normalizedScopeId) {
@@ -362,6 +395,7 @@ export async function updateProxy(id: string, payload: Partial<ProxyPayload>) {
   const existing = await getProxyById(id, { includeSecrets: true });
   if (!existing) return null;
 
+  await assertProxyCleanupCandidate();
   updateProxyRow(db, id, existing, payload, new Date().toISOString());
 
   backupDbFile("pre-write");
@@ -373,6 +407,7 @@ export async function createProxyAndAssign(
   payload: ProxyPayload,
   assignment: ProxyAssignmentPayload
 ): Promise<ProxyMutationResult> {
+  assertNoApplicationProxy("configured");
   const db = getDbInstance();
   const id = randomUUID();
   const now = new Date().toISOString();
@@ -408,6 +443,7 @@ export async function updateProxyAndAssign(
   payload: Partial<ProxyPayload>,
   assignment: ProxyAssignmentPayload
 ): Promise<ProxyMutationResult | null> {
+  assertNoApplicationProxy("configured");
   const db = getDbInstance();
   const now = new Date().toISOString();
 
@@ -470,6 +506,8 @@ export async function getProxyAssignments(filters?: { proxyId?: string; scope?: 
       .all()
       .map(mapAssignmentRow);
   } catch (error: unknown) {
+    if (isRuntimePolicyError(error)) throw error;
+    if (getRuntimePolicy().mode === "locked") throw new RuntimePolicyError("proxy-forbidden");
     // Fix #1706: Gracefully handle missing proxy_assignments table on fresh
     // Electron installs where migration 004 hasn't run yet.
     const msg = error instanceof Error ? error.message : String(error);
@@ -498,11 +536,17 @@ export async function assignProxyToScope(
   scopeId: string | null,
   proxyId: string | null
 ): Promise<ProxyAssignmentRecord | null> {
+  assertNoApplicationProxy(proxyId ? "configured" : "none");
   const normalizedScope = normalizeScope(scope);
   const normalizedScopeId = normalizeAssignmentScopeId(normalizedScope, scopeId);
   const db = getDbInstance();
 
   if (!proxyId) {
+    await assertProxyCleanupCandidate(
+      (entry) =>
+        entry.scope === normalizedScope &&
+        normalizeAssignmentScopeId(entry.scope, entry.scopeId) === normalizedScopeId
+    );
     db.prepare("DELETE FROM proxy_assignments WHERE scope = ? AND scope_id IS ?").run(
       normalizedScope,
       normalizedScopeId
@@ -547,6 +591,7 @@ export async function addProxyToScopePool(
   scopeId: string | null,
   proxyId: string
 ): Promise<ProxyAssignmentRecord | null> {
+  assertNoApplicationProxy("configured");
   const normalizedScope = normalizeScope(scope);
   const normalizedScopeId = normalizeAssignmentScopeId(normalizedScope, scopeId);
   if (normalizedScope !== "global" && !normalizedScopeId) {
@@ -606,6 +651,12 @@ export async function removeProxyFromScopePool(
 ): Promise<boolean> {
   const normalizedScope = normalizeScope(scope);
   const normalizedScopeId = normalizeAssignmentScopeId(normalizedScope, scopeId);
+  await assertProxyCleanupCandidate(
+    (entry) =>
+      entry.proxyId === proxyId &&
+      entry.scope === normalizedScope &&
+      normalizeAssignmentScopeId(entry.scope, entry.scopeId) === normalizedScopeId
+  );
   const db = getDbInstance();
   const result = db
     .prepare("DELETE FROM proxy_assignments WHERE scope = ? AND scope_id IS ? AND proxy_id = ?")
@@ -631,6 +682,7 @@ export async function setScopeRotationStrategy(
   const normalizedScope = normalizeScope(scope);
   const rotationScopeId = normalizeRotationScopeId(normalizedScope, scopeId);
   const normalizedStrategy = normalizeRotationStrategy(strategy);
+  await assertProxyCleanupCandidate();
   const now = new Date().toISOString();
   const db = getDbInstance();
 
@@ -676,6 +728,7 @@ export async function deleteProxyById(id: string, options?: { force?: boolean })
     throw err;
   }
 
+  await assertProxyCleanupCandidate((entry) => entry.proxyId === id);
   if (force && usage.count > 0) {
     db.prepare("DELETE FROM proxy_assignments WHERE proxy_id = ?").run(id);
   }
@@ -821,6 +874,7 @@ export async function bulkAssignProxyToScope(
   scopeIds: string[],
   proxyId: string | null
 ): Promise<{ updated: number; failed: Array<{ scopeId: string; reason: string }> }> {
+  assertNoApplicationProxy(proxyId ? "configured" : "none");
   const uniqueScopeIds = [
     ...new Set((scopeIds || []).map((id) => String(id).trim()).filter(Boolean)),
   ];
@@ -837,6 +891,7 @@ export async function bulkAssignProxyToScope(
       await assignProxyToScope(scope, scopeId, proxyId);
       updated++;
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       failed.push({
         scopeId,
         reason: error instanceof Error ? error.message : "Unknown error",
@@ -853,16 +908,32 @@ export async function bulkAssignProxyToScope(
  * Priority: provider-level → global → null
  */
 export async function resolveProxyForProvider(providerId: string) {
+  assertNoApplicationProxy("none");
   try {
     const db = getDbInstance();
-    if (!isGlobalProxyEnabled(db)) return null;
+    if (getRuntimePolicy().mode === "locked") {
+      // The ordinary helper is fail-open on DB/JSON errors. Locked resolution
+      // must not convert an unreadable toggle into a direct fallback.
+      const row = db
+        .prepare(
+          "SELECT value FROM key_value WHERE namespace = 'settings' AND key = 'proxyEnabled'"
+        )
+        .get() as { value?: string } | undefined;
+      if (row) {
+        if (typeof row.value !== "string") throw new RuntimePolicyError("proxy-forbidden");
+        if (JSON.parse(row.value) === false) return null;
+      }
+    } else if (!isGlobalProxyEnabled(db)) return null;
 
     // Resolve by specificity across both storage backends. The GUI Custom tab
     // still writes provider/global proxies to the legacy config, while Saved
     // Proxy uses the registry. A registry-global fallback must not shadow a
     // more-specific legacy provider proxy (#2601).
     const registryProvider = await resolveProxyForScopeFromRegistry("provider", providerId);
-    if (registryProvider?.proxy) return registryProvider.proxy;
+    if (registryProvider?.proxy) {
+      assertNoApplicationProxy("configured");
+      return registryProvider.proxy;
+    }
 
     // Fallback: honor the legacy per-provider / global proxy config (set via
     // /api/settings/proxy?level=provider&id=...). The proxy registry only tracks
@@ -874,6 +945,7 @@ export async function resolveProxyForProvider(providerId: string) {
     const { getProxyForLevel } = await import("./settings");
     const legacyProvider = await getProxyForLevel("provider", providerId);
     if (legacyProvider && typeof legacyProvider === "object" && legacyProvider.host) {
+      assertNoApplicationProxy("configured");
       return {
         type: legacyProvider.type,
         host: legacyProvider.host,
@@ -884,10 +956,14 @@ export async function resolveProxyForProvider(providerId: string) {
     }
 
     const registryGlobal = await resolveProxyForScopeFromRegistry("global");
-    if (registryGlobal?.proxy) return registryGlobal.proxy;
+    if (registryGlobal?.proxy) {
+      assertNoApplicationProxy("configured");
+      return registryGlobal.proxy;
+    }
 
     const legacyGlobal = await getProxyForLevel("global");
     if (legacyGlobal && typeof legacyGlobal === "object" && legacyGlobal.host) {
+      assertNoApplicationProxy("configured");
       return {
         type: legacyGlobal.type,
         host: legacyGlobal.host,
@@ -899,6 +975,8 @@ export async function resolveProxyForProvider(providerId: string) {
 
     return null;
   } catch (error: unknown) {
+    if (isRuntimePolicyError(error)) throw error;
+    if (getRuntimePolicy().mode === "locked") throw new RuntimePolicyError("proxy-forbidden");
     const msg = error instanceof Error ? error.message : String(error);
     if (msg.includes("no such table")) return null;
     throw error;

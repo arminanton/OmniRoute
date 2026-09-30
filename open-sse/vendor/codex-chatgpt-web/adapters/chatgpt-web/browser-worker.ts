@@ -10,6 +10,12 @@ import {
   type Page,
 } from "playwright-core";
 import {
+  assertLocalHelper,
+  assertNotLockedCapability,
+  isRuntimePolicyError,
+} from "../../../../../src/shared/runtimePolicy.ts";
+import { resolveBrowserCdpEndpoint } from "../../../../services/obscura.ts";
+import {
   atomicWriteFile,
   CHATGPT_CONNECTOR_NAME,
   defaultChromeExecutable,
@@ -328,6 +334,7 @@ export async function ensureChatGptPersonalizedConnectorAccess(
       try {
         await toggleChatGptPersonalizationChoice(page);
       } catch (restoreError) {
+        if (isRuntimePolicyError(restoreError)) throw restoreError;
         throw new AggregateError(
           [restoreError],
           "ChatGPT personalization changed but connector access was not proven and the original state could not be restored"
@@ -373,6 +380,7 @@ export async function ensureChatGptPersonalizedConnectorAccess(
     await personalized.waitFor({ state: "visible", timeout: 10_000 });
     await unpersonalized.waitFor({ state: "hidden", timeout: 10_000 });
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     if (!(error instanceof Error) || error.name !== "TimeoutError") throw error;
     throw chatGptConnectorUnavailableError(
       "ChatGPT did not confirm Personalized connector access for this Temporary Chat"
@@ -429,6 +437,7 @@ export async function throwIfChatGptRateLimitDialog(page: Page): Promise<void> {
     try {
       await acknowledge.press("Enter");
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       throw new ChatGptWebAdapterError(
         `ChatGPT rate limit: too many requests, and the dialog could not be dismissed (${error instanceof Error ? error.message : String(error)}). Try again in a few minutes.`,
         { status: 429, errorType: "rate_limit_error", code: "rate_limit_exceeded", retryable: true }
@@ -881,6 +890,7 @@ async function waitForOperationalChatGptViewport(page: Page, signal?: AbortSigna
       signal
     );
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     if (signal?.aborted)
       throw new DOMException("ChatGPT browser page acquisition aborted", "AbortError");
     throw new Error(
@@ -1399,8 +1409,31 @@ export function stripChatGptTraceControlSuffix(
   return text === block.text ? block : { ...block, text };
 }
 
+function assertBrowserRuntime(
+  config: Pick<ResolvedBrowserConfig, "browserHost" | "cdpEndpoint">,
+  phase: "configured" | "connect"
+): void {
+  if (config.cdpEndpoint) {
+    assertLocalHelper({ role: "browser-cdp", endpoint: config.cdpEndpoint, phase });
+    if (phase === "connect") assertNotLockedCapability("browser-cdp-attach");
+  }
+  if (config.browserHost === "launcher") {
+    assertNotLockedCapability("launcher-browser-host");
+  } else if (!config.cdpEndpoint) {
+    assertNotLockedCapability("local-browser-launch");
+  }
+}
+
 export function resolveBrowserConfig(provider: CodexProviderConfig): ResolvedBrowserConfig {
   const configured = provider.chatgptWeb ?? {};
+  // Check the literal value before standalone's legacy trim/default handling.
+  assertBrowserRuntime(
+    {
+      browserHost: configured.browserHost ?? "managed-chrome",
+      cdpEndpoint: configured.cdpEndpoint,
+    },
+    "configured"
+  );
   const appName = configured.appName?.trim() || CHATGPT_CONNECTOR_NAME;
   const browserHost = configured.browserHost ?? "managed-chrome";
   const browserHostDescriptorPath = configured.browserHostDescriptorPath?.trim();
@@ -1639,6 +1672,7 @@ export class ChatGptBrowserWorker {
   }
 
   run(turn: BrowserTurn): Promise<string> {
+    assertBrowserRuntime(this.config, "connect");
     if (this.activeRuns.has(turn.traceId)) {
       return Promise.reject(new Error(`Duplicate ChatGPT web browser turn: ${turn.traceId}`));
     }
@@ -1761,6 +1795,7 @@ export class ChatGptBrowserWorker {
       );
       return value;
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       console.error(
         `[chatgpt-web] browser turn ${traceId} stage=${stage} failed durationMs=${Math.round(performance.now() - startedAt)}: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -1771,6 +1806,7 @@ export class ChatGptBrowserWorker {
   }
 
   private async ensurePage(): Promise<Page> {
+    assertBrowserRuntime(this.config, "connect");
     if (this.page && !this.page.isClosed()) return this.page;
     if (this.config.browserHost === "launcher") {
       const connection = await connectLauncherBrowserHost(this.config.browserHostDescriptorPath!);
@@ -1798,7 +1834,7 @@ export class ChatGptBrowserWorker {
       );
     }
     this.browser = this.config.cdpEndpoint
-      ? await chromium.connectOverCDP(this.config.cdpEndpoint)
+      ? await chromium.connectOverCDP(await resolveBrowserCdpEndpoint(this.config.cdpEndpoint))
       : await chromium.launch({
           executablePath: this.config.chromeExecutablePath,
           headless: !this.config.headed,
@@ -1809,6 +1845,7 @@ export class ChatGptBrowserWorker {
   }
 
   private async ensureManagedBrowser(): Promise<{ browser: Browser; context: BrowserContext }> {
+    assertBrowserRuntime(this.config, "connect");
     if (this.managedBrowserReady) return this.managedBrowserReady;
     const opening = (async () => {
       if (
@@ -1830,7 +1867,7 @@ export class ChatGptBrowserWorker {
         );
       }
       const browser = this.config.cdpEndpoint
-        ? await chromium.connectOverCDP(this.config.cdpEndpoint)
+        ? await chromium.connectOverCDP(await resolveBrowserCdpEndpoint(this.config.cdpEndpoint))
         : await chromium.launch({
             executablePath: this.config.chromeExecutablePath,
             headless: !this.config.headed,
@@ -1844,6 +1881,7 @@ export class ChatGptBrowserWorker {
     try {
       return await opening;
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       if (this.managedBrowserReady === opening) this.managedBrowserReady = undefined;
       throw error;
     }
@@ -1900,6 +1938,7 @@ export class ChatGptBrowserWorker {
       ]);
       if (ready === "session-expired") await throwIfChatGptSessionFailureAlert(page);
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       if (error instanceof ChatGptWebAdapterError) throw error;
       await throwIfChatGptSessionFailureAlert(page);
       throw new Error(
@@ -1955,6 +1994,7 @@ export class ChatGptBrowserWorker {
         ready === "slider" ? "effort-slider-visible" : "effort-choice-visible"
       );
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       if (error instanceof ChatGptWebAdapterError) throw error;
       await throwIfChatGptRateLimitDialog(page);
       await throwIfChatGptSessionFailureAlert(page);
@@ -2391,6 +2431,7 @@ export class ChatGptBrowserWorker {
       try {
         state = await this.submissionDomState(page, baseline.domCache);
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         if (!chatGptExternalProgressIsLive(progress, Date.now(), graceMs)) throw error;
         await this.waitForTurnDomOrExternalProgress(
           page,
@@ -2573,6 +2614,7 @@ export class ChatGptBrowserWorker {
         await appResult.waitFor({ state: "visible", timeout: 2_500 });
         return true;
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         if (!(error instanceof Error) || error.name !== "TimeoutError") throw error;
         return false;
       } finally {
@@ -2606,6 +2648,7 @@ export class ChatGptBrowserWorker {
         await captureDiagnostic?.("connector-menu-visible");
         break;
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         if (!(error instanceof Error) || error.name !== "TimeoutError") throw error;
         const visibleRows = await this.connectorMentionRowTitles(menuRows);
         const knownIdentityMismatch =
@@ -2912,6 +2955,7 @@ export class ChatGptBrowserWorker {
         );
         return;
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         if (!retryAvailable || !(error instanceof ChatGptPromptAttachmentIntegrityError))
           throw error;
         retryAvailable = false;
@@ -3594,6 +3638,7 @@ export class ChatGptBrowserWorker {
   }
 
   private async runExclusive(turn: BrowserTurn): Promise<string> {
+    assertBrowserRuntime(this.config, "connect");
     if (turn.abortSignal?.aborted) throw new DOMException("ChatGPT web turn aborted", "AbortError");
     if (this.config.browserHost !== "launcher") return this.runBrowserTurn(turn);
 
@@ -3661,6 +3706,7 @@ export class ChatGptBrowserWorker {
       heartbeatTimer.unref?.();
       return await this.runBrowserTurn(turn, surfaceId, undefined, reused);
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       originalError = error;
       terminal =
         (error instanceof DOMException && error.name === "AbortError") ||
@@ -3687,6 +3733,7 @@ export class ChatGptBrowserWorker {
         });
         if (release.cancelledByUser) throw chatGptBrowserTabClosedError();
       } catch (controlError) {
+        if (isRuntimePolicyError(controlError)) throw controlError;
         if (
           controlError instanceof ChatGptWebAdapterError &&
           controlError.code === "client_cancelled"
@@ -4024,6 +4071,7 @@ export class ChatGptBrowserWorker {
           );
           break;
         } catch (error) {
+          if (isRuntimePolicyError(error)) throw error;
           if (!(error instanceof ChatGptConnectorCatalogStaleError) || !catalogRefreshAvailable)
             throw error;
           catalogRefreshAvailable = false;
@@ -4170,6 +4218,7 @@ export class ChatGptBrowserWorker {
                 snapshot = await this.responseDomSnapshot(responseTurn.locator, responseDomCache);
               }
             } catch (error) {
+              if (isRuntimePolicyError(error)) throw error;
               if (!(error instanceof ChatGptBrowserObservationTimeoutError) || !launcherSurfaceId)
                 throw error;
               consecutiveObservationRebinds += 1;
@@ -4233,6 +4282,7 @@ export class ChatGptBrowserWorker {
               try {
                 return markdownBuffer.observe(snapshot.markdownSegments);
               } catch (error) {
+                if (isRuntimePolicyError(error)) throw error;
                 return throwMarkdownConsistencyError(error);
               }
             })();
@@ -4272,6 +4322,7 @@ export class ChatGptBrowserWorker {
                 try {
                   return markdownBuffer.finish();
                 } catch (error) {
+                  if (isRuntimePolicyError(error)) throw error;
                   return throwMarkdownConsistencyError(error);
                 }
               })();
@@ -4320,6 +4371,7 @@ export class ChatGptBrowserWorker {
           }
           await new Promise((resolveSleep) => setTimeout(resolveSleep, 250));
         } catch (error) {
+          if (isRuntimePolicyError(error)) throw error;
           // Only a defect in this worker is retried here. Every deliberate signal — adapter errors,
           // aborts, closed tabs, DOM-health verdicts — still fails the turn immediately.
           // Retry only faults raised while reading the page. Once observation succeeded, a
@@ -4351,6 +4403,7 @@ export class ChatGptBrowserWorker {
       );
       return finalText;
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       console.error(
         `[chatgpt-web] browser turn ${turn.traceId} failed:` +
           ` ${redactChatGptUiDiagnostic(error instanceof Error ? error.message : String(error))}`
@@ -4374,6 +4427,7 @@ export class ChatGptBrowserWorker {
           if (verifiedAuthCookies.length > 0) await context.addCookies(verifiedAuthCookies);
           atomicWriteFile(this.config.storageStatePath, `${JSON.stringify(mergedState)}\n`);
         } catch (storageError) {
+          if (isRuntimePolicyError(storageError)) throw storageError;
           console.error(
             `[chatgpt-web] failed to preserve verified browser auth for ${turn.traceId}: ${storageError instanceof Error ? storageError.message : String(storageError)}`
           );

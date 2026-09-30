@@ -9,7 +9,16 @@
  */
 
 import { extractApiKey } from "@/sse/services/auth";
-import { getApiKeyMetadata, isModelAllowedForKey, getApiKeyById } from "@/lib/db/apiKeys";
+import {
+  getApiKeyMetadata,
+  isModelAllowedForKey,
+  getApiKeyById,
+  validateApiKey,
+} from "@/lib/db/apiKeys";
+import {
+  createReasoningCacheKeyContext,
+  type ReasoningCacheContext,
+} from "@omniroute/open-sse/services/reasoningCacheContext.ts";
 import { getComboByName } from "@/lib/db/combos";
 import { isDashboardSessionAuthenticated } from "./apiAuth";
 import { resolveComboForModel } from "@/lib/db/modelComboMappings";
@@ -374,6 +383,8 @@ export interface ApiKeyPolicyResult {
   apiKey: string | null;
   /** Metadata from DB (null if no key or key not found) */
   apiKeyInfo: ApiKeyMetadata | null;
+  /** Trusted replay principal; null disables replay when identity is unresolved. */
+  reasoningCacheContext: ReasoningCacheContext | null;
   /** If set, the request should be rejected with this Response */
   rejection: Response | null;
 }
@@ -659,6 +670,67 @@ function extractUngatedClientApiKey(request: Request): string | null {
   return null;
 }
 
+/**
+ * Authz and policy historically choose different header/URL precedence. Do not
+ * change authorization here: replay is allowed only when ALL presented inputs
+ * agree with the selected credential. Unsupported or unresolved inputs disable
+ * replay, never fall back to the shared local principal.
+ */
+function hasUnambiguousReasoningCacheCredential(request: Request, apiKey: string): boolean {
+  const presented: string[] = [];
+  const authorization = request.headers.get("authorization");
+  if (authorization !== null) {
+    const trimmed = authorization.trim();
+    if (!trimmed.toLowerCase().startsWith("bearer ")) return false;
+    const bearer = trimmed.slice(7).trim();
+    if (!bearer) return false;
+    presented.push(bearer);
+  }
+  for (const name of ["x-api-key", "x-goog-api-key"]) {
+    const value = request.headers.get(name);
+    if (value === null) continue;
+    if (!value.trim()) return false;
+    presented.push(value.trim());
+  }
+  // A playground key-id is a policy selector, not a presented credential.
+  if (request.headers.has(PLAYGROUND_KEY_ID_HEADER)) return false;
+  try {
+    const url = new URL(request.url);
+    if (["token", "key", "apiKey", "api_key"].some((name) => url.searchParams.has(name))) {
+      return false; // Query credentials are intentionally unsupported by auth.
+    }
+    // Use the real extractor with empty headers to inspect only the URL token.
+    const urlKey = extractApiKey({ url: request.url, headers: new Headers() });
+    const segments = url.pathname
+      .split("/")
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    const tokenizedPath =
+      segments[0] === "vscode" ||
+      (segments[0] === "api" && segments[1] === "v1" && segments[2] === "vscode");
+    if (urlKey) presented.push(urlKey);
+    else if (tokenizedPath) return false;
+  } catch {
+    return false;
+  }
+  return presented.length > 0 && presented.every((credential) => credential === apiKey);
+}
+
+async function resolveReasoningCacheContext(
+  request: Request,
+  apiKey: string
+): Promise<ReasoningCacheContext | null> {
+  if (!hasUnambiguousReasoningCacheCredential(request, apiKey)) return null;
+  try {
+    // Metadata existence (or its id, including "env-key") is not authentication.
+    if (!(await validateApiKey(apiKey))) return null;
+    return createReasoningCacheKeyContext(apiKey);
+  } catch {
+    // Cache validation failure must not change request auth/policy semantics.
+    return null;
+  }
+}
+
 export async function enforceApiKeyPolicy(
   request: Request,
   modelStr: string | null
@@ -672,9 +744,10 @@ export async function enforceApiKeyPolicy(
     extractUngatedClientApiKey(request) ||
     (await resolvePlaygroundTestKey(request));
 
-  // No API key = local/session mode, skip policy checks
+  // No-key HTTP may be accepted by auth, but it has no authenticated cache
+  // principal. The explicit local constructor is for trusted in-process use only.
   if (!apiKey) {
-    return { apiKey: null, apiKeyInfo: null, rejection: null };
+    return { apiKey: null, apiKeyInfo: null, reasoningCacheContext: null, rejection: null };
   }
 
   // Fetch key metadata (includes allowedModels)
@@ -687,34 +760,48 @@ export async function enforceApiKeyPolicy(
     return {
       apiKey,
       apiKeyInfo: null,
+      reasoningCacheContext: null,
       rejection: errorResponse(HTTP_STATUS.SERVICE_UNAVAILABLE, "API key policy unavailable"),
     };
   }
 
   // Key not found in DB — skip policy (auth layer handles validation)
   if (!apiKeyInfo) {
-    return { apiKey, apiKeyInfo: null, rejection: null };
+    return { apiKey, apiKeyInfo: null, reasoningCacheContext: null, rejection: null };
   }
 
   const context = { request, apiKey, apiKeyInfo, modelStr };
   const statusRejection = validateKeyStatus(context);
-  if (statusRejection) return { apiKey, apiKeyInfo, rejection: statusRejection };
+  if (statusRejection)
+    return { apiKey, apiKeyInfo, reasoningCacheContext: null, rejection: statusRejection };
   const scheduleRejection = await validateKeyScheduleAndUsage(context);
-  if (scheduleRejection) return { apiKey, apiKeyInfo, rejection: scheduleRejection };
+  if (scheduleRejection)
+    return { apiKey, apiKeyInfo, reasoningCacheContext: null, rejection: scheduleRejection };
   const endpointRejection = validateEndpointAccess(context);
-  if (endpointRejection) return { apiKey, apiKeyInfo, rejection: endpointRejection };
+  if (endpointRejection)
+    return { apiKey, apiKeyInfo, reasoningCacheContext: null, rejection: endpointRejection };
 
   const quotaRejection = await validateQuotaAccess(context);
-  if (quotaRejection) return { apiKey, apiKeyInfo, rejection: quotaRejection };
+  if (quotaRejection)
+    return { apiKey, apiKeyInfo, reasoningCacheContext: null, rejection: quotaRejection };
   const modelRejection = await validateModelAccess(context);
-  if (modelRejection) return { apiKey, apiKeyInfo, rejection: modelRejection };
+  if (modelRejection)
+    return { apiKey, apiKeyInfo, reasoningCacheContext: null, rejection: modelRejection };
 
   const budgetRejection = validateBudget(context);
-  if (budgetRejection) return { apiKey, apiKeyInfo, rejection: budgetRejection };
+  if (budgetRejection)
+    return { apiKey, apiKeyInfo, reasoningCacheContext: null, rejection: budgetRejection };
   const tokenRejection = validateTokenLimit(context);
-  if (tokenRejection) return { apiKey, apiKeyInfo, rejection: tokenRejection };
+  if (tokenRejection)
+    return { apiKey, apiKeyInfo, reasoningCacheContext: null, rejection: tokenRejection };
   const rateRejection = await validateRateLimitAndThrottle(context);
-  if (rateRejection) return { apiKey, apiKeyInfo, rejection: rateRejection };
+  if (rateRejection)
+    return { apiKey, apiKeyInfo, reasoningCacheContext: null, rejection: rateRejection };
 
-  return { apiKey, apiKeyInfo, rejection: null };
+  return {
+    apiKey,
+    apiKeyInfo,
+    reasoningCacheContext: await resolveReasoningCacheContext(request, apiKey),
+    rejection: null,
+  };
 }

@@ -96,10 +96,11 @@ test("parseGeminiModelsList maps Veo predictLongRunning models to the videos end
   assert.deepEqual(veo!.supportedEndpoints, ["videos"]);
 });
 
-test("parseGeminiModelsList defaults to chat and tolerates empty/missing input", () => {
+test("parseGeminiModelsList omits unknown capabilities and tolerates empty/missing input", () => {
   assert.deepEqual(parseGeminiModelsList({}), []);
   assert.deepEqual(parseGeminiModelsList(null), []);
-  const [m] = parseGeminiModelsList({ models: [{ name: "models/mystery" }] });
-  assert.equal(m.id, "mystery");
-  assert.deepEqual(m.supportedEndpoints, ["chat"]);
+  assert.deepEqual(parseGeminiModelsList({ models: [{ name: "models/mystery" }] }), []);
+  const [known] = parseGeminiModelsList({ models: [{ name: "models/gemini-2.5-flash" }] });
+  assert.equal(known.id, "gemini-2.5-flash");
+  assert.deepEqual(known.supportedEndpoints, ["chat"]);
 });

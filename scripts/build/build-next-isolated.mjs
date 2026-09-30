@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import {
   assembleStandalone,
+  assertRequiredStandaloneModules,
   syncStandaloneNativeAssets as _syncNativeAssets,
   syncStandaloneExtraModules as _syncExtraModules,
 } from "./assembleStandalone.mjs";
@@ -381,6 +382,12 @@ export async function main() {
       console.log(
         "[build-next-isolated] Contributor profile: skipped standalone packaging (compile-only validation)"
       );
+    }
+    // Optional assembly errors stay best-effort, but missing/changed required
+    // authority bytes must never turn a successful Next exit into a usable build.
+    // Keep this outside the nonfatal catch and after all assembly/prune writes.
+    if (result.code === 0 && !isContributorBuild()) {
+      assertRequiredStandaloneModules(projectRoot, standaloneDir);
     }
     process.exitCode = result.code;
   } catch (error) {

@@ -9,16 +9,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getDbInstance } from "../db/core";
+import { cleanupAbandonedCallLogIdentities } from "../db/callLogIdentities";
 import {
   findReferencedArtifacts,
   selectCallLogIdsBefore,
   selectOverflowArtifactPaths,
 } from "./callLogsBoundedQueries";
-import {
-  CALL_LOGS_DIR,
-  deleteCallArtifact,
-  type CallLogDetailState,
-} from "./callLogArtifacts";
+import { CALL_LOGS_DIR, deleteCallArtifact, type CallLogDetailState } from "./callLogArtifacts";
 import { getCallLogMaxEntries, getCallLogRetentionDays, getCallLogsTableMaxRows } from "../logEnv";
 import { isSqlitePagerCorruptError, notePagerCorruption } from "../db/healthCheck";
 
@@ -333,7 +330,9 @@ export function handleCallLogRotateError(error: unknown): void {
 export function rotateCallLogs() {
   if (callLogRotatePaused) return;
   try {
-    if (!CALL_LOGS_DIR || !fs.existsSync(CALL_LOGS_DIR)) return;
+    if (!CALL_LOGS_DIR) return;
+    cleanupAbandonedCallLogIdentities(CALL_LOG_ROTATE_BATCH_SIZE);
+    if (!fs.existsSync(CALL_LOGS_DIR)) return;
 
     const retentionMs = getCallLogRetentionDays() * 24 * 60 * 60 * 1000;
     const cutoff = new Date(Date.now() - retentionMs).toISOString();

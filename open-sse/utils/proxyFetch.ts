@@ -1,9 +1,16 @@
 // @ts-nocheck
 import "./setupPolyfill.ts";
+import { prepareOwnListenerSelfHop } from "./selfHop.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  assertNoApplicationProxy,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+} from "@/shared/runtimePolicy";
 import { fetch as undiciFetch, Agent } from "undici";
 import {
   buildVercelRelayHeaders,
+  assertRuntimePolicyDispatcher,
   createProxyDispatcher,
   getDefaultDispatcher,
   getProxyRetryDispatcher,
@@ -383,6 +390,7 @@ function sanitizeTransportError(
   message: string,
   fallbackCode: string
 ): Error & { code: string; errorCode?: string; statusCode?: number } {
+  if (isRuntimePolicyError(error)) throw error;
   const source = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   const sanitized = new Error(message) as Error & {
     code: string;
@@ -413,6 +421,7 @@ type PatchState = {
   originalFetch: typeof globalThis.fetch;
   proxyContext: AsyncLocalStorage<unknown>;
   tlsFingerprintContext?: AsyncLocalStorage<TlsFingerprintStore>;
+  requiredProxyContext?: AsyncLocalStorage<boolean>;
   isPatched: boolean;
 };
 
@@ -438,6 +447,14 @@ function getPatchState(): PatchState {
 
 const patchState = getPatchState();
 patchState.tlsFingerprintContext ??= new AsyncLocalStorage<TlsFingerprintStore>();
+patchState.requiredProxyContext ??= new AsyncLocalStorage<boolean>();
+const requiredProxyContext = patchState.requiredProxyContext;
+
+function requiredProxyEgressError(): Error & { code: string } {
+  return Object.assign(new Error("A required proxy route is unavailable"), {
+    code: "PROXY_REQUIRED_EGRESS",
+  });
+}
 const originalFetch = patchState.originalFetch;
 const originalFetchWithDispatcher = originalFetch as FetchWithDispatcher;
 const proxyContext = patchState.proxyContext;
@@ -545,15 +562,37 @@ function resolveEnvProxyUrl(targetUrl) {
         process.env.all_proxy;
 
   if (!proxyUrl) return null;
+  assertNoApplicationProxy("configured");
   return normalizeProxyUrl(proxyUrl, "environment proxy");
 }
 
 export function resolveProxyForRequest(targetUrl) {
+  assertNoApplicationProxy("none"); // Load/validate authority even for direct routes.
+  const selectedContext = proxyContext.getStore();
+  if (selectedContext && selectedContext !== DIRECT_PROXY_CONTEXT) {
+    // Do not let NO_PROXY/local bypass turn a forbidden explicit selection direct.
+    proxyConfigToUrl(selectedContext);
+  }
   let target;
   try {
     target = new URL(targetUrl);
   } catch {
     target = null;
+  }
+
+  if (requiredProxyContext.getStore()) {
+    const context = proxyContext.getStore();
+    if (
+      !target ||
+      !context ||
+      context === DIRECT_PROXY_CONTEXT ||
+      isLocalAddress(target.hostname.toLowerCase()) ||
+      noProxyMatch(targetUrl)
+    )
+      throw requiredProxyEgressError();
+    const requiredUrl = proxyConfigToUrl(context);
+    if (!requiredUrl) throw requiredProxyEgressError();
+    return { source: "context", proxyUrl: requiredUrl };
   }
 
   // Always bypass proxy for local/LAN addresses
@@ -599,12 +638,25 @@ function getTargetUrl(input) {
 export async function runWithProxyContext(
   proxyConfig,
   fn,
-  opts?: { directFallbackOnUnreachable?: boolean; skipUnreachableProbe?: boolean }
+  opts?: {
+    directFallbackOnUnreachable?: boolean;
+    skipUnreachableProbe?: boolean;
+    requireProxy?: boolean;
+  }
 ) {
   if (typeof fn !== "function") {
     throw new TypeError("runWithProxyContext requires a callback function");
   }
 
+  // A malformed explicit selection must not disappear through the legacy
+  // truthy inheritance rule (false/0 are opaque, not proof of directness).
+  assertNoApplicationProxy(
+    proxyConfig == null || proxyConfig === ""
+      ? "none"
+      : typeof proxyConfig === "string"
+        ? "configured"
+        : "opaque"
+  );
   // Inherit existing context if no specific proxyConfig is provided. A direct
   // sentinel must remain direct without being mistaken for a proxy config.
   const currentContext = proxyContext.getStore();
@@ -613,17 +665,24 @@ export async function runWithProxyContext(
   const contextValue = inheritsDirect ? DIRECT_PROXY_CONTEXT : effectiveProxyConfig;
 
   const resolvedProxyUrl = effectiveProxyConfig ? proxyConfigToUrl(effectiveProxyConfig) : null;
+  assertNoApplicationProxy(resolvedProxyUrl ? "configured" : "none");
+  // Once credential work requires an assigned route, nested scopes cannot lower it.
+  const requireProxy = opts?.requireProxy === true || requiredProxyContext.getStore() === true;
+  if (requireProxy && !resolvedProxyUrl) throw requiredProxyEgressError();
 
   // The caller must opt in, and the runtime feature flag must also be enabled.
   // This fallback changes egress IP, so upgrades must not silently turn it on.
   const directFallbackOnUnreachable =
-    opts?.directFallbackOnUnreachable === true && isControlPlaneProxyDirectFallbackEnabled();
+    !requireProxy &&
+    opts?.directFallbackOnUnreachable === true &&
+    isControlPlaneProxyDirectFallbackEnabled();
   // Only callers that explicitly opt out of the optimistic TCP probe avoid the
   // fast-fail race. For single-use OAuth/expensive inference, that race could
   // report 503 while the already-dispatched POST completes unseen by the caller.
   // This does NOT change proxy egress or permit a direct fallback; the actual
   // transport still fails closed on a dead assigned proxy.
-  const skipUnreachableProbe = opts?.skipUnreachableProbe === true && !directFallbackOnUnreachable;
+  const skipUnreachableProbe =
+    requireProxy || (opts?.skipUnreachableProbe === true && !directFallbackOnUnreachable);
   // Keep an explicit direct sentinel so resolveProxyForRequest cannot re-read
   // HTTPS_PROXY/HTTP_PROXY after the control-plane route decision.
   const runDirect = () => proxyContext.run(DIRECT_PROXY_CONTEXT, fn);
@@ -679,6 +738,7 @@ export async function runWithProxyContext(
         await assertHostnameSupportsFamily(u.hostname, fam === "ipv6" ? 6 : 4);
       }
     } catch (familyErr) {
+      if (isRuntimePolicyError(familyErr)) throw familyErr;
       if (directFallbackOnUnreachable) {
         console.warn(
           `[ProxyFetch] Proxy family pre-check failed (${proxyUrlForLogs(resolvedProxyUrl)}); using a direct connection for this request.`
@@ -692,68 +752,83 @@ export async function runWithProxyContext(
     }
   }
 
-  return proxyContext.run(contextValue, async () => {
-    if (resolvedProxyUrl && effectiveProxyConfig !== currentContext) {
-      // #9158: this fires on EVERY proxied request (innermost context wins).
-      // Gate it behind the same env flag as the relay routing log so request
-      // traffic doesn't spam stdout at production log levels.
-      if (process.env.OMNIROUTE_PROXY_FETCH_DEBUG === "true") {
-        console.log(
-          `[ProxyFetch] Applied request proxy context: ${proxyUrlForLogs(resolvedProxyUrl)}`
-        );
+  return requiredProxyContext.run(requireProxy, () =>
+    proxyContext.run(contextValue, async () => {
+      if (resolvedProxyUrl && effectiveProxyConfig !== currentContext) {
+        // #9158: this fires on EVERY proxied request (innermost context wins).
+        // Gate it behind the same env flag as the relay routing log so request
+        // traffic doesn't spam stdout at production log levels.
+        if (process.env.OMNIROUTE_PROXY_FETCH_DEBUG === "true") {
+          console.log(
+            `[ProxyFetch] Applied request proxy context: ${proxyUrlForLogs(resolvedProxyUrl)}`
+          );
+        }
       }
-    }
-    // #5217: record the proxy actually applied so a post-execution egress logger
-    // reflects the real egress (executors that pin a per-account proxy internally
-    // otherwise leave proxyInfo reading "direct"). Innermost runWithProxyContext
-    // wins, which is exactly the per-account proxy the executor selected.
-    if (effectiveProxyConfig) {
-      const sink = appliedProxyContext.getStore();
-      if (sink) sink.proxy = effectiveProxyConfig;
-    }
+      // #5217: record the proxy actually applied so a post-execution egress logger
+      // reflects the real egress (executors that pin a per-account proxy internally
+      // otherwise leave proxyInfo reading "direct"). Innermost runWithProxyContext
+      // wins, which is exactly the per-account proxy the executor selected.
+      if (effectiveProxyConfig) {
+        const sink = appliedProxyContext.getStore();
+        if (sink) sink.proxy = effectiveProxyConfig;
+      }
 
-    const requestPromise = Promise.resolve().then(() => fn());
-    if (!unreachableProbe) return requestPromise;
+      const requestPromise = Promise.resolve().then(() => fn());
+      if (!unreachableProbe) return requestPromise;
 
-    // #9100: non-blocking fast-fail — race the background probe against the
-    // request. Only if the probe resolves UNREACHABLE while the request is
-    // still in flight do we abort it with PROXY_UNREACHABLE (503). If the
-    // request already settled (or the probe found the proxy reachable), the
-    // request wins and the stale probe result is ignored — the first dispatch
-    // is NEVER gated on the probe.
-    const winner = await Promise.race([
-      unreachableProbe.then((reachable) => ({ kind: "probe" as const, reachable })),
-      requestPromise.then((value) => ({ kind: "request" as const, value })),
-    ]);
+      // #9100: non-blocking fast-fail — race the background probe against the
+      // request. Only if the probe resolves UNREACHABLE while the request is
+      // still in flight do we abort it with PROXY_UNREACHABLE (503). If the
+      // request already settled (or the probe found the proxy reachable), the
+      // request wins and the stale probe result is ignored — the first dispatch
+      // is NEVER gated on the probe.
+      const winner = await Promise.race([
+        unreachableProbe.then((reachable) => ({ kind: "probe" as const, reachable })),
+        requestPromise.then((value) => ({ kind: "request" as const, value })),
+      ]);
 
-    if (winner.kind === "probe" && !winner.reachable) {
-      // Proxy is dead and the request is still in flight → fail fast with the
-      // standard PROXY_UNREACHABLE error (503). The in-flight request's own
-      // result is discarded (its executor-level signal will still fire); the
-      // caller observes this fast failure instead of the ~30s timeout stall.
-      requestPromise.catch(() => {});
-      const proxyLabel = proxyUrlForLogs(resolvedProxyUrl);
-      const err = new Error(`[Proxy Fast-Fail] Proxy unreachable: ${proxyLabel}`) as Error & {
-        code?: string;
-        errorCode?: string;
-        statusCode?: number;
-      };
-      err.code = "PROXY_UNREACHABLE";
-      err.errorCode = "proxy_unreachable";
-      err.statusCode = 503;
-      throw markVerifiedExhaustedTransportError(err);
-    }
+      if (winner.kind === "probe" && !winner.reachable) {
+        // Proxy is dead and the request is still in flight → fail fast with the
+        // standard PROXY_UNREACHABLE error (503). The in-flight request's own
+        // result is discarded (its executor-level signal will still fire); the
+        // caller observes this fast failure instead of the ~30s timeout stall.
+        requestPromise.catch(() => {});
+        const proxyLabel = proxyUrlForLogs(resolvedProxyUrl);
+        const err = new Error(`[Proxy Fast-Fail] Proxy unreachable: ${proxyLabel}`) as Error & {
+          code?: string;
+          errorCode?: string;
+          statusCode?: number;
+        };
+        err.code = "PROXY_UNREACHABLE";
+        err.errorCode = "proxy_unreachable";
+        err.statusCode = 503;
+        throw markVerifiedExhaustedTransportError(err);
+      }
 
-    if (winner.kind === "probe") {
-      // Probe said reachable but the request is still pending — keep waiting.
-      return await requestPromise;
-    }
-    return winner.value;
-  });
+      if (winner.kind === "probe") {
+        // Probe said reachable but the request is still pending — keep waiting.
+        return await requestPromise;
+      }
+      return winner.value;
+    })
+  );
 }
 
 /** Run a request with an explicit direct-egress sentinel, bypassing proxy env/context lookup. */
 export function runWithDirectFetchContext<T>(fn: () => T): T {
+  if (requiredProxyContext.getStore()) throw requiredProxyEgressError();
+  if (getRuntimePolicy().mode === "locked") {
+    const inherited = proxyContext.getStore();
+    if (inherited && inherited !== DIRECT_PROXY_CONTEXT) proxyConfigToUrl(inherited);
+    // An explicit direct scope must not erase an environment proxy selection.
+    assertNoApplicationProxy(
+      ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"].some(
+        (key) => Boolean(process.env[key])
+      )
+        ? "configured"
+        : "none"
+    );
+  }
   return proxyContext.run(DIRECT_PROXY_CONTEXT, fn);
 }
 
@@ -796,6 +871,29 @@ async function patchedFetch(
   options: FetchWithDispatcherOptions = {},
   deps: ProxyFetchDeps = {}
 ) {
+  // Only a trusted bridge may opt in. URL alone never mints admission proof.
+  // Keep the secret on this exact listener: no proxy, redirects or POST replay.
+  options = { ...options };
+  // Credential-refresh egress is stricter than internal API routing. Validate
+  // before any dispatcher, TLS, relay or self-hop path can send credentials.
+  if (requiredProxyContext.getStore()) {
+    if (options.dispatcher) throw requiredProxyEgressError();
+    resolveProxyForRequest(getTargetUrl(input));
+    // Refresh bodies and bearer-bearing GETs must not be replayed on redirects.
+    options.redirect = "manual";
+  }
+  // Check the resolved route and factory provenance before ANY early transport
+  // branch, including self-hop, explicit dispatchers and native direct contexts.
+  if (getRuntimePolicy().mode === "locked") {
+    resolveProxyForRequest(getTargetUrl(input));
+    assertRuntimePolicyDispatcher(options.dispatcher);
+  }
+  if (prepareOwnListenerSelfHop(input, options)) {
+    delete options.dispatcher;
+    const nativeSelfHop = deps.nativeFetch ?? originalFetch;
+    return nativeSelfHop(input, options);
+  }
+
   // Explicit direct contexts must win even when a caller supplied a stale
   // dispatcher. Native fetch preserves direct streaming semantics.
   if (proxyContext.getStore() === DIRECT_PROXY_CONTEXT) {
@@ -847,6 +945,7 @@ async function patchedFetch(
         if (tlsStore) tlsStore.used = true;
         return response;
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
         const sessionHadCookies =
           !!error &&
@@ -904,6 +1003,7 @@ async function patchedFetch(
           directHeadersTimeoutMs
         );
       } catch (dispatcherError) {
+        if (isRuntimePolicyError(dispatcherError)) throw dispatcherError;
         if (isCallerAbort(dispatcherError, getEffectiveSignal(input, options))) {
           throw dispatcherError;
         }
@@ -972,6 +1072,7 @@ async function patchedFetch(
               // ignore
             }
             if (targetHostname) {
+              assertNoApplicationProxy("configured"); // No fallback probes in locked mode.
               const findWorkingProxy =
                 deps.findWorkingProxy ?? (await import("./proxyFallback.ts")).findWorkingProxy;
               const fallbackProxyUrl = await findWorkingProxy(targetHostname, targetUrl);
@@ -979,7 +1080,8 @@ async function patchedFetch(
                 try {
                   const dispatcher = createProxyDispatcher(fallbackProxyUrl);
                   return await _undiciDirect(input, { ...options, dispatcher });
-                } catch {
+                } catch (error) {
+                  if (isRuntimePolicyError(error)) throw error;
                   // Proxy also failed — fall through to native fetch
                 }
               }
@@ -992,6 +1094,7 @@ async function patchedFetch(
           try {
             return await _nativeFallback(input, options);
           } catch (nativeError) {
+            if (isRuntimePolicyError(nativeError)) throw nativeError;
             // Surface both dispatcher and native causes immediately.
             const detail = `dispatcher=[${describeFetchCause(dispatcherError)}] native=[${describeFetchCause(nativeError)}]`;
             console.warn(`[ProxyFetch] native fetch fallback ALSO failed: ${detail}`);
@@ -1052,7 +1155,7 @@ async function patchedFetch(
     const _undiciRelay =
       deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>);
     const hasNonReplayableRelayBody = requestHasNonReplayableBody(input, options);
-    const maxRelayAttempts = hasNonReplayableRelayBody ? 1 : 2;
+    const maxRelayAttempts = requiredProxyContext.getStore() || hasNonReplayableRelayBody ? 1 : 2;
     const relayUrl = `https://${vc.host}`;
     let lastRelayError: unknown = null;
     for (let attempt = 0; attempt < maxRelayAttempts; attempt++) {
@@ -1074,6 +1177,7 @@ async function patchedFetch(
           signal: relayController.signal,
         });
       } catch (relayError) {
+        if (isRuntimePolicyError(relayError)) throw relayError;
         // #9158: classify an internal per-attempt timeout FIRST — a relay that
         // hangs past RELAY_FETCH_TIMEOUT_MS must fail fast as RELAY_TIMEOUT (504)
         // and NOT be retried, instead of surviving into the caller's ~30s stall.
@@ -1144,13 +1248,18 @@ async function patchedFetch(
       if (tlsStore) tlsStore.used = true;
       return response;
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
       const sessionHadCookies =
         !!error &&
         typeof error === "object" &&
         "sessionHadCookies" in error &&
         error.sessionHadCookies === true;
-      if (!isTlsFallbackReplaySafe(input, options) || sessionHadCookies) {
+      if (
+        requiredProxyContext.getStore() ||
+        !isTlsFallbackReplaySafe(input, options) ||
+        sessionHadCookies
+      ) {
         throw sanitizeTransportError(
           error,
           sessionHadCookies
@@ -1172,7 +1281,7 @@ async function patchedFetch(
   const _undiciProxy =
     deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>);
   const hasNonReplayableProxyBody = requestHasNonReplayableBody(input, options);
-  const maxProxyAttempts = hasNonReplayableProxyBody ? 1 : 2;
+  const maxProxyAttempts = requiredProxyContext.getStore() || hasNonReplayableProxyBody ? 1 : 2;
   let lastProxyError: unknown = null;
   for (let attempt = 0; attempt < maxProxyAttempts; attempt++) {
     try {
@@ -1182,6 +1291,7 @@ async function patchedFetch(
           attempt === 0 ? createProxyDispatcher(proxyUrl) : getProxyRetryDispatcher(proxyUrl),
       });
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
       const msg = error instanceof Error ? error.message : String(error);
       const errCode = (error as { code?: unknown })?.code;
@@ -1301,8 +1411,23 @@ export function isTlsFingerprintActive(provider?: string | null, proxied = false
  * proxy dispatcher has compatibility issues with a particular endpoint.
  */
 export function getOriginalFetch(): typeof globalThis.fetch {
-  return originalFetch;
+  return policyCheckedNativeFetch;
 }
+
+// Check on every call, not just when the factory is obtained: a caller can retain
+// this function and later enter a stricter credential-refresh scope. Ordinary
+// standalone calls still dispatch through the exact original native fetch.
+const policyCheckedNativeFetch: typeof globalThis.fetch = async (input, init = {}) => {
+  if (requiredProxyContext.getStore()) throw requiredProxyEgressError();
+  if (getRuntimePolicy().mode === "locked") {
+    assertRuntimePolicyDispatcher((init as FetchWithDispatcherOptions).dispatcher);
+    // Native bypass cannot honor a configured proxy. Reuse the direct transport
+    // policy adapter to inspect context, env and fresh stored selections first.
+    const { assertPinnedTransportAllowed } = await import("@/shared/network/pinnedTransportPolicy");
+    await assertPinnedTransportAllowed(getTargetUrl(input));
+  }
+  return originalFetch(input, init);
+};
 
 /** Test-only: exposes the relay Agent options for config assertions (#9100). */
 export function __getRelayPoolAgentOptionsForTest() {

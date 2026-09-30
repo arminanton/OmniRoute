@@ -4,7 +4,6 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import dns from "node:dns";
 import { callVisionModel, type VisionModelConfig } from "@/lib/guardrails/visionBridgeHelpers";
 import { createProviderConnection } from "@/lib/db/providers";
 import { resetDbInstance } from "@/lib/db/core";
@@ -12,24 +11,11 @@ import { resetDbInstance } from "@/lib/db/core";
 // Store original fetch
 const originalFetch = globalThis.fetch;
 
-// Stub DNS for fetchRemoteImage's GHSA-cmhj-wh2f-9cgx DNS-rebinding guard
-// (assertHostnameResolvesPublic in src/shared/network/remoteImageFetch.ts).
-// These tests mock globalThis.fetch with example.com hosts that don't actually
-// resolve in CI; the call path (callVisionModel -> fetchRemoteImageAsDataUri)
-// does not expose a way to inject a `lookup` stub through to fetchRemoteImage,
-// so we monkey-patch dns.promises.lookup with a pass-through public-IP
-// resolver. Node --test runs each test file in its own process, so this
-// rebinding does not leak across files.
-const originalDnsLookup = dns.promises.lookup;
-(dns.promises as { lookup: unknown }).lookup = (async (
-  _hostname: string,
-  options?: { all?: boolean }
-) => {
-  const record = { address: "203.0.113.1", family: 4 };
-  return options && options.all ? [record] : record;
-}) as typeof dns.promises.lookup;
-process.on("exit", () => {
-  (dns.promises as { lookup: unknown }).lookup = originalDnsLookup;
+// Public URL downloads exercise the real pinned dial path against fake sockets.
+import { installMockedPinnedMedia } from "../../helpers/mockedPinnedMedia.ts";
+test.beforeEach((t) => {
+  assert.ok("mock" in t, "pinned media setup requires a TestContext");
+  installMockedPinnedMedia(t);
 });
 
 // (#8430) getBestVisionModel now validates that a `fixedModel` has a usable
@@ -100,24 +86,34 @@ test("callVisionModel can route a catalog model through the OmniRoute self-loop"
   const fetchImpl: typeof fetch = async (input, init) => {
     capturedUrl = String(input);
     capturedBody = JSON.parse(String(init?.body));
-    capturedHeaders = (init?.headers ?? {}) as Record<string, string>;
+    capturedHeaders = Object.fromEntries(new Headers(init?.headers));
+    assert.equal(init?.redirect, "manual");
     return Response.json({ choices: [{ message: { content: "GREEN_SCENE_2" } }] });
   };
 
-  const result = await callVisionModel("data:image/png;base64,iVBORw0KGgo", {
-    model: "openai/gpt-4o-mini",
-    prompt: "Describe this frame",
-    timeoutMs: 30000,
-    maxImages: 1,
-    routeThroughOmniRoute: true,
-    fetchImpl,
-  });
+  const result = await callVisionModel(
+    "data:image/png;base64,iVBORw0KGgo",
+    {
+      model: "openai/gpt-4o-mini",
+      prompt: "Describe this frame",
+      timeoutMs: 30000,
+      maxImages: 1,
+      routeThroughOmniRoute: true,
+      fetchImpl,
+    },
+    "validated-client-api-key"
+  );
 
   const url = new URL(capturedUrl);
   assert.equal(url.hostname, "localhost");
   assert.equal(url.pathname, "/v1/chat/completions");
   assert.equal(capturedBody.model, "openai/gpt-4o-mini");
-  assert.equal(capturedHeaders["x-omniroute-admission-bypass"], "internal");
+  assert.match(capturedHeaders["x-omniroute-self-hop"], /^[a-f0-9]{64}$/);
+  assert.equal(capturedHeaders.authorization, "Bearer validated-client-api-key");
+  assert.notEqual(
+    capturedHeaders.authorization,
+    `Bearer ${capturedHeaders["x-omniroute-self-hop"]}`
+  );
   assert.match(capturedHeaders["x-omniroute-disabled-guardrails"], /video-bridge/);
   assert.equal(result, "GREEN_SCENE_2");
 });

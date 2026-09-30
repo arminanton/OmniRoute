@@ -23,7 +23,13 @@ import { pathToFileURL } from "node:url";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-api-key-policy-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
-process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "task-607-api-key-secret";
+process.env.HOME = TEST_DATA_DIR;
+process.env.USERPROFILE = TEST_DATA_DIR;
+Object.assign(process.env, { NODE_ENV: "test" });
+process.env.REDIS_URL = "";
+process.env.API_KEY_SECRET = "task-607-api-key-secret";
+delete process.env.OMNIROUTE_API_KEY;
+delete process.env.ROUTER_API_KEY;
 
 const coreDb = await import("../../src/lib/db/core.ts");
 const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
@@ -433,6 +439,7 @@ test("enforceApiKeyPolicy bypasses local mode and unknown keys", async () => {
   assert.deepEqual(await policy.enforceApiKeyPolicy(makePolicyRequest(null), "openai/gpt-4.1"), {
     apiKey: null,
     apiKeyInfo: null,
+    reasoningCacheContext: null,
     rejection: null,
   });
 

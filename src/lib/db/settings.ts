@@ -7,12 +7,33 @@ import { backupDbFile } from "./backup";
 import { PROVIDER_ID_TO_ALIAS } from "@omniroute/open-sse/config/providerModels.ts";
 import { invalidateDbCache } from "./readCache";
 import { encrypt, decrypt } from "./encryption";
-import { getProxyRegistryGeneration, resolveProxyForScopeFromRegistry } from "./proxies";
+import {
+  getProxyAssignments,
+  getProxyRegistryGeneration,
+  resolveProxyForScopeFromRegistry,
+} from "./proxies";
 import { getComboModelProvider as getComboEntryProvider } from "@/lib/combos/steps";
 import { requestBodyLimitMbFromEnv } from "@/shared/constants/bodySize";
 import { DEFAULT_RESPONSES_PREVIOUS_RESPONSE_ID_MODE } from "@/shared/constants/responsesPreviousResponseId";
 import { type JsonRecord, toRecord } from "./settings/shared";
 import { resolveNoAuthSharedProviderProxy } from "./settings/noAuthProxyFallback";
+import { getFeatureFlagOverrides } from "./featureFlags";
+import { assertRuntimePolicySettings } from "@/shared/runtimePolicySettings";
+import {
+  assertNoApplicationProxy,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+  RuntimePolicyError,
+} from "@/shared/runtimePolicy";
+import {
+  assertRuntimePolicyProxyConfig,
+  assertRuntimePolicyProxySelection,
+} from "@/shared/runtimePolicyProxyConfig";
+
+function rethrowProxyPolicyError(error: unknown): void {
+  if (isRuntimePolicyError(error)) throw error;
+  if (getRuntimePolicy().mode === "locked") throw new RuntimePolicyError("proxy-forbidden");
+}
 
 type ProxyValue = JsonRecord | string | null;
 type ProxyResolutionResult = {
@@ -47,6 +68,7 @@ function cacheProxyResolution(
   registryGeneration: number,
   result: ProxyResolutionResult
 ) {
+  assertRuntimePolicyProxySelection(result.proxy);
   if (generation !== proxyConfigGeneration) return;
   if (registryGeneration !== getProxyRegistryGeneration()) return;
   if (proxyResolutionCache.size >= PROXY_RESOLUTION_CACHE_MAX_ENTRIES) {
@@ -138,7 +160,7 @@ function applySessionAffinityLegacyFallback(settings: Record<string, unknown>): 
   }
 }
 
-export async function getSettings() {
+export async function getSettings(options: { autoCompleteSetup?: boolean } = {}) {
   const db = getDbInstance();
   const rows = db.prepare("SELECT key, value FROM key_value WHERE namespace = 'settings'").all();
   const settings: Record<string, unknown> = {
@@ -287,8 +309,14 @@ export async function getSettings() {
   applySessionAffinityLegacyFallback(settings);
 
   // Auto-complete onboarding for pre-configured deployments (Docker/VM)
-  // If INITIAL_PASSWORD is set via env, this is a headless deploy — skip the wizard
-  if (!settings.setupComplete && process.env.INITIAL_PASSWORD) {
+  // If INITIAL_PASSWORD is set via env, this is a headless deploy — skip the wizard.
+  // Locked reads never provision settings; explicit writes must pass admission.
+  if (
+    options.autoCompleteSetup !== false &&
+    !settings.setupComplete &&
+    process.env.INITIAL_PASSWORD &&
+    getRuntimePolicy().mode !== "locked"
+  ) {
     settings.setupComplete = true;
     settings.requireLogin = true;
     db.prepare(
@@ -302,17 +330,56 @@ export async function getSettings() {
   return settings;
 }
 
+/** Authoritative namespaces for boot/write admission; no onboarding/migration writes. */
+export async function getRuntimePolicySettingsCandidate(
+  updates: Readonly<Record<string, unknown>> = {}
+): Promise<Record<string, unknown>> {
+  try {
+    const db = getDbInstance();
+    return {
+      ...(await getSettings({ autoCompleteSetup: false })),
+      ...updates,
+      featureFlags: getFeatureFlagOverrides(),
+      proxyConfig: await getProxyConfig({ migrate: false }),
+      proxyAssignments: await getProxyAssignments(),
+      proxyApiKeyAssignments: db
+        .prepare("SELECT id, proxy_id FROM api_keys WHERE proxy_id IS NOT NULL AND proxy_id != ''")
+        .all(),
+      proxyPerKeyConnectionEnabled: Boolean(
+        db
+          .prepare(
+            "SELECT 1 FROM provider_connections WHERE (proxy_enabled IS NULL OR proxy_enabled != 0) AND per_key_proxy_enabled = 1 LIMIT 1"
+          )
+          .get()
+      ),
+    };
+  } catch (error) {
+    rethrowProxyPolicyError(error);
+    throw error;
+  }
+}
+
 export async function updateSettings(
   updates: Record<string, unknown>,
   options?: { expectedRevision?: number }
 ) {
+  // Read without onboarding writes: reject the whole effective candidate before
+  // persistence, backup, cache invalidation, or runtime hot reload. The flag
+  // namespace is authoritative; a settings.featureFlags payload cannot shadow it.
+  if (getRuntimePolicy().mode === "locked") {
+    assertRuntimePolicySettings(await getRuntimePolicySettingsCandidate(updates));
+  }
+
   // Detect first-time setup completion before we overwrite settings.
   let setupJustCompleted = false;
   if (updates.setupComplete === true) {
     try {
-      const prev = await getSettings();
+      const prev = await getSettings(
+        getRuntimePolicy().mode === "locked" ? { autoCompleteSetup: false } : undefined
+      );
       setupJustCompleted = prev.setupComplete !== true;
-    } catch {
+    } catch (error) {
+      rethrowProxyPolicyError(error);
       setupJustCompleted = true;
     }
   }
@@ -342,12 +409,15 @@ export async function updateSettings(
     bumpProxyConfigGeneration();
   }
 
-  const nextSettings = await getSettings();
+  const nextSettings = await getSettings(
+    getRuntimePolicy().mode === "locked" ? { autoCompleteSetup: false } : undefined
+  );
 
   try {
     const { applyRuntimeSettings } = await import("@/lib/config/runtimeSettings");
     await applyRuntimeSettings(nextSettings, { source: "settings:update" });
   } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     console.warn(
       "[HOT_RELOAD] Failed to apply runtime settings after update:",
       error instanceof Error ? error.message : error
@@ -355,7 +425,7 @@ export async function updateSettings(
   }
 
   // Onboarding / setup finished → one-shot Codex catalog revalidation (init case).
-  if (setupJustCompleted) {
+  if (setupJustCompleted && getRuntimePolicy().mode !== "locked") {
     void import("@/shared/services/codexCatalogRevalidation")
       .then(({ scheduleCodexCatalogRevalidationAfterInit }) => {
         scheduleCodexCatalogRevalidationAfterInit();
@@ -426,7 +496,7 @@ function migrateProxyEntry(value: unknown): JsonRecord | null {
   }
 }
 
-export async function getProxyConfig() {
+export async function getProxyConfig(options: { migrate?: boolean } = {}) {
   const db = getDbInstance();
   const rows = db.prepare("SELECT key, value FROM key_value WHERE namespace = 'proxyConfig'").all();
 
@@ -453,7 +523,7 @@ export async function getProxyConfig() {
     }
   }
 
-  if (migrated) {
+  if (migrated && options.migrate !== false && getRuntimePolicy().mode !== "locked") {
     const insert = db.prepare(
       "INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES ('proxyConfig', ?, ?)"
     );
@@ -466,14 +536,27 @@ export async function getProxyConfig() {
 
 export async function getProxyForLevel(level: string, id?: string | null) {
   const config = await getProxyConfig();
+  assertRuntimePolicyProxyConfig({ proxyEnabled: false, proxyConfig: config }, {});
   if (level === "global") return config.global || null;
   const map = toProxyMap(config[level + "s"] || config[level] || {});
   return (id ? map[id] : null) || null;
 }
 
 export async function setProxyForLevel(level: string, id: string | null, proxy: ProxyValue) {
+  assertNoApplicationProxy(proxy ? "configured" : "none");
   const db = getDbInstance();
-  const config = await getProxyConfig();
+  const config = await getProxyConfig({ migrate: getRuntimePolicy().mode !== "locked" });
+  if (getRuntimePolicy().mode === "locked") {
+    const mapKey = level + "s";
+    const nextMap = { ...toProxyMap(config[mapKey]) };
+    if (id) delete nextMap[id];
+    const nextConfig =
+      level === "global" ? { ...config, global: null } : { ...config, [mapKey]: nextMap };
+    assertRuntimePolicyProxyConfig({
+      ...(await getRuntimePolicySettingsCandidate()),
+      proxyConfig: nextConfig,
+    });
+  }
 
   if (level === "global") {
     config.global = proxy || null;
@@ -506,8 +589,24 @@ export async function deleteProxyForLevel(level: string, id: string | null) {
 export async function resolveProxyForConnection(
   connectionId: string,
   apiKeyId?: string,
-  providerId?: string
+  providerId?: string,
+  options: { fresh?: boolean; skipFallback?: boolean } = {}
 ) {
+  try {
+    return await resolveProxyForConnectionUnchecked(connectionId, apiKeyId, providerId, options);
+  } catch (error) {
+    rethrowProxyPolicyError(error);
+    throw error;
+  }
+}
+
+async function resolveProxyForConnectionUnchecked(
+  connectionId: string,
+  apiKeyId?: string,
+  providerId?: string,
+  options: { fresh?: boolean; skipFallback?: boolean } = {}
+) {
+  assertNoApplicationProxy("none");
   const cacheKey = providerId
     ? `${connectionId}:${apiKeyId || ""}:${providerId}`
     : apiKeyId
@@ -517,10 +616,12 @@ export async function resolveProxyForConnection(
   const startRegistryGeneration = getProxyRegistryGeneration();
   const cached = proxyResolutionCache.get(cacheKey);
   if (
+    !options.fresh &&
     cached &&
     cached.generation === startGeneration &&
     cached.registryGeneration === startRegistryGeneration
   ) {
+    assertRuntimePolicyProxySelection(cached.result.proxy);
     return cached.result;
   }
 
@@ -536,7 +637,8 @@ export async function resolveProxyForConnection(
     if (proxyEnabledRow?.value) {
       globalProxyEnabled = JSON.parse(proxyEnabledRow.value) !== false;
     }
-  } catch {
+  } catch (error) {
+    rethrowProxyPolicyError(error);
     // Default to true on read error
   }
 
@@ -585,11 +687,14 @@ export async function resolveProxyForConnection(
     if (perKeyRow?.value) {
       globalPerKeyProxyEnabled = JSON.parse(perKeyRow.value) !== false;
     }
-  } catch {
+  } catch (error) {
+    rethrowProxyPolicyError(error);
     // Default to false on read error
   }
 
   const config = await getProxyConfig();
+  // Validate shape without treating unrelated dormant scopes as selected.
+  assertRuntimePolicyProxyConfig({ proxyEnabled: false, proxyConfig: config }, {});
 
   // Step 2: API key-level proxy (only if per-key proxy is enabled globally or per-connection)
   if (apiKeyId) {
@@ -635,7 +740,8 @@ export async function resolveProxyForConnection(
             return result;
           }
         }
-      } catch {
+      } catch (error) {
+        rethrowProxyPolicyError(error);
         // Fall through to existing resolution
       }
     }
@@ -711,7 +817,8 @@ export async function resolveProxyForConnection(
             cacheProxyResolution(cacheKey, startGeneration, startRegistryGeneration, result);
             return result;
           }
-        } catch {
+        } catch (error) {
+          rethrowProxyPolicyError(error);
           // Ignore malformed combo records during proxy resolution.
         }
       }
@@ -756,6 +863,12 @@ export async function resolveProxyForConnection(
     return result;
   }
 
+  // Credential refresh must not probe/adopt an unrelated fallback identity.
+  // Existing callers retain auto-selection unless they explicitly opt out.
+  if (options.skipFallback) {
+    return { proxy: null, level: "direct", levelId: null };
+  }
+
   // Step 11: Auto-selection fallback (only when global proxy is enabled)
   try {
     const { selectWorkingProxyFallback } = await import("@omniroute/open-sse/utils/proxyFallback");
@@ -777,6 +890,7 @@ export async function resolveProxyForConnection(
       return normalizedFallback;
     }
   } catch (err) {
+    rethrowProxyPolicyError(err);
     console.warn({ err, connectionId }, "Proxy fallback auto-selection failed");
   }
 
@@ -785,6 +899,14 @@ export async function resolveProxyForConnection(
 }
 
 export async function setProxyConfig(config: Record<string, unknown>) {
+  const hasProxy =
+    config.level !== undefined
+      ? Boolean(config.proxy)
+      : Boolean(config.global) ||
+        ["providers", "combos", "keys"].some((key) =>
+          Object.values(toProxyMap(config[key])).some(Boolean)
+        );
+  assertNoApplicationProxy(hasProxy ? "configured" : "none");
   if (config.level !== undefined) {
     const level = typeof config.level === "string" ? config.level : "global";
     const id = typeof config.id === "string" ? config.id : null;
@@ -793,7 +915,21 @@ export async function setProxyConfig(config: Record<string, unknown>) {
   }
 
   const db = getDbInstance();
-  const current = await getProxyConfig();
+  const current = await getProxyConfig({ migrate: getRuntimePolicy().mode !== "locked" });
+  if (getRuntimePolicy().mode === "locked") {
+    const next = { ...current };
+    if (config.global !== undefined) next.global = toProxyValue(config.global);
+    for (const mapKey of ["providers", "combos", "keys"]) {
+      if (!config[mapKey]) continue;
+      const merged = { ...toProxyMap(current[mapKey]), ...toProxyMap(config[mapKey]) };
+      for (const [key, value] of Object.entries(merged)) if (!value) delete merged[key];
+      next[mapKey] = merged;
+    }
+    assertRuntimePolicyProxyConfig({
+      ...(await getRuntimePolicySettingsCandidate()),
+      proxyConfig: next,
+    });
+  }
   const insert = db.prepare(
     "INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES ('proxyConfig', ?, ?)"
   );

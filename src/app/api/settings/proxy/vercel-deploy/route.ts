@@ -1,3 +1,9 @@
+import {
+  assertNoApplicationProxy,
+  isRuntimePolicyError,
+  markRuntimePolicyResponse,
+} from "@/shared/runtimePolicy";
+import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { randomBytes } from "crypto";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { createErrorResponse, createErrorResponseFromUnknown } from "@/lib/api/errorResponse";
@@ -181,6 +187,14 @@ async function pollDeployment(deploymentApiUrl: string, token: string): Promise<
 export async function POST(request: Request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
+  try {
+    assertNoApplicationProxy("configured");
+  } catch (error) {
+    if (!isRuntimePolicyError(error)) throw error;
+    return markRuntimePolicyResponse(
+      Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+    );
+  }
 
   let rawBody: unknown = {};
   try {

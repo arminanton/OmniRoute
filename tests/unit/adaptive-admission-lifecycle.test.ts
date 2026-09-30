@@ -193,8 +193,7 @@ describe("response lifecycle helpers", () => {
 
     async function drainSse(
       status: number,
-      signal?: AbortSignal,
-      expectImmediateRelease = false
+      signal?: AbortSignal
     ): Promise<ReturnType<typeof createSpyLease>> {
       const spy = createSpyLease(`sse-${status}-${spySuffix++}`);
       const body = new ReadableStream<Uint8Array>({
@@ -213,10 +212,6 @@ describe("response lifecycle helpers", () => {
         spy.lease,
         { admittedAtMs: 250, signal, nowMs: clock.now }
       );
-      if (expectImmediateRelease) {
-        assert.equal(spy.releaseCount, 1);
-        return spy;
-      }
       assert.equal(spy.releaseCount, 0);
       await wrapped.text();
       return spy;
@@ -248,10 +243,10 @@ describe("response lifecycle helpers", () => {
     const upstream = await drainSse(503);
     assert.equal(upstream.calls[0]!.outcome, "upstream_error");
 
-    // Already-aborted signal settles immediately as cancelled (wins over 2xx).
+    // Already-aborted signal settles as cancelled after source cleanup (wins over 2xx).
     const ac = new AbortController();
     ac.abort();
-    const abortedOk = await drainSse(200, ac.signal, true);
+    const abortedOk = await drainSse(200, ac.signal);
     assert.equal(abortedOk.releaseCount, 1);
     assert.equal(abortedOk.calls[0]!.outcome, "cancelled");
 

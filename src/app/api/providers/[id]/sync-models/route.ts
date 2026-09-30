@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
+import { assertResolvedProviderConnectionEntrypoint } from "@/sse/services/compatibleNodeBaseUrl";
 import { getCachedProviderConnectionById } from "@/lib/db/readCache";
 import {
   deleteImportedCustomModels,
@@ -28,7 +30,10 @@ import {
 import { replaceSyncedAvailableModelsForConnection } from "@/lib/db/models";
 import { GET as getProviderModels } from "../models/route";
 import { isDegradedDiscovery } from "./degradedLocalCatalog";
-import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import {
+  runtimePolicyErrorResponse,
+  sanitizeErrorMessage,
+} from "@omniroute/open-sse/utils/error";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -357,7 +362,11 @@ export async function selfFetchWithRetry(
 // fetchProviderModelsForSync — private orchestrator (uses selfFetchWithRetry)
 // ---------------------------------------------------------------------------
 
-async function fetchProviderModelsForSync(request: Request, connectionId: string) {
+async function fetchProviderModelsForSync(
+  request: Request,
+  connectionId: string,
+  provider: string
+) {
   const safeOrigin = getModelSyncInternalBaseUrl();
   const modelsPath =
     `/api/providers/${encodeURIComponent(connectionId)}/models` +
@@ -370,7 +379,18 @@ async function fetchProviderModelsForSync(request: Request, connectionId: string
 
   const targetUrl = `${safeOrigin}${modelsPath}`;
 
-  // Wrap fetch so it forwards the required headers on every retry attempt.
+  // MaxAI discovery owns its account and refresh lifecycle. Never replay it
+  // through retries, a readiness probe, or the in-process route fallback.
+  if (provider === "maxai" || provider === "mx") {
+    return fetchModelSyncInternal(targetUrl, {
+      method: "GET",
+      headers,
+      redirect: "error",
+      signal: request.signal,
+    });
+  }
+
+  // Other providers retain their existing boot-readiness/retry behavior.
   const fetchWithHeaders: typeof fetch = (input, init) =>
     fetchModelSyncInternal(input, { ...init, headers, redirect: "error" });
 
@@ -421,10 +441,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       );
     }
 
-    const connection = await getCachedProviderConnectionById(id);
+    let connection = await getCachedProviderConnectionById(id);
     if (!connection) {
       return NextResponse.json({ error: "Connection not found" }, { status: 404 });
     }
+    connection = await assertResolvedProviderConnectionEntrypoint(connection);
 
     logProvider = toNonEmptyString(connection.provider) || "unknown";
     channelLabel = getModelSyncChannelLabel(connection);
@@ -530,7 +551,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       id
     );
 
-    const modelsRes = await fetchProviderModelsForSync(request, id);
+    const modelsRes = await fetchProviderModelsForSync(request, id, logProvider);
+    if (isRuntimePolicyResponse(modelsRes)) return modelsRes;
+    if ((logProvider === "maxai" || logProvider === "mx") && !modelsRes.ok) {
+      return modelsRes;
+    }
 
     const duration = Date.now() - start;
     const { data: modelsData, parseError } = await readJsonResponse(modelsRes);
@@ -744,6 +769,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       importedModels,
     });
   } catch (error: any) {
+    if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
     // Log error
     await saveCallLog({
       method: "POST",

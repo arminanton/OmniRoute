@@ -20,6 +20,8 @@
  * Full coverage: tests/unit/search-baseurl-client-override-3f8g.test.ts.
  */
 
+import { assertRuntimeExecutorEntrypoint } from "@/shared/runtimePolicyEntrypoints";
+import { assertNotLockedCapability } from "@/shared/runtimePolicy";
 import { parseAndValidateNonMetadataUrl } from "@/shared/network/outboundUrlGuard";
 import type { SearchProviderConfig } from "../../config/searchRegistry.ts";
 
@@ -47,6 +49,7 @@ export class SearchBaseUrlOverrideError extends Error {
 }
 
 export function resolveSearchBaseUrl(config: SearchProviderConfig, params: BaseUrlParams): string {
+  assertRuntimeExecutorEntrypoint(config.id, params, "search-base-url-v1");
   const operatorOverride = readSetting(params.providerSpecificData, "baseUrl");
   if (operatorOverride) {
     parseAndValidateNonMetadataUrl(operatorOverride);
@@ -55,6 +58,8 @@ export function resolveSearchBaseUrl(config: SearchProviderConfig, params: BaseU
 
   const callerOverride = readSetting(params.providerOptions, "baseUrl");
   if (callerOverride) {
+    // Caller input is never a server-resolved configured binding.
+    assertNotLockedCapability("search-client-base-url-override");
     if (!config.allowClientBaseUrlOverride || config.authType === "apikey") {
       throw new SearchBaseUrlOverrideError(config.id);
     }

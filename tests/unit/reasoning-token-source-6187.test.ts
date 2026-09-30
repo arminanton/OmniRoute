@@ -13,7 +13,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getDbInstance, resetDbInstance } from "../../src/lib/db/core.ts";
-import { saveCallLog } from "../../src/lib/usage/callLogs.ts";
+import { saveCallLog, getCallLogById } from "../../src/lib/usage/callLogs.ts";
 import { getObservedReasoning } from "../../src/lib/usage/tokenAccounting.ts";
 import { computeCostFromPricing } from "../../src/lib/usage/costCalculator.ts";
 
@@ -77,15 +77,18 @@ test("saveCallLog records reasoning_source=content when usage under-reports reas
     // usage EXPLICITLY reports reasoning_tokens=0 (the bug trigger)
     tokens: { prompt_tokens: 10, completion_tokens: 20, reasoning_tokens: 0 },
     responseBody: {
-      choices: [{ message: { role: "assistant", content: "answer", reasoning_content: reasoning } }],
+      choices: [
+        { message: { role: "assistant", content: "answer", reasoning_content: reasoning } },
+      ],
     },
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const row = db
     .prepare(
       "SELECT tokens_reasoning, reasoning_source, reasoning_chars FROM call_logs WHERE id = ?"
     )
-    .get(testId) as {
+    .get(physicalId) as {
     tokens_reasoning: number | null;
     reasoning_source: string | null;
     reasoning_chars: number | null;
@@ -133,10 +136,13 @@ test("saveCallLog keeps reasoning_source=usage when usage reports reasoning toke
       choices: [{ message: { role: "assistant", content: "answer" } }],
     },
   });
+  const physicalId = (await getCallLogById(testId))!.id;
 
   const row = db
-    .prepare("SELECT tokens_reasoning, reasoning_source, reasoning_chars FROM call_logs WHERE id = ?")
-    .get(testId) as {
+    .prepare(
+      "SELECT tokens_reasoning, reasoning_source, reasoning_chars FROM call_logs WHERE id = ?"
+    )
+    .get(physicalId) as {
     tokens_reasoning: number | null;
     reasoning_source: string | null;
     reasoning_chars: number | null;

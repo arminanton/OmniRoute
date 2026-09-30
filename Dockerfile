@@ -1,5 +1,12 @@
+# ── Immutable npm runtime/security input tree (not a release layer) ──────────
+FROM node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1 AS npm-tool-tree
+COPY docker/npm-tools/package.json docker/npm-tools/package-lock.json /tmp/docker-npm-tree/
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
+  npm ci --prefix /tmp/docker-npm-tree --install-strategy=nested --include=optional \
+    --ignore-scripts --no-audit --no-fund --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=30000 --fetch-timeout=60000
+
 # ── Common base with runtime deps ──────────────────────────────────────────
-FROM node:26-trixie-slim AS base
+FROM node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1 AS base
 WORKDIR /app
 
 # `apt-get upgrade` pulls the security-patched versions of the Debian (trixie)
@@ -27,90 +34,70 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,targe
 #   ip-address      10.2.0 (needs >= 10.3.1)  CVE-2026-69192/-69198/-54272
 #   tar             7.5.19 (needs >= 7.5.21)  GHSA-r292-9mhp-454m
 #   undici          6.27.0 (needs >= 6.28.0)  CVE-2026-16729/-16728/-15157
-# No published npm release carries patched copies, so `npm install -g npm@latest`
-# alone was pure build time for zero CVEs — it is kept only to land on a known,
-# current npm tree, and the patched copies are overlaid on top below.
-#
-# Deleting npm from the runner stages is NOT an option: the application shells
-# out to npm at runtime (src/lib/services/installers/utils.ts::runNpm for the
-# embedded services, src/lib/system/{autoUpdate,globalPackagePath}.ts,
-# src/app/api/system/version). The previous version of this comment claimed the
-# opposite; it was wrong.
-#
-# The overlay is semver-compatible with the ranges npm's own tree declares
-# (minimatch → brace-expansion ^5.0.5, socks → ip-address ^10.1.1, node-gyp →
-# tar ^7.5.4 and undici ^6.25.0 — hence undici stays on the 6.x line, NOT 8.x).
-# --install-strategy=nested makes each replacement self-contained, so it cannot
-# perturb the versions the rest of npm's flat tree resolves.
-RUN set -eux; \
-  npm install -g npm@latest; \
-  npm install --prefix /tmp/npm-cve-patch --no-audit --no-fund --ignore-scripts \
-    --install-strategy=nested \
-    brace-expansion@5.0.9 ip-address@10.5.0 tar@7.5.22 undici@6.28.0; \
-  for pkg in brace-expansion ip-address tar undici; do \
-    test -d "/usr/local/lib/node_modules/npm/node_modules/$pkg"; \
-    rm -rf "/usr/local/lib/node_modules/npm/node_modules/$pkg"; \
-    cp -R "/tmp/npm-cve-patch/node_modules/$pkg" \
-      "/usr/local/lib/node_modules/npm/node_modules/$pkg"; \
-  done; \
-  rm -rf /tmp/npm-cve-patch; \
-  node -e "for (const p of ['brace-expansion','ip-address','tar','undici']) console.log(p, require('/usr/local/lib/node_modules/npm/node_modules/'+p+'/package.json').version);"; \
-  npm --version; \
-  npm cache clean --force
+# Pin the complete npm12.1.0 closure and the four replacements in a private
+# integrity lock. The immutable image's bundled npm11.19.1 only bootstraps this
+# tree; every later install and runtime npm/npx uses the locked npm12.1.0.
+# The application invokes npm at runtime (embedded service installers and
+# system update/global-package discovery), so removing npm is not safe.
+# Each replacement is nested and self-contained. In particular, undici stays
+# on compatible6.x (^6.25.0), never8.x. No package lifecycle hooks are permitted.
+COPY --chmod=444 scripts/build/install-docker-npm-tree.mjs /opt/omniroute-docker-build/install-docker-npm-tree.mjs
+RUN --network=none --mount=type=bind,from=npm-tool-tree,source=/tmp/docker-npm-tree,target=/tmp/docker-npm-tree \
+  set -eux; \
+  chmod 755 /opt/omniroute-docker-build; \
+  node /opt/omniroute-docker-build/install-docker-npm-tree.mjs; \
+  node -e "const assert=require('node:assert/strict'); for (const [p,v] of Object.entries({'brace-expansion':'5.0.9','ip-address':'10.5.0','tar':'7.5.22','undici':'6.28.0'})) { assert.equal(require('/usr/local/lib/node_modules/npm/node_modules/'+p+'/package.json').version,v); console.log(p,v); }"; \
+  test "$(npm --version)" = 12.1.0; \
+  test "$(npx --version)" = 12.1.0; \
+  test "$(npm root -g)" = /usr/local/lib/node_modules
 
-# ── Builder ────────────────────────────────────────────────────────────────
-FROM base AS builder
+# ── Complete locked CLI input trees (not copied into release layers) ─────────
+# This branch can fetch while the application builds. Materialization later
+# reads it through a readonly mount and copies only the standard global tree.
+FROM base AS cli-dependencies
+COPY docker/cli/package.json docker/cli/package-lock.json /tmp/docker-cli-tree/
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
+  npm ci --prefix /tmp/docker-cli-tree --install-strategy=nested --include=optional \
+    --ignore-scripts --no-audit --no-fund --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=30000 --fetch-timeout=60000
 
-# No telemetry, anywhere. Disable Next.js's anonymous build-time telemetry
-# (it otherwise pings Vercel during `next build`). Set on the builder stage so
-# every image build is silent; the runtime never builds, so this covers the
-# only phase Next telemetry can fire.
+# ── Locked dependencies and offline prebuilt acceptance ────────────────────
+FROM base AS dependencies
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV NPM_CONFIG_LEGACY_PEER_DEPS=true
 
-# Build tools for native module compilation
-# apt-get update needed here because base's rm -rf clears the shared cache
+COPY package.json package-lock.json ./
+# Keep every workspace manifest in the clean install input set.
+COPY open-sse/package.json ./open-sse/package.json
+COPY packages/browser-pool/package.json ./packages/browser-pool/package.json
+COPY scripts/build/postinstall.mjs ./scripts/build/postinstall.mjs
+COPY scripts/build/postinstallSupport.mjs ./scripts/build/postinstallSupport.mjs
+COPY scripts/build/native-binary-compat.mjs ./scripts/build/native-binary-compat.mjs
+COPY scripts/build/build-tproxy-native.mjs ./scripts/build/build-tproxy-native.mjs
+COPY scripts/build/verify-docker-native-deps.mjs ./scripts/build/verify-docker-native-deps.mjs
+
+# Require the unchanged application lock and preserve all optional platform
+# packages. No dependency install hooks, source fallback or WASM fallback.
+RUN test -f package-lock.json \
+  || (echo "package-lock.json is required for reproducible Docker builds" >&2 && exit 1)
+RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
+  npm ci --include=optional --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
+    --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=30000 --fetch-timeout=60000
+# better-sqlite3 13.0.3 already packages GNU N-API binaries. Its old gyp step
+# was stamp-only. Require the actual loaded prebuilt and an in-memory query,
+# plus all build/runtime native payloads and matching local Node headers.
+RUN --network=none node scripts/build/verify-docker-native-deps.mjs --project-root=/app --node-root=/usr/local
+
+# ── Builder: only the first-party TPROXY addon needs a compiler ──────────────
+FROM dependencies AS builder
+ENV OMNIROUTE_DOCKER_NATIVE_BUILD=1
+
+# Preserve the TPROXY compiler toolchain. The locked local node-gyp uses only
+# validated headers beside Node, never npx or a Docker-time header download.
 RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-lists,target=/var/lib/apt/lists,sharing=locked \
   apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
-
-COPY package*.json ./
-# Workspace package manifests MUST be present before `npm ci` so npm materializes
-# the workspace and installs its *workspace-only* deps (e.g. safe-regex,
-# @toon-format/toon — declared in open-sse/package.json, not hoisted to root).
-# Without this, `npm ci` skips them and the application build fails with "Module not
-# found" (root cause of the v3.8.39 Docker build break). workspaces = ["open-sse"].
-COPY open-sse/package.json ./open-sse/package.json
-COPY scripts/build/postinstall.mjs ./scripts/build/postinstall.mjs
-COPY scripts/build/postinstallSupport.mjs ./scripts/build/postinstallSupport.mjs
-COPY scripts/build/native-binary-compat.mjs ./scripts/build/native-binary-compat.mjs
-ENV NPM_CONFIG_LEGACY_PEER_DEPS=true
-# --ignore-scripts blocks broad dependency install/postinstall hooks, closing
-# the supply-chain attack surface where a transitive dep can run arbitrary code
-# at install time. better-sqlite3 still needs a native binding for the target
-# platform, so rebuild and smoke-test only that known runtime dependency below.
-#
-# We REQUIRE a committed package-lock.json so resolved dependency versions
-# are reproducible.
-RUN test -f package-lock.json \
-  || (echo "package-lock.json is required for reproducible Docker builds" >&2 && exit 1)
-# `npm rebuild <pkg>` re-runs the package's own install script, so under npm 11 +
-# `--ignore-scripts` on the parent `npm ci` it depends on npm's script-allowlist
-# machinery correctly re-enabling that one package's script. Some self-hosted build
-# environments (e.g. Dokploy) hit a broken/incomplete better-sqlite3 native binding
-# from that indirection. Invoking `node-gyp rebuild` directly inside the package
-# directory bypasses npm's script-running layer entirely and is deterministic
-# regardless of npm version or ignore-scripts allowlist behavior.
-# node-gyp comes from npm's own bundled copy (deterministic, already in the image)
-# instead of `npx --yes`, which would install an arbitrary registry version
-# on-demand and run its lifecycle scripts (Sonar docker:S6505).
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
-  npm ci --include=optional --no-audit --no-fund --legacy-peer-deps --ignore-scripts \
-  && (cd node_modules/better-sqlite3 \
-      && node /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild) \
-  && node -e "require('better-sqlite3')(':memory:').close()" \
-  && node -e "const wreq=require('wreq-js'); if(typeof wreq.createTransport!=='function') process.exit(1)"
 
 # Build with Turbopack (stable in Next 16, the repo default). The v3.8.27-era
 # TurbopackInternalError panic ("entered unreachable code: there must be a path to a
@@ -199,9 +186,14 @@ ARG OMNIROUTE_BUILD_WORKERS=2
 ENV CIRCLE_NODE_TOTAL=${OMNIROUTE_BUILD_WORKERS}
 
 COPY . ./
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-next-cache,target=/app/.build/next/cache \
+# The complete compile is offline. Missing payloads/headers cannot trigger
+# hidden recovery downloads. Any required external input must be explicit.
+RUN --network=none --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-next-cache,target=/app/.build/next/cache \
   mkdir -p /app/data \
   && npm run build \
+  && rm -rf /app/.build/next/standalone/node_modules/better-sqlite3 \
+  && cp -a /app/node_modules/better-sqlite3 /app/.build/next/standalone/node_modules/better-sqlite3 \
+  && node scripts/build/verify-docker-native-deps.mjs --project-root=/app --node-root=/usr/local --require-tproxy --standalone-root=/app/.build/next/standalone \
   && node --input-type=module -e "import { createRequire } from 'node:module'; import { pathToFileURL } from 'node:url'; const standaloneRoot = '/app/.build/next/standalone/node_modules/'; const require = createRequire('/app/.build/next/standalone/package.json'); for (const pkg of ['@atjsh/llmlingua-2', '@huggingface/transformers', 'js-tiktoken']) { const resolved = require.resolve(pkg); if (!resolved.startsWith(standaloneRoot)) throw new Error(pkg + ' resolved outside standalone: ' + resolved); await import(pathToFileURL(resolved).href); } const onnxRuntime = require.resolve('onnxruntime-node'); if (!onnxRuntime.startsWith(standaloneRoot)) throw new Error('onnxruntime-node resolved outside standalone: ' + onnxRuntime); await import(pathToFileURL(onnxRuntime).href);"
 
 # ── Runner base ────────────────────────────────────────────────────────────
@@ -240,23 +232,23 @@ RUN mkdir -p /app/data /run/codex-appserver /home/node/.codex
 # The old per-module overrides were therefore pure duplication and were removed
 # (build-output-isolation cleanup). See scripts/build/assembleStandalone.mjs
 # (EXTRA_MODULE_ENTRIES) for the single source of truth.
-COPY --from=builder /app/.build/next/standalone ./
+COPY --from=builder --chown=node:node /app/.build/next/standalone ./
 # better-sqlite3 is the one exception still copied explicitly: assembleStandalone
 # only syncs its native build/ dir; the JS wrapper (lib/, package.json) is left to
 # Next.js tracing. bootstrap-env requires SQLite BEFORE the standalone server
 # starts, so guarantee the complete package independent of trace behaviour.
-COPY --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
+COPY --from=builder --chown=node:node /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
 # migrations land at <standalone>/migrations via assembleStandalone; point the runtime at them.
 ENV OMNIROUTE_MIGRATIONS_DIR=/app/migrations
 
 # Docker healthcheck script — not traced by Next.js standalone output, so copy
 # it explicitly. The HEALTHCHECK CMD references it as `node healthcheck.mjs`.
-COPY --from=builder /app/scripts/dev/healthcheck.mjs ./healthcheck.mjs
+COPY --from=builder --chown=node:node /app/scripts/dev/healthcheck.mjs ./healthcheck.mjs
 
-# Hand /app over to the baked-in `node` non-root user (UID/GID 1000) so the
-# runtime process never holds root privileges. The chown happens after all
-# COPYs so it covers files originally owned by root in the builder stage.
-RUN chown -R node:node /app /run/codex-appserver /home/node/.codex \
+# COPY sets ownership while creating the runtime tree. Preserve ownership of
+# the existing /app inode and the small writable/mount directories without a
+# second recursive walk over the complete standalone tree. UID/GID stay 1000.
+RUN chown node:node /app /app/data /run/codex-appserver /home/node/.codex \
   && chmod 700 /run/codex-appserver /home/node/.codex
 
 EXPOSE 20128
@@ -264,6 +256,9 @@ EXPOSE 20128
 # Drop to non-root before ENTRYPOINT/CMD so every derived stage (runner-cli,
 # runner-web) also runs as a non-root user unless they explicitly switch back.
 USER node
+
+# Check the final complete SQLite COPY as the actual non-root runtime user.
+RUN --network=none node -e "const assert=require('node:assert/strict'); assert.equal(require('better-sqlite3/package.json').version,'13.0.3'); const db=require('better-sqlite3')(':memory:'); assert.equal(db.prepare('SELECT 1 AS ok').get().ok,1); db.close()"
 
 # Warns if the mounted data volume has wrong ownership
 COPY --chmod=755 scripts/check-permissions.sh /app/check-permissions.sh
@@ -336,19 +331,18 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,targe
   && rm -rf /var/lib/apt/lists/* \
   && git config --system url."https://github.com/".insteadOf "ssh://git@github.com/"
 
-# Install CLI tools globally. Separate layer from apt for better cache reuse.
-# Pinned to exact versions per Diego's diagnosis in #12576 — floating
-# `@latest` causes two CI failures:
-#   1. `openclaw` ships a breaking major ~weekly; overnight builds silently
-#      advance to a version that no longer matches the tested combo stack.
-#   2. `codex` / `claude-code` dev pre-releases (`@next`, dist-tags) mutate
-#      API surface without notice; reproducible builds need a SHA-pinned dev
-#      build, not the floating `@latest`.
-RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-npm-cache,target=/root/.npm \
-  npm install -g --no-audit --no-fund \
-    @openai/codex@0.153.2 \
-    @anthropic-ai/claude-code@2.1.260 \
-    droid@0.212.0 \
-    openclaw@2026.9.1
+# Lock all four CLI trees (Codex0.153.2, Claude2.1.260, Droid0.212.0,
+# OpenClaw2026.9.1) without changing standard global package or bin paths.
+# Nested installation keeps each complete dependency/resource tree contained.
+# Deny broad hooks; only the reviewed, hashed setup entrypoints run offline.
+COPY --chmod=444 scripts/build/install-docker-cli-tree.mjs scripts/build/setup-docker-clis.mjs scripts/build/verify-docker-clis.mjs /opt/omniroute-docker-build/
+RUN --network=none --mount=type=bind,from=cli-dependencies,source=/tmp/docker-cli-tree,target=/tmp/docker-cli-tree \
+  chmod 755 /opt/omniroute-docker-build \
+  && node /opt/omniroute-docker-build/install-docker-cli-tree.mjs \
+  && node /opt/omniroute-docker-build/setup-docker-clis.mjs
 
 USER node
+
+# Prove the installed CLIs and their packaged native bindings work offline as
+# the final runtime user, without login, providers, first-run setup or updates.
+RUN --network=none node /opt/omniroute-docker-build/verify-docker-clis.mjs

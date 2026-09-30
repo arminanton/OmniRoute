@@ -17,6 +17,7 @@ import {
 } from "@/sse/services/auth";
 import { isAllRateLimitedCredentials } from "@/app/api/v1/_shared/rateLimit";
 import { handleImageGeneration } from "@omniroute/open-sse/handlers/imageGeneration.ts";
+import { isRemoteMediaFailureResult } from "@/shared/network/remoteImageFetch";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { calculateModalCost } from "@/lib/usage/costCalculator";
@@ -147,7 +148,7 @@ export async function executeImageCombo(
 
     // Terminal failures (400 bad model, 403 banned, etc.) — stop iterating
     // Non-terminal failures (429, 5xx) — try next target
-    if (status === 400 || status === 403 || status === 401) {
+    if (isRemoteMediaFailureResult(result) || status === 400 || status === 403 || status === 401) {
       return errorResponse(status, `[${targetProvider}] ${error}`);
     }
 

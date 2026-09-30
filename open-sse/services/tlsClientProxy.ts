@@ -1,3 +1,5 @@
+import { assertNoApplicationProxy, isRuntimePolicyError } from "@/shared/runtimePolicy";
+
 type ResolveProxyForRequest = (
   targetUrl: string
 ) => { source: string; proxyUrl: string | null } | null;
@@ -15,16 +17,34 @@ export function resolveTlsClientProxyUrl(
   perCall: string | undefined,
   resolveProxyForRequest: ResolveProxyForRequest
 ): string | undefined {
-  if (perCall && perCall.length > 0) return perCall;
+  assertNoApplicationProxy(
+    perCall == null || perCall === ""
+      ? "none"
+      : typeof perCall === "string"
+        ? "configured"
+        : "opaque"
+  );
+  if (perCall && perCall.length > 0) {
+    assertNoApplicationProxy("configured");
+    return perCall;
+  }
   let info: { source: string; proxyUrl: string | null } | null;
   try {
     info = resolveProxyForRequest(targetUrl);
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     throw new Error(
       `[TlsClient] Proxy resolution failed for ${targetUrl}; refusing direct connection (fail-closed): ${
         err instanceof Error ? err.message : String(err)
       }`
     );
   }
+  assertNoApplicationProxy(
+    info?.proxyUrl
+      ? "configured"
+      : info?.source === "direct" && info.proxyUrl === null
+        ? "none"
+        : "opaque"
+  );
   return info && info.proxyUrl ? info.proxyUrl : undefined;
 }

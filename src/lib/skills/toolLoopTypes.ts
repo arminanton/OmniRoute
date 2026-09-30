@@ -3,6 +3,8 @@
  * All consumers use `import type` — no runtime imports.
  */
 
+import type { ReasoningCacheContext } from "../../../open-sse/services/reasoningCacheContext.ts";
+
 // ─── §5.4 Provider Leg ─────────────────────────────────────────────────────
 
 export interface ProviderLegUsage {
@@ -190,6 +192,7 @@ export interface NonStreamingClientTranslateInput {
   historyMessages?: unknown[] | null;
   responseToolNameMap: Map<string, string> | null;
   requestToolIdentityMap: Map<string, { namespace?: string; name: string }> | null;
+  reasoningCacheContext?: ReasoningCacheContext | null;
   reasoningCacheScope: string | null;
   skipReasoningReplay?: boolean;
   clientHeaders: Headers | Record<string, unknown> | null;

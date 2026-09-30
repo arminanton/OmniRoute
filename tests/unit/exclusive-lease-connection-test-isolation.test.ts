@@ -6,6 +6,8 @@ import test from "node:test";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-lease-test-isolation-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
+// Fixed fixture-only secret; never inherit a host or live API-key signing secret.
+process.env.API_KEY_SECRET = "lease-isolation-test-only-api-key-secret";
 process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
 process.env.OMNIROUTE_DISABLE_CREDENTIAL_HEALTH_CHECK = "true";
 
@@ -18,6 +20,7 @@ globalThis.fetch = async () => {
 
 const core = await import("../../src/lib/db/core.ts");
 const leases = await import("../../src/lib/db/exclusiveConnectionLeases.ts");
+const apiKeys = await import("../../src/lib/db/apiKeys.ts");
 const { testSingleConnection } = await import("../../src/app/api/providers/[id]/test/route.ts");
 const providerModels = await import("../../src/app/api/providers/[id]/models/route.ts");
 const providerLimits = await import("../../src/lib/usage/providerLimits.ts");
@@ -31,7 +34,25 @@ test.after(() => {
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-test("connection verification skips an ACTIVE exclusive lease before any probe or mutation", async () => {
+function readLeasedConnectionState() {
+  const db = core.getDbInstance();
+  // Compare the whole stored row, including credentials, health/probe fields and timestamps.
+  const connection = db
+    .prepare("SELECT * FROM provider_connections WHERE id = ?")
+    .get("leased-test-connection");
+  assert.ok(connection && typeof connection === "object" && "api_key" in connection);
+  assert.equal(connection.api_key, "synthetic-key");
+  const leaseRows = db
+    .prepare("SELECT * FROM exclusive_connection_leases WHERE connection_id = ? ORDER BY id")
+    .all("leased-test-connection");
+  assert.equal(leaseRows.length, 1);
+  const lease = leaseRows[0];
+  assert.ok(lease && typeof lease === "object" && "state" in lease);
+  assert.equal(lease.state, "ACTIVE");
+  return { connection, leases: leaseRows };
+}
+
+test.before(() => {
   const db = core.getDbInstance();
   db.prepare(
     `INSERT INTO provider_connections
@@ -52,40 +73,64 @@ test("connection verification skips an ACTIVE exclusive lease before any probe o
     connectionId: "leased-test-connection",
   });
   assert.equal(acquired.kind, "ACQUIRED");
+});
 
+test("connection verification skips an ACTIVE exclusive lease before any probe or mutation", async () => {
+  const before = readLeasedConnectionState();
   const result = await testSingleConnection("leased-test-connection");
 
   assert.equal(result.valid, false);
   assert.equal(result.skipped, true);
   assert.equal(result.diagnosis?.code, "exclusive_lease_active");
   assert.equal(externalCalls, 0);
-  const row = db
-    .prepare("SELECT test_status, last_tested, last_error FROM provider_connections WHERE id = ?")
-    .get("leased-test-connection") as {
-    test_status: string;
-    last_tested: string | null;
-    last_error: string | null;
-  };
+  assert.deepEqual(readLeasedConnectionState(), before);
+  const row = before.connection;
+  assert.ok("test_status" in row && "last_tested" in row && "last_error" in row);
   assert.equal(row.test_status, "active");
   assert.equal(row.last_tested, null);
   assert.equal(row.last_error, null);
 });
 
-test("model discovery and reset-credit paths reject ACTIVE leased connections", async () => {
+test("unauthenticated model discovery rejects before any probe or mutation", async () => {
+  const before = readLeasedConnectionState();
   const response = await providerModels.GET(
     new Request("http://omniroute.local/api/providers/leased-test-connection/models"),
     { params: { id: "leased-test-connection" } }
   );
-  assert.equal(response.status, 409);
+  assert.equal(response.status, 401);
+  assert.equal(externalCalls, 0);
+  assert.deepEqual(readLeasedConnectionState(), before);
+});
 
+test("authenticated model discovery rejects an ACTIVE lease before any probe or mutation", async () => {
+  // Use the real management guard and a real synthetic key in this isolated SQLite fixture.
+  const managementKey = await apiKeys.createApiKey("lease isolation management", "test", [
+    "manage",
+  ]);
+  const before = readLeasedConnectionState();
+  const response = await providerModels.GET(
+    new Request("http://omniroute.local/api/providers/leased-test-connection/models", {
+      headers: { Authorization: `Bearer ${managementKey.key}` },
+    }),
+    { params: { id: "leased-test-connection" } }
+  );
+  assert.equal(response.status, 409);
+  assert.equal(externalCalls, 0);
+  assert.deepEqual(readLeasedConnectionState(), before);
+});
+
+test("reset-credit listing rejects an ACTIVE lease before any refresh or mutation", async () => {
+  const before = readLeasedConnectionState();
   await assert.rejects(
     codexResetCredits.listCodexResetCredits("leased-test-connection"),
     (error: unknown) =>
-      error instanceof Error &&
-      (error as Error & { status?: number }).status === 409 &&
+      error instanceof codexResetCredits.CodexResetCreditError &&
+      error.status === 409 &&
+      error.code === "exclusive_lease_active" &&
       /exclusive lease/i.test(error.message)
   );
   assert.equal(externalCalls, 0);
+  assert.deepEqual(readLeasedConnectionState(), before);
 });
 
 test("quota refresh proceeds on an ACTIVE leased usage-supported connection", async () => {

@@ -14,6 +14,7 @@
  * lightweight client + transport, and so it is independently unit-testable with a
  * fake websocketFn.
  */
+import { isRuntimePolicyError } from "../../../src/shared/runtimePolicy.ts";
 import {
   CodexAppServerClient,
   type CodexAppServerWebsocketFn,
@@ -36,7 +37,7 @@ function str(v: unknown): string | undefined {
 
 /**
  * Open a short-lived WS to the app-server, initialize, and read the account.
- * Returns an auth status; never throws (maps failures to state "unknown").
+ * Non-policy failures map to an auth status; branded runtime-policy errors propagate.
  *
  * @param config resolved app-server config (url + capability token).
  * @param websocketFn the wreq-js websocket factory
@@ -85,6 +86,7 @@ export async function probeCodexAppServerAuth(
         reason: "app-server reachable but its Codex CLI is not signed in",
       };
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       const message = err instanceof Error ? err.message : String(err);
       // A JSON-RPC error on account/read (e.g. AuthRequiredError) also means
       // "up but not authenticated" — surface it as logged_out, not unknown, so

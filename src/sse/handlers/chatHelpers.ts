@@ -11,6 +11,7 @@ import { updateProviderCredentials } from "../services/tokenRefresh";
 import { detectFormatFromEndpoint } from "@omniroute/open-sse/services/provider.ts";
 import { resolveChatCoreTargetFormat } from "@omniroute/open-sse/handlers/chatCore/targetFormat.ts";
 import { handleChatCore } from "@omniroute/open-sse/handlers/chatCore.ts";
+import type { ReasoningCacheContext } from "@omniroute/open-sse/services/reasoningCacheContext.ts";
 import {
   checkResourcePressureGuard,
   type ResourcePressureGuardResult,
@@ -26,6 +27,11 @@ import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts";
 import { isNousOAuthDirectOrConnectProxy } from "@omniroute/open-sse/config/nousOAuth.ts";
 import { getCachedProviderNodes } from "@/lib/db/readCache";
+import {
+  isRuntimePolicyError,
+  isRuntimePolicyResponse,
+  markRuntimePolicyResponse,
+} from "@/shared/runtimePolicy";
 import {
   runWithProxyContext,
   runWithAppliedProxyCapture,
@@ -45,6 +51,7 @@ import { resolveUseUpstream429BreakerHints } from "../../shared/utils/providerHi
 import { logProxyEvent } from "../../lib/proxyLogger";
 import { logTranslationEvent } from "../../lib/translatorEvents";
 import { getRuntimeProviderProfile } from "@omniroute/open-sse/services/accountFallback.ts";
+import { runMaxaiConnectionTransport, wasMaxaiTlsUsed } from "@omniroute/open-sse/services/maxaiTransport.ts";
 
 // Models that explicitly cannot run on the codex/ChatGPT-Pro OAuth pool — when
 // a caller writes `codex/deepseek-v4-pro` we transparently reroute to the
@@ -66,6 +73,7 @@ type TrafficType = "production" | "shadow";
 
 type ExecuteChatWithBreakerOptions = {
   trafficType?: TrafficType;
+  reasoningCacheContext?: ReasoningCacheContext | null;
   [key: string]: any;
 };
 
@@ -366,7 +374,7 @@ export async function checkPipelineGates(
     resetTimeout: providerProfile.resetTimeoutMs ?? providerProfile.circuitBreakerReset,
     // #4602: a local WS-bridge "Controller is already closed" throw is not an
     // upstream outage — keep it from tripping the whole-provider breaker.
-    isFailure: (e) => !isLocalStreamLifecycleError(e),
+    isFailure: (e) => !isRuntimePolicyError(e) && !isLocalStreamLifecycleError(e),
     onStateChange: (name: string, from: string, to: string) =>
       log.info("CIRCUIT", `${name}: ${from} → ${to}`),
     ...(useHints429
@@ -438,6 +446,7 @@ export async function executeChatWithBreaker({
   routingComboId = null,
   reasoningTransportFallback = "drop",
   sessionAffinityKey = null,
+  reasoningCacheContext = null,
   managedLease = null,
   // #12150 P1b: additive, optional video-bridge log/Memory shadow — undefined
   // for every non-video request. Passed straight through to handleChatCore;
@@ -495,8 +504,9 @@ export async function executeChatWithBreaker({
   }
 
   try {
+    const isMaxai = provider === "maxai" || provider === "mx";
     const withInferenceProxyContext = <T>(fn: () => Promise<T>): Promise<T> =>
-      runWithProxyContext(
+      isMaxai ? runMaxaiConnectionTransport(credentials.connectionId, fn) : runWithProxyContext(
         proxyInfo?.proxy || null,
         fn,
         provider === "nous-oauth" || provider === "nso" ? { skipUnreachableProbe: true } : undefined
@@ -539,6 +549,7 @@ export async function executeChatWithBreaker({
             routingComboId,
             sessionAffinityKey,
             reasoningTransportFallback,
+            reasoningCacheContext,
             managedLease,
             videoBridgeLog,
             skipResourcePressureGuard: true,
@@ -562,6 +573,12 @@ export async function executeChatWithBreaker({
             },
             onStreamFailure: async (failure: any) => {
               if (isShadowTraffic) return;
+              if (
+                isRuntimePolicyError(failure) ||
+                isRuntimePolicyError(failure?.originalError) ||
+                isRuntimePolicyResponse(failure?.response)
+              )
+                return;
               if (!credentials.connectionId) return;
               if (
                 Number(failure?.status) === 499 ||
@@ -607,7 +624,13 @@ export async function executeChatWithBreaker({
     // Track whenever direct TLS is possible. proxyFetch decides against wreq only
     // after resolving NO_PROXY/local bypasses, so predicting from proxyInfo here
     // would drop the account scope when a configured proxy resolves to direct.
-    const tlsFingerprintActive = isTlsFingerprintActive(provider);
+    const tlsFingerprintActive = isMaxai || isTlsFingerprintActive(provider);
+    const trackedChat = () => isMaxai
+      ? runMaxaiConnectionTransport(credentials.connectionId, async () => {
+          const result = await chatFn();
+          return { result, tlsFingerprintUsed: wasMaxaiTlsUsed() };
+        })
+      : runWithTlsTracking(tlsTrackingIdentity, chatFn);
 
     if (isShadowTraffic) {
       if (!bypassCircuitBreaker && breaker && !breaker.canExecute()) {
@@ -623,7 +646,7 @@ export async function executeChatWithBreaker({
       }
 
       if (tlsFingerprintActive) {
-        const tracked = await runWithTlsTracking(tlsTrackingIdentity, chatFn);
+        const tracked = await trackedChat();
         return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
       }
 
@@ -633,7 +656,7 @@ export async function executeChatWithBreaker({
 
     if (bypassCircuitBreaker) {
       if (tlsFingerprintActive) {
-        const tracked = await runWithTlsTracking(tlsTrackingIdentity, chatFn);
+        const tracked = await trackedChat();
         return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
       }
 
@@ -643,7 +666,7 @@ export async function executeChatWithBreaker({
 
     if (tlsFingerprintActive) {
       const tracked = await breaker.execute(
-        async () => runWithTlsTracking(tlsTrackingIdentity, chatFn),
+        trackedChat,
         { classifyResult: chatPathOwnsBreakerAccounting }
       );
       return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
@@ -654,6 +677,7 @@ export async function executeChatWithBreaker({
     });
     return { result, tlsFingerprintUsed: false };
   } catch (cbErr: any) {
+    if (isRuntimePolicyError(cbErr)) throw cbErr;
     if (cbErr instanceof CircuitBreakerOpenError) {
       log.warn("CIRCUIT", `${provider} circuit open during retry: ${cbErr.message}`);
       return {
@@ -943,6 +967,7 @@ export function decideProxyResolutionFailure(
   err: unknown,
   env: { PROXY_FAIL_OPEN?: string } = process.env
 ): null {
+  if (isRuntimePolicyError(err)) throw err;
   if ((env.PROXY_FAIL_OPEN ?? "").trim().toLowerCase() === "true") {
     log.warn(
       "PROXY",
@@ -1176,6 +1201,7 @@ export function withSelectedConnectionHeader(
       headers: response.headers,
     });
     cloned.headers.set("X-OmniRoute-Selected-Connection-Id", connectionId);
+    if (isRuntimePolicyResponse(response)) markRuntimePolicyResponse(cloned);
     return inheritTrustedLocalRateLimitResponse(response, cloned);
   }
 }

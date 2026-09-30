@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -296,6 +304,11 @@ test("npm, standalone, Electron, and container assembly carry the wreq license e
   const fixtureRoot = mkdtempSync(join(tmpdir(), "omniroute-wreq-notices-source-"));
   const outputRoot = mkdtempSync(join(tmpdir(), "omniroute-wreq-notices-output-"));
   try {
+    // Required runtime-policy remains the real canonical file, not a fixture authority.
+    const policySource = join(fixtureRoot, "scripts", "build", "runtime-policy.mjs");
+    mkdirSync(dirname(policySource), { recursive: true });
+    copyFileSync(new URL("../../scripts/build/runtime-policy.mjs", import.meta.url), policySource);
+
     const copiedPaths = ["THIRD_PARTY_NOTICES.md", ...RELEASE_EVIDENCE_PATHS];
     for (const relativePath of copiedPaths) {
       const target = join(fixtureRoot, relativePath);

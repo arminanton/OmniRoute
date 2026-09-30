@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { getAgent } from "@/lib/cloudAgent/registry";
 import {
   createCloudAgentTaskTable,
@@ -14,7 +15,7 @@ import {
 } from "@/lib/cloudAgent/api";
 import { z } from "zod";
 import pino from "pino";
-import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import { runtimePolicyErrorResponse, sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 
 const logger = pino({ name: "cloud-agents-api" });
 
@@ -91,6 +92,13 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           });
         }
       } catch (err) {
+        if (isRuntimePolicyError(err)) {
+          const response = runtimePolicyErrorResponse();
+          for (const [key, value] of Object.entries(getCloudAgentCorsHeaders(request))) {
+            response.headers.set(key, value);
+          }
+          return response;
+        }
         logger.error({ err }, "Failed to sync task status");
       }
     }
@@ -183,6 +191,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       { headers: getCloudAgentCorsHeaders(request) }
     );
   } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      const response = runtimePolicyErrorResponse();
+      for (const [name, value] of Object.entries(getCloudAgentCorsHeaders(request))) {
+        response.headers.set(name, value);
+      }
+      return response;
+    }
     logger.error({ err: error }, "Failed to process task action");
     return NextResponse.json(
       {

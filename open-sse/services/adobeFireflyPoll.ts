@@ -4,6 +4,8 @@
  * Split out of adobeFireflyClient.ts.
  */
 
+import { cancelOutboundBody } from "@/shared/network/guardedPinnedFetch";
+import { RemoteMediaFetchError } from "@/shared/network/remoteImageFetch";
 import { sanitizeErrorMessage } from "../utils/error.ts";
 import { DEFAULT_POLL_INTERVAL_MS } from "./adobeFireflyCatalog.ts";
 import { AdobeFireflyError, isAdobeUserAccessToken } from "./adobeFireflyCredentials.ts";
@@ -12,6 +14,7 @@ import {
   extractAdobeMediaUrl,
   isAdobeJobFailed,
   isAdobeTransientSubmitError,
+  normalizeAdobePollUrl,
 } from "./adobeFireflyResponses.ts";
 
 export async function sleep(ms: number): Promise<void> {
@@ -33,6 +36,8 @@ export async function pollAdobeJob(opts: {
     error?: (...args: unknown[]) => void;
   };
 }): Promise<{ mediaUrl: string; latest: unknown }> {
+  // This exported entry point is also called directly; validate before reading/sending Bearer.
+  const pollUrl = normalizeAdobePollUrl(opts.pollUrl);
   const fetchImpl = opts.fetchImpl || fetch;
   const deadline = Date.now() + opts.timeoutMs;
   const interval =
@@ -44,10 +49,17 @@ export async function pollAdobeJob(opts: {
 
   while (Date.now() < deadline) {
     attempt += 1;
-    const pollResp = await fetchImpl(opts.pollUrl, {
+    const pollResp = await fetchImpl(pollUrl, {
       method: "GET",
       headers: buildAdobePollHeaders(accessToken),
+      redirect: "manual",
     });
+
+    // Never let a redirect reach auth renewal, JSON parsing or transient provider retry.
+    if (pollResp.status >= 300 && pollResp.status < 400) {
+      cancelOutboundBody(pollResp);
+      throw new RemoteMediaFetchError(new Error("Adobe Firefly poll redirect is not allowed"));
+    }
 
     if (pollResp.status === 401 || pollResp.status === 403) {
       const accessError = pollResp.headers.get("x-access-error") || "";

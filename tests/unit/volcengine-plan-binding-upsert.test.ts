@@ -10,6 +10,12 @@ import {
 } from "../../src/models/index.ts";
 import { detectPlan, __testing as bindingTesting } from "../../src/lib/providers/volcenginePlanBinding.ts";
 
+type UpsertedConnection = NonNullable<
+  Awaited<ReturnType<typeof bindingTesting.upsertConnection>>
+> & {
+  providerSpecificData: Record<string, unknown>;
+};
+
 test("detectPlan returns available: false when account has no active quota windows (unsubscribed)", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
@@ -67,7 +73,7 @@ test("volcenginePlanBinding upsert rules with SQLite temp isolation", async (t) 
     providerSpecificData: { autoFetchModels: true, customTag: "keep-me" },
   });
 
-  const updated1 = await (bindingTesting as any).upsertConnection(
+  const updated1 = (await bindingTesting.upsertConnection(
     "coding",
     "ark-new-key-1",
     "new-cookie-1",
@@ -75,7 +81,7 @@ test("volcenginePlanBinding upsert rules with SQLite temp isolation", async (t) 
     123,
     { dummy: 1 },
     undefined
-  );
+  )) as UpsertedConnection;
 
   assert.equal(updated1.id, conn1.id);
   assert.equal(updated1.name, "main", "Preserves original custom name 'main'");
@@ -93,7 +99,7 @@ test("volcenginePlanBinding upsert rules with SQLite temp isolation", async (t) 
     providerSpecificData: {},
   });
 
-  const createdNew = await (bindingTesting as any).upsertConnection(
+  const createdNew = (await bindingTesting.upsertConnection(
     "coding",
     "ark-brand-new-key-3",
     "new-cookie-3",
@@ -101,7 +107,7 @@ test("volcenginePlanBinding upsert rules with SQLite temp isolation", async (t) 
     999,
     {},
     undefined
-  );
+  )) as UpsertedConnection;
 
   assert.notEqual(createdNew.id, conn1.id);
   assert.equal(createdNew.name, "Volcano Ark Coding Plan");
@@ -117,7 +123,7 @@ test("volcenginePlanBinding upsert rules with SQLite temp isolation", async (t) 
   });
 
   // Passing conn1.id (which is coding-plan) into agent upsert must NOT match conn1
-  const agentUpsertResult = await (bindingTesting as any).upsertConnection(
+  const agentUpsertResult = (await bindingTesting.upsertConnection(
     "agent",
     "ark-agent-new-key",
     "agent-cookie",
@@ -125,7 +131,7 @@ test("volcenginePlanBinding upsert rules with SQLite temp isolation", async (t) 
     888,
     {},
     conn1.id as string // Mismatched provider
-  );
+  )) as UpsertedConnection;
   assert.notEqual(agentUpsertResult.id, conn1.id);
   assert.equal(agentUpsertResult.id, agentConn.id, "Matched the single agent connection instead");
 });

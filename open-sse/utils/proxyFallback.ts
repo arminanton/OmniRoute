@@ -9,6 +9,7 @@
  */
 
 import { fetch as undiciFetch } from "undici";
+import { assertNoApplicationProxy, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { createProxyDispatcher, normalizeProxyUrl } from "./proxyDispatcher.ts";
 import { resolveProxyForScopeFromRegistry, listProxies } from "@/lib/db/proxies";
 import { listOneproxyProxies } from "@/lib/db/oneproxy";
@@ -80,7 +81,8 @@ function cacheKeyForTarget(targetHostname: string, targetUrl: string): string {
     const url = new URL(targetUrl);
     const normalizedPath = `${url.pathname || "/"}${url.search}`;
     return `${url.protocol}//${url.host}${normalizedPath}`;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return targetHostname.toLowerCase();
   }
 }
@@ -97,7 +99,8 @@ function resolveEnvProxyUrl(targetUrl: string): string | null {
     let hostname: string | undefined;
     try {
       hostname = new URL(targetUrl).hostname.toLowerCase();
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       return null;
     }
     const patterns = noProxy
@@ -125,7 +128,8 @@ function resolveEnvProxyUrl(targetUrl: string): string | null {
   let protocol: string;
   try {
     protocol = new URL(targetUrl).protocol;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 
@@ -143,7 +147,8 @@ function resolveEnvProxyUrl(targetUrl: string): string | null {
   if (!proxyUrl) return null;
   try {
     return normalizeProxyUrl(proxyUrl, "environment proxy");
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }
@@ -163,6 +168,7 @@ function resolveEnvProxyUrl(targetUrl: string): string | null {
  * @returns Deduplicated array of normalized proxy URLs.
  */
 export async function getProxyCandidates(targetUrl?: string): Promise<string[]> {
+  assertNoApplicationProxy("configured");
   const candidates = new Set<string>();
 
   // 1. Global proxy from registry
@@ -171,7 +177,8 @@ export async function getProxyCandidates(targetUrl?: string): Promise<string[]> 
     if (globalProxy?.proxy) {
       candidates.add(proxyRecordToUrl(globalProxy.proxy as ProxyShape));
     }
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     // Table may not exist yet
   }
 
@@ -183,7 +190,8 @@ export async function getProxyCandidates(targetUrl?: string): Promise<string[]> 
         candidates.add(proxyRecordToUrl(p as unknown as ProxyShape));
       }
     }
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     // Table may not exist yet
   }
 
@@ -195,7 +203,8 @@ export async function getProxyCandidates(targetUrl?: string): Promise<string[]> 
         candidates.add(proxyRecordToUrl(p as unknown as ProxyShape));
       }
     }
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     // Table may not exist yet
   }
 
@@ -204,7 +213,8 @@ export async function getProxyCandidates(targetUrl?: string): Promise<string[]> 
     try {
       const envProxy = resolveEnvProxyUrl(targetUrl);
       if (envProxy) candidates.add(envProxy);
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       // Ignore env proxy errors
     }
   }
@@ -230,6 +240,7 @@ export async function testSingleProxy(
   targetUrl: string,
   timeoutMs = 3000
 ): Promise<{ ok: boolean; latencyMs: number | null }> {
+  assertNoApplicationProxy("configured");
   const start = Date.now();
 
   try {
@@ -251,7 +262,8 @@ export async function testSingleProxy(
 
     // Any response (including 4xx) means the proxy can reach the target
     return { ok: true, latencyMs };
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return { ok: false, latencyMs: null };
   }
 }
@@ -268,6 +280,7 @@ export async function testProxiesAgainstTarget(
   targetUrl: string,
   proxyUrls: string[]
 ): Promise<Array<{ proxyUrl: string; ok: boolean; latencyMs: number | null }>> {
+  assertNoApplicationProxy("configured");
   if (proxyUrls.length === 0) return [];
 
   const results = await Promise.allSettled(
@@ -277,6 +290,9 @@ export async function testProxiesAgainstTarget(
     })
   );
 
+  for (const result of results) {
+    if (result.status === "rejected" && isRuntimePolicyError(result.reason)) throw result.reason;
+  }
   return results.map((r) =>
     r.status === "fulfilled" ? r.value : { proxyUrl: "unknown", ok: false, latencyMs: null }
   );
@@ -310,6 +326,7 @@ export async function findWorkingProxy(
   targetHostname: string,
   targetUrl: string
 ): Promise<string | null> {
+  assertNoApplicationProxy("configured"); // Includes cached/inflight candidates.
   if (!targetHostname) return null;
   const cacheKey = cacheKeyForTarget(targetHostname, targetUrl);
 
@@ -351,6 +368,9 @@ export async function findWorkingProxy(
       })
     );
 
+    for (const result of results) {
+      if (result.status === "rejected" && isRuntimePolicyError(result.reason)) throw result.reason;
+    }
     const working = results.find((r) => r.status === "fulfilled" && r.value.ok);
 
     if (working && working.status === "fulfilled") {
@@ -408,6 +428,7 @@ export async function selectWorkingProxyFallback(_connectionId?: string): Promis
   // assignments / per-connection proxy_enabled). Default OFF — only run when the
   // operator explicitly enables PROXY_AUTO_SELECT_ENABLED.
   if (!isFeatureFlagEnabled("PROXY_AUTO_SELECT_ENABLED")) return null;
+  assertNoApplicationProxy("configured");
 
   const candidates = await getProxyCandidates();
   if (candidates.length === 0) return null;
@@ -434,7 +455,8 @@ export async function selectWorkingProxyFallback(_connectionId?: string): Promis
       levelId: null,
       source: "automatic",
     };
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }

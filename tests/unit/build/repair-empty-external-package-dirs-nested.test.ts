@@ -23,6 +23,14 @@ test("assembleStandalone repairs a hollow externalized package dir in the nested
   const distDir = path.join(projectRoot, relDistDir);
   const outDir = path.join(tmp, "dist");
 
+  // Seed the canonical module as bytes; do not initialize the live policy reader.
+  const policySource = path.join(projectRoot, "scripts", "build", "runtime-policy.mjs");
+  fs.mkdirSync(path.dirname(policySource), { recursive: true });
+  fs.copyFileSync(
+    new URL("../../../scripts/build/runtime-policy.mjs", import.meta.url),
+    policySource
+  );
+
   // Real source package the repair should copy from.
   const sourcePkgDir = path.join(projectRoot, "node_modules", "some-nested-pkg");
   fs.mkdirSync(sourcePkgDir, { recursive: true });

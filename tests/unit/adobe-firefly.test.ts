@@ -596,11 +596,19 @@ test("handleAdobeFireflyImageGeneration submit+poll happy path (mocked)", async 
     if (u.includes("generate-async")) {
       return jsonResponse(
         200,
-        { links: { result: "https://poll.example/job/img1" } },
-        { "x-override-status-link": "https://poll.example/job/img1" }
+        {
+          links: {
+            result:
+              "https://bks-epo8552.adobe.io/v2/jobs/result/img1?host=firefly-epo855232.adobe.io",
+          },
+        },
+        {
+          "x-override-status-link":
+            "https://bks-epo8552.adobe.io/v2/jobs/result/img1?host=firefly-epo855232.adobe.io",
+        }
       );
     }
-    if (u.includes("poll.example")) {
+    if (u.startsWith("https://bks-epo8552.adobe.io/v2/jobs/result/")) {
       return jsonResponse(200, {
         status: "COMPLETED",
         outputs: [{ image: { presignedUrl: "https://cdn.example/out.png" } }],
@@ -638,11 +646,20 @@ test("handleAdobeFireflyImageGeneration uploads refs and submits referenceBlobs"
       sawGenerateBody = JSON.parse(String(init?.body || "{}"));
       return jsonResponse(
         200,
-        { links: { result: { href: "https://poll.example/j1" } } },
-        { "x-override-status-link": "https://poll.example/j1" }
+        {
+          links: {
+            result: {
+              href: "https://bks-epo8552.adobe.io/v2/jobs/result/j1?host=firefly-epo855232.adobe.io",
+            },
+          },
+        },
+        {
+          "x-override-status-link":
+            "https://bks-epo8552.adobe.io/v2/jobs/result/j1?host=firefly-epo855232.adobe.io",
+        }
       );
     }
-    if (u.includes("poll.example")) {
+    if (u.startsWith("https://bks-epo8552.adobe.io/v2/jobs/result/")) {
       return jsonResponse(200, {
         status: "COMPLETED",
         outputs: [{ image: { presignedUrl: "https://cdn.example/out.png" } }],
@@ -675,11 +692,17 @@ test("adobeFireflyGenerateVideo submit+poll happy path (mocked)", async () => {
     if (u.includes("3p-videos")) {
       return jsonResponse(
         200,
-        { links: { result: { href: "https://poll.example/job/vid1" } } },
+        {
+          links: {
+            result: {
+              href: "https://bks-epo8552.adobe.io/v2/jobs/result/vid1?host=firefly-epo855232.adobe.io",
+            },
+          },
+        },
         {}
       );
     }
-    if (u.includes("poll.example")) {
+    if (u.startsWith("https://bks-epo8552.adobe.io/v2/jobs/result/")) {
       return jsonResponse(200, {
         status: "COMPLETED",
         outputs: [{ video: { presignedUrl: "https://cdn.example/out.mp4" } }],
@@ -958,9 +981,19 @@ test("image submit retries on 408 then succeeds", async () => {
           message: "system under load",
         });
       }
-      return jsonResponse(200, { links: { result: { href: "https://poll.example/job/r1" } } }, {});
+      return jsonResponse(
+        200,
+        {
+          links: {
+            result: {
+              href: "https://bks-epo8552.adobe.io/v2/jobs/result/r1?host=firefly-epo855232.adobe.io",
+            },
+          },
+        },
+        {}
+      );
     }
-    if (u.includes("poll.example")) {
+    if (u.startsWith("https://bks-epo8552.adobe.io/v2/jobs/result/")) {
       return jsonResponse(200, {
         status: "COMPLETED",
         outputs: [{ image: { presignedUrl: "https://cdn.example/retry.png" } }],
@@ -1111,9 +1144,16 @@ test("adobeFireflyGenerateImage cookie path exchanges IMS token first", async ()
           ? (init.headers as Record<string, string>).Authorization
           : auth;
       assert.equal(headerAuth, `Bearer ${userTok}`);
-      return jsonResponse(200, {}, { "x-override-status-link": "https://poll.example/job/c1" });
+      return jsonResponse(
+        200,
+        {},
+        {
+          "x-override-status-link":
+            "https://bks-epo8552.adobe.io/v2/jobs/result/c1?host=firefly-epo855232.adobe.io",
+        }
+      );
     }
-    if (String(url).includes("poll.example")) {
+    if (String(url).startsWith("https://bks-epo8552.adobe.io/v2/jobs/result/")) {
       return jsonResponse(200, {
         outputs: [{ image: { presignedUrl: "https://cdn.example/cookie.png" } }],
       });

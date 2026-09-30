@@ -1,6 +1,9 @@
 import { isIP } from "node:net";
 import dns from "node:dns";
-import { Agent, fetch as undiciFetch } from "undici";
+import { Agent, buildConnector, fetch as undiciFetch } from "undici";
+import { getRuntimePolicy } from "@/shared/runtimePolicy";
+import { assertRuntimePolicyDispatcher } from "@omniroute/open-sse/utils/proxyDispatcher.ts";
+import { assertPinnedTransportAllowed } from "./pinnedTransportPolicy";
 
 /**
  * Shared DNS-resolve-then-pin primitives (#12569). Extracted from remoteImageFetch.ts
@@ -49,51 +52,87 @@ export async function resolveHostnameAddresses(
 }
 
 /**
- * Build a `fetch` bound to a single already-DNS-validated address, ignoring
- * whatever the hostname resolves to at connect time. Exported for direct
- * testing: this is the mechanism that closes the DNS-rebinding TOCTOU gap
- * (GHSA-cmhj-wh2f-9cgx) — a second, real DNS lookup at connect time could
- * otherwise return a different (possibly private) address than the one
- * validated up-front.
+ * Build a fetch bound to an already-approved IP address. This is a transport
+ * primitive, not an SSRF or proxy-policy gate: callers must validate every DNS
+ * answer and the active proxy policy before calling it, including each redirect.
+ * Redirects are always manual unless the caller asks to reject them outright.
  */
 export function createPinnedFetch(address: string, family: number): typeof fetch {
-  const dispatcher = new Agent({
-    connect: {
-      // Node's `net.connect`/`tls.connect` invoke a custom `lookup` in one of
-      // two incompatible shapes depending on `options.all`: modern Node
-      // (autoSelectFamily / Happy Eyeballs, on by default since Node 18)
-      // calls `lookup(hostname, { all: true, ... }, callback)` and requires
-      // `callback(err, addresses[])` — an array of `{ address, family }`.
-      // Only when `all` is falsy does it accept the single-address form
-      // `callback(err, address, family)`. Handling only the single-address
-      // form here (as an earlier draft did) throws `ERR_INVALID_IP_ADDRESS`
-      // for every real request once autoSelectFamily kicks in, silently
-      // breaking every pinned fetch — verified by
-      // `tests/unit/remote-image-fetch-pin-dns-connection.test.ts`.
+  if (
+    typeof address !== "string" ||
+    (family !== 4 && family !== 6) ||
+    isIP(address) !== family ||
+    address.includes("%")
+  ) {
+    throw new TypeError("Invalid pinned IP address or family");
+  }
+  // URL parsing gives equivalent IPv6 spellings the same representation.
+  const canonicalAddress = (value: string) =>
+    isIP(value) === 6 ? bareHostname(new URL(`http://[${value}]/`).hostname) : value;
+  const pinnedAddress = canonicalAddress(address);
+
+  return (async (input, init) => {
+    if (getRuntimePolicy().mode === "locked") {
+      assertRuntimePolicyDispatcher((init as RequestInit & { dispatcher?: unknown })?.dispatcher);
+      const target = typeof input === "object" && "url" in input ? input.url : String(input);
+      // Reviewed pin factory only; never classify a caller dispatcher by its name.
+      await assertPinnedTransportAllowed(target);
+    }
+    const inputRequest = typeof input === "object" && "signal" in input ? input : undefined;
+    const signal = init?.signal === undefined ? inputRequest?.signal : init.signal;
+    const connector = buildConnector({
+      // Agent.destroy alone cannot interrupt a socket still being connected.
+      // Native net/tls sockets must receive the request signal too.
+      signal: signal ?? undefined,
       lookup: (_hostname, options, callback) => {
+        // Happy Eyeballs requires the array shape; older/single-family callers
+        // require the address/family shape. Neither branch performs DNS.
         if (options && typeof options === "object" && "all" in options && options.all) {
           callback(null, [{ address, family }]);
           return;
         }
         callback(null, address, family);
       },
-    },
-  });
-  return (async (input, init) => {
+    });
+    // One dispatcher per invocation makes this fetch reusable, without retaining
+    // an idle pool or allowing one call's cancellation to affect another call.
+    const dispatcher = new Agent({
+      connections: 1,
+      connect: (options, callback) => {
+        // A cancelled response can otherwise trigger an idle reconnect while
+        // Undici drains its queue. This dispatcher owns only one request.
+        if (dispatcher.closed || dispatcher.destroyed) {
+          callback(new TypeError("Pinned request is already closed"), null);
+          return;
+        }
+        // Node skips lookup for literal hosts, so lookup alone is not a pin.
+        const literalFamily = isIP(options.hostname);
+        if (
+          literalFamily &&
+          (literalFamily !== family || canonicalAddress(options.hostname) !== pinnedAddress)
+        ) {
+          callback(new TypeError("Request IP address does not match the approved pin"), null);
+          return;
+        }
+        connector(options, callback);
+      },
+    });
     try {
       return (await undiciFetch(input as string | URL, {
         ...(init as Parameters<typeof undiciFetch>[1]),
+        redirect: (init?.redirect ?? inputRequest?.redirect) === "error" ? "error" : "manual",
         dispatcher,
       })) as unknown as Response;
     } catch (error) {
-      dispatcher.destroy();
+      void dispatcher.destroy().catch(() => {});
       throw error;
     } finally {
-      // Do not await close before returning the Response: close waits until the caller
-      // drains/cancels its body, so a slow or infinite response would hang before the caller
-      // could enforce its body limit. Webhook callers cancel ignored/redirect bodies and
-      // consume bounded diagnostic bodies; close then releases all sockets.
-      void dispatcher.close().catch(() => {});
+      // Do not await close: the caller must receive headers before consuming or
+      // cancelling a slow/infinite body. Undici closes after EOF/cancel/abort.
+      void dispatcher
+        .close()
+        .catch(() => dispatcher.destroy())
+        .catch(() => {});
     }
   }) as typeof fetch;
 }

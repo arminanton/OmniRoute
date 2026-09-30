@@ -20,6 +20,8 @@ const FORBIDDEN = new Set(
     // all already strip them; this list, the canonical one, did not.
     "proxy-authenticate",
     "proxy-authorization",
+    "x-omniroute-self-hop",
+    "x-omniroute-admission-bypass",
     "transfer-encoding",
     "te",
     "trailer",

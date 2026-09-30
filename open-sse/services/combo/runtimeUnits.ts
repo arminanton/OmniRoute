@@ -8,6 +8,7 @@
 import { errorResponse, errorResponseWithComboDiagnostics } from "../../utils/error.ts";
 import type { ComboDiagnostics } from "../../utils/error.ts";
 import { recordComboRequest } from "../comboMetrics.ts";
+import { isRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
 import { resolveDelayMs } from "./comboPredicates.ts";
 import { isRuntimeUnitAtConcurrencyCap } from "./runtimeUnitCapacity.ts";
@@ -292,7 +293,8 @@ export async function executeRuntimeUnitCombo(args: {
         effectiveComboStrategy: effectiveStrategy,
       });
       lastResponse = response;
-      if (isExhaustedNetworkResponse(response)) return { response, unit };
+      if (isRuntimePolicyResponse(response) || isExhaustedNetworkResponse(response))
+        return { response, unit };
       if (response.ok) {
         if (unit.kind === "combo-ref") {
           recordComboRequest(args.combo.name, null, {

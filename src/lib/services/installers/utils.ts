@@ -6,6 +6,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 
 const DEFAULT_TIMEOUT_MS = 300_000; // 5 min — npm install can be slow
@@ -144,11 +145,11 @@ export function runNpm(
   args: string[],
   options: { cwd?: string; timeoutMs?: number; prefix?: string } = {}
 ): Promise<NpmRunResult> {
+  assertNotLockedCapability("embedded-service-install");
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const isBun = Boolean(process.versions.bun);
-  const npmBin = process.platform === "win32"
-    ? (isBun ? "bun.exe" : "npm.cmd")
-    : (isBun ? "bun" : "npm");
+  const npmBin =
+    process.platform === "win32" ? (isBun ? "bun.exe" : "npm.cmd") : isBun ? "bun" : "npm";
   const execArgs = isBun && args[0] === "install" ? ["add", ...args.slice(1)] : args;
 
   return new Promise((resolve, reject) => {
@@ -162,6 +163,10 @@ export function runNpm(
       }),
       (err, stdout, stderr) => {
         if (err) {
+          if (isRuntimePolicyError(err)) {
+            reject(err);
+            return;
+          }
           const classified = classifyError(
             Object.assign(err, { stdout, stderr }) as NodeJS.ErrnoException & {
               stdout: string;

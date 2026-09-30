@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { installPinnedTransport } from "../helpers/pinnedTransport.ts";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-image-route-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
@@ -231,28 +232,46 @@ test("v1 image models GET exposes current Codex image models and hides inactive 
   assert.ok(!ids.some((id: string) => id.startsWith("xai/")));
 });
 
-test("v1 image generation POST accepts promptless requests for image-only models", async () => {
+test("v1 image generation POST accepts promptless requests for image-only models", async (t) => {
   await seedConnection("topaz", { apiKey: "topaz-key" });
+  const sourceBytes = new Uint8Array([1, 2, 3]);
+  const transport = installPinnedTransport(t.mock, {
+    dnsLookup: async (hostname) => {
+      assert.equal(hostname, "example.com");
+      return [{ address: "93.184.216.34", family: 4 }];
+    },
+    reply(socket, dial) {
+      assert.equal(dial.protocol, "https:");
+      assert.equal(dial.options.host, "example.com");
+      assert.match(socket.request, /^GET \/topaz-input\.png HTTP\/1\.1\r\n/);
+      assert.doesNotMatch(
+        socket.request,
+        /\r\n(?:authorization|proxy-authorization|cookie|x-api-key|apikey):/i
+      );
+      socket.respond({ headers: { "content-type": "image/png" }, body: sourceBytes });
+    },
+  });
+  t.after(transport.restore);
+  let providerSends = 0;
 
   globalThis.fetch = async (url, options: RequestInit = {}) => {
     const stringUrl = String(url);
-    if (stringUrl === "https://example.com/topaz-input.png") {
-      return new Response(new Uint8Array([1, 2, 3]), {
-        status: 200,
-        headers: { "content-type": "image/png" },
-      });
-    }
-
     if (stringUrl === "https://api.topazlabs.com/image/v1/enhance") {
+      providerSends++;
+      assert.equal(options.method, "POST");
+      assert.equal(new Headers(options.headers).get("x-api-key"), "topaz-key");
       const formData = options.body as FormData;
-      assert.ok(formData.get("image") instanceof File);
+      const image = formData.get("image");
+      assert.ok(image instanceof File);
+      assert.equal(image.type, "image/png");
+      assert.deepEqual(new Uint8Array(await image.arrayBuffer()), sourceBytes);
       return new Response(new Uint8Array([7, 7, 7]), {
         status: 200,
         headers: { "content-type": "image/jpeg" },
       });
     }
 
-    throw new Error(`Unexpected URL: ${stringUrl}`);
+    throw new Error(`Unexpected provider URL: ${stringUrl}`);
   };
 
   const response = await imageRoute.POST(
@@ -271,6 +290,14 @@ test("v1 image generation POST accepts promptless requests for image-only models
 
   assert.equal(response.status, 200);
   assert.equal(body.data[0].b64_json, "BwcH");
+  assert.equal(providerSends, 1);
+  assert.equal(transport.resolutions.length, 1);
+  assert.equal(transport.dials.length, 1);
+  assert.deepEqual(transport.lookups, [
+    { hostname: "example.com", all: true, address: "93.184.216.34", family: 4 },
+  ]);
+  await transport.sockets[0].closedPromise;
+  assert.equal(transport.sockets[0].destroyed, true);
 });
 
 test("v1 image generation POST still requires prompts for text-input models", async () => {

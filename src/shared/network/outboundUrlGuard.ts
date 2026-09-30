@@ -81,10 +81,46 @@ export function isCloudMetadataHost(hostname: string): boolean {
   return mapped !== null && isCloudMetadataIpv4(mapped);
 }
 
+/** Non-routable/special-use targets are not valid HTTP service endpoints.
+ * Private IPv4/ULA/loopback remain available to explicit admin policies, but
+ * link-local, multicast and IP translation/tunnel ranges never do. */
+export function isForbiddenNetworkHost(hostname: string): boolean {
+  const host = normalizeHost(hostname);
+  if (isCloudMetadataHost(host)) return true;
+  const mapped = mappedIpv4Host(host);
+  if (mapped !== null) return isForbiddenNetworkHost(mapped);
+  if (ipVersion(host) === 4) {
+    const [a, b, c] = host.split(".").map(Number);
+    return (
+      a === 0 ||
+      a >= 224 ||
+      (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+      (a === 192 && b === 88 && c === 99) ||
+      (a === 198 && (b === 18 || b === 19 || (b === 51 && c === 100))) ||
+      (a === 203 && b === 0 && c === 113)
+    );
+  }
+  if (ipVersion(host) === 6) {
+    if (host === "::1") return false;
+    const [first, second] = host.split(":").map((part) => parseInt(part || "0", 16));
+    // Only native global-unicast and private ULA are useful here. Deny mapped
+    // translation/tunnel/reserved/link-local/multicast ranges, even for admins.
+    if ((first & 0xfe00) === 0xfc00) return false;
+    return (
+      (first & 0xe000) !== 0x2000 ||
+      first === 0x2002 ||
+      (first === 0x2001 && (second <= 0x1ff || second === 0xdb8)) ||
+      (first === 0x3fff && second <= 0xfff)
+    );
+  }
+  return false;
+}
+
 export function parseOutboundUrl(input: string | URL) {
   let url: URL;
   try {
-    url = input instanceof URL ? input : new URL(String(input));
+    // Snapshot mutable URL objects before any later DNS/policy await.
+    url = new URL(String(input));
   } catch {
     throw new OutboundUrlGuardError(`Invalid outbound URL: ${String(input)}`, {
       code: "OUTBOUND_URL_INVALID",
@@ -114,7 +150,7 @@ export function parseOutboundUrl(input: string | URL) {
 export function parseAndValidatePublicUrl(input: string | URL) {
   const url = parseOutboundUrl(input);
 
-  if (isPrivateHost(url.hostname)) {
+  if (isPrivateHost(url.hostname) || isForbiddenNetworkHost(url.hostname)) {
     throw new OutboundUrlGuardError(PROVIDER_URL_BLOCKED_MESSAGE, {
       code: "OUTBOUND_URL_GUARD_BLOCKED",
       url: url.toString(),
@@ -134,7 +170,7 @@ export function parseAndValidatePublicUrl(input: string | URL) {
 export function parseAndValidateNonMetadataUrl(input: string | URL) {
   const url = parseOutboundUrl(input);
 
-  if (isCloudMetadataHost(url.hostname)) {
+  if (isForbiddenNetworkHost(url.hostname)) {
     throw new OutboundUrlGuardError(CLOUD_METADATA_BLOCKED_MESSAGE, {
       code: "OUTBOUND_URL_GUARD_BLOCKED",
       url: url.toString(),

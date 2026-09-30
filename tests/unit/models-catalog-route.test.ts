@@ -86,7 +86,7 @@ test("v1 models catalog requires auth when the route is protected and login is e
   const response = await v1ModelsCatalog.getUnifiedModelsResponse(
     new Request("http://localhost/api/v1/models")
   );
-  const body = (await response.json()) as any;
+  const body = (await response.json()) as { error: { code: string; message: string } };
 
   assert.equal(response.status, 401);
   assert.equal(body.error.code, "invalid_api_key");

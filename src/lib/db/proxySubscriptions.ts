@@ -1,6 +1,7 @@
 // Proxy-subscription-specific pool operations, split out of `proxies.ts` to keep
 // that module under its frozen size cap. Re-exported from `proxies.ts` so callers
 // (subscriptionService.ts et al.) can keep importing from the original module.
+import { assertNoApplicationProxy } from "@/shared/runtimePolicy";
 import { getDbInstance } from "./core";
 import { backupDbFile } from "./backup";
 import { normalizeScope, normalizeAssignmentScopeId } from "./proxies/mappers";
@@ -25,11 +26,14 @@ export async function addProxiesToScopePool(
     throw new Error("scopeId is required for non-global proxy assignments");
   }
   const unique = [...new Set((proxyIds || []).filter(Boolean))];
+  assertNoApplicationProxy(unique.length > 0 ? "configured" : "none");
   if (unique.length === 0) return 0;
 
   const db = getDbInstance();
   const maxRow = db
-    .prepare("SELECT MAX(position) AS maxPos FROM proxy_assignments WHERE scope = ? AND scope_id IS ?")
+    .prepare(
+      "SELECT MAX(position) AS maxPos FROM proxy_assignments WHERE scope = ? AND scope_id IS ?"
+    )
     .get(normalizedScope, normalizedScopeId) as { maxPos?: number | null } | undefined;
   const base = maxRow && typeof maxRow.maxPos === "number" ? maxRow.maxPos + 1 : 0;
   const now = new Date().toISOString();

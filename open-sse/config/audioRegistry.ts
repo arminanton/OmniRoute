@@ -34,6 +34,15 @@ export interface AudioProvider {
 }
 
 export const AUDIO_TRANSCRIPTION_PROVIDERS: Record<string, AudioProvider> = {
+  maxai: {
+    id: "maxai",
+    baseUrl: "https://api.maxai.me/gpt/speech_to_text",
+    authType: "apikey",
+    authHeader: "bearer",
+    format: "maxai-stt",
+    supportedFormats: ["webm"],
+    models: [{ id: "speech-to-text", name: "MaxAI Speech to Text" }],
+  },
   vertex: {
     id: "vertex",
     baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",

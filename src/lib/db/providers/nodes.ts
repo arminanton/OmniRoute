@@ -3,6 +3,7 @@
  */
 
 import { v4 as uuidv4 } from "uuid";
+import { validateProviderNodeCandidate } from "@/shared/runtimePolicyEntrypoints";
 import { getDbInstance, rowToCamel } from "../core";
 import { selectProviderNodeForConnection } from "../providerNodeSelect";
 import { backupDbFile } from "../backup";
@@ -113,6 +114,8 @@ export async function createProviderNode(data: JsonRecord) {
     updatedAt: now,
   };
 
+  validateProviderNodeCandidate({ ...node, customHeaders: data.customHeaders });
+
   db.prepare(
     `
     INSERT INTO provider_nodes (id, type, name, prefix, api_type, base_url, chat_path, models_path, icon_url, custom_headers_json, daily_quota_reset_timezone, daily_quota_reset_hour, created_at, updated_at)
@@ -148,6 +151,8 @@ export async function updateProviderNode(id: string, data: JsonRecord) {
     const existingJson = (existing as JsonRecord).custom_headers_json;
     merged["customHeadersJson"] = typeof existingJson === "string" ? existingJson : null;
   }
+
+  validateProviderNodeCandidate({ ...merged, id });
 
   db.prepare(
     `

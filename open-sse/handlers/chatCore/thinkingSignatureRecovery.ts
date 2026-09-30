@@ -3,6 +3,8 @@ import {
   isAnthropicThinkingSignatureError,
 } from "./passthroughHelpers.ts";
 
+import { isRuntimePolicyResponse } from "@/shared/runtimePolicy";
+
 type ProviderExecution = {
   response: Response;
   url?: string;
@@ -72,7 +74,7 @@ export async function recoverAnthropicThinkingSignature(args: {
       if (result === firstFailure) {
         return { status: firstFailure.status, message: firstFailure.message };
       }
-      if (result.response.ok) return null;
+      if (isRuntimePolicyResponse(result.response) || result.response.ok) return null;
       const details = await args.parseError(result.response.clone());
       return { status: details.statusCode, message: details.message };
     },
@@ -93,7 +95,10 @@ export async function recoverAnthropicThinkingSignature(args: {
     attempted: true,
     succeeded: execution.response.ok,
     execution,
-    error: execution.response.ok ? null : await args.parseError(execution.response),
+    error:
+      isRuntimePolicyResponse(execution.response) || execution.response.ok
+        ? null
+        : await args.parseError(execution.response),
     recoveryBody: recovery.recoveryBody,
   };
 }

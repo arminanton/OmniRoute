@@ -10,7 +10,7 @@ test("generic remote-media fetch reuses the public-only bounded download policy"
         headers: { "content-type": "video/mp4" },
       }),
     guard: "public-only",
-    lookup: async () => [{ address: "203.0.113.10", family: 4 }],
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
     maxBytes: 1024,
   });
 
@@ -30,7 +30,7 @@ test("generic remote-media fetch rejects private DNS answers before downloading"
         guard: "public-only",
         lookup: async () => [{ address: "127.0.0.1", family: 4 }],
       }),
-    /blocked private address/
+    /Blocked private or local/
   );
   assert.equal(fetched, false);
 });
@@ -49,7 +49,7 @@ test("HTTPS-only media mode rejects a redirect downgrade before following the ho
           });
         },
         guard: "public-only",
-        lookup: async () => [{ address: "203.0.113.10", family: 4 }],
+        lookup: async () => [{ address: "93.184.216.34", family: 4 }],
       }),
     /HTTPS/
   );
@@ -70,7 +70,7 @@ test("existing image/audio callers remain backwards-compatible when HTTPS-only m
       return new Response("media");
     },
     guard: "public-only",
-    lookup: async () => [{ address: "203.0.113.10", family: 4 }],
+    lookup: async () => [{ address: "93.184.216.34", family: 4 }],
   });
   assert.equal(result.buffer.toString(), "media");
   assert.equal(fetched.length, 2);

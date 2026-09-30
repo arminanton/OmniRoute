@@ -202,6 +202,14 @@ test("syncStandaloneExtraModules copies the complete wreq-js runtime", async () 
       "native module bytes"
     );
 
+    // Copy canonical source bytes only; never initialize the live policy reader.
+    const policySource = path.join(tempDir, "scripts", "build", "runtime-policy.mjs");
+    await fs.mkdir(path.dirname(policySource), { recursive: true });
+    await fs.copyFile(
+      new URL("../../scripts/build/runtime-policy.mjs", import.meta.url),
+      policySource
+    );
+
     const changed = await syncStandaloneExtraModules(tempDir, fs, logger);
 
     assert.equal(changed, true);

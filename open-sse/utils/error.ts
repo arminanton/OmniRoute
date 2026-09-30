@@ -1,3 +1,4 @@
+import { markRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import { CORS_HEADERS } from "./cors.ts";
 import { unwrapClinepassEnvelope } from "./clinepassEnvelope.ts";
 import {
@@ -191,6 +192,7 @@ const SAFE_PUBLIC_ERROR_IDENTIFIERS = new Set([
   "proxy_family_unavailable",
   "proxy_request_failed",
   "proxy_unreachable",
+  "omni_runtime_policy_denied",
   "quota_exhausted",
   "quota_not_allocated",
   "quota_only",
@@ -568,6 +570,15 @@ export function errorResponse(
         "Content-Type": "application/json",
       },
     }
+  );
+}
+
+/** A locally denied operation is not an upstream failure. Never expose policy details. */
+export function runtimePolicyErrorResponse(): Response {
+  return markRuntimePolicyResponse(
+    errorResponse(403, "Request denied by runtime policy.", {
+      code: "OMNI_RUNTIME_POLICY_DENIED",
+    })
   );
 }
 

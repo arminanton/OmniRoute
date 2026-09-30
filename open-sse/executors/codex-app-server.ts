@@ -1,17 +1,21 @@
 import {
-  bridgeToResponsesSSE,
-  buildResponseJSON,
-} from "../vendor/codex-chatgpt-web/bridge.ts";
+  assertLocalHelper,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+  markRuntimePolicyResponse,
+} from "../../src/shared/runtimePolicy.ts";
+import { bridgeToResponsesSSE, buildResponseJSON } from "../vendor/codex-chatgpt-web/bridge.ts";
 import { AsyncEventQueue } from "../vendor/codex-chatgpt-web/event-queue.ts";
 import type { AdapterEvent } from "../vendor/codex-chatgpt-web/types.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
 import { PROVIDERS } from "../config/constants.ts";
 import { BaseExecutor, type ExecuteInput, type ExecutorExecuteResult } from "./base.ts";
+import { CodexAppServerClient, type CodexAppServerClientOptions } from "./codex/appServerClient.ts";
 import {
-  CodexAppServerClient,
-  type CodexAppServerClientOptions,
-} from "./codex/appServerClient.ts";
-import { resolveAppServerConfig, resolveThreadStartPolicy, type CodexAppServerConfig } from "./codex/appServerConfig.ts";
+  resolveAppServerConfig,
+  resolveThreadStartPolicy,
+  type CodexAppServerConfig,
+} from "./codex/appServerConfig.ts";
 import {
   translateNotification,
   translateToolCall,
@@ -232,6 +236,7 @@ export class CodexAppServerExecutor extends BaseExecutor {
         "codex_app_server_unconfigured"
       );
     }
+    assertLocalHelper({ role: "codex-app-server", endpoint: config.url, phase: "connect" });
     // Turn policy (hardened after the #11205 security review): approvalPolicy
     // "never", sandbox "workspace-write", autoApprove off unless the operator
     // opted in — see resolveThreadStartPolicy.
@@ -242,6 +247,8 @@ export class CodexAppServerExecutor extends BaseExecutor {
     const toolMaps = buildAppServerToolMaps(input.body);
     const hasTools = toolMaps.specs.length > 0;
     const events = new AsyncEventQueue<AdapterEvent>();
+    let policyFailure: unknown;
+    let policyResponse: Response | undefined;
     const client = new CodexAppServerClient({
       ...this.clientOptions,
       autoApproveApprovals: policy.autoApprove,
@@ -389,6 +396,13 @@ export class CodexAppServerExecutor extends BaseExecutor {
         // down the socket mid-turn and the queue never closes (request hangs).
         await turnDone;
       } catch (err) {
+        if (isRuntimePolicyError(err)) {
+          policyFailure = err;
+          if (policyResponse) markRuntimePolicyResponse(policyResponse);
+          events.close();
+          markTerminated();
+          return;
+        }
         if (!terminated) {
           events.push({
             type: "error",
@@ -409,6 +423,7 @@ export class CodexAppServerExecutor extends BaseExecutor {
       const running = run();
       const collected = await events.collect();
       await running;
+      if (policyFailure) throw policyFailure;
       const response = buildResponseJSON(collected, input.model, {
         toolNsMap: toolMaps.namespace,
         freeformToolNames: toolMaps.freeform,
@@ -430,10 +445,25 @@ export class CodexAppServerExecutor extends BaseExecutor {
       () => client.close(),
       2_000
     );
-    return {
-      response: new Response(stream, { status: 200, headers: SSE_HEADERS }),
-      url: config.url,
-    };
+    // The generic Responses bridge serializes thrown iterator errors. Keep local
+    // policy provenance outside it, including failures after streaming starts.
+    const guardedStream =
+      getRuntimePolicy().mode === "locked"
+        ? stream.pipeThrough(
+            new TransformStream({
+              transform(chunk, controller) {
+                if (policyFailure) throw policyFailure;
+                controller.enqueue(chunk);
+              },
+              flush() {
+                if (policyFailure) throw policyFailure;
+              },
+            })
+          )
+        : stream;
+    policyResponse = new Response(guardedStream, { status: 200, headers: SSE_HEADERS });
+    if (policyFailure) markRuntimePolicyResponse(policyResponse);
+    return { response: policyResponse, url: config.url };
   }
 }
 

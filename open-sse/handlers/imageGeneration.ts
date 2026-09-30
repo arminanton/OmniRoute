@@ -31,7 +31,15 @@ import {
   extractComfyOutputFiles,
   resolveComfyUiBaseUrl,
 } from "../utils/comfyuiClient.ts";
-import { fetchRemoteImage } from "@/shared/network/remoteImageFetch";
+import {
+  fetchRemoteImage,
+  RemoteMediaFetchError,
+  createRemoteMediaFailureResult,
+} from "@/shared/network/remoteImageFetch";
+import {
+  validateBflPollingUrl,
+  rejectBflRedirect,
+} from "./imageGeneration/providers/bflPolling.ts";
 import {
   FetchTimeoutError,
   fetchWithTimeout,
@@ -549,6 +557,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
 
@@ -560,6 +569,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
 
@@ -571,6 +581,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
 
@@ -582,6 +593,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
 
@@ -593,6 +605,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
 
@@ -625,6 +638,7 @@ export async function handleImageGeneration({
       provider,
       body,
       credentials,
+      connectionId: credentials?.connectionId,
       log,
       signal,
     });
@@ -649,6 +663,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
 
@@ -660,6 +675,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
 
@@ -703,7 +719,15 @@ export async function handleImageGeneration({
   }
 
   if (providerConfig.format === "haiper-image") {
-    return handleHaiperImageGeneration({ model, provider, providerConfig, body, credentials, log });
+    return handleHaiperImageGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      credentials,
+      log,
+      signal,
+    });
   }
   if (providerConfig.format === "leonardo-image") {
     return handleLeonardoImageGeneration({
@@ -713,6 +737,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
   if (providerConfig.format === "ideogram-image") {
@@ -723,6 +748,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
   if (providerConfig.format === "magnific-image" || providerConfig.format === "freepik-image") {
@@ -733,6 +759,7 @@ export async function handleImageGeneration({
       body,
       credentials,
       log,
+      signal,
     });
   }
 
@@ -1575,6 +1602,7 @@ async function handleFalAIImageGeneration({
   body,
   credentials,
   log,
+  signal = null,
 }) {
   const startTime = Date.now();
   const token = credentials.apiKey || credentials.accessToken;
@@ -1624,7 +1652,9 @@ async function handleFalAIImageGeneration({
   }
 
   try {
+    signal?.throwIfAborted();
     const response = await fetch(`${providerConfig.baseUrl.replace(/\/$/, "")}/${falModel}`, {
+      signal,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1648,7 +1678,7 @@ async function handleFalAIImageGeneration({
     }
 
     const payload = await response.json();
-    const images = await normalizeProviderImagePayload(payload, body, log, "b64_json");
+    const images = await normalizeProviderImagePayload(payload, body, log, "b64_json", signal);
     return saveImageSuccessResult({
       provider,
       model,
@@ -1659,6 +1689,9 @@ async function handleFalAIImageGeneration({
       images,
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (log) log.error("IMAGE", `${provider} fetch error: ${err.message}`);
     return saveImageErrorResult({
       provider,
@@ -1677,6 +1710,7 @@ async function handleStabilityAIImageGeneration({
   body,
   credentials,
   log,
+  signal = null,
 }) {
   const startTime = Date.now();
   const token = credentials.apiKey || credentials.accessToken;
@@ -1714,6 +1748,7 @@ async function handleStabilityAIImageGeneration({
   }
 
   try {
+    signal?.throwIfAborted();
     if (STABILITY_GENERATION_ENDPOINTS[model]) {
       if (model.startsWith("sd3.5")) {
         upstreamBody.model = model;
@@ -1721,7 +1756,7 @@ async function handleStabilityAIImageGeneration({
       }
 
       if (imageUrl) {
-        const imageSource = await resolveImageSource(imageUrl);
+        const imageSource = await resolveImageSource(imageUrl, signal);
         upstreamBody.mode = "image-to-image";
         appendOptionalFormValue(formData, "mode", "image-to-image");
         upstreamBody.image = imageSource.base64;
@@ -1747,13 +1782,13 @@ async function handleStabilityAIImageGeneration({
       }
     } else {
       if (imageUrl) {
-        const imageSource = await resolveImageSource(imageUrl);
+        const imageSource = await resolveImageSource(imageUrl, signal);
         upstreamBody.image = imageSource.base64;
         appendImageFormValue(formData, "image", imageSource, "image");
       }
 
       if (maskUrl && shouldIncludeStabilityMask(model)) {
-        const maskSource = await resolveImageSource(maskUrl);
+        const maskSource = await resolveImageSource(maskUrl, signal);
         upstreamBody.mask = maskSource.base64;
         appendImageFormValue(formData, "mask", maskSource, "mask");
       }
@@ -1806,7 +1841,9 @@ async function handleStabilityAIImageGeneration({
       log.info("IMAGE", `${provider}/${model} (stability-ai) | prompt: "${promptPreview}..."`);
     }
 
+    signal?.throwIfAborted();
     const response = await fetch(`${providerConfig.baseUrl.replace(/\/$/, "")}${endpoint}`, {
+      signal,
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -1838,7 +1875,7 @@ async function handleStabilityAIImageGeneration({
       payload = { image: buffer.toString("base64") };
     }
 
-    const images = await normalizeProviderImagePayload(payload, body, log, "b64_json");
+    const images = await normalizeProviderImagePayload(payload, body, log, "b64_json", signal);
     return saveImageSuccessResult({
       provider,
       model,
@@ -1849,6 +1886,9 @@ async function handleStabilityAIImageGeneration({
       images,
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (log) log.error("IMAGE", `${provider} fetch error: ${err.message}`);
     return saveImageErrorResult({
       provider,
@@ -1867,6 +1907,7 @@ async function handleBlackForestLabsImageGeneration({
   body,
   credentials,
   log,
+  signal = null,
 }) {
   const startTime = Date.now();
   const token = credentials.apiKey || credentials.accessToken;
@@ -1887,14 +1928,15 @@ async function handleBlackForestLabsImageGeneration({
   };
 
   try {
+    signal?.throwIfAborted();
     if (BFL_EDIT_MODELS.has(model) && imageUrl) {
-      upstreamBody.input_image = (await resolveImageSource(imageUrl)).base64;
+      upstreamBody.input_image = (await resolveImageSource(imageUrl, signal)).base64;
     } else if (imageUrl && isHttpUrl(imageUrl)) {
       upstreamBody.image_url = imageUrl;
     }
 
     if (maskUrl && (model === "flux-pro-1.0-fill" || model === "flux-kontext-pro")) {
-      upstreamBody.mask = (await resolveImageSource(maskUrl)).base64;
+      upstreamBody.mask = (await resolveImageSource(maskUrl, signal)).base64;
     }
 
     if (model === "flux-kontext-pro" || model === "flux-kontext-max") {
@@ -1923,7 +1965,10 @@ async function handleBlackForestLabsImageGeneration({
       log.info("IMAGE", `${provider}/${model} (black-forest-labs) | prompt: "${promptPreview}..."`);
     }
 
+    signal?.throwIfAborted();
     const response = await fetch(`${providerConfig.baseUrl.replace(/\/$/, "")}${endpoint}`, {
+      signal,
+      redirect: "manual",
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -1933,6 +1978,7 @@ async function handleBlackForestLabsImageGeneration({
       body: JSON.stringify(upstreamBody),
     });
 
+    rejectBflRedirect(response);
     if (!response.ok) {
       const errorText = await response.text();
       if (log)
@@ -1951,13 +1997,14 @@ async function handleBlackForestLabsImageGeneration({
     const finalPayload = initialPayload.polling_url
       ? await pollBlackForestLabsResult({
           pollingUrl: initialPayload.polling_url,
+          signal,
           token,
           body,
           log,
         })
       : initialPayload;
 
-    const images = await normalizeProviderImagePayload(finalPayload, body, log, "url");
+    const images = await normalizeProviderImagePayload(finalPayload, body, log, "url", signal);
     return saveImageSuccessResult({
       provider,
       model,
@@ -1968,6 +2015,9 @@ async function handleBlackForestLabsImageGeneration({
       images,
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (log) log.error("IMAGE", `${provider} fetch error: ${err.message}`);
     return saveImageErrorResult({
       provider,
@@ -1986,6 +2036,7 @@ async function handleRecraftImageGeneration({
   body,
   credentials,
   log,
+  signal = null,
 }) {
   const startTime = Date.now();
   const token = credentials.apiKey || credentials.accessToken;
@@ -2005,9 +2056,11 @@ async function handleRecraftImageGeneration({
   }
 
   try {
+    signal?.throwIfAborted();
     const response = await fetch(
       `${providerConfig.baseUrl.replace(/\/$/, "")}/v1/images/generations`,
       {
+        signal,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -2032,7 +2085,7 @@ async function handleRecraftImageGeneration({
     }
 
     const payload = await response.json();
-    const images = await normalizeProviderImagePayload(payload, body, log, "url");
+    const images = await normalizeProviderImagePayload(payload, body, log, "url", signal);
     return saveImageSuccessResult({
       provider,
       model,
@@ -2043,6 +2096,9 @@ async function handleRecraftImageGeneration({
       images,
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (log) log.error("IMAGE", `${provider} fetch error: ${err.message}`);
     return saveImageErrorResult({
       provider,
@@ -2061,6 +2117,7 @@ async function handleTopazImageGeneration({
   body,
   credentials,
   log,
+  signal = null,
 }) {
   const startTime = Date.now();
   const token = credentials.apiKey || credentials.accessToken;
@@ -2075,7 +2132,8 @@ async function handleTopazImageGeneration({
   }
 
   try {
-    const imageSource = await resolveImageSource(imageUrl);
+    signal?.throwIfAborted();
+    const imageSource = await resolveImageSource(imageUrl, signal);
     const formData = new FormData();
     const blob = new Blob([imageSource.buffer], { type: imageSource.contentType || "image/png" });
     formData.append("image", blob, "image.png");
@@ -2091,7 +2149,9 @@ async function handleTopazImageGeneration({
       log.info("IMAGE", `${provider}/${model} (topaz) | prompt: "${promptPreview}..."`);
     }
 
+    signal?.throwIfAborted();
     const response = await fetch(`${providerConfig.baseUrl.replace(/\/$/, "")}/image/v1/enhance`, {
+      signal,
       method: "POST",
       headers: {
         Accept: "image/jpeg",
@@ -2131,6 +2191,9 @@ async function handleTopazImageGeneration({
       images,
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (log) log.error("IMAGE", `${provider} fetch error: ${err.message}`);
     return saveImageErrorResult({
       provider,
@@ -2142,19 +2205,24 @@ async function handleTopazImageGeneration({
   }
 }
 
-async function pollBlackForestLabsResult({ pollingUrl, token, body, log }) {
+async function pollBlackForestLabsResult({ pollingUrl, token, body, log, signal = null }) {
+  const target = validateBflPollingUrl(pollingUrl);
   const timeoutMs = normalizePositiveNumber(body.timeout_ms, 300000);
   const pollIntervalMs = normalizePositiveNumber(body.poll_interval_ms, 1500);
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const response = await fetch(pollingUrl, {
+    signal?.throwIfAborted();
+    const response = await fetch(target.toString(), {
+      signal,
+      redirect: "manual",
       method: "GET",
       headers: {
         "x-key": token,
       },
     });
 
+    rejectBflRedirect(response);
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`BFL polling failed (${response.status}): ${errorText}`);
@@ -2227,7 +2295,8 @@ function extractImageInputs(body) {
   };
 }
 
-async function resolveImageSource(source) {
+async function resolveImageSource(source, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   if (typeof source !== "string" || source.trim().length === 0) {
     throw new Error("Invalid image source");
   }
@@ -2244,7 +2313,11 @@ async function resolveImageSource(source) {
   }
 
   if (isHttpUrl(trimmed)) {
-    const remoteImage = await fetchRemoteImage(trimmed);
+    const remoteImage = await fetchRemoteImage(trimmed, {
+      guard: "public-only",
+      pinDns: true,
+      signal,
+    });
     return {
       buffer: remoteImage.buffer,
       base64: remoteImage.buffer.toString("base64"),
@@ -2324,7 +2397,13 @@ function shouldIncludeStabilityMask(model) {
   ]).has(model);
 }
 
-export async function normalizeProviderImagePayload(payload, body, log, defaultFormat) {
+export async function normalizeProviderImagePayload(
+  payload,
+  body,
+  log,
+  defaultFormat,
+  signal?: AbortSignal
+) {
   const candidates = [];
 
   const pushCandidate = (value) => {
@@ -2350,7 +2429,7 @@ export async function normalizeProviderImagePayload(payload, body, log, defaultF
 
   const normalized = [];
   for (const candidate of candidates) {
-    const item = await normalizeProviderImageCandidate(candidate, body, defaultFormat);
+    const item = await normalizeProviderImageCandidate(candidate, body, defaultFormat, signal);
     if (item) normalized.push(item);
   }
 
@@ -2364,7 +2443,12 @@ export async function normalizeProviderImagePayload(payload, body, log, defaultF
   return normalized;
 }
 
-async function normalizeProviderImageCandidate(candidate, body, defaultFormat) {
+async function normalizeProviderImageCandidate(
+  candidate,
+  body,
+  defaultFormat,
+  signal?: AbortSignal
+) {
   const wantsBase64 = body?.response_format === "b64_json" || defaultFormat === "b64_json";
   let url = null;
   let b64 = null;
@@ -2386,7 +2470,7 @@ async function normalizeProviderImageCandidate(candidate, body, defaultFormat) {
   }
 
   if (wantsBase64 && !b64 && url) {
-    b64 = (await resolveImageSource(url)).base64;
+    b64 = (await resolveImageSource(url, signal)).base64;
   }
 
   if (url && !wantsBase64) {
@@ -2902,6 +2986,7 @@ async function handleNanoBananaImageGeneration({
   body,
   credentials,
   log,
+  signal = null,
 }) {
   const startTime = Date.now();
   const token = credentials.apiKey || credentials.accessToken;
@@ -2953,7 +3038,9 @@ async function handleNanoBananaImageGeneration({
   }
 
   try {
+    signal?.throwIfAborted();
     const submitResp = await fetch(submitUrl, {
+      signal,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -3054,6 +3141,7 @@ async function handleNanoBananaImageGeneration({
 
     while (Date.now() < deadline) {
       const pollResp = await fetch(`${statusUrl}?taskId=${encodeURIComponent(taskId)}`, {
+        signal,
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -3075,7 +3163,7 @@ async function handleNanoBananaImageGeneration({
 
       const successFlag = Number(taskData?.successFlag);
       if (successFlag === 1) {
-        const normalized = await normalizeNanoBananaTaskResult(taskData, body, log);
+        const normalized = await normalizeNanoBananaTaskResult(taskData, body, log, signal);
 
         saveCallLog({
           method: "POST",
@@ -3131,6 +3219,9 @@ async function handleNanoBananaImageGeneration({
 
     return { success: false, status: 504, error: timeoutError };
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (log) log.error("IMAGE", `${provider} fetch error: ${err.message}`);
     saveCallLog({
       method: "POST",
@@ -3171,7 +3262,7 @@ function normalizeNanoBananaSyncPayload(data, prompt) {
   return { data: images.filter(Boolean) };
 }
 
-async function normalizeNanoBananaTaskResult(taskData, body, log) {
+async function normalizeNanoBananaTaskResult(taskData, body, log, signal?: AbortSignal) {
   const response = taskData?.response || {};
 
   const urlCandidates = [
@@ -3209,7 +3300,11 @@ async function normalizeNanoBananaTaskResult(taskData, body, log) {
 
     if (urlCandidates.length > 0) {
       const firstUrl = urlCandidates[0];
-      const remoteImage = await fetchRemoteImage(firstUrl);
+      const remoteImage = await fetchRemoteImage(firstUrl, {
+        guard: "public-only",
+        pinDns: true,
+        signal,
+      });
       const base64 = remoteImage.buffer.toString("base64");
       return [{ b64_json: base64, revised_prompt: body.prompt }];
     }

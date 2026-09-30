@@ -16,7 +16,43 @@ export const CODEX_GITHUB_MODELS_URL =
   "https://raw.githubusercontent.com/openai/codex/refs/heads/main/codex-rs/models-manager/models.json";
 export const CODEX_GITHUB_CATALOG_CACHE_TTL_MS = 5 * 60 * 1000;
 
+import {
+  CODEX_EFFORT_ORDER,
+  splitCodexReasoningSuffix,
+  type CodexEffortLevel,
+} from "@omniroute/open-sse/config/codexReasoningSuffix.ts";
+
 type JsonRecord = Record<string, unknown>;
+
+export function normalizeCodexReasoningLevels(value: unknown): CodexEffortLevel[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.flatMap((entry) => {
+    const raw = typeof entry === "string" ? entry : asRecord(entry).effort;
+    const effort = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+    return CODEX_EFFORT_ORDER.includes(effort as CodexEffortLevel)
+      ? [effort as CodexEffortLevel] : [];
+  }))];
+}
+
+/** Expand only authoritative base rows; cached variants are never expansion seeds. */
+export function expandCodexEffortVariants(models: CodexDiscoveryModel[]): CodexDiscoveryModel[] {
+  const result = new Map(models.map((model) => [model.id, model]));
+  for (const model of models) {
+    if (splitCodexReasoningSuffix(model.id).effort || model.effortBaseModelId) continue;
+    for (const effort of normalizeCodexReasoningLevels(model.supportedThinkingEfforts ?? model.supported_reasoning_levels)) {
+      const id = `${model.id}-${effort}`;
+      // Only advertise aliases that the executor can actually decode.
+      if (splitCodexReasoningSuffix(id).baseModel !== model.id || result.has(id)) continue;
+      result.set(id, {
+        ...model,
+        id,
+        name: `${model.name} (${effort})`,
+        effortBaseModelId: model.id,
+      });
+    }
+  }
+  return [...result.values()];
+}
 
 export type CodexDiscoveryModel = {
   id: string;
@@ -29,6 +65,9 @@ export type CodexDiscoveryModel = {
   description?: string;
   supportsThinking?: boolean;
   supportsVision?: boolean;
+  supported_reasoning_levels?: CodexEffortLevel[];
+  supportedThinkingEfforts?: CodexEffortLevel[];
+  effortBaseModelId?: string;
 };
 
 export type CodexModelsFetch = (
@@ -136,12 +175,6 @@ function getCodexModelName(record: JsonRecord, id: string): string {
   );
 }
 
-function recordSupportsThinking(record: JsonRecord): boolean {
-  return (
-    Array.isArray(record.supported_reasoning_levels) && record.supported_reasoning_levels.length > 0
-  );
-}
-
 function isImageModality(modality: unknown): boolean {
   return toNonEmptyString(modality)?.toLowerCase() === "image";
 }
@@ -197,7 +230,12 @@ function buildCodexDiscoveryModel(record: JsonRecord): CodexDiscoveryModel | nul
   if (typeof inputTokenLimit === "number") model.inputTokenLimit = inputTokenLimit;
   if (typeof outputTokenLimit === "number") model.outputTokenLimit = outputTokenLimit;
   if (description) model.description = description;
-  if (recordSupportsThinking(record)) model.supportsThinking = true;
+  const efforts = normalizeCodexReasoningLevels(record.supportedThinkingEfforts ?? record.supported_reasoning_levels);
+  if (efforts.length > 0) {
+    model.supported_reasoning_levels = efforts;
+    model.supportedThinkingEfforts = efforts;
+    model.supportsThinking = true;
+  }
   if (recordSupportsVision(record)) model.supportsVision = true;
 
   return model;
@@ -404,7 +442,9 @@ export function buildCodexDiscoveryCatalog(
   extraFilters: readonly CodexDiscoveryModelFilter[] = []
 ): CodexDiscoveryModel[] {
   return applyCodexDiscoveryFilters(
-    mergeCodexLiveModelsWithLocalCatalog(remoteModels, localCatalogModels),
+    expandCodexEffortVariants(applyCodexDiscoveryFilters(
+      mergeCodexLiveModelsWithLocalCatalog(remoteModels, localCatalogModels), extraFilters
+    )),
     extraFilters
   );
 }
@@ -423,19 +463,22 @@ export function reconcileCuratedCodexCatalog(
   curatedModels: CodexLocalCatalogModel[]
 ): CuratedCodexCatalogResult {
   const remoteById = new Map(remoteModels.map((model) => [model.id, model]));
-  const curatedIds = new Set<string>();
   const models: CodexDiscoveryModel[] = [];
 
   for (const localModel of curatedModels) {
     if (!localModel.id) continue;
-    curatedIds.add(localModel.id);
     const normalizedLocal = localCatalogModelToCodexDiscoveryModel(localModel);
     const remoteModel = remoteById.get(localModel.id);
     models.push(remoteModel ? { ...remoteModel, ...normalizedLocal } : normalizedLocal);
   }
 
-  const candidateModels = remoteModels.filter((model) => !curatedIds.has(model.id));
-  return { models, candidateModels };
+  const activeModels = expandCodexEffortVariants(models);
+  const activeIds = new Set(activeModels.map((model) => model.id));
+  const candidateModels = remoteModels.filter((model) => !activeIds.has(model.id));
+  return {
+    models: activeModels,
+    candidateModels: expandCodexEffortVariants(candidateModels).filter((model) => !activeIds.has(model.id)),
+  };
 }
 
 export function enrichCodexModelsFromGithubCatalog(

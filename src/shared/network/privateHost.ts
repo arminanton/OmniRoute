@@ -48,9 +48,14 @@ export function ipVersion(host: string): 0 | 4 | 6 {
 }
 
 export function normalizeHost(hostname: string) {
-  const normalized = hostname.trim().toLowerCase();
+  let normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
   if (normalized.startsWith("[") && normalized.endsWith("]")) {
-    return normalized.slice(1, -1);
+    normalized = normalized.slice(1, -1);
+  }
+  // DNS may return expanded IPv6, while WHATWG URLs use compressed hextets.
+  // Classify both spellings identically without importing node:* in this browser-safe file.
+  if (ipVersion(normalized) === 6 && !normalized.includes("%")) {
+    normalized = new URL(`http://[${normalized}]/`).hostname.slice(1, -1);
   }
   return normalized;
 }
@@ -95,7 +100,7 @@ export function isPrivateHost(hostname: string) {
       normalized === "::1" ||
       normalized.startsWith("fc") ||
       normalized.startsWith("fd") ||
-      normalized.startsWith("fe80:")
+      (parseInt(normalized.split(":", 1)[0], 16) & 0xffc0) === 0xfe80
     );
   }
 

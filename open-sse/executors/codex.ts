@@ -1,5 +1,10 @@
 import { getCodexRequestDefaults } from "@/lib/providers/requestDefaults";
 import {
+  getRuntimePolicy,
+  isRuntimePolicyError,
+  isRuntimePolicyResponse,
+} from "../../src/shared/runtimePolicy.ts";
+import {
   getCodexModelScope,
   getCodexRateLimitKey,
   type CodexQuotaScope,
@@ -92,7 +97,8 @@ function getCodexWebSocketTransport(): WebsocketFn | null {
   try {
     const mod = _wreqRequire("wreq-js") as { websocket?: WebsocketFn };
     _websocketFn = typeof mod.websocket === "function" ? mod.websocket : null;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     console.warn("[codex] wreq-js import failed, websocket disabled");
     _websocketFn = null;
   }
@@ -330,6 +336,7 @@ function normalizeServiceTierValue(value: unknown): string | undefined {
  * Update this table when Codex releases new models with different caps.
  */
 const MAX_EFFORT_BY_MODEL: Record<string, EffortLevel> = {
+  "gpt-6-astra": "ultra",
   "gpt-5.6-sol": "ultra",
   "gpt-5.6-terra": "ultra",
   "gpt-5.6-luna": "max",
@@ -399,7 +406,8 @@ function consumeResponsesStoreMarker(body: Record<string, unknown>): unknown {
 function isCodexWsGloballyEnabled(): boolean {
   try {
     return isFeatureFlagEnabled("OMNIROUTE_CODEX_WS_ENABLED");
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return true;
   }
 }
@@ -411,7 +419,8 @@ function isCodexWsGloballyEnabled(): boolean {
 function isCodexAppServerGloballyEnabled(): boolean {
   try {
     return isFeatureFlagEnabled("OMNIROUTE_CODEX_APP_SERVER_ENABLED");
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return true;
   }
 }
@@ -423,11 +432,18 @@ function isCodexAppServerGloballyEnabled(): boolean {
  * the websocket check so it wins when configured.
  */
 export function isCodexAppServerRequired(credentials: unknown): boolean {
-  if (!isCodexAppServerGloballyEnabled()) return false;
   const providerSpecificData =
     credentials && typeof credentials === "object"
       ? (credentials as { providerSpecificData?: Record<string, unknown> }).providerSpecificData
       : null;
+  if (
+    getRuntimePolicy().mode === "locked" &&
+    providerSpecificData?.codexTransport === "app-server"
+  ) {
+    const config = resolveAppServerConfig(providerSpecificData);
+    return isCodexAppServerGloballyEnabled() && !!config;
+  }
+  if (!isCodexAppServerGloballyEnabled()) return false;
   if (providerSpecificData?.codexTransport !== "app-server") return false;
   return !!resolveAppServerConfig(providerSpecificData);
 }
@@ -692,6 +708,7 @@ export async function peekCodexSseTransientError(
       }
     }
   } catch (err) {
+    if (isRuntimePolicyError(err)) throw err;
     console.warn(
       `[codex] peekCodexSseTransientError: read error, passing stream through: ${
         err instanceof Error ? err.message : String(err)
@@ -833,6 +850,8 @@ export class CodexExecutor extends BaseExecutor {
 
     if (!isCodexResponsesWebSocketRequired(nextInput.model, nextInput.credentials)) {
       const httpResult = await super.execute(nextInput);
+      if (isRuntimePolicyResponse((httpResult as { response?: Response }).response))
+        return httpResult;
       if (codexDropNonstandardEvents()) {
         const resp = (httpResult as { response?: Response }).response;
         if (resp?.body) {
@@ -1035,6 +1054,10 @@ export class CodexExecutor extends BaseExecutor {
             ws.send(bodyString);
           }
         } catch (error) {
+          if (isRuntimePolicyError(error)) {
+            finishStream({ reason: "policy_denied", emitDone: false, closeController: false });
+            throw error;
+          }
           failController(
             "upstream_websocket_connect_failed",
             error instanceof Error ? error.message : String(error)

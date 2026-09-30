@@ -13,7 +13,7 @@
  * @see Issue #1628
  */
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import {
   clearAllReasoningCache,
   cleanupExpiredReasoning,
@@ -24,6 +24,10 @@ import {
   setReasoningCache,
 } from "../../src/lib/db/reasoningCache.ts";
 import { isInternalReasoningPlaceholder } from "../utils/reasoningPlaceholder.ts";
+import {
+  isTrustedReasoningCacheContext,
+  type ReasoningCacheContext,
+} from "./reasoningCacheContext.ts";
 
 // ──────────────── Provider/Model Detection ────────────────
 
@@ -160,6 +164,32 @@ let replays = 0;
 // ──────────────── Core Operations ────────────────
 
 /**
+ * The only logical-ID → storage-ID boundary. Every request read/write/delete
+ * uses this, including IDs that already look like storage keys. No legacy or
+ * principal-only fallback is permitted. Tools use principal-only isolation;
+ * no-tool conversation IDs additionally carry their stable transcript/session.
+ */
+function storageKey(logicalId: string, context: ReasoningCacheContext | null): string | null {
+  const secret = process.env.API_KEY_SECRET;
+  if (
+    typeof logicalId !== "string" ||
+    !logicalId ||
+    !isTrustedReasoningCacheContext(context) ||
+    !secret?.trim()
+  ) {
+    return null;
+  }
+  const tuple = [
+    "reasoning-cache-v2",
+    context.kind,
+    context.kind === "key" ? context.fingerprint : "",
+    null,
+    logicalId,
+  ];
+  return `rc2h:${createHmac("sha256", secret).update(JSON.stringify(tuple)).digest("hex")}`;
+}
+
+/**
  * Evict the oldest entry from the memory cache when full.
  */
 function evictOldest(): void {
@@ -194,17 +224,20 @@ export function cacheReasoning(
   toolCallId: string,
   provider: string,
   model: string,
-  reasoning: string
+  reasoning: string,
+  context: ReasoningCacheContext | null
 ): void {
-  cacheReasoningByKey(toolCallId, provider, model, reasoning);
+  cacheReasoningByKey(toolCallId, provider, model, reasoning, context);
 }
 
 export function cacheReasoningByKey(
-  key: string,
+  logicalId: string,
   provider: string,
   model: string,
-  reasoning: string
+  reasoning: string,
+  context: ReasoningCacheContext | null
 ): void {
+  const key = storageKey(logicalId, context);
   if (!key || !reasoning) return;
   // ponytail: never store the internal replay placeholder — models echo it
   // and it poisons the cache (upstream echo loop, OmniRoute #9573).
@@ -217,7 +250,7 @@ export function cacheReasoningByKey(
   const now = Date.now();
 
   // Memory write
-  if (memoryCache.size >= MAX_MEMORY_ENTRIES) {
+  if (!memoryCache.has(key) && memoryCache.size >= MAX_MEMORY_ENTRIES) {
     evictOldest();
   }
   memoryCache.set(key, {
@@ -317,10 +350,11 @@ export function cacheReasoningBatch(
   toolCallIds: string[],
   provider: string,
   model: string,
-  reasoning: string
+  reasoning: string,
+  context: ReasoningCacheContext | null
 ): void {
   for (const id of toolCallIds) {
-    if (id) cacheReasoning(id, provider, model, reasoning);
+    if (id) cacheReasoning(id, provider, model, reasoning, context);
   }
 }
 
@@ -332,9 +366,15 @@ export function cacheReasoningFromAssistantMessage(
   message: AssistantMessageLike | null | undefined,
   provider: string,
   model: string,
-  context?: AssistantMessageCacheContext
+  context: ReasoningCacheContext | null,
+  options?: AssistantMessageCacheContext
 ): number {
-  if (!message || message.role !== "assistant") {
+  if (
+    !message ||
+    message.role !== "assistant" ||
+    !isTrustedReasoningCacheContext(context) ||
+    !process.env.API_KEY_SECRET?.trim()
+  ) {
     return 0;
   }
 
@@ -354,19 +394,19 @@ export function cacheReasoningFromAssistantMessage(
         .filter((id) => id.length > 0)
     : [];
   if (toolCallIds.length === 0) {
-    const scope = context?.scope?.trim();
-    const historyMessages = context?.historyMessages;
+    const scope = options?.scope?.trim();
+    const historyMessages = options?.historyMessages;
     if (!scope || !Array.isArray(historyMessages)) return 0;
 
     const messages = [...historyMessages, message];
     const cacheKey = buildAssistantMessageCacheKey(scope, messages, messages.length - 1);
     if (!cacheKey) return 0;
 
-    cacheReasoningByKey(cacheKey, provider, model, reasoning);
+    cacheReasoningByKey(cacheKey, provider, model, reasoning, context);
     return 1;
   }
 
-  cacheReasoningBatch(toolCallIds, provider, model, reasoning);
+  cacheReasoningBatch(toolCallIds, provider, model, reasoning, context);
   return toolCallIds.length;
 }
 
@@ -374,19 +414,23 @@ export function cacheReasoningFromAssistantMessage(
  * Look up cached reasoning_content by tool_call_id.
  * Memory first → DB fallback → null (miss).
  */
-export function lookupReasoning(toolCallId: string): string | null {
-  if (!toolCallId) {
+export function lookupReasoning(
+  logicalId: string,
+  context: ReasoningCacheContext | null
+): string | null {
+  const key = storageKey(logicalId, context);
+  if (!key) {
     misses++;
     return null;
   }
 
   // 1. Check memory
-  const mem = memoryCache.get(toolCallId);
+  const mem = memoryCache.get(key);
   if (mem) {
     if (Date.now() < mem.expiresAt) {
       // ponytail: never replay the internal placeholder from memory.
       if (isInternalReasoningPlaceholder(mem.reasoning)) {
-        memoryCache.delete(toolCallId);
+        memoryCache.delete(key);
         misses++;
         return null;
       }
@@ -394,14 +438,14 @@ export function lookupReasoning(toolCallId: string): string | null {
       return mem.reasoning;
     }
     // Expired in memory — remove
-    memoryCache.delete(toolCallId);
+    memoryCache.delete(key);
   }
 
   // 2. Fallback to DB
   let dbResult: { reasoning: string; provider: string; model: string; expiresAt: string } | null =
     null;
   try {
-    dbResult = getReasoningCache(toolCallId);
+    dbResult = getReasoningCache(key);
   } catch {
     // DB lookup failure is non-fatal; treat it as a cache miss.
   }
@@ -421,8 +465,11 @@ export function lookupReasoning(toolCallId: string): string | null {
     if (promotedReasoning.length > MAX_ENTRY_BYTES) {
       promotedReasoning = promotedReasoning.slice(0, MAX_ENTRY_BYTES);
     }
-    // Promote back to memory for fast subsequent lookups
-    memoryCache.set(toolCallId, {
+    // DB promotion must obey the same memory bound and retain persisted expiry.
+    if (!memoryCache.has(key) && memoryCache.size >= MAX_MEMORY_ENTRIES) {
+      evictOldest();
+    }
+    memoryCache.set(key, {
       reasoning: promotedReasoning,
       provider: dbResult.provider,
       model: dbResult.model,
@@ -543,15 +590,30 @@ export function clearReasoningCacheAll(provider?: string): number {
   }
 }
 
+/** Delete only this trusted principal's logical ID, never an opaque-ID bypass. */
+export function deleteReasoningCacheEntry(
+  logicalId: string,
+  context: ReasoningCacheContext | null
+): number {
+  const key = storageKey(logicalId, context);
+  return key ? deleteStorageEntry(key) : 0;
+}
+
 /**
- * Delete one reasoning cache entry by tool_call_id from memory + DB.
+ * Management-only operation for opaque IDs returned by the dashboard listing.
+ * Callers MUST authorize management access first. Never use for request replay.
+ * Legacy raw rows remain inert until expiry or provider/global admin clear.
  */
-export function deleteReasoningCacheEntry(toolCallId: string): number {
-  if (!toolCallId) return 0;
-  const existedInMemory = memoryCache.delete(toolCallId);
+export function deleteReasoningCacheStorageEntryForAdmin(key: string): number {
+  if (typeof key !== "string" || !/^rc2h:[a-f0-9]{64}$/.test(key)) return 0;
+  return deleteStorageEntry(key);
+}
+
+function deleteStorageEntry(key: string): number {
+  const existedInMemory = memoryCache.delete(key);
   let deletedFromDb = 0;
   try {
-    deletedFromDb = deleteReasoningCache(toolCallId);
+    deletedFromDb = deleteReasoningCache(key);
   } catch {
     // Memory delete already happened; DB delete can be retried by a later cleanup.
   }

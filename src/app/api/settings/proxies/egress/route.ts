@@ -1,3 +1,9 @@
+import {
+  assertNoApplicationProxy,
+  isRuntimePolicyError,
+  markRuntimePolicyResponse,
+} from "@/shared/runtimePolicy";
+import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { createErrorResponseFromUnknown } from "@/lib/api/errorResponse";
@@ -21,6 +27,15 @@ export async function GET(request: Request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
   try {
+    assertNoApplicationProxy("configured");
+  } catch (error) {
+    if (!isRuntimePolicyError(error)) throw error;
+    return markRuntimePolicyResponse(
+      Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+    );
+  }
+
+  try {
     const [diagnostic, { summary }] = await Promise.all([
       diagnoseAllEgressIps(),
       getRecentEgressSharingSummary(),
@@ -34,6 +49,15 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
+  try {
+    assertNoApplicationProxy("configured");
+  } catch (error) {
+    if (!isRuntimePolicyError(error)) throw error;
+    return markRuntimePolicyResponse(
+      Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+    );
+  }
+
   try {
     const report = await validateProxyPool();
     const dead = report.filter((r) => !r.alive);

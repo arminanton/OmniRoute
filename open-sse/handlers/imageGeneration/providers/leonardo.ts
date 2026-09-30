@@ -3,8 +3,23 @@
 // Ref: see open-sse/handlers/imageGeneration.ts top-of-file comment for split rationale
 
 import { saveCallLog } from "@/lib/usageDb";
+import {
+  fetchRemoteImage,
+  RemoteMediaFetchError,
+  createRemoteMediaFailureResult,
+} from "@/shared/network/remoteImageFetch";
 import { sleep } from "../../../utils/sleep.ts";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
+
+interface LeonardoGenerationParams {
+  model: string;
+  provider: string;
+  providerConfig: { baseUrl: string; statusUrl?: string };
+  body: Record<string, unknown>;
+  credentials: { apiKey?: string };
+  log?: { info: (tag: string, msg: string) => void; error: (tag: string, msg: string) => void };
+  signal?: AbortSignal;
+}
 
 export async function handleLeonardoImageGeneration({
   model,
@@ -13,7 +28,8 @@ export async function handleLeonardoImageGeneration({
   body,
   credentials,
   log,
-}) {
+  signal,
+}: LeonardoGenerationParams) {
   const startTime = Date.now();
   const token = credentials?.apiKey || "";
   const prompt = typeof body.prompt === "string" ? body.prompt : String(body.prompt ?? "");
@@ -21,8 +37,10 @@ export async function handleLeonardoImageGeneration({
     log.info("IMAGE", `${provider}/${model} (leonardo) | prompt: "${prompt.slice(0, 60)}..."`);
   }
   try {
+    signal?.throwIfAborted();
     const res = await fetch(providerConfig.baseUrl, {
       method: "POST",
+      signal,
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify({
         modelId: model || "phoenix",
@@ -63,6 +81,7 @@ export async function handleLeonardoImageGeneration({
     while (Date.now() < deadline) {
       await sleep(5000);
       const statusRes = await fetch(`${providerConfig.baseUrl}/${genId}`, {
+        signal,
         headers: { Authorization: `Bearer ${token}` },
       });
       const status = await statusRes.json();
@@ -70,15 +89,11 @@ export async function handleLeonardoImageGeneration({
       if (gen.status === "COMPLETE") {
         const imgUrl = gen.generated_images?.[0]?.url;
         if (imgUrl) {
-          const imgRes = await fetch(imgUrl);
-          if (!imgRes.ok) {
-            return {
-              success: false,
-              status: imgRes.status,
-              error: `Failed to download image: ${imgRes.status}`,
-            };
-          }
-          const buf = await imgRes.arrayBuffer();
+          const { buffer: buf } = await fetchRemoteImage(imgUrl, {
+            guard: "public-only",
+            pinDns: true,
+            signal,
+          });
           saveCallLog({
             method: "POST",
             path: "/v1/images/generations",
@@ -120,6 +135,9 @@ export async function handleLeonardoImageGeneration({
     }).catch(() => {});
     return { success: false, status: 504, error: "Leonardo image generation timed out" };
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (log) log.error("IMAGE", `${provider} leonardo error: ${err.message}`);
     saveCallLog({
       method: "POST",
@@ -137,4 +155,3 @@ export async function handleLeonardoImageGeneration({
     };
   }
 }
-

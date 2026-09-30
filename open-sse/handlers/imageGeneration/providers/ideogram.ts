@@ -3,7 +3,22 @@
 // Ref: see open-sse/handlers/imageGeneration.ts top-of-file comment for split rationale
 
 import { saveCallLog } from "@/lib/usageDb";
+import {
+  fetchRemoteImage,
+  RemoteMediaFetchError,
+  createRemoteMediaFailureResult,
+} from "@/shared/network/remoteImageFetch";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
+
+interface IdeogramGenerationParams {
+  model: string;
+  provider: string;
+  providerConfig: { baseUrl: string; statusUrl?: string };
+  body: Record<string, unknown>;
+  credentials: { apiKey?: string };
+  log?: { info: (tag: string, msg: string) => void; error: (tag: string, msg: string) => void };
+  signal?: AbortSignal;
+}
 
 export async function handleIdeogramImageGeneration({
   model,
@@ -12,7 +27,8 @@ export async function handleIdeogramImageGeneration({
   body,
   credentials,
   log,
-}) {
+  signal,
+}: IdeogramGenerationParams) {
   const startTime = Date.now();
   const token = credentials?.apiKey || "";
   const prompt = typeof body.prompt === "string" ? body.prompt : String(body.prompt ?? "");
@@ -20,8 +36,10 @@ export async function handleIdeogramImageGeneration({
     log.info("IMAGE", `${provider}/${model} (ideogram) | prompt: "${prompt.slice(0, 60)}..."`);
   }
   try {
+    signal?.throwIfAborted();
     const res = await fetch(providerConfig.baseUrl, {
       method: "POST",
+      signal,
       headers: { "Content-Type": "application/json", "Api-Key": token },
       body: JSON.stringify({ prompt, aspect_ratio: "ASPECT_16_9", model: model || "V_3" }),
     });
@@ -41,15 +59,11 @@ export async function handleIdeogramImageGeneration({
     const data = await res.json();
     if (data.data && data.data.length > 0) {
       const imgUrl = data.data[0].url;
-      const imgRes = await fetch(imgUrl);
-      if (!imgRes.ok) {
-        return {
-          success: false,
-          status: imgRes.status,
-          error: `Failed to download image: ${imgRes.status}`,
-        };
-      }
-      const buf = await imgRes.arrayBuffer();
+      const { buffer: buf } = await fetchRemoteImage(imgUrl, {
+        guard: "public-only",
+        pinDns: true,
+        signal,
+      });
       saveCallLog({
         method: "POST",
         path: "/v1/images/generations",
@@ -77,6 +91,9 @@ export async function handleIdeogramImageGeneration({
     }).catch(() => {});
     return { success: false, status: 502, error: "No images returned from Ideogram" };
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (log) log.error("IMAGE", `${provider} ideogram error: ${err.message}`);
     saveCallLog({
       method: "POST",

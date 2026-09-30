@@ -3,9 +3,9 @@
  */
 import { detectMediaParts, type MediaPart } from "@omniroute/open-sse/utils/mediaParts";
 import { normalizeDataUri } from "@omniroute/open-sse/utils/imageNormalize";
-import { fetchRemoteImage } from "@/shared/network/remoteImageFetch";
+import { fetchRemoteImage, RemoteMediaFetchError } from "@/shared/network/remoteImageFetch";
 import { getRuntimePorts } from "@/lib/runtime/ports";
-import { resolveSelfLoopBearer } from "@/shared/middleware/chatBodyAdmission";
+import { isOwnListenerApiUrl, stampOwnListenerSelfHop } from "@omniroute/open-sse/utils/selfHop.ts";
 import { getBestVisionModel, getFallbackModels, recordLatency } from "./visionBridgeRouter";
 import { REGISTRY } from "@omniroute/open-sse/config/providers";
 import { fetch as undiciFetch } from "undici";
@@ -78,14 +78,19 @@ let selfLoopKeyPromise: Promise<string> | null = null;
  * The `sk_omniroute` sentinel works only when REQUIRE_API_KEY is disabled; on
  * REQUIRE_API_KEY instances it is rejected with 401 "Missing API key", which
  * silently breaks every vision-bridge describe. Priority:
- *   1. VISION_BRIDGE_API_KEY env (already handled by resolveProviderApiKey —
- *      kept here for the injected-resolver test path).
+ *   1. OMNIROUTE_API_KEY / ROUTER_API_KEY / VISION_BRIDGE_API_KEY env.
+ *      Provider credentials are not used as credentials for the local API.
  *   2. Injected resolver (tests) or the DB-backed `getOrCreateApiKey()` —
  *      memoized so at most one key is created per process.
  *   3. `sk_omniroute` as a final fallback (local mode without auth).
  */
 export async function resolveSelfLoopApiKey(resolver?: () => Promise<string>): Promise<string> {
-  const envKey = (process.env.VISION_BRIDGE_API_KEY || "").trim();
+  const envKey = (
+    process.env.OMNIROUTE_API_KEY ||
+    process.env.ROUTER_API_KEY ||
+    process.env.VISION_BRIDGE_API_KEY ||
+    ""
+  ).trim();
   if (envKey) return envKey;
   if (resolver) {
     const key = (await resolver()).trim();
@@ -230,13 +235,14 @@ const VISION_BRIDGE_UA_FETCH: typeof fetch = ((input: RequestInfo | URL, init?: 
 /**
  * Resolve every image part in the body to a base64 data URI when the target
  * model speaks the Claude wire format (remote URLs unsupported by most
- * claude-format backends, e.g. MiniMax 403 2013). Fail-open: an image that
- * cannot be fetched is left untouched.
+ * claude-format backends, e.g. MiniMax 403 2013). Remote-media fetch failures
+ * must propagate; only unrelated legacy failures leave the image untouched.
  */
 export async function ensureBase64ImagesForClaudeWire(
   body: RequestBody,
   model: string,
-  fetchImpl: typeof fetch = VISION_BRIDGE_UA_FETCH
+  fetchImpl: typeof fetch = VISION_BRIDGE_UA_FETCH,
+  signal?: AbortSignal
 ): Promise<RequestBody> {
   if (!isClaudeWireFormatModel(model)) return body;
   const parts = extractImageParts(body.messages as RequestMessage[]);
@@ -247,16 +253,21 @@ export async function ensureBase64ImagesForClaudeWire(
       const normalized = resolveImageAsDataUri(part.imageUrl);
       if (normalized.startsWith("data:")) return null; // already base64
       try {
-        return await fetchRemoteImageAsDataUri(normalized, new AbortController().signal, fetchImpl);
-      } catch {
-        return null; // fail-open: keep the original part
+        return await fetchRemoteImageAsDataUri(
+          normalized,
+          signal ?? new AbortController().signal,
+          fetchImpl
+        );
+      } catch (error) {
+        if (error instanceof RemoteMediaFetchError) throw error;
+        return null; // preserve legacy behavior for unrelated failures
       }
     })
   );
 
   // Map sequential image index → resolved data URI (null = keep original).
   const byIndex = new Map<number, string>();
-  parts.forEach((part, i) => {
+  parts.forEach((_part, i) => {
     if (resolved[i]) byIndex.set(i, resolved[i] as string);
   });
   if (byIndex.size === 0) return body;
@@ -308,11 +319,13 @@ async function fetchRemoteImageAsDataUri(
   signal: AbortSignal,
   fetchImpl: typeof fetch = VISION_BRIDGE_UA_FETCH
 ): Promise<string> {
+  // Provider/self-hop fetch implementations are not safe URL download transports.
+  // Keep this legacy argument for callers, but never bypass DNS pin/proxy policy with it.
+  void fetchImpl;
   const remoteImage = await fetchRemoteImage(imageUrl, {
     signal,
-    // Bypass the runtime's hooked global fetch (ProxyFetch) — a dead local
-    // proxy (e.g. 127.0.0.1:8317) would otherwise break the download.
-    fetchImpl,
+    guard: "public-only",
+    pinDns: true,
   });
   const mediaType = remoteImage.contentType.split(";")[0]?.trim() || "image/png";
   const dataUri = `data:${mediaType};base64,${remoteImage.buffer.toString("base64")}`;
@@ -427,6 +440,9 @@ export async function callVisionModel(
       }
       return result;
     } catch (error) {
+      // URL admission/retrieval failed before a model send. Another provider
+      // must not turn that denial into paid fallback or fetch the raw URL.
+      if (error instanceof RemoteMediaFetchError) throw error;
       recordLatency(currentModel, Date.now() - attemptStart, false);
       lastError = error instanceof Error ? error : new Error(String(error));
       if (config.signal?.aborted) {
@@ -759,7 +775,11 @@ async function callVisionModelSingle(
       // guardrail on the sub-request to prevent infinite recursion.
       // Use a real DB-backed key for self-loop (sk_omniroute is rejected by
       // REQUIRE_API_KEY instances with 401 "Missing API key").
-      const selfLoopApiKey = resolvedApiKey || (await resolveSelfLoopApiKey());
+      const targetUrl = `${baseUrl}/chat/completions`;
+      const ownListener = isOwnListenerApiUrl(targetUrl);
+      const selfLoopApiKey = ownListener
+        ? apiKey || (await resolveSelfLoopApiKey())
+        : resolvedApiKey || (await resolveSelfLoopApiKey());
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         // Explicit JSON opt-in: without `Accept: application/json` OmniRoute's
@@ -774,25 +794,11 @@ async function callVisionModelSingle(
         headers["x-omniroute-disabled-guardrails"] = routeThroughOmniRoute
           ? "vision-bridge,video-bridge"
           : "vision-bridge";
-        // Internal self-loop sub-request: the parent request already holds the
-        // single heavyweight admission lease (`CHAT_MAX_HEAVY_IN_FLIGHT=1`), so a
-        // large base64-image describe body would be rejected with 503
-        // `chat_admission_busy` before it is described. The route only honors
-        // this header for trusted self-loop credentials (the local
-        // `sk_omniroute` sentinel OR the operator-configured env key), so
-        // external clients cannot use it to bypass admission.
-        headers["x-omniroute-admission-bypass"] = "internal";
-        // The compression pipeline must not touch the image payload of the
-        // self-loop describe call (stacked RTK/Caveman can mangle data URIs).
+        // Do not mutate the image payload of the internal describe request.
         headers["x-omniroute-compression"] = "off";
-        // The admission bypass honors the env key when set (REQUIRE_API_KEY=true
-        // deployments) and the `sk_omniroute` sentinel otherwise. Force the same
-        // resolved credential so the bypass holds even when a real vision key is
-        // configured for the vision model's provider.
-        headers["Authorization"] = `Bearer ${resolveSelfLoopBearer()}`;
       }
 
-      response = await fetchImpl(`${baseUrl}/chat/completions`, {
+      const requestOptions: RequestInit = {
         method: "POST",
         signal,
         headers,
@@ -832,7 +838,11 @@ async function callVisionModelSingle(
           ],
           max_tokens: 300,
         }),
-      });
+      };
+      // The known bridge, not a caller-selected URL in proxyFetch, opts in.
+      // Proof is bound to this listener/API path and remains separate from API auth.
+      if (ownListener) stampOwnListenerSelfHop(targetUrl, requestOptions);
+      response = await fetchImpl(targetUrl, requestOptions);
     }
 
     clearTimeout(timeoutId);

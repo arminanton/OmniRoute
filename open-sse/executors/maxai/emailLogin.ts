@@ -23,6 +23,10 @@
  * subsequent chat / refresh calls (the minted token is bound to that device id).
  * `client_user_id` is likewise a client UUID.
  */
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
+import { z } from "zod";
+import { maxaiFetch } from "../../services/maxaiTransport.ts";
+import { sanitizeErrorMessage } from "../../utils/error.ts";
 import { buildMaxaiSignedHeaders } from "./signing.ts";
 import { maxaiStaticHeaders, MAXAI_BASE_URL } from "./protocol.ts";
 import { ensureMaxaiConstants } from "./constantsStore.ts";
@@ -33,6 +37,44 @@ export const MAXAI_VERIFY_CODE_PATH = "/oauth/verify_secret_code";
 
 /** The web app's env tag for production email verification. */
 const MAXAI_VERIFY_ENV = "prod_co";
+
+export const MAXAI_LOGIN_ERROR = sanitizeErrorMessage("MaxAI sign-in failed. Please try again.");
+export const MAXAI_LOGIN_TIMEOUT_MS = 30_000;
+const MAXAI_LOGIN_RESPONSE_BYTES = 64 * 1024;
+const emailSchema = z.string().max(254).trim().email();
+const codeSchema = z
+  .string()
+  .length(6)
+  .regex(/^[0-9]{6}$/);
+const identityIdSchema = z.string().length(36).uuid();
+
+/** Shared with the route so validation happens before any identity write or wire call. */
+export const maxaiLoginBodySchema = z
+  .object({
+    step: z.enum(["request", "verify"]).default("request"),
+    email: emailSchema.optional(),
+    code: codeSchema.optional(),
+  })
+  .strict()
+  .refine((body) => (body.step === "request" ? !!body.email : !!body.code));
+
+export const maxaiLoginIdentitySchema = z.object({
+  email: emailSchema,
+  deviceId: identityIdSchema,
+  clientUserId: identityIdSchema,
+});
+const requestInputSchema = maxaiLoginIdentitySchema.omit({ clientUserId: true });
+const verifyInputSchema = maxaiLoginIdentitySchema.extend({ code: codeSchema });
+const tokenSchema = z
+  .string()
+  .min(1)
+  .max(16_384)
+  .regex(/^[\x21-\x7e]{1,16384}$/);
+const userIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]{1,128}$/);
 
 export interface MaxaiEmailRequestInput {
   email: string;
@@ -98,137 +140,171 @@ function pick<T = unknown>(body: Record<string, unknown>, key: string): T | unde
   return body?.[key] as T | undefined;
 }
 
-/**
- * Step 1: ask MaxAI to email a sign-in code. Never throws.
- * Returns ok=true when the server acknowledges (status "OK").
- */
+/** A single deadline covers constants extraction, the signed POST, and the response body. */
+async function withLoginDeadline<T>(
+  parent: AbortSignal | null | undefined,
+  run: (signal: AbortSignal) => Promise<T>
+): Promise<T> {
+  const controller = new AbortController();
+  const abort = () => controller.abort(); // Never forward credential-bearing abort reasons.
+  if (parent?.aborted) abort();
+  else parent?.addEventListener("abort", abort, { once: true });
+  const timeout = setTimeout(abort, MAXAI_LOGIN_TIMEOUT_MS);
+  timeout.unref?.();
+  let onAbort: () => void = () => {};
+  try {
+    controller.signal.throwIfAborted();
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(new Error(MAXAI_LOGIN_ERROR));
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    // Also bound adapters that fail to settle promptly after receiving an abort.
+    return await Promise.race([aborted, run(controller.signal)]);
+  } finally {
+    clearTimeout(timeout);
+    parent?.removeEventListener("abort", abort);
+    controller.signal.removeEventListener("abort", onAbort);
+  }
+}
+
+async function readLoginBody(res: Response, signal: AbortSignal): Promise<Record<string, unknown>> {
+  const reader = res.body?.getReader();
+  if (!reader) throw new Error(MAXAI_LOGIN_ERROR);
+  const cancel = () => {
+    void reader.cancel().catch(() => {});
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    for (;;) {
+      signal.throwIfAborted();
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAXAI_LOGIN_RESPONSE_BYTES) {
+        cancel();
+        throw new Error(MAXAI_LOGIN_ERROR);
+      }
+      chunks.push(value);
+    }
+    signal.throwIfAborted();
+    const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new Error(MAXAI_LOGIN_ERROR);
+    }
+    return body as Record<string, unknown>;
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    reader.releaseLock();
+  }
+}
+
+async function postSignedLogin(
+  input: MaxaiEmailRequestInput,
+  path: string,
+  body: Record<string, unknown>
+): Promise<{ status: number; body?: Record<string, unknown> }> {
+  const doFetch = input.fetchImpl ?? maxaiFetch;
+  let status = 0;
+  try {
+    return await withLoginDeadline(input.signal, async (signal) => {
+      signal.throwIfAborted();
+      const constants = await ensureMaxaiConstants({ fetchImpl: doFetch, signal });
+      signal.throwIfAborted();
+      if (!constants) return { status };
+      const res = await doFetch(MAXAI_BASE_URL + path, {
+        method: "POST",
+        headers: signedOauthHeaders(path, input.deviceId, constants),
+        body: JSON.stringify(body),
+        signal,
+        redirect: "error",
+      });
+      status = res.status;
+      if (signal.aborted || status !== 200) {
+        void res.body?.cancel().catch(() => {});
+        return { status };
+      }
+      return { status, body: await readLoginBody(res, signal) };
+    });
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
+    return { status };
+  }
+}
+
+/** Step 1: request a code with persisted identity. Policy denial remains terminal. */
 export async function requestMaxaiEmailCode(
   input: MaxaiEmailRequestInput
 ): Promise<MaxaiEmailRequestResult> {
-  const doFetch = input.fetchImpl ?? fetch;
-  if (!input.email || !input.deviceId) {
-    return { ok: false, status: 0, error: "missing email or deviceId" };
+  const parsed = requestInputSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, status: 0, error: MAXAI_LOGIN_ERROR };
+  const result = await postSignedLogin({ ...input, ...parsed.data }, MAXAI_SIGNIN_EMAIL_PATH, {
+    email: parsed.data.email,
+    app: "maxai_webapp",
+  });
+  if (result.body && pick(result.body, "status") === "OK") {
+    return { ok: true, status: 200 };
   }
-
-  // Initial login is the FIRST signed call — ensure we have live signing constants
-  // (extracted from MaxAI's public bundle) before signing. No keys = cannot sign.
-  const constants = await ensureMaxaiConstants({ fetchImpl: doFetch, signal: input.signal });
-  if (!constants) {
-    return { ok: false, status: 0, error: "MaxAI signing constants unavailable (extraction failed)" };
-  }
-
-  let res: Response;
-  try {
-    res = await doFetch(MAXAI_BASE_URL + MAXAI_SIGNIN_EMAIL_PATH, {
-      method: "POST",
-      headers: signedOauthHeaders(MAXAI_SIGNIN_EMAIL_PATH, input.deviceId, constants),
-      body: JSON.stringify({ email: input.email, app: "maxai_webapp" }),
-      signal: input.signal ?? undefined,
-    });
-  } catch (err) {
-    return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  const raw = await res.text().catch(() => "");
-  if (res.status !== 200) {
-    return { ok: false, status: res.status, error: raw.slice(0, 200) };
-  }
-  let body: Record<string, unknown> = {};
-  try {
-    body = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return { ok: false, status: res.status, error: "unparseable signin response" };
-  }
-  if (pick<string>(body, "status") === "OK") return { ok: true, status: 200 };
-  const detail = pick<string>(body, "detail") || pick<string>(body, "msg") || "sign-in request failed";
-  return { ok: false, status: res.status, error: String(detail).slice(0, 200) };
+  return { ok: false, status: result.status, error: MAXAI_LOGIN_ERROR };
 }
 
-/**
- * Step 2: verify the emailed code and return the full credential. Never throws.
- * On success the caller persists the credential to the connection's
- * providerSpecificData (accessToken/refreshToken/deviceId/userId).
- */
+/** Step 2: verify the pending identity. The caller must persist all credentials before success. */
 export async function verifyMaxaiEmailCode(
   input: MaxaiEmailVerifyInput
 ): Promise<MaxaiEmailVerifyResult> {
-  const doFetch = input.fetchImpl ?? fetch;
-  if (!input.email || !input.code || !input.deviceId) {
-    return { ok: false, status: 0, error: "missing email, code, or deviceId" };
-  }
-
-  const constants = await ensureMaxaiConstants({ fetchImpl: doFetch, signal: input.signal });
-  if (!constants) {
-    return { ok: false, status: 0, error: "MaxAI signing constants unavailable (extraction failed)" };
-  }
-
-  const requestBody = {
-    email: input.email,
-    secret_code: input.code,
+  const parsed = verifyInputSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, status: 0, error: MAXAI_LOGIN_ERROR };
+  const identity = parsed.data;
+  const result = await postSignedLogin({ ...input, ...identity }, MAXAI_VERIFY_CODE_PATH, {
+    email: identity.email,
+    secret_code: identity.code,
     app: "maxai_webapp",
     env: MAXAI_VERIFY_ENV,
     invitation_code: null,
     ref: "",
     client_reference_id: null,
-    client_user_id: input.clientUserId,
+    client_user_id: identity.clientUserId,
     client_price_version: null,
     client_onboarding_version: null,
     user_acquisition_channel: "",
     gclid: null,
+  });
+  const failure: MaxaiEmailVerifyResult = {
+    ok: false,
+    status: result.status,
+    error: MAXAI_LOGIN_ERROR,
   };
-
-  let res: Response;
-  try {
-    res = await doFetch(MAXAI_BASE_URL + MAXAI_VERIFY_CODE_PATH, {
-      method: "POST",
-      headers: signedOauthHeaders(MAXAI_VERIFY_CODE_PATH, input.deviceId, constants),
-      body: JSON.stringify(requestBody),
-      signal: input.signal ?? undefined,
-    });
-  } catch (err) {
-    return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err) };
-  }
-
-  const raw = await res.text().catch(() => "");
-  if (res.status !== 200) {
-    return { ok: false, status: res.status, error: raw.slice(0, 200) };
-  }
-  let body: Record<string, unknown> = {};
-  try {
-    body = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return { ok: false, status: res.status, error: "unparseable verify response" };
-  }
-
-  const authUser = pick<Record<string, unknown>>(body, "auth_user");
-  const status = pick<string>(body, "status");
-  if (status === "OK" && authUser && typeof authUser === "object") {
-    const accessToken = String(authUser.accessToken ?? authUser.access_token ?? "");
-    const refreshToken = String(authUser.refreshToken ?? authUser.refresh_token ?? "");
-    const userId = String(authUser.userId ?? authUser.user_id ?? "");
-    if (!accessToken || !refreshToken) {
-      return { ok: false, status: 200, error: "verify OK but token fields missing" };
-    }
-    return {
-      ok: true,
-      status: 200,
-      credential: {
-        accessToken,
-        refreshToken,
-        userId,
-        email: String(authUser.email ?? input.email),
-        deviceId: input.deviceId,
-        clientUserId: String(authUser.clientUserId ?? authUser.client_user_id ?? input.clientUserId),
-      },
-    };
-  }
-
-  // 10119 is MaxAI's "code expired / too many attempts" signal; surface it.
-  const code = pick<number>(body, "code");
-  const detail = pick<string>(body, "detail") || pick<string>(body, "msg");
-  const error =
-    code === 10119
-      ? "Code expired or too many attempts — request a new code."
-      : String(detail || "Invalid code. Check the code and try again.").slice(0, 200);
-  return { ok: false, status: res.status, error };
+  if (!result.body || pick(result.body, "status") !== "OK") return failure;
+  const authUser = pick<Record<string, unknown>>(result.body, "auth_user");
+  if (!authUser || typeof authUser !== "object" || Array.isArray(authUser)) return failure;
+  const accessToken = tokenSchema.safeParse(authUser.accessToken ?? authUser.access_token);
+  const refreshToken = tokenSchema.safeParse(authUser.refreshToken ?? authUser.refresh_token);
+  const userId = userIdSchema.safeParse(authUser.userId ?? authUser.user_id);
+  const email = emailSchema.safeParse(authUser.email ?? identity.email);
+  const clientUserId = identityIdSchema.safeParse(
+    authUser.clientUserId ?? authUser.client_user_id ?? identity.clientUserId
+  );
+  if (
+    !accessToken.success ||
+    !refreshToken.success ||
+    !userId.success ||
+    !email.success ||
+    !clientUserId.success ||
+    email.data.toLowerCase() !== identity.email.toLowerCase() ||
+    clientUserId.data !== identity.clientUserId
+  )
+    return failure;
+  return {
+    ok: true,
+    status: 200,
+    credential: {
+      accessToken: accessToken.data,
+      refreshToken: refreshToken.data,
+      userId: userId.data,
+      email: identity.email,
+      deviceId: identity.deviceId,
+      clientUserId: identity.clientUserId,
+    },
+  };
 }

@@ -33,6 +33,7 @@ import {
   type UpscaleLogger,
 } from "./shared.ts";
 import { sanitizeErrorMessage } from "../../utils/error.ts";
+import { RemoteMediaFetchError } from "@/shared/network/remoteImageFetch";
 
 /** Topaz caps a single output edge well below this; keeps a 4x pass on a huge source sane. */
 const MAX_OUTPUT_EDGE = 16000;
@@ -46,6 +47,7 @@ export async function handleTopazImageUpscale({
   credentials,
   log,
   fetchImpl = fetch,
+  signal,
 }: {
   model: string;
   provider: string;
@@ -54,6 +56,7 @@ export async function handleTopazImageUpscale({
   credentials: UpscaleCredentials;
   log?: UpscaleLogger;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<UpscaleHandlerResult> {
   const startTime = Date.now();
   const token = credentials.apiKey || credentials.accessToken;
@@ -83,7 +86,8 @@ export async function handleTopazImageUpscale({
   const requestSummary: Record<string, unknown> = { model, factor, output_format: outputFormat };
 
   try {
-    const imageSource = await resolveUpscaleImageSource(source);
+    signal?.throwIfAborted();
+    const imageSource = await resolveUpscaleImageSource(source, signal);
 
     const formData = new FormData();
     formData.append(
@@ -147,7 +151,9 @@ export async function handleTopazImageUpscale({
     );
 
     const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
+    signal?.throwIfAborted();
     const response = await fetchImpl(`${baseUrl}/image/v1/enhance`, {
+      signal,
       method: "POST",
       headers: {
         Accept: `image/${outputFormat}`,
@@ -184,7 +190,10 @@ export async function handleTopazImageUpscale({
       });
     }
 
-    const declared = (response.headers.get("content-type") || "").split(";")[0]!.trim().toLowerCase();
+    const declared = (response.headers.get("content-type") || "")
+      .split(";")[0]!
+      .trim()
+      .toLowerCase();
     const contentType = declared.startsWith("image/") ? declared : sniffImageMime(buffer);
 
     return saveUpscaleSuccessResult({
@@ -195,9 +204,21 @@ export async function handleTopazImageUpscale({
       images: [
         buildUpscaleImageEntry({ buffer, contentType, responseFormat: body.response_format }),
       ],
-      meta: { provider, model, factor, ...(target ? { width: target.width, height: target.height } : {}) },
+      meta: {
+        provider,
+        model,
+        factor,
+        ...(target ? { width: target.width, height: target.height } : {}),
+      },
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return {
+        success: false,
+        status: signal?.aborted ? 499 : (err as RemoteMediaFetchError).status,
+        error: "Remote image could not be loaded",
+      };
+    }
     const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
     log?.error?.("IMAGE", `${provider} topaz upscale exception: ${errorText}`);
     return saveUpscaleErrorResult({
@@ -225,7 +246,9 @@ function normalizeFactor(body: Record<string, unknown>): number {
 }
 
 function normalizeOutputFormat(value: unknown): string {
-  const raw = String(value ?? "").trim().toLowerCase();
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase();
   if (raw === "jpg") return "jpeg";
   return ALLOWED_OUTPUT_FORMATS.includes(raw) ? raw : "png";
 }
@@ -266,6 +289,8 @@ function appendUnitFloat(
 
 function toBoolean(value: unknown): boolean {
   if (typeof value === "boolean") return value;
-  const raw = String(value ?? "").trim().toLowerCase();
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase();
   return raw === "true" || raw === "1" || raw === "yes" || raw === "on";
 }

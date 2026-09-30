@@ -1,3 +1,4 @@
+import { assertNotLockedCapability } from "@/shared/runtimePolicy";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getProviderConnections } from "@/lib/db/providers";
 import { resolveAllowedOrigin, getCorsStatus } from "@/server/cors/origins";
@@ -93,6 +94,7 @@ function getConnectionToken(connection: JsonRecord): string | null {
 export async function getCloudAgentCredentials(
   providerId: string
 ): Promise<AgentCredentials | null> {
+  assertNotLockedCapability("cloud-agent");
   const connections = (await getProviderConnections({
     provider: providerId,
     isActive: true,

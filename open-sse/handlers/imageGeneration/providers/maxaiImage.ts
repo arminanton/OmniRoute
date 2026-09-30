@@ -11,11 +11,13 @@
 // X-Authorization signer + Firefox-150 identity the chat path uses); the signer
 // signs whatever `path` it is given, so image and chat share one auth module.
 //
-// Residential egress + Firefox-150 TLS are applied transparently at the infra
-// layer (in-container TUN + TLS_FINGERPRINT_PROVIDERS), so nothing egress-
-// specific lives here.
+// Refresh, signing-bundle fetches and image requests share one verified,
+// connection-selected residential Firefox-150 transport. No ambient fetch fallback.
 
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { resolveMaxaiCredential } from "../../../executors/maxai/credentials.ts";
+import { ensureFreshMaxaiCredential } from "../../../executors/maxai/refresh.ts";
+import { maxaiFetch, runMaxaiConnectionTransport } from "../../../services/maxaiTransport.ts";
 import { buildMaxaiSignedHeaders } from "../../../executors/maxai/signing.ts";
 import { ensureMaxaiConstants } from "../../../executors/maxai/constantsStore.ts";
 import { MAXAI_BASE_URL, maxaiStaticHeaders } from "../../../executors/maxai/protocol.ts";
@@ -40,10 +42,11 @@ const MAXAI_IMAGE_ALIASES: Record<string, string> = {
   "flux-1-schneil": "flux-1-schnell", // tolerate a common typo
 };
 
-/** Strip a `maxai/` prefix and resolve size-name aliases to the canonical model id. */
+/** Strip a `maxai/` or `mx/` prefix and resolve aliases to the canonical model id. */
 export function resolveMaxaiImageModel(model: unknown): string {
   let m = typeof model === "string" ? model.trim() : "";
   if (m.startsWith("maxai/")) m = m.slice("maxai/".length);
+  else if (m.startsWith("mx/")) m = m.slice("mx/".length);
   return MAXAI_IMAGE_ALIASES[m] ?? m;
 }
 
@@ -54,7 +57,8 @@ export function resolveMaxaiImageModel(model: unknown): string {
  * the model default. Models with no constraint pass the size through.
  */
 export function snapMaxaiImageSize(model: string, size: unknown): string {
-  const requested = typeof size === "string" && size.trim() ? size.trim() : MAXAI_IMAGE_DEFAULT_SIZE;
+  const requested =
+    typeof size === "string" && size.trim() ? size.trim() : MAXAI_IMAGE_DEFAULT_SIZE;
   const allowed = MAXAI_STRICT_SIZE_MODELS[model];
   if (!allowed) return requested; // flux / sd3: no constraint
   return allowed.has(requested) ? requested : MAXAI_IMAGE_DEFAULT_SIZE;
@@ -68,7 +72,11 @@ export function extractMaxaiImageUrls(json: unknown): string[] {
   let items: unknown[] = [];
   if (Array.isArray(json)) {
     items = json;
-  } else if (json && typeof json === "object" && Array.isArray((json as Record<string, unknown>).data)) {
+  } else if (
+    json &&
+    typeof json === "object" &&
+    Array.isArray((json as Record<string, unknown>).data)
+  ) {
     items = (json as Record<string, unknown>).data as unknown[];
   }
   const urls: string[] = [];
@@ -93,7 +101,8 @@ export async function handleMaxaiImageGeneration({
   credentials,
   log,
   signal,
-  fetchImpl = fetch,
+  connectionId = credentials?.connectionId,
+  fetchImpl = maxaiFetch,
 }: {
   model: string;
   provider: string;
@@ -101,8 +110,11 @@ export async function handleMaxaiImageGeneration({
   credentials: {
     apiKey?: string;
     accessToken?: string;
+    refreshToken?: string;
+    connectionId?: string;
     providerSpecificData?: Record<string, unknown> | null;
-  };
+  } | null;
+  connectionId?: string | null;
   log?: { info?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void };
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
@@ -120,11 +132,12 @@ export async function handleMaxaiImageGeneration({
     });
   }
 
-  const cred = resolveMaxaiCredential(
+  const credential = resolveMaxaiCredential(
     credentials?.providerSpecificData,
-    credentials?.accessToken || credentials?.apiKey
+    credentials?.accessToken || credentials?.apiKey,
+    credentials?.refreshToken
   );
-  if (!cred) {
+  if (!credential) {
     return saveImageErrorResult({
       provider,
       model,
@@ -132,6 +145,16 @@ export async function handleMaxaiImageGeneration({
       startTime,
       error: "MaxAI credentials missing access_token",
       retryable: true,
+    });
+  }
+
+  if (typeof connectionId !== "string" || !connectionId.trim()) {
+    return saveImageErrorResult({
+      provider,
+      model,
+      status: 503,
+      startTime,
+      error: "MaxAI image generation requires a connection.",
     });
   }
 
@@ -146,85 +169,117 @@ export async function handleMaxaiImageGeneration({
     model_name: canonicalModel,
   };
 
-  const constants = await ensureMaxaiConstants({ fetchImpl, signal });
-  if (!constants) {
-    return saveImageErrorResult({
-      provider,
-      model,
-      status: 401,
-      startTime,
-      error: "MaxAI signing constants unavailable (extraction failed).",
-    });
-  }
-  const headers: Record<string, string> = {
-    ...maxaiStaticHeaders(),
-    ...buildMaxaiSignedHeaders({ path: MAXAI_IMAGE_PATH, userId: cred.userId, deviceId: cred.deviceId }, constants),
-    Authorization: `Bearer ${cred.accessToken}`,
-    "Content-Type": "application/json",
-  };
-
-  let resp: Response;
   try {
-    resp = await fetchImpl(MAXAI_BASE_URL + MAXAI_IMAGE_PATH, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody),
-      signal,
-    });
-  } catch (err) {
-    const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
-    log?.error?.("IMAGE", `${provider} maxai-image transport error: ${errorText}`);
-    return saveImageErrorResult({ provider, model, status: 502, startTime, error: errorText, requestBody });
-  }
+    signal?.throwIfAborted();
+    return await runMaxaiConnectionTransport(connectionId, async () => {
+      signal?.throwIfAborted();
+      // Unified refresh commits rotation durably. Do not persist a stale
+      // providerSpecificData snapshot from this handler or its route.
+      const cred = await ensureFreshMaxaiCredential({
+        connectionId,
+        credential,
+        signal,
+        fetchImpl,
+      });
+      signal?.throwIfAborted();
+      const constants = await ensureMaxaiConstants({ fetchImpl, signal });
+      signal?.throwIfAborted();
+      if (!constants) {
+        return saveImageErrorResult({
+          provider,
+          model,
+          status: 503,
+          startTime,
+          error: "MaxAI signing constants unavailable.",
+        });
+      }
+      const headers: Record<string, string> = {
+        ...maxaiStaticHeaders(),
+        ...buildMaxaiSignedHeaders(
+          { path: MAXAI_IMAGE_PATH, userId: cred.userId, deviceId: cred.deviceId },
+          constants
+        ),
+        Authorization: `Bearer ${cred.accessToken}`,
+        "Content-Type": "application/json",
+      };
 
-  if (!resp.ok) {
-    const detail = (await resp.text().catch(() => "")).slice(0, 500);
-    log?.error?.("IMAGE", `${provider} maxai-image error ${resp.status}: ${detail}`);
+      const resp = await fetchImpl(MAXAI_BASE_URL + MAXAI_IMAGE_PATH, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal,
+        redirect: "error",
+      });
+      signal?.throwIfAborted();
+
+      if (!resp.ok) {
+        // Never read/log credential-adjacent upstream error bodies.
+        await resp.body?.cancel().catch(() => {});
+        const error = `MaxAI image generation failed (HTTP ${resp.status}).`;
+        log?.error?.("IMAGE", error);
+        return saveImageErrorResult({
+          provider,
+          model,
+          status: resp.status,
+          startTime,
+          error,
+          requestBody,
+          // Expired token or masked TLS rejection: select the next account.
+          retryable: resp.status === 401 || resp.status === 418,
+        });
+      }
+
+      let json: unknown;
+      try {
+        json = await resp.json();
+      } catch {
+        signal?.throwIfAborted();
+        return saveImageErrorResult({
+          provider,
+          model,
+          status: 502,
+          startTime,
+          error: "MaxAI returned a non-JSON image response.",
+          requestBody,
+        });
+      }
+      signal?.throwIfAborted();
+      const status = (json as Record<string, unknown>)?.status;
+      const urls = extractMaxaiImageUrls(json);
+      if (status !== "OK" || urls.length === 0) {
+        return saveImageErrorResult({
+          provider,
+          model,
+          status: 502,
+          startTime,
+          error: "MaxAI image generation returned no images.",
+          requestBody,
+        });
+      }
+
+      return saveImageSuccessResult({
+        provider,
+        model,
+        startTime,
+        requestBody,
+        responseBody: { images_count: urls.length },
+        images: urls.map((url) => ({ url })),
+      });
+    });
+  } catch (cause) {
+    if (isRuntimePolicyError(cause)) throw cause;
+    const error = sanitizeErrorMessage(
+      signal?.aborted ? "MaxAI image generation cancelled." : "MaxAI image generation unavailable."
+    );
+    log?.error?.("IMAGE", error);
     return saveImageErrorResult({
       provider,
       model,
-      status: resp.status,
+      status: signal?.aborted ? 499 : 503,
       startTime,
-      error: detail || `MaxAI image generation failed (HTTP ${resp.status})`,
+      error,
       requestBody,
-      // 401 = expired token, 418 = TLS/JA3 masked-reject: rotate to the next account.
-      retryable: resp.status === 401 || resp.status === 418,
+      retryable: !signal?.aborted,
     });
   }
-
-  let json: unknown;
-  try {
-    json = await resp.json();
-  } catch {
-    return saveImageErrorResult({
-      provider,
-      model,
-      status: 502,
-      startTime,
-      error: "MaxAI returned a non-JSON image response",
-      requestBody,
-    });
-  }
-
-  const status = (json as Record<string, unknown>)?.status;
-  const urls = extractMaxaiImageUrls(json);
-  if (status !== "OK" || urls.length === 0) {
-    return saveImageErrorResult({
-      provider,
-      model,
-      status: 502,
-      startTime,
-      error: `MaxAI image generation returned no images (status=${String(status)})`,
-      requestBody,
-    });
-  }
-
-  return saveImageSuccessResult({
-    provider,
-    model,
-    startTime,
-    requestBody,
-    responseBody: { images_count: urls.length },
-    images: urls.map((url) => ({ url })),
-  });
 }

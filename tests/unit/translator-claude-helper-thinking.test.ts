@@ -1,11 +1,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const previousDataDir = process.env.DATA_DIR;
+const previousApiKeySecret = process.env.API_KEY_SECRET;
+const dataDir = mkdtempSync(join(tmpdir(), "omniroute-translator-replay-"));
+process.env.DATA_DIR = dataDir;
+process.env.API_KEY_SECRET = "fabricated-translator-replay-test-secret";
 
 const { prepareClaudeRequest } = await import("../../open-sse/translator/helpers/claudeHelper.ts");
 const { DEFAULT_THINKING_CLAUDE_SIGNATURE } =
   await import("../../open-sse/config/defaultThinkingSignature.ts");
 const reasoningCache = await import("../../open-sse/services/reasoningCache.ts");
+const { createLocalReasoningCacheContext } =
+  await import("../../open-sse/services/reasoningCacheContext.ts");
+const reasoningCacheContext = createLocalReasoningCacheContext();
+const { resetDbInstance } = await import("../../src/lib/db/core.ts");
 
+test.after(() => {
+  resetDbInstance();
+  rmSync(dataDir, { recursive: true, force: true });
+  if (previousDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = previousDataDir;
+  if (previousApiKeySecret === undefined) delete process.env.API_KEY_SECRET;
+  else process.env.API_KEY_SECRET = previousApiKeySecret;
+});
 
 function multiTurnBodyWithoutThinkingBlock() {
   return {
@@ -133,10 +154,13 @@ test("kimi-coding provider — cache hits do not replace the empty thinking mark
     "call_x",
     "kimi-coding",
     "kimi-k2.6",
-    "the model actually thought this"
+    "the model actually thought this",
+    reasoningCacheContext
   );
   const body = multiTurnBodyWithoutThinkingBlock();
-  const result = prepareClaudeRequest(body as any, "kimi-coding");
+  const result = prepareClaudeRequest(body as any, "kimi-coding", false, null, {
+    reasoningCacheContext,
+  });
   const content = (result as any).messages[1].content;
   assert.equal(content[0].type, "thinking");
   assert.equal(content[0].thinking, "");
@@ -160,7 +184,13 @@ test("kimi-coding provider — existing thinking block: client text preserved, s
 
 test("kimi-coding provider — redacted thinking becomes an empty marker even on cache hit", () => {
   reasoningCache.clearReasoningCacheAll();
-  reasoningCache.cacheReasoning("call_z", "kimi-coding", "kimi-k2.6", "cached reasoning v2");
+  reasoningCache.cacheReasoning(
+    "call_z",
+    "kimi-coding",
+    "kimi-k2.6",
+    "cached reasoning v2",
+    reasoningCacheContext
+  );
   const body = {
     thinking: { type: "enabled", budget_tokens: 4096 },
     messages: [
@@ -178,7 +208,9 @@ test("kimi-coding provider — redacted thinking becomes an empty marker even on
       },
     ],
   };
-  const result = prepareClaudeRequest(body as any, "kimi-coding");
+  const result = prepareClaudeRequest(body as any, "kimi-coding", false, null, {
+    reasoningCacheContext,
+  });
   const content = (result as any).messages[1].content;
   assert.equal(content[0].type, "thinking");
   assert.equal(content[0].thinking, "");

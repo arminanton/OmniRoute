@@ -10,6 +10,7 @@
  */
 
 import { createConnection } from "node:net";
+import { assertNoApplicationProxy } from "@/shared/runtimePolicy";
 import { stripIpv6Brackets } from "@omniroute/open-sse/utils/proxyFamily";
 
 // Configurable via env vars
@@ -47,6 +48,13 @@ export async function isProxyReachable(
   timeoutMs = FAST_FAIL_TIMEOUT_MS,
   cacheTtlMs = HEALTH_CACHE_TTL_MS
 ): Promise<boolean> {
+  assertNoApplicationProxy(
+    proxyUrl == null || proxyUrl === ""
+      ? "none"
+      : typeof proxyUrl === "string"
+        ? "configured"
+        : "opaque"
+  );
   const cached = proxyHealthCache.get(proxyUrl);
   if (cached && Date.now() - cached.checkedAt < cached.ttlMs) {
     return cached.healthy;

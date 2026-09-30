@@ -10,24 +10,22 @@
  *   • SSE response parsed for text deltas, with inline `<think>` reasoning split
  *     out into `reasoning_content` (see ./stream.ts).
  *
- * Egress + TLS: the request MUST exit a residential IP (MaxAI bot-bans datacenter
- * IPs). OmniRoute routes the executor's `fetch()` through the per-connection proxy
- * (a residential HTTP proxy) transparently, and applies the wreq-js Firefox TLS
- * fingerprint when enabled. This executor does not open its own socket; it uses
- * the ambient patched `fetch`, so the proxy + TLS overlay apply automatically.
- *
- * Auth refresh: MaxAI's `/oauth/refresh_access_token` is deep-TLS-gated and cannot
- * be called by any HTTP client (only a real browser passes). The access token is
- * therefore minted/refreshed out-of-band by OmniRoute's own browser-mint flow
- * (see maxaiBrowserLogin); this executor only consumes the stored credential.
+ * Egress + TLS: every request uses a connection-bound, independently verified
+ * residential route and the installed Firefox 150 / Windows wreq profile.
+ * No native fallback is allowed. Offline tests do not prove account acceptance.
+ * Refresh uses the same transport and commits token rotation under a durable
+ * generation lease/CAS before the current request uses the fresh credential.
  */
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { BaseExecutor, type ExecuteInput, type ExecutorExecuteResult } from "./base.ts";
 import { PROVIDERS } from "../config/constants.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
+import { isForbiddenCustomHeaderName } from "@/shared/constants/upstreamHeaders";
 import { resolveMaxaiCredential, type MaxaiCredential } from "./maxai/credentials.ts";
 import { buildMaxaiSignedHeaders } from "./maxai/signing.ts";
 import { ensureMaxaiConstants } from "./maxai/constantsStore.ts";
-import { maxaiAccessTokenNeedsRefresh, maxaiRefreshAccessToken } from "./maxai/refresh.ts";
+import { ensureFreshMaxaiCredential } from "./maxai/refresh.ts";
+import { maxaiFetch, runMaxaiConnectionTransport } from "../services/maxaiTransport.ts";
 import {
   assembleMaxaiContext,
   buildMaxaiChatBody,
@@ -41,6 +39,25 @@ import { resolveMaxaiDocList, type MaxaiDocListEntry } from "./maxai/documents.t
 import { estimateMaxaiTokens, isMaxaiTextFrame, ThinkSplitter } from "./maxai/stream.ts";
 import { prepareToolMessages, parseToolCallsFromText } from "../translator/webTools.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
+
+function withMaxaiExtraHeaders(
+  authoritative: Record<string, string>,
+  extra?: Record<string, string> | null
+): Record<string, string> {
+  const protectedNames = new Set(Object.keys(authoritative).map((name) => name.toLowerCase()));
+  const headers = { ...authoritative };
+  for (const [name, value] of Object.entries(extra ?? {})) {
+    const normalized = name.trim().toLowerCase();
+    if (
+      protectedNames.has(normalized) ||
+      isForbiddenCustomHeaderName(normalized) ||
+      normalized.startsWith("sec-ch-ua")
+    )
+      continue;
+    headers[name] = value;
+  }
+  return headers;
+}
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 const SSE_HEADERS = {
@@ -146,19 +163,57 @@ function chunk(
   controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(payload)}\n\n`));
 }
 
+type MaxaiExecutorDependencies = {
+  fetchImpl?: typeof fetch;
+  runTransport?: typeof runMaxaiConnectionTransport;
+  ensureCredential?: typeof ensureFreshMaxaiCredential;
+};
+
 export class MaxAiExecutor extends BaseExecutor {
-  constructor() {
+  private readonly fetchImpl: typeof fetch;
+  private readonly runTransport: typeof runMaxaiConnectionTransport;
+  private readonly ensureCredential: typeof ensureFreshMaxaiCredential;
+
+  constructor(deps: MaxaiExecutorDependencies = {}) {
     super("maxai", PROVIDERS.maxai ?? { id: "maxai", baseUrl: MAXAI_BASE_URL });
+    this.fetchImpl = deps.fetchImpl ?? maxaiFetch;
+    this.runTransport = deps.runTransport ?? runMaxaiConnectionTransport;
+    this.ensureCredential = deps.ensureCredential ?? ensureFreshMaxaiCredential;
   }
 
   override async execute(input: ExecuteInput): Promise<ExecutorExecuteResult> {
+    try {
+      input.signal?.throwIfAborted();
+      return await this.runTransport(input.credentials?.connectionId ?? "", () =>
+        this.executeBound(input)
+      );
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
+      if (input.signal?.aborted) throw input.signal.reason;
+      const status =
+        error && typeof error === "object" && "status" in error && typeof error.status === "number"
+          ? error.status
+          : 503;
+      return wrap(
+        errorResponse(
+          status,
+          "MaxAI account or verified transport unavailable.",
+          "maxai_account_unavailable"
+        ),
+        MAXAI_BASE_URL + MAXAI_CHAT_PATH
+      );
+    }
+  }
+
+  private async executeBound(input: ExecuteInput): Promise<ExecutorExecuteResult> {
     // The MaxAI chat endpoint URL is the wrapper's `url` for every return path
     // (error and success alike), so define it once up front.
     const url = MAXAI_BASE_URL + MAXAI_CHAT_PATH;
 
-    const cred = resolveMaxaiCredential(
+    let cred = resolveMaxaiCredential(
       input.credentials?.providerSpecificData,
-      input.credentials?.accessToken
+      input.credentials?.accessToken || input.credentials?.apiKey,
+      input.credentials?.refreshToken
     );
     if (!cred) {
       return wrap(
@@ -171,10 +226,16 @@ export class MaxAiExecutor extends BaseExecutor {
       );
     }
 
-    // Proactively refresh a near-expiry access token (browserless; see ./maxai/refresh.ts).
-    // Failures here are non-fatal: we fall through with the existing token, and a
-    // genuinely-dead token surfaces as a 401/418 below (prompting a re-mint).
-    const accessToken = await this.ensureFreshAccess(cred, input);
+    // The shared coordinator owns the durable lease/CAS write. Never call the
+    // generic snapshot persistence callback again after a successful rotation.
+    cred = await this.ensureCredential({
+      connectionId: input.credentials.connectionId,
+      credential: cred,
+      signal: input.signal,
+      fetchImpl: this.fetchImpl,
+    });
+    input.signal?.throwIfAborted();
+    const accessToken = cred.accessToken;
 
     const body = (input.body ?? {}) as OpenAiChatBody;
 
@@ -206,20 +267,35 @@ export class MaxAiExecutor extends BaseExecutor {
 
     // Doc-RAG: upload any inline documents (base64 file/input_file/document
     // parts) on the current turn to /app/upload_document and attach the
-    // resulting doc_list to the chat body. Best-effort: upload failures are
-    // skipped and the chat proceeds without the doc.
-    let docList: MaxaiDocListEntry[] = [];
+    // resulting doc_list to the chat body. Missing or failed document uploads
+    // must not silently turn a grounded request into a text-only answer.
+    let docList: MaxaiDocListEntry[];
     try {
       docList = await resolveMaxaiDocList(
         originalMessages,
         { accessToken, userId: cred.userId, deviceId: cred.deviceId },
-        { signal: input.signal ?? undefined }
+        { signal: input.signal ?? undefined, fetchImpl: this.fetchImpl }
       );
-    } catch {
-      docList = [];
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
+      input.signal?.throwIfAborted();
+      const status =
+        error &&
+        typeof error === "object" &&
+        "status" in error &&
+        (error.status === 400 || error.status === 413)
+          ? error.status
+          : 502;
+      return wrap(
+        errorResponse(status, "MaxAI document could not be processed.", "maxai_document_error"),
+        url
+      );
     }
 
-    const constants = await ensureMaxaiConstants({ signal: input.signal });
+    const constants = await ensureMaxaiConstants({
+      signal: input.signal,
+      fetchImpl: this.fetchImpl,
+    });
     if (!constants) {
       return wrap(
         errorResponse(
@@ -249,30 +325,28 @@ export class MaxAiExecutor extends BaseExecutor {
       },
       constants
     );
-    const headers: Record<string, string> = {
-      ...maxaiStaticHeaders(),
-      ...signedHeaders,
-      Authorization: `Bearer ${accessToken}`,
-      ...(input.upstreamExtraHeaders ?? {}),
-    };
+    const headers = withMaxaiExtraHeaders(
+      {
+        ...maxaiStaticHeaders(),
+        ...signedHeaders,
+        Authorization: `Bearer ${accessToken}`,
+      },
+      input.upstreamExtraHeaders
+    );
 
     let upstream: Response;
     try {
-      upstream = await fetch(url, {
+      upstream = await this.fetchImpl(url, {
         method: "POST",
+        redirect: "error",
         headers,
         body: JSON.stringify(chatBody),
         signal: input.signal ?? undefined,
       });
-    } catch (err) {
-      return wrap(
-        errorResponse(
-          502,
-          `MaxAI request failed: ${sanitizeErrorMessage(err instanceof Error ? err.message : err)}`,
-          "maxai_transport_error"
-        ),
-        url
-      );
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
+      input.signal?.throwIfAborted();
+      return wrap(errorResponse(502, "MaxAI request failed.", "maxai_transport_error"), url);
     }
 
     if (upstream.status !== 200 || !upstream.body) {
@@ -287,11 +361,7 @@ export class MaxAiExecutor extends BaseExecutor {
       );
       if (tooLong) {
         return wrap(
-          errorResponse(
-            400,
-            `MaxAI request exceeds the context limit: ${sanitizeErrorMessage(detail.slice(0, 200))}`,
-            "context_length_exceeded"
-          ),
+          errorResponse(400, "MaxAI request exceeds the context limit.", "context_length_exceeded"),
           url
         );
       }
@@ -299,7 +369,7 @@ export class MaxAiExecutor extends BaseExecutor {
       return wrap(
         errorResponse(
           status,
-          `MaxAI upstream ${upstream.status}: ${sanitizeErrorMessage(detail.slice(0, 300))}`,
+          `MaxAI upstream request failed (HTTP ${upstream.status}).`,
           upstream.status === 401 || upstream.status === 418
             ? "maxai_auth_error"
             : "maxai_upstream_error"
@@ -326,7 +396,14 @@ export class MaxAiExecutor extends BaseExecutor {
       // nudged retry and keep it only if it actually produces a tool call.
       const firstHasToolCall = !!parseToolCallsFromText(answer, "probe", requestedTools).toolCalls;
       if (!firstHasToolCall && isToolNarrationMiss(reasoning + "\n" + answer, requestedTools)) {
-        const retry = await this.retryToolTurn(cred, accessToken, input, toolNudge(text));
+        const retry = await this.retryToolTurn(
+          cred,
+          accessToken,
+          input,
+          toolNudge(text),
+          imageUrls,
+          docList
+        );
         if (retry && parseToolCallsFromText(retry.answer, "probe", requestedTools).toolCalls) {
           reasoning = retry.reasoning;
           answer = retry.answer;
@@ -411,50 +488,6 @@ export class MaxAiExecutor extends BaseExecutor {
   }
 
   /**
-   * Return a non-expired access token, refreshing browserlessly when the stored
-   * one is missing or within the expiry margin and a refresh token is available.
-   * Persists a freshly-minted token via `onCredentialsRefreshed`. Never throws —
-   * on any refresh failure it returns the original token so the request still
-   * proceeds (a truly-dead token then surfaces as an upstream 401/418).
-   */
-  private async ensureFreshAccess(cred: MaxaiCredential, input: ExecuteInput): Promise<string> {
-    if (!cred.refreshToken) return cred.accessToken;
-    if (!maxaiAccessTokenNeedsRefresh(cred.accessToken)) return cred.accessToken;
-
-    const result = await maxaiRefreshAccessToken({
-      refreshToken: cred.refreshToken,
-      deviceId: cred.deviceId,
-      userId: cred.userId,
-      signal: input.signal ?? undefined,
-    });
-    if (!result.ok || !result.accessToken) {
-      input.log?.warn?.(
-        "maxai",
-        `access-token refresh failed (${result.status}); using existing token`
-      );
-      return cred.accessToken;
-    }
-
-    // Persist the new access token (merged into providerSpecificData) so the next
-    // request starts fresh. The refresh token and device id are unchanged.
-    try {
-      await input.onCredentialsRefreshed?.({
-        accessToken: result.accessToken,
-        providerSpecificData: {
-          ...(input.credentials?.providerSpecificData ?? {}),
-          maxaiAccessToken: result.accessToken,
-        },
-      });
-    } catch (err) {
-      input.log?.warn?.(
-        "maxai",
-        `refreshed token persist failed: ${sanitizeErrorMessage(err instanceof Error ? err.message : err)}`
-      );
-    }
-    return result.accessToken;
-  }
-
-  /**
    * Run a single follow-up MaxAI turn with a gentle nudge appended, used to
    * recover a reasoning-model "narration miss" (the model talked ABOUT the
    * <tool> block instead of emitting it). Bounded to one extra call; returns the
@@ -464,39 +497,55 @@ export class MaxAiExecutor extends BaseExecutor {
     cred: MaxaiCredential,
     accessToken: string,
     input: ExecuteInput,
-    nudgedText: string
+    nudgedText: string,
+    imageUrls: string[],
+    docList: MaxaiDocListEntry[]
   ): Promise<{ reasoning: string; answer: string } | null> {
     try {
-      const constants = await ensureMaxaiConstants({ signal: input.signal });
+      input.signal?.throwIfAborted();
+      const constants = await ensureMaxaiConstants({
+        signal: input.signal,
+        fetchImpl: this.fetchImpl,
+      });
       if (!constants) return null;
       const retryBody = buildMaxaiChatBody({
         conversationId: newConversationId(),
         text: nudgedText,
         modelName: input.model,
         appVersion: constants.appVersion,
+        imageUrls,
+        docList,
       });
-      const headers: Record<string, string> = {
-        ...maxaiStaticHeaders(),
-        ...buildMaxaiSignedHeaders(
-          {
-            path: MAXAI_CHAT_PATH,
-            userId: cred.userId,
-            deviceId: cred.deviceId,
-          },
-          constants
-        ),
-        Authorization: `Bearer ${accessToken}`,
-        ...(input.upstreamExtraHeaders ?? {}),
-      };
-      const res = await fetch(MAXAI_BASE_URL + MAXAI_CHAT_PATH, {
+      const headers = withMaxaiExtraHeaders(
+        {
+          ...maxaiStaticHeaders(),
+          ...buildMaxaiSignedHeaders(
+            {
+              path: MAXAI_CHAT_PATH,
+              userId: cred.userId,
+              deviceId: cred.deviceId,
+            },
+            constants
+          ),
+          Authorization: `Bearer ${accessToken}`,
+        },
+        input.upstreamExtraHeaders
+      );
+      const res = await this.fetchImpl(MAXAI_BASE_URL + MAXAI_CHAT_PATH, {
         method: "POST",
+        redirect: "error",
         headers,
         body: JSON.stringify(retryBody),
         signal: input.signal ?? undefined,
       });
-      if (res.status !== 200 || !res.body) return null;
+      if (res.status !== 200 || !res.body) {
+        await res.body?.cancel().catch(() => {});
+        return null;
+      }
       return collectNonStream(await res.text());
-    } catch {
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
+      input.signal?.throwIfAborted();
       return null;
     }
   }
@@ -544,12 +593,18 @@ export class MaxAiExecutor extends BaseExecutor {
       }
     };
 
+    const reader = source.getReader();
+    let cancelled = false;
     return new ReadableStream({
+      async cancel(reason) {
+        cancelled = true;
+        await reader.cancel(reason);
+      },
       async start(controller) {
-        const reader = source.getReader();
         try {
           for (;;) {
             const { done, value } = await reader.read();
+            if (cancelled) return;
             if (done) break;
             sseBuf += decoder.decode(value, { stream: true });
             let nl: number;

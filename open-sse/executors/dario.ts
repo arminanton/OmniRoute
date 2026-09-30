@@ -24,6 +24,11 @@
  */
 
 import {
+  assertNotLockedCapability,
+  getRuntimePolicy,
+  isRuntimePolicyError,
+} from "@/shared/runtimePolicy";
+import {
   BaseExecutor,
   mergeUpstreamExtraHeaders,
   mergeAbortSignals,
@@ -47,17 +52,20 @@ export function clearDarioUrlCache() {
 
 // Pre-load settings URL at module init so the sync path has a cache hit.
 // Runs once when the executor module is first imported (mirrors cliproxyapi.ts).
-(async () => {
-  try {
-    const { getSettings } = await import("@/lib/db/settings");
-    const settings = await getSettings();
-    if (typeof settings.dario_url === "string" && settings.dario_url.trim()) {
-      _cachedSettingsUrl = { url: settings.dario_url.trim(), ts: Date.now() };
+if (getRuntimePolicy().mode === "standalone") {
+  (async () => {
+    try {
+      const { getSettings } = await import("@/lib/db/settings");
+      const settings = await getSettings();
+      if (typeof settings.dario_url === "string" && settings.dario_url.trim()) {
+        _cachedSettingsUrl = { url: settings.dario_url.trim(), ts: Date.now() };
+      }
+    } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
+      /* env vars will be used as fallback */
     }
-  } catch {
-    /* env vars will be used as fallback */
-  }
-})();
+  })();
+}
 
 /**
  * Resolve Dario base URL. Priority:
@@ -66,6 +74,7 @@ export function clearDarioUrlCache() {
  *   3. Defaults (127.0.0.1:3456)
  */
 async function resolveDarioBaseUrl(): Promise<string> {
+  assertNotLockedCapability("embedded-service-dario");
   if (_cachedSettingsUrl && Date.now() - _cachedSettingsUrl.ts < URL_CACHE_TTL_MS) {
     return _cachedSettingsUrl.url;
   }
@@ -78,7 +87,8 @@ async function resolveDarioBaseUrl(): Promise<string> {
       _cachedSettingsUrl = { url, ts: Date.now() };
       return url;
     }
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     /* fall through to env vars */
   }
 
@@ -220,6 +230,7 @@ export class DarioExecutor extends BaseExecutor {
     log?: ExecutorLog | null;
     upstreamExtraHeaders?: Record<string, string> | null;
   }) {
+    assertNotLockedCapability("embedded-service-dario");
     // Resolve URL dynamically so settings table dario_url is respected.
     // Uses 60s cache to avoid DB reads on every request.
     const baseUrl = await resolveDarioBaseUrl();
@@ -266,6 +277,7 @@ export class DarioExecutor extends BaseExecutor {
    * shows running+degraded until the operator completes the Claude OAuth login.
    */
   async healthCheck(): Promise<{ ok: boolean; latencyMs: number; error?: string }> {
+    assertNotLockedCapability("embedded-service-dario");
     const start = Date.now();
     try {
       const baseUrl = await resolveDarioBaseUrl();
@@ -278,6 +290,7 @@ export class DarioExecutor extends BaseExecutor {
         ...(!res.ok ? { error: `HTTP ${res.status}` } : {}),
       };
     } catch (err) {
+      if (isRuntimePolicyError(err)) throw err;
       return {
         ok: false,
         latencyMs: Date.now() - start,

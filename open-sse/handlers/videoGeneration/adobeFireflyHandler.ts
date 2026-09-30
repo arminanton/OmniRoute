@@ -7,6 +7,10 @@
 import { saveCallLog } from "@/lib/usageDb";
 import { sanitizeErrorMessage } from "../../utils/error.ts";
 import {
+  RemoteMediaFetchError,
+  createRemoteMediaFailureResult,
+} from "@/shared/network/remoteImageFetch";
+import {
   AdobeFireflyError,
   adobeFireflyGenerateVideo,
   resolveAdobeSourceImageIds,
@@ -25,6 +29,7 @@ export async function handleAdobeFireflyVideoGeneration({
   body,
   credentials,
   log,
+  signal,
   fetchImpl = fetch,
 }: {
   model: string;
@@ -44,6 +49,7 @@ export async function handleAdobeFireflyVideoGeneration({
   } | null;
   log?: { info?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void };
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }) {
   const startTime = Date.now();
   const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
@@ -56,6 +62,7 @@ export async function handleAdobeFireflyVideoGeneration({
   }
 
   try {
+    signal?.throwIfAborted();
     const session = await ensureAdobeFireflySession({
       credentials,
       fetchImpl,
@@ -82,9 +89,11 @@ export async function handleAdobeFireflyVideoGeneration({
       sessionCookie,
       arpSessionId,
       prompt,
+      signal,
       fetchImpl,
       log,
     });
+    signal?.throwIfAborted();
 
     log?.info?.(
       "VIDEO",
@@ -137,6 +146,9 @@ export async function handleAdobeFireflyVideoGeneration({
       },
     };
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (err instanceof AdobeFireflyError) {
       log?.error?.("VIDEO", `${provider} adobe-firefly error ${err.status}: ${err.message}`);
       saveCallLog({

@@ -1,5 +1,9 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
+import {
+  getAntigravityClaudeThinkingLevel,
+  isSelectedAntigravityClaudeModel,
+} from "../../config/antigravityClaudeEffort.ts";
 import { ANTIGRAVITY_DEFAULT_SYSTEM } from "../../config/constants.ts";
 import {
   buildGeminiThoughtSignatureKey,
@@ -123,6 +127,8 @@ function convertOpenAIToolChoiceToGemini(choice: unknown): GeminiFunctionCalling
 type CloudCodeEnvelope = {
   project: string;
   model?: string;
+  /** Internal caller intent; the executor removes it before upstream dispatch. */
+  reasoning_effort?: unknown;
   user_prompt_id?: string;
   userAgent?: string;
   requestId?: string;
@@ -809,6 +815,12 @@ export function openaiToAntigravityRequest(model, body, stream, credentials = nu
   }
 
   const envelope = wrapInCloudCodeEnvelope(model, cloudCodeRequest, credentials);
+  if (isSelectedAntigravityClaudeModel(model)) {
+    // Retain an explicit unsupported value too: the executor must not fall back
+    // to the alias tier after translation. It removes this non-wire field.
+    const explicitEffort = body.reasoning_effort ?? body.reasoning?.effort ?? body.output_config?.effort;
+    if (explicitEffort !== undefined) envelope.reasoning_effort = explicitEffort;
+  }
 
   // Match real Antigravity client: don't send maxOutputTokens when the user
   // hasn't explicitly specified max_tokens / max_completion_tokens.
@@ -834,7 +846,15 @@ export function openaiToAntigravityRequest(model, body, stream, credentials = nu
   // Must run AFTER the hasThinking-derived maxOutputTokens decision above so the
   // budget is accounted for before the field is removed.
   if (isClaude && envelope.request?.generationConfig) {
-    delete envelope.request.generationConfig.thinkingConfig;
+    // Selected adaptive Claude uses a level, not the legacy Gemini token-budget
+    // knob. The executor verifies the selected account's live capability before
+    // retaining this field; unsupported Claude keeps the existing strip path.
+    const thinkingLevel = getAntigravityClaudeThinkingLevel(model, body);
+    if (thinkingLevel) {
+      envelope.request.generationConfig.thinkingConfig = { thinkingLevel };
+    } else {
+      delete envelope.request.generationConfig.thinkingConfig;
+    }
   }
 
   return envelope;

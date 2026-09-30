@@ -1,5 +1,14 @@
+import {
+  assertRuntimeProviderSupported,
+  assertRuntimeExecutorEntrypoint,
+} from "@/shared/runtimePolicyEntrypoints";
+import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
-import { getRegistryEntry } from "../config/providerRegistry.ts";
+import {
+  getRegistryEntry,
+  requireCompatibleBaseUrl,
+  guardCompatibleUrl,
+} from "../config/providerRegistry.ts";
 import { resolveFetchStartTimeout } from "../utils/fetchStartTimeoutPolicy.ts";
 import {
   resolveAlternateFormat,
@@ -30,7 +39,11 @@ import {
   addParamToBlocklist,
   isAutoLearnGloballyEnabled,
 } from "@/lib/db/paramFilters";
-import { applyFingerprint, isCliCompatEnabled, stripInternalBodyFields } from "../config/cliFingerprints.ts";
+import {
+  applyFingerprint,
+  isCliCompatEnabled,
+  stripInternalBodyFields,
+} from "../config/cliFingerprints.ts";
 import { supportsClaudeMaxEffort, supportsXHighEffort } from "../config/providerModels.ts";
 import { getThinkingBudgetConfig, ThinkingMode } from "../services/thinkingBudget.ts";
 import {
@@ -62,6 +75,8 @@ import { signRequestBody } from "../services/claudeCodeCCH.ts";
 import { normalizeCacheControlTtl } from "../services/claudeCodeConstraints.ts";
 import {
   appendAnthropicBetaHeader,
+  CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH,
+  joinClaudeCodeCompatibleUrl,
   CLAUDE_CODE_COMPATIBLE_REDACT_THINKING_BETA,
   CONTEXT_1M_BETA_HEADER,
   enforceThinkingTemperature,
@@ -135,10 +150,11 @@ export { sanitizeReasoningEffortForProvider } from "./base/reasoningEffort.ts";
  * Valid paths must start with '/', contain no '..' segments,
  * no null bytes, and be reasonable in length.
  */
-function sanitizePath(path: string): boolean {
+export function sanitizePath(path: string): boolean {
   if (typeof path !== "string") return false;
   if (!path.startsWith("/")) return false;
-  if (path.includes("\0")) return false; // null byte
+  if (/[\\\s#]/.test(path)) return false;
+  if ([...path].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) return false;
   if (path.includes("..")) return false; // path traversal
   if (path.length > 512) return false; // sanity limit
   return true;
@@ -324,6 +340,7 @@ export class BaseExecutor {
   private _pool: import("../services/sessionPool/sessionPool.ts").SessionPool | null = null;
 
   constructor(provider: string, config: ProviderConfig) {
+    assertRuntimeProviderSupported(provider);
     this.provider = provider;
     this.config = config;
   }
@@ -334,6 +351,7 @@ export class BaseExecutor {
 
   protected getPool(): SessionPool | null {
     if (!this.poolConfig) return null;
+    assertNotLockedCapability("provider-session-pool");
     if (!this._pool) {
       const pool = new SessionPool(this.provider, this.poolConfig);
       pool.warmUp(this.poolConfig.minSessions).catch(() => {});
@@ -374,21 +392,41 @@ export class BaseExecutor {
     urlIndex = 0,
     credentials: ProviderCredentials | null = null
   ) {
+    assertRuntimeExecutorEntrypoint(this.provider, credentials);
     void model;
     void stream;
     if (this.provider?.startsWith?.("openai-compatible-")) {
       const psd = credentials?.providerSpecificData;
-      const baseUrl = typeof psd?.baseUrl === "string" ? psd.baseUrl : "https://api.openai.com/v1";
+      const baseUrl = requireCompatibleBaseUrl(this.provider, psd);
       const normalized = baseUrl.replace(/\/$/, "");
       // Sanitize custom path: must start with '/', no path traversal, no null bytes
       const rawPath = typeof psd?.chatPath === "string" && psd.chatPath ? psd.chatPath : null;
       const customPath = rawPath && sanitizePath(rawPath) ? rawPath : null;
-      if (customPath) return `${normalized}${customPath}`;
+      if (customPath) return guardCompatibleUrl(baseUrl, `${normalized}${customPath}`);
       const path =
         getOpenAICompatibleType(this.provider, psd) === "responses"
           ? "/responses"
           : "/chat/completions";
-      return `${normalized}${path}`;
+      return guardCompatibleUrl(baseUrl, `${normalized}${path}`);
+    }
+    if (this.provider?.startsWith?.("anthropic-compatible-")) {
+      const psd = credentials?.providerSpecificData;
+      const baseUrl = requireCompatibleBaseUrl(this.provider, psd);
+      const rawPath = typeof psd?.chatPath === "string" ? psd.chatPath : null;
+      const customPath = rawPath && sanitizePath(rawPath) ? rawPath : null;
+      if (isClaudeCodeCompatible(this.provider)) {
+        return guardCompatibleUrl(
+          baseUrl,
+          joinClaudeCodeCompatibleUrl(
+            baseUrl,
+            customPath || CLAUDE_CODE_COMPATIBLE_DEFAULT_CHAT_PATH
+          )
+        );
+      }
+      return guardCompatibleUrl(
+        baseUrl,
+        `${baseUrl.replace(/\/$/, "")}${customPath || "/messages"}`
+      );
     }
     const baseUrls = this.getBaseUrls();
     return baseUrls[urlIndex] || baseUrls[0] || this.config.baseUrl || "";
@@ -399,6 +437,7 @@ export class BaseExecutor {
    * providerSpecificData.baseUrl over the static provider config baseUrl.
    */
   protected resolveBaseUrl(credentials: ProviderCredentials | null, fallback?: string): string {
+    assertRuntimeExecutorEntrypoint(this.provider, credentials);
     const psdBaseUrl = credentials?.providerSpecificData?.baseUrl;
     // Operator's manual override always wins (#6147).
     if (typeof psdBaseUrl === "string" && psdBaseUrl) return psdBaseUrl;
@@ -649,6 +688,7 @@ export class BaseExecutor {
   }
 
   async countTokens({ model, body, credentials, signal, log }: CountTokensInput) {
+    assertRuntimeExecutorEntrypoint(this.provider, credentials);
     const url = this.buildCountTokensUrl(model, credentials);
     if (!url) return null;
     this.assertOutboundUrlAllowed(url); // GHSA-4f49
@@ -695,6 +735,7 @@ export class BaseExecutor {
 
       return { input_tokens: inputTokens, provider: this.provider, source: "provider" };
     } catch (error) {
+      if (isRuntimePolicyError(error)) throw error;
       log?.debug?.(
         "COUNT_TOKENS",
         `${this.provider}/${model} real count unavailable: ${error instanceof Error ? error.message : String(error)}`
@@ -706,6 +747,7 @@ export class BaseExecutor {
   }
 
   async execute(input: ExecuteInput): Promise<ExecutorExecuteResult> {
+    assertRuntimeExecutorEntrypoint(this.provider, input.credentials);
     const {
       model,
       body,
@@ -806,6 +848,7 @@ export class BaseExecutor {
           }
         }
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         // tokenRefresh.ts:1352 documents that onPersist throws are re-thrown so
         // the caller is aware of the persistence failure. Honor that contract:
         // log at error level (not warn), with sanitized message — and let the
@@ -1499,7 +1542,10 @@ export class BaseExecutor {
           const errText = await response
             .clone()
             .text()
-            .catch(() => "");
+            .catch((error: unknown) => {
+              if (isRuntimePolicyError(error)) throw error;
+              return "";
+            });
           if (/context[_-]management|context editing/i.test(errText)) {
             contextEditingDisabled = true;
             delete (transformedBody as Record<string, unknown>).context_management;
@@ -1532,7 +1578,10 @@ export class BaseExecutor {
           const errText = await response
             .clone()
             .text()
-            .catch(() => "");
+            .catch((error: unknown) => {
+              if (isRuntimePolicyError(error)) throw error;
+              return "";
+            });
           const upstreamMax = parseThinkingBudgetMax(errText);
           if (upstreamMax !== null) {
             const currentBudget = readNestedThinkingBudget(transformedBody);
@@ -1573,7 +1622,10 @@ export class BaseExecutor {
           const errText = await response
             .clone()
             .text()
-            .catch(() => "");
+            .catch((error: unknown) => {
+              if (isRuntimePolicyError(error)) throw error;
+              return "";
+            });
           const acceptedValues = parseReasoningEffortEnum(errText);
           if (acceptedValues) {
             reasoningEffortClamped = true;
@@ -1616,7 +1668,10 @@ export class BaseExecutor {
           const errText = await response
             .clone()
             .text()
-            .catch(() => "");
+            .catch((error: unknown) => {
+              if (isRuntimePolicyError(error)) throw error;
+              return "";
+            });
           const offending = findOffendingField(errText);
           if (
             offending &&
@@ -1661,6 +1716,7 @@ export class BaseExecutor {
                   response = await fetchWithStartTimeout(url, { ...fetchOptions, body: retryBody });
                 }
               } catch (learnError) {
+                if (isRuntimePolicyError(learnError)) throw learnError;
                 log?.warn?.(
                   "AUTO_LEARN",
                   `Failed to persist auto-learned param "${autoLearned}" for ${this.provider}: ${String(learnError)}`
@@ -1682,7 +1738,10 @@ export class BaseExecutor {
           const wafErrText = await response
             .clone()
             .text()
-            .catch(() => "");
+            .catch((error: unknown) => {
+              if (isRuntimePolicyError(error)) throw error;
+              return "";
+            });
           if (/content[_-]blocked/i.test(wafErrText)) {
             retryAttemptsByUrl[urlIndex] = (retryAttemptsByUrl[urlIndex] ?? 0) + 1;
             const wafAttempt = retryAttemptsByUrl[urlIndex];
@@ -1729,6 +1788,7 @@ export class BaseExecutor {
 
         return { response, url, headers: finalHeaders, transformedBody: serializedBody };
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         // Distinguish timeout errors from other abort errors
         const err = error instanceof Error ? error : new Error(String(error));
         if (err.name === "TimeoutError") {

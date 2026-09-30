@@ -5,7 +5,8 @@ import { detectMediaParts } from "@omniroute/open-sse/utils/mediaParts";
 
 import { getRuntimePorts } from "@/lib/runtime/ports";
 import { fetchRemoteImage } from "@/shared/network/remoteImageFetch";
-import { resolveSelfLoopBearer } from "@/shared/middleware/chatBodyAdmission";
+import { stampOwnListenerSelfHop } from "@omniroute/open-sse/utils/selfHop.ts";
+import { resolveSelfLoopApiKey } from "./visionBridgeHelpers";
 
 import { hasUsableCredentialsForModel } from "./visionBridgeCredentials";
 
@@ -199,7 +200,10 @@ async function resolveAudioBytes(
           timeoutMs: config.timeoutMs,
         }));
     const remote = await fetchRemote(part.ref, { signal });
-    return { bytes: remote.buffer, mime: remote.contentType.split(";", 1)[0]?.trim().toLowerCase() };
+    return {
+      bytes: remote.buffer,
+      mime: remote.contentType.split(";", 1)[0]?.trim().toLowerCase(),
+    };
   }
   return { bytes: Buffer.from(part.ref, "base64") };
 }
@@ -283,20 +287,20 @@ async function sendAudioTranscriptionRequest(
     );
 
     const port = (deps.getPort ?? (() => getRuntimePorts().port))();
-    const bearer = (deps.getBearer ?? resolveSelfLoopBearer)();
-    const response = await (deps.fetchImpl ?? fetch)(
-      `http://localhost:${port}/v1/audio/transcriptions`,
-      {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${bearer}`,
-          "Content-Type": `multipart/form-data; boundary=${boundary}`,
-        },
-        body: multipartBody,
-      }
-    );
+    const bearer = await (deps.getBearer ?? resolveSelfLoopApiKey)();
+    const targetUrl = `http://localhost:${port}/v1/audio/transcriptions`;
+    const requestOptions: RequestInit = {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${bearer}`,
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+      body: multipartBody,
+    };
+    stampOwnListenerSelfHop(targetUrl, requestOptions);
+    const response = await (deps.fetchImpl ?? fetch)(targetUrl, requestOptions);
     if (!response.ok) {
       throw new Error(`Audio transcription failed (${response.status})`);
     }

@@ -1,3 +1,4 @@
+import { isRuntimePolicyError, markRuntimePolicyResponse } from "@/shared/runtimePolicy";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { isAuthenticated } from "@/shared/utils/apiAuth";
@@ -94,6 +95,11 @@ export async function GET(request: NextRequest) {
       summary: { total, active, inactive, overriddenByDb, overriddenByEnv },
     });
   } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      return markRuntimePolicyResponse(
+        Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+      );
+    }
     return NextResponse.json({ error: sanitizeErrorMessage(error) }, { status: 500 });
   }
 }
@@ -186,6 +192,11 @@ export async function PUT(request: NextRequest) {
       requiresRestart: definition.requiresRestart,
     });
   } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      return markRuntimePolicyResponse(
+        Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+      );
+    }
     return NextResponse.json({ error: sanitizeErrorMessage(error) }, { status: 500 });
   }
 }
@@ -210,6 +221,11 @@ export async function DELETE(request: NextRequest) {
       message: `Cleared ${count} feature flag override${count !== 1 ? "s" : ""}`,
     });
   } catch (error) {
+    if (isRuntimePolicyError(error)) {
+      return markRuntimePolicyResponse(
+        Response.json({ error: sanitizeErrorMessage(error) }, { status: 403 })
+      );
+    }
     return NextResponse.json({ error: sanitizeErrorMessage(error) }, { status: 500 });
   }
 }

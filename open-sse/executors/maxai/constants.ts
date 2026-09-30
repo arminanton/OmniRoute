@@ -35,7 +35,9 @@
  * miss on the signer chunk can't break a signer that already has valid keys;
  * extraction still overrides them when present.
  */
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { createHmac, createHash } from "node:crypto";
+import { maxaiFetch } from "../../services/maxaiTransport.ts";
 
 /** The public bundle base. `/app/` is the SPA entry that references the chunks. */
 export const MAXAI_WEBAPP_ORIGIN = "https://www.maxai.co";
@@ -45,8 +47,7 @@ export const MAXAI_WEBAPP_APP_PATH = "/app/";
 export const MAXAI_CONSTANTS_SETTINGS_KEY = "maxaiSigningConstants";
 
 /** Firefox-150 UA used for the (unauthenticated) static-asset fetches. */
-const FETCH_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0";
+const FETCH_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0";
 
 /**
  * The header/slot NAMES the signer emits. These are standard HTTP header names
@@ -187,10 +188,7 @@ export function looksLikeSignerChunk(js: string): boolean {
  * Parse the two bundle chunks into raw constants. Pure (no network) so it is
  * unit-tested directly against synthetic fixtures.
  */
-export function parseMaxaiConstants(
-  appChunk: string,
-  signerChunk: string
-): MaxaiParsedConstants {
+export function parseMaxaiConstants(appChunk: string, signerChunk: string): MaxaiParsedConstants {
   const decoded = decodeNjHeaderNames(signerChunk);
   return {
     hmacKey: resolveWebpackGetter(appChunk, "Mn"),
@@ -209,7 +207,10 @@ function isHexKey(v: string | null | undefined): boolean {
 
 /** A doc-id key is a UUID (v4-shaped). */
 function isUuidKey(v: string | null | undefined): boolean {
-  return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v);
+  return (
+    typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)
+  );
 }
 
 /** A MaxAI app_version tag looks like `webpage_x.y.z`. */
@@ -223,9 +224,7 @@ function isAppVersion(v: string | null | undefined): boolean {
  * well-formed — return null otherwise, so we never persist a half-configured
  * signer. Only the plain HTTP header names fall back to the standard defaults.
  */
-export function assembleMaxaiConstants(
-  parsed: MaxaiParsedConstants
-): MaxaiSigningConstants | null {
+export function assembleMaxaiConstants(parsed: MaxaiParsedConstants): MaxaiSigningConstants | null {
   if (!isHexKey(parsed.hmacKey) || !isHexKey(parsed.aesKey)) return null;
   if (!isHexKey(parsed.ctxKey)) return null;
   if (!isUuidKey(parsed.docIdKey)) return null;
@@ -311,14 +310,41 @@ async function fetchText(
   fetchImpl: typeof fetch,
   signal?: AbortSignal | null
 ): Promise<string> {
+  signal?.throwIfAborted();
   try {
     const res = await fetchImpl(url, {
       headers: { "User-Agent": FETCH_UA, Accept: "*/*" },
+      redirect: "error",
       signal: signal ?? undefined,
     });
-    if (!res.ok) return "";
-    return await res.text();
-  } catch {
+    signal?.throwIfAborted();
+    if (!res.ok || res.redirected || !res.body) {
+      await res.body?.cancel().catch(() => {});
+      return "";
+    }
+    const limit = 4 * 1024 * 1024;
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      for (;;) {
+        signal?.throwIfAborted();
+        const part = await reader.read();
+        if (part.done) break;
+        bytes += part.value.byteLength;
+        if (bytes > limit) {
+          await reader.cancel();
+          return "";
+        }
+        chunks.push(part.value);
+      }
+      return Buffer.concat(chunks).toString("utf8");
+    } finally {
+      reader.releaseLock();
+    }
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
+    signal?.throwIfAborted();
     return "";
   }
 }
@@ -398,26 +424,23 @@ async function fetchSignerChunk(
 export async function fetchMaxaiConstants(
   opts: FetchConstantsOptions = {}
 ): Promise<MaxaiSigningConstants | null> {
-  const fetchImpl = opts.fetchImpl ?? fetch;
+  const fetchImpl = opts.fetchImpl ?? maxaiFetch;
   const origin = opts.origin ?? MAXAI_WEBAPP_ORIGIN;
-  const maxScan = opts.maxScanChunks ?? 80;
+  const maxScan = Math.min(80, Math.max(0, Math.trunc(opts.maxScanChunks ?? 80)));
+  const timeout = AbortSignal.timeout(30_000);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+  signal.throwIfAborted();
 
-  const html = await fetchText(origin + MAXAI_WEBAPP_APP_PATH, fetchImpl, opts.signal);
+  const html = await fetchText(origin + MAXAI_WEBAPP_APP_PATH, fetchImpl, signal);
   if (!html) return null;
 
   const { appChunk, candidateChunks } = findChunkUrls(html);
   if (!appChunk) return null;
 
-  const appJs = await fetchText(origin + appChunk, fetchImpl, opts.signal);
+  const appJs = await fetchText(origin + appChunk, fetchImpl, signal);
   if (!appJs) return null;
 
-  const signerJs = await fetchSignerChunk(
-    origin,
-    candidateChunks,
-    fetchImpl,
-    opts.signal,
-    maxScan
-  );
+  const signerJs = await fetchSignerChunk(origin, candidateChunks, fetchImpl, signal, maxScan);
 
   const parsed = parseMaxaiConstants(appJs, signerJs);
   const assembled = assembleMaxaiConstants(parsed);

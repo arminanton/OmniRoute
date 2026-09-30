@@ -1,30 +1,114 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import {
+import { RuntimePolicyError, isRuntimePolicyError } from "../../src/shared/runtimePolicy.ts";
+import { registerHooks } from "node:module";
+import type { MaxaiCredential } from "../../open-sse/executors/maxai/credentials.ts";
+
+const state = {
+  scope: null as string | null,
+  scopes: [] as string[],
+  constantsScopes: [] as (string | null)[],
+  refreshScopes: [] as (string | null)[],
+  refreshedInput: null as {
+    connectionId: string;
+    credential: MaxaiCredential;
+    fetchImpl: typeof fetch;
+  } | null,
+  wire: (async () => {
+    throw new Error("Unexpected wire call");
+  }) as typeof fetch,
+  refresh: async (credential: MaxaiCredential) => credential,
+  constants: async (_input: { fetchImpl: typeof fetch; signal?: AbortSignal }) => MOCK_CONSTANTS,
+  failScope: false,
+};
+const symbol = Symbol.for("omniroute.maxai-image-safety-test");
+Object.defineProperty(globalThis, symbol, { value: state, configurable: true });
+const prelude = 'const s = globalThis[Symbol.for("omniroute.maxai-image-safety-test")];';
+const hooks = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    let source: string | undefined;
+    if (specifier.endsWith("/maxaiTransport.ts"))
+      source = `
+      export async function runMaxaiConnectionTransport(id, fn) {
+        if (!id || s.failScope) throw new Error("secret-token proxy-password at /private/test.ts:1:1");
+        s.scopes.push(id); const old = s.scope; s.scope = id;
+        try { return await fn(); } finally { s.scope = old; }
+      }
+      export const maxaiFetch = (url, init) => {
+        if (!s.scope) throw new Error("Unscoped wire call");
+        return s.wire(url, init);
+      };`;
+    if (specifier.endsWith("/maxai/refresh.ts"))
+      source = `
+      export async function ensureFreshMaxaiCredential(input) {
+        s.refreshScopes.push(s.scope); s.refreshedInput = input;
+        return s.refresh(input.credential);
+      }`;
+    if (specifier.endsWith("/maxai/constantsStore.ts"))
+      source = `
+      export async function ensureMaxaiConstants(input) {
+        s.constantsScopes.push(s.scope); return s.constants(input);
+      }`;
+    if (specifier === "../../imageGeneration.ts")
+      source = `
+      export const saveImageErrorResult = (input) => ({ success: false, ...input });
+      export const saveImageSuccessResult = (input) => ({ success: true, data: { data: input.images } });`;
+    if (source !== undefined)
+      return {
+        url: "data:text/javascript," + encodeURIComponent(prelude + source),
+        shortCircuit: true,
+      };
+    if (specifier.includes("/lib/db/")) throw new Error("Real DB prohibited in image unit tests");
+    return nextResolve(specifier, context);
+  },
+});
+const {
   resolveMaxaiImageModel,
   snapMaxaiImageSize,
   extractMaxaiImageUrls,
   handleMaxaiImageGeneration,
   MAXAI_IMAGE_PATH,
-} from "../../open-sse/handlers/imageGeneration/providers/maxaiImage.ts";
+} = await import("../../open-sse/handlers/imageGeneration/providers/maxaiImage.ts");
 import { IMAGE_PROVIDERS } from "../../open-sse/config/imageRegistry.ts";
-import { __setMaxaiConstantsForTest } from "../../open-sse/executors/maxai/constantsStore.ts";
 import { MAXAI_BASE_URL } from "../../open-sse/executors/maxai/protocol.ts";
 import { MOCK_CONSTANTS } from "./helpers/maxaiMockConstants.ts";
-
-// Image generation signs like any request; seed the in-process constants memo
-// with MOCK values so the handler doesn't try to fetch the live MaxAI bundle.
-__setMaxaiConstantsForTest(MOCK_CONSTANTS);
 
 // A minimal valid MaxAI credential (userId derives nothing here; the signer is
 // exercised elsewhere). providerSpecificData carries the token + device id.
 const CRED = {
+  connectionId: "image-account",
+  refreshToken: "top-level-refresh",
   providerSpecificData: {
     maxaiAccessToken: "tok-abc",
     maxaiDeviceId: "dev-123",
     maxaiUserId: "11111111-1111-4111-8111-111111111111",
   },
 };
+
+const nativeFetch = globalThis.fetch;
+test.beforeEach(() => {
+  state.scope = null;
+  state.scopes = [];
+  state.constantsScopes = [];
+  state.refreshScopes = [];
+  state.failScope = false;
+  state.refreshedInput = null;
+  state.refresh = async (credential) => credential;
+  state.constants = async () => MOCK_CONSTANTS;
+  state.wire = async () => {
+    throw new Error("Unexpected wire call");
+  };
+  globalThis.fetch = async () => {
+    throw new Error("Ambient fetch is prohibited");
+  };
+});
+test.afterEach(() => {
+  globalThis.fetch = nativeFetch;
+});
+test.after(() => {
+  hooks.deregister();
+  Reflect.deleteProperty(globalThis, symbol);
+});
 
 // --- Registry ------------------------------------------------------------
 
@@ -42,6 +126,7 @@ test("maxai is registered in IMAGE_PROVIDERS with the maxai-image format + 6 mod
 
 test("resolveMaxaiImageModel strips maxai/ prefix and resolves aliases", () => {
   assert.equal(resolveMaxaiImageModel("maxai/gpt-image-1"), "gpt-image-1");
+  assert.equal(resolveMaxaiImageModel("mx/gpt-image-1"), "gpt-image-1");
   assert.equal(resolveMaxaiImageModel("stable-diffusion-v3"), "sd3-medium");
   assert.equal(resolveMaxaiImageModel("stable-diffusion-3-medium"), "sd3-medium");
   assert.equal(resolveMaxaiImageModel("flux-1-schnell"), "flux-1-schnell");
@@ -176,4 +261,155 @@ test("handleMaxaiImageGeneration surfaces a no-images response as 502", async ()
   })) as { success: boolean; status?: number };
   assert.equal(result.success, false);
   assert.equal(result.status, 502);
+});
+
+test("image helper refuses a missing connection before refresh or network", async () => {
+  let calls = 0;
+  const { connectionId: _connectionId, ...credentials } = CRED;
+  const result = await handleMaxaiImageGeneration({
+    model: "gpt-image-1",
+    provider: "maxai",
+    body: { prompt: "x" },
+    credentials,
+    fetchImpl: async () => {
+      calls++;
+      return Response.json({ status: "OK", data: [{ url: "x" }] });
+    },
+  });
+  assert.equal(result.success, false);
+  assert.equal(calls, 0);
+  assert.deepEqual(state.refreshScopes, []);
+});
+
+test("image helper defaults to account-bound fetch and uses refreshed credentials immediately", async () => {
+  state.refresh = async (credential) => ({ ...credential, accessToken: "fresh-access" });
+  state.wire = async (_url, init) => {
+    assert.equal(state.scope, CRED.connectionId);
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer fresh-access");
+    assert.equal(init?.redirect, "error");
+    return Response.json({ status: "OK", data: [{ png_url: "https://example.com/image.png" }] });
+  };
+  const result = await handleMaxaiImageGeneration({
+    model: "mx/gpt-image-1",
+    provider: "mx",
+    body: { prompt: "x" },
+    credentials: CRED,
+  });
+  assert.equal(result.success, true);
+  assert.deepEqual(state.scopes, [CRED.connectionId]);
+  assert.deepEqual(state.refreshScopes, [CRED.connectionId]);
+  assert.deepEqual(state.constantsScopes, [CRED.connectionId]);
+  assert.equal(state.refreshedInput?.credential.refreshToken, CRED.refreshToken);
+});
+
+test("image failures never expose or log upstream body/status/transport secrets", async () => {
+  const secret = "synthetic-access synthetic-refresh proxy-password at /private/test.ts:1:1";
+  for (const fetchImpl of [
+    async () => new Response(secret, { status: 418 }),
+    async () => {
+      throw new Error(secret);
+    },
+    async () => Response.json({ status: secret, data: [] }),
+  ]) {
+    const logs: unknown[] = [];
+    const result = await handleMaxaiImageGeneration({
+      model: "gpt-image-1",
+      provider: "maxai",
+      body: { prompt: "x" },
+      credentials: CRED,
+      fetchImpl,
+      log: { error: (...args) => logs.push(args) },
+    });
+    assert.equal(result.success, false);
+    assert.doesNotMatch(
+      JSON.stringify({ result, logs }),
+      /synthetic-access|synthetic-refresh|proxy-password|at \/private/
+    );
+  }
+});
+
+test("image abort during refresh prevents the signed image request", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  state.refresh = async (credential) => {
+    controller.abort();
+    return credential;
+  };
+  const result = await handleMaxaiImageGeneration({
+    model: "gpt-image-1",
+    provider: "maxai",
+    body: { prompt: "x" },
+    credentials: CRED,
+    signal: controller.signal,
+    fetchImpl: async () => {
+      calls++;
+      return Response.json({});
+    },
+  });
+  assert.equal(result.success, false);
+  assert.equal(calls, 0);
+});
+
+test("cold image signing fetch and API use the identical account-bound fetch", async () => {
+  const calls: string[] = [];
+  state.constants = async (input) => {
+    assert.equal(input.fetchImpl, state.refreshedInput?.fetchImpl);
+    await input.fetchImpl("https://www.maxai.co/app/", { signal: input.signal, redirect: "error" });
+    return MOCK_CONSTANTS;
+  };
+  state.wire = async (url) => {
+    assert.equal(state.scope, CRED.connectionId);
+    calls.push(String(url));
+    return String(url).endsWith("/app/")
+      ? new Response("")
+      : Response.json({ status: "OK", data: [{ url: "https://example.com/image.png" }] });
+  };
+  const result = await handleMaxaiImageGeneration({
+    model: "gpt-image-1",
+    provider: "maxai",
+    body: { prompt: "x" },
+    credentials: CRED,
+  });
+  assert.equal(result.success, true);
+  assert.deepEqual(calls, ["https://www.maxai.co/app/", MAXAI_BASE_URL + MAXAI_IMAGE_PATH]);
+});
+
+test("image transport rejection prevents refresh and signing bundle work", async () => {
+  state.failScope = true;
+  const logs: unknown[] = [];
+  const result = await handleMaxaiImageGeneration({
+    model: "gpt-image-1",
+    provider: "maxai",
+    body: { prompt: "x" },
+    credentials: CRED,
+    log: { error: (...args) => logs.push(args) },
+  });
+  assert.equal(result.success, false);
+  assert.deepEqual(state.refreshScopes, []);
+  assert.deepEqual(state.constantsScopes, []);
+  assert.doesNotMatch(JSON.stringify({ result, logs }), /secret-token|proxy-password|at \/private/);
+});
+
+test("MaxAI image handler preserves trusted policy without converting to provider failure", async () => {
+  const policyError = new RuntimePolicyError("proxy-forbidden");
+  let logs = 0;
+  state.wire = async () => {
+    throw policyError;
+  };
+  await assert.rejects(
+    handleMaxaiImageGeneration({
+      model: "gpt-image-1",
+      provider: "maxai",
+      body: { prompt: "a boat" },
+      credentials: CRED,
+      log: {
+        error() {
+          logs++;
+        },
+      },
+    }),
+    (error) => error === policyError && isRuntimePolicyError(error)
+  );
+  assert.equal(logs, 0);
+  assert.deepEqual(state.scopes, ["image-account"]);
 });

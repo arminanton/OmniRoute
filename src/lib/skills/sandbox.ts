@@ -1,6 +1,7 @@
 import { createRequire } from "module";
 import type { ChildProcess } from "child_process";
 import { randomUUID } from "crypto";
+import { assertNotLockedCapability } from "@/shared/runtimePolicy";
 import {
   resolveProvider,
   buildKillCommand,
@@ -58,6 +59,7 @@ class SandboxRunner {
    * remainder of the process so subsequent `run()` calls stay sync-friendly.
    */
   async getProvider(): Promise<ContainerProvider> {
+    assertNotLockedCapability("skill-sandbox");
     if (!this.cachedProvider) {
       this.cachedProvider = await resolveProvider();
     }
@@ -70,6 +72,7 @@ class SandboxRunner {
     env: Record<string, string> = {},
     configOverride: Partial<SandboxConfig> = {}
   ): Promise<SandboxResult> {
+    assertNotLockedCapability("skill-sandbox");
     const sandboxId = randomUUID();
     const startTime = Date.now();
     const config = { ...this.config, ...configOverride };

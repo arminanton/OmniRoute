@@ -20,6 +20,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { DATA_DIR } from "@/lib/db/core";
 import { upsertVersionManagerTool } from "@/lib/db/versionManager";
 import { runNpm, InstallError } from "./utils";
@@ -92,6 +93,7 @@ export async function getInstalledVersion(): Promise<string | null> {
 }
 
 export async function getLatestVersion(): Promise<string | null> {
+  assertNotLockedCapability("embedded-service-install");
   if (latestVersionCache && latestVersionCache.expiresAt > Date.now()) {
     return latestVersionCache.value;
   }
@@ -102,7 +104,8 @@ export async function getLatestVersion(): Promise<string | null> {
       latestVersionCache = { value: version, expiresAt: Date.now() + VERSION_CACHE_TTL_MS };
     }
     return version || null;
-  } catch {
+  } catch (error) {
+    if (isRuntimePolicyError(error)) throw error;
     return null;
   }
 }
@@ -112,6 +115,7 @@ export async function getLatestVersion(): Promise<string | null> {
  * Upserts the version_manager row with tool='dario'.
  */
 export async function install(version = "latest"): Promise<InstallResult> {
+  assertNotLockedCapability("embedded-service-install");
   const startMs = Date.now();
   const installDir = getDarioInstallDir();
 
@@ -186,6 +190,7 @@ export async function update(): Promise<InstallResult> {
  * startup failure (ServiceSupervisor.waitForHealthy tolerates it).
  */
 export function resolveSpawnArgs(apiKey: string, port: number): SpawnArgs {
+  assertNotLockedCapability("embedded-service-provisioning");
   const cliPath = getCliPath();
   const installDir = getDarioInstallDir();
 

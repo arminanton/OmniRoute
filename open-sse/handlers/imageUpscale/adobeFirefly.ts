@@ -18,6 +18,10 @@ import {
 } from "../../services/adobeFireflyUpscale.ts";
 import { sanitizeErrorMessage } from "../../utils/error.ts";
 import {
+  RemoteMediaFetchError,
+  createRemoteMediaFailureResult,
+} from "@/shared/network/remoteImageFetch";
+import {
   extractUpscaleSourceImage,
   saveUpscaleErrorResult,
   saveUpscaleSuccessResult,
@@ -32,6 +36,7 @@ export async function handleAdobeFireflyImageUpscale({
   body,
   credentials,
   log,
+  signal,
   fetchImpl = fetch,
 }: {
   model: string;
@@ -40,6 +45,7 @@ export async function handleAdobeFireflyImageUpscale({
   credentials: UpscaleCredentials;
   log?: UpscaleLogger;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
 }): Promise<UpscaleHandlerResult> {
   const startTime = Date.now();
 
@@ -65,9 +71,11 @@ export async function handleAdobeFireflyImageUpscale({
   }
 
   try {
+    signal?.throwIfAborted();
     const accessToken = await resolveAdobeAccessToken(credentials, fetchImpl);
     // Keep the raw credential blob for Cookie + sherlockToken (x-arp-session-id).
-    const psd = (credentials as { providerSpecificData?: { cookie?: string } })?.providerSpecificData;
+    const psd = (credentials as { providerSpecificData?: { cookie?: string } })
+      ?.providerSpecificData;
     const sessionCookie =
       (typeof psd?.cookie === "string" && psd.cookie.trim()) ||
       (typeof credentials?.apiKey === "string" && credentials.apiKey.trim()) ||
@@ -82,9 +90,11 @@ export async function handleAdobeFireflyImageUpscale({
       max: 1,
       sessionCookie,
       prompt: "upsample",
+      signal,
       fetchImpl,
       log,
     });
+    signal?.throwIfAborted();
 
     if (blobIds.length === 0) {
       return saveUpscaleErrorResult({
@@ -129,8 +139,14 @@ export async function handleAdobeFireflyImageUpscale({
       },
     });
   } catch (err) {
+    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+      return createRemoteMediaFailureResult(err, signal);
+    }
     if (err instanceof AdobeFireflyError) {
-      log?.error?.("IMAGE", `${provider} adobe-firefly upscale error ${err.status}: ${err.message}`);
+      log?.error?.(
+        "IMAGE",
+        `${provider} adobe-firefly upscale error ${err.status}: ${err.message}`
+      );
       return saveUpscaleErrorResult({
         provider,
         model,

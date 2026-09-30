@@ -344,6 +344,10 @@ export function normalizeDiscoveredModels(
         : {}),
       ...(supportedEndpoints && supportedEndpoints.length > 0 ? { supportedEndpoints } : {}),
       ...(supportedThinkingEfforts !== undefined ? { supportedThinkingEfforts } : {}),
+      ...((providerId === "antigravity" || providerId === "agy") &&
+      record.supportsAdaptiveThinking === true
+        ? { supportsAdaptiveThinking: true }
+        : {}),
       ...(defaultThinkingEffort !== undefined ? { defaultThinkingEffort } : {}),
       ...(typeof inputTokenLimit === "number" ? { inputTokenLimit } : {}),
       ...(typeof outputTokenLimit === "number" ? { outputTokenLimit } : {}),

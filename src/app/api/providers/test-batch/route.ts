@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { getProviderConnections } from "@/models";
 import {
   AI_PROVIDERS,
@@ -20,7 +21,10 @@ import { testSingleConnection } from "../[id]/test/route";
 import { providersBatchTestSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
-import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import {
+  runtimePolicyErrorResponse,
+  sanitizeErrorMessage,
+} from "@omniroute/open-sse/utils/error";
 
 // Determine auth type group for a provider id
 function getAuthGroup(providerId) {
@@ -196,6 +200,7 @@ export async function POST(request) {
           testedAt: data.testedAt || new Date().toISOString(),
         };
       } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
         const message = getSafeErrorMessage(error, "Connection test failed");
         return {
           provider: conn.provider,
@@ -217,6 +222,13 @@ export async function POST(request) {
     for (let i = 0; i < connectionsToTest.length; i += CONCURRENCY) {
       const batch = connectionsToTest.slice(i, i + CONCURRENCY);
       const batchResults = await Promise.allSettled(batch.map(testOne));
+      // Current-batch work already started and is allowed to settle. A policy
+      // denial stops aggregation and prevents every later batch from starting.
+      for (const result of batchResults) {
+        if (result.status === "rejected" && isRuntimePolicyError(result.reason)) {
+          throw result.reason;
+        }
+      }
       for (const r of batchResults) {
         const message = r.status === "rejected" ? getSafeErrorMessage(r.reason) : null;
         results.push(
@@ -255,6 +267,7 @@ export async function POST(request) {
       },
     });
   } catch (error) {
+    if (isRuntimePolicyError(error)) return runtimePolicyErrorResponse();
     console.log("Error in batch test:", error);
     return NextResponse.json({ error: "Batch test failed" }, { status: 500 });
   }

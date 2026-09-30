@@ -104,7 +104,7 @@ test("Fix D: staleness fallback returns absolute expiresAt, not raw expiresIn", 
   const slice = src.slice(idx, idx + 800);
   assert.match(
     slice,
-    /expiresAt:\s*dbConnection\.expiresAt/,
+    /expiresAt:\s*new Date\(dbExpiresAt\)\.toISOString\(\)/,
     "Staleness fallback must return absolute expiresAt"
   );
   assert.doesNotMatch(

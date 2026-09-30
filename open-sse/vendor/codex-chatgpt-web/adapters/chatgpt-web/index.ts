@@ -1,5 +1,6 @@
 /* Adapted from miuuyy/codex-chatgpt-web v4.0.7 commit b59d7dc51b84fb1f465ff1d00f5207f3b2b4a494 (MIT). */
 import { createHash } from "node:crypto";
+import { isRuntimePolicyError } from "../../../../../src/shared/runtimePolicy.ts";
 import { resolve } from "node:path";
 import { defaultBrokerEndpoint, expandUserPath, resolveBrokerEndpoint } from "../../config";
 import { releaseLauncherRetainedConversation } from "../../launcher-browser-host";
@@ -273,6 +274,7 @@ function replayEvents(events: AdapterEvent[], emit: (event: AdapterEvent) => voi
 }
 
 function submittedTurnFailure(session: ChatGptTurnSession, error: unknown): Error {
+  if (isRuntimePolicyError(error)) return error;
   const normalized = error instanceof Error ? error : new Error(String(error));
   if (normalized instanceof ChatGptWebAdapterError) return normalized;
   const phase = session.runtime.submission?.phase;
@@ -726,10 +728,12 @@ export function createChatGptWebAdapter(
                   await chatGptTurnSessions.retireConversationAndWait(retainedKey);
                   return summary;
                 } catch (error) {
+                  if (isRuntimePolicyError(error)) throw error;
                   let handoffError = error instanceof Error ? error : new Error(String(error));
                   try {
                     await chatGptTurnSessions.retireConversationAndWait(retainedKey);
                   } catch (retirementError) {
+                    if (isRuntimePolicyError(retirementError)) throw retirementError;
                     handoffError = new AggregateError(
                       [
                         handoffError,
@@ -755,6 +759,7 @@ export function createChatGptWebAdapter(
             try {
               summary = await withAbort(sharedSummary, incoming.abortSignal);
             } catch (error) {
+              if (isRuntimePolicyError(error)) throw error;
               if (
                 incoming.abortSignal?.aborted &&
                 error instanceof DOMException &&
@@ -1041,6 +1046,7 @@ export function createChatGptWebAdapter(
             }
           });
         } catch (error) {
+          if (isRuntimePolicyError(error)) throw error;
           if (
             incoming.abortSignal?.aborted &&
             error instanceof DOMException &&

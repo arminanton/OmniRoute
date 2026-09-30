@@ -76,12 +76,19 @@ test("(c) CRUX: agentrouter keeps its OWN registry baseUrl + ?beta=true", () => 
   assert.ok(!url.includes("api.anthropic.com"));
 });
 
-test("(c) real CC-family provider still uses the CC default baseUrl + Bearer auth", () => {
+test("(c) real CC-family provider requires its configured baseUrl and keeps Bearer auth", () => {
   // The wire-image guard must NOT leak into genuine anthropic-compatible-cc-* providers.
   const headers = buildProviderHeaders("anthropic-compatible-cc-foo", { apiKey: "sk-foo" }, true);
   assert.equal(headers["Authorization"], "Bearer sk-foo");
   assert.equal(headers["x-api-key"], undefined);
 
-  const url = buildProviderUrl("anthropic-compatible-cc-foo", "claude-sonnet-4-6", true);
-  assert.ok(url.includes("api.anthropic.com"));
+  // A missing node endpoint must never send its credentials to the native provider.
+  assert.throws(
+    () => buildProviderUrl("anthropic-compatible-cc-foo", "claude-sonnet-4-6", true),
+    /Compatible provider node has no valid baseUrl/
+  );
+  const url = buildProviderUrl("anthropic-compatible-cc-foo", "claude-sonnet-4-6", true, {
+    providerSpecificData: { baseUrl: "https://cc-relay.example.test/v1" },
+  });
+  assert.equal(url, "https://cc-relay.example.test/v1/messages?beta=true");
 });

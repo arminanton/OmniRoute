@@ -18,6 +18,18 @@ import {
   type AdaptiveAdmissionRuntime,
 } from "../../open-sse/services/admission/runtime.ts";
 import type { AdaptiveAdmissionConfig } from "../../open-sse/services/admission/types.ts";
+import { createReasoningCacheKeyContext } from "../../open-sse/services/reasoningCacheContext.ts";
+
+function principal(credential: string) {
+  const prior = process.env.API_KEY_SECRET;
+  process.env.API_KEY_SECRET = "test-admission-principal-secret";
+  try {
+    return createReasoningCacheKeyContext(credential)!;
+  } finally {
+    if (prior === undefined) delete process.env.API_KEY_SECRET;
+    else process.env.API_KEY_SECRET = prior;
+  }
+}
 
 class FakeClock {
   nowMs = 0;
@@ -101,8 +113,12 @@ function makeRuntime(
 }
 
 describe("resolveAdmissionTenantKey", () => {
-  it("uses only opaque api key id; never falls through to empty/raw", () => {
-    assert.equal(resolveAdmissionTenantKey("key-abc"), "key-abc");
+  it("uses only trusted authenticated principals; never raw metadata IDs", () => {
+    assert.equal(resolveAdmissionTenantKey("key-abc"), ANONYMOUS_ADMISSION_TENANT_KEY);
+    assert.notEqual(
+      resolveAdmissionTenantKey(principal("key-abc")),
+      ANONYMOUS_ADMISSION_TENANT_KEY
+    );
     assert.equal(resolveAdmissionTenantKey(""), ANONYMOUS_ADMISSION_TENANT_KEY);
     assert.equal(resolveAdmissionTenantKey(null), ANONYMOUS_ADMISSION_TENANT_KEY);
     assert.equal(resolveAdmissionTenantKey(undefined), ANONYMOUS_ADMISSION_TENANT_KEY);
@@ -206,7 +222,7 @@ describe("createChatAdmissionContext", () => {
     );
     const ctx = createChatAdmissionContext(() => runtime);
     const first = await ctx.acquire(
-      "tenant-a",
+      principal("tenant-a"),
       { signal: undefined },
       {
         messages: [{ role: "user", content: "hi" }],
@@ -217,7 +233,7 @@ describe("createChatAdmissionContext", () => {
     assert.ok(ctx.getAdmittedState());
     assert.equal(runtime.snapshot().activeCount, 1);
 
-    const second = await ctx.acquire("tenant-b", {}, { messages: [] });
+    const second = await ctx.acquire(principal("tenant-b"), {}, { messages: [] });
     assert.equal(second, null);
     assert.equal(runtime.snapshot().activeCount, 1);
     assert.equal(runtime.snapshot().admittedCount, 1);
@@ -238,11 +254,11 @@ describe("createChatAdmissionContext", () => {
       })
     );
     const holdCtx = createChatAdmissionContext(() => tiny);
-    assert.equal(await holdCtx.acquire("hold", {}, { messages: [] }), null);
+    assert.equal(await holdCtx.acquire(principal("hold"), {}, { messages: [] }), null);
 
     const rejectCtx = createChatAdmissionContext(() => tiny);
     const rejectPromise = rejectCtx.acquire(
-      "waiter",
+      principal("waiter"),
       {},
       { messages: [{ role: "user", content: "x" }] }
     );
@@ -294,7 +310,7 @@ describe("withChatAdmission lifecycle", () => {
 
   it("JSON success releases active lease before return", async () => {
     const handle = wrap(async (_req, _raw, _body, _id, ctx) => {
-      const rejection = await ctx.acquire("k1", {}, { messages: [], stream: false });
+      const rejection = await ctx.acquire(principal("k1"), {}, { messages: [], stream: false });
       assert.equal(rejection, null);
       assert.equal(runtime.snapshot().activeCount, 1);
       return new Response(JSON.stringify({ choices: [] }), {
@@ -310,7 +326,7 @@ describe("withChatAdmission lifecycle", () => {
 
   it("SSE keeps lease through open stream and releases once on cancel", async () => {
     const handle = wrap(async (_req, _raw, _body, _id, ctx) => {
-      const rejection = await ctx.acquire("k-sse", {}, { messages: [], stream: true });
+      const rejection = await ctx.acquire(principal("k-sse"), {}, { messages: [], stream: true });
       assert.equal(rejection, null);
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
@@ -336,7 +352,7 @@ describe("withChatAdmission lifecycle", () => {
       release.call(runtime, lease, outcome, options);
     };
     const handle = wrap(async (_req, _raw, _body, _id, ctx) => {
-      assert.equal(await ctx.acquire("k-err", {}, { messages: [] }), null);
+      assert.equal(await ctx.acquire(principal("k-err"), {}, { messages: [] }), null);
       throw new Error("provider exploded");
     });
     await assert.rejects(() => handle({}, null, null), /provider exploded/);
@@ -356,7 +372,7 @@ describe("withChatAdmission lifecycle", () => {
     };
 
     const handle = wrap(async (_req, _raw, _body, _id, ctx) => {
-      assert.equal(await ctx.acquire("k-attach", {}, { messages: [] }), null);
+      assert.equal(await ctx.acquire(principal("k-attach"), {}, { messages: [] }), null);
       return new Response("ok");
     });
 
@@ -367,7 +383,7 @@ describe("withChatAdmission lifecycle", () => {
 
   it("timeout-classified throw releases as timeout", async () => {
     const handle = wrap(async (_req, _raw, _body, _id, ctx) => {
-      assert.equal(await ctx.acquire("k-to", {}, { messages: [] }), null);
+      assert.equal(await ctx.acquire(principal("k-to"), {}, { messages: [] }), null);
       throw Object.assign(new Error("gateway timeout"), { status: 504 });
     });
     await assert.rejects(() => handle({}, null, null), /gateway timeout/);
@@ -390,7 +406,7 @@ describe("withChatAdmission lifecycle", () => {
 
     const holdHandle = withChatAdmission(
       async (_req, _raw, _body, _id, ctx) => {
-        assert.equal(await ctx.acquire("hold", {}, { messages: [] }), null);
+        assert.equal(await ctx.acquire(principal("hold"), {}, { messages: [] }), null);
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             controller.enqueue(new TextEncoder().encode("data: hold\n\n"));
@@ -409,7 +425,7 @@ describe("withChatAdmission lifecycle", () => {
     let innerCalls = 0;
     const rejectHandle = withChatAdmission(
       async (_req, _raw, _body, _id, ctx) => {
-        const rejection = await ctx.acquire("waiter", {}, { messages: [] });
+        const rejection = await ctx.acquire(principal("waiter"), {}, { messages: [] });
         if (rejection) return rejection;
         innerCalls += 1;
         return new Response("inner", { status: 200 });
@@ -443,7 +459,7 @@ describe("withChatAdmission lifecycle", () => {
 
     const holdHandle = withChatAdmission(
       async (_req, _raw, _body, _id, ctx) => {
-        assert.equal(await ctx.acquire("hold", {}, { messages: [] }), null);
+        assert.equal(await ctx.acquire(principal("hold"), {}, { messages: [] }), null);
         return new Response(
           new ReadableStream({
             start(c) {
@@ -461,7 +477,7 @@ describe("withChatAdmission lifecycle", () => {
     const ac = new AbortController();
     const waitHandle = withChatAdmission(
       async (req, _raw, _body, _id, ctx) => {
-        const rejection = await ctx.acquire("waiter", req, { messages: [] });
+        const rejection = await ctx.acquire(principal("waiter"), req, { messages: [] });
         if (rejection) return rejection;
         innerCalls += 1;
         return new Response("inner", { status: 200 });
