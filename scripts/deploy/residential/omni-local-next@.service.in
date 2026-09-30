@@ -23,9 +23,12 @@ TimeoutStopSec=20
 # No start loop before fresh attestation/configuration review exists.
 Restart=no
 Delegate=yes
-NoNewPrivileges=yes
+# The trusted root OCI manager must initialize the non-root payload user.
+# Payload NNP is enforced independently by the launcher and boundary reader.
+NoNewPrivileges=no
 PrivateTmp=yes
-ProtectHome=yes
+ProtectHome=read-only
+ReadWritePaths=/home/ubuntu/.omniroute
 ProtectSystem=full
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
