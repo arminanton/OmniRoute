@@ -462,7 +462,10 @@ def main() -> int:
     cidpath = RUN / (args.role + ".cid")
     if not cidpath.exists():
         return 0
-    cid = read_protected(cidpath, private=True).decode().strip()
+    # Podman creates CID files mode0644 even under the launcher's umask.
+    # The enclosing RUN directory remains root-only; CID is not a secret.
+    protected(RUN, directory=True, private=True)
+    cid = read_protected(cidpath).decode().strip()
     if not HEX.fullmatch(cid):
         raise PolicyError("invalid owned CID")
     result = subprocess.run(["/usr/bin/podman", "--remote=false", "inspect", cid],
