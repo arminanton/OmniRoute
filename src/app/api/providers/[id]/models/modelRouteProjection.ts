@@ -7,6 +7,7 @@ import { getSettings } from "@/lib/db/settings";
 import { readNoAuthModelCatalog, replaceNoAuthModelCatalog } from "@/lib/db/models/noAuthCatalog";
 import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { discoverDuckDuckGoModels } from "@/lib/providerModels/duckDuckGoModels";
+import { discoverCloudflarePlaygroundModels } from "@/lib/providerModels/cloudflarePlaygroundModels";
 import { getStaticModelsForProvider } from "@/lib/providers/staticModels";
 import { usesNoAuthLiveCatalog } from "@/lib/providers/noAuthCatalogPolicy";
 import { SAFE_OUTBOUND_FETCH_PRESETS, safeOutboundFetch } from "@/shared/network/safeOutboundFetch";
@@ -86,13 +87,16 @@ export async function buildNoAuthModelsResponse(
     typeof registryEntry?.modelsUrl === "string" && registryEntry.modelsUrl.length > 0
       ? registryEntry.modelsUrl
       : null;
-  const hasLiveDiscovery = !!modelsUrl || providerId === "duckduckgo-web";
+  const hasLiveDiscovery =
+    !!modelsUrl || providerId === "duckduckgo-web" || providerId === "cloudflare-playground";
   const liveModels =
     providerId === "duckduckgo-web"
       ? await discoverDuckDuckGoModels()
-      : modelsUrl
-        ? await fetchLiveNoAuthModels(modelsUrl)
-        : null;
+      : providerId === "cloudflare-playground"
+        ? await discoverCloudflarePlaygroundModels()
+        : modelsUrl
+          ? await fetchLiveNoAuthModels(modelsUrl)
+          : null;
 
   if (liveModels !== null) {
     // Store provider eligibility/lifecycle decisions, never request-specific visibility.

@@ -66,6 +66,16 @@ class KernelLauncherTests(unittest.TestCase):
         for role in ("browser", "codex"):
             self.assertFalse(any("dst=/run/omniroute-browser-login" in x for x in launcher.command(policy, role)))
 
+    def test_codex_home_does_not_require_image_node_home_access(self):
+        policy = self.policy()
+        codex = launcher.command(policy, "codex")
+        app = launcher.command(policy, "app")
+        self.assertIn("--env=HOME=/codex-home", codex)
+        for args in (codex, app):
+            self.assertIn("--env=CODEX_HOME=/codex-home", args)
+            self.assertTrue(any("dst=/codex-home,rw," in arg for arg in args))
+            self.assertFalse(any("/home/node/.codex" in arg for arg in args))
+
     def test_browser_login_requires_explicit_secure_origin(self):
         policy = self.policy()
         policy["helpers"]["browserLogin"] = True

@@ -11,13 +11,19 @@ const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const modelsRoute = await import("../../src/app/api/providers/[id]/models/route.ts");
 const snapshots = await import("../../src/lib/db/models/noAuthCatalog.ts");
+const { __setCloudflareCatalogTransportForTests } =
+  await import("../../src/lib/providerModels/cloudflarePlaygroundModels.ts");
 test.beforeEach(async () => {
-  for (const provider of ["opencode", "duckduckgo-web", "uncloseai"]) {
+  __setCloudflareCatalogTransportForTests(async () => {
+    throw new Error("Offline test");
+  });
+  for (const provider of ["opencode", "duckduckgo-web", "uncloseai", "cloudflare-playground"]) {
     await snapshots.deleteNoAuthModelCatalog(provider);
   }
 });
 
 test.after(() => {
+  __setCloudflareCatalogTransportForTests(null);
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -267,7 +273,7 @@ test("curated-only no-auth catalogs do not claim an upstream failure or fetch", 
     throw new Error("Curated catalogs do not fetch");
   };
   try {
-    for (const provider of ["cloudflare-playground", "chipotle"]) {
+    for (const provider of ["chipotle"]) {
       const response = await modelsRoute.GET(
         new Request(`http://localhost/api/providers/${provider}/models?refresh=true`),
         { params: { id: provider } }
@@ -407,4 +413,64 @@ test("validated empty Free discovery replaces prior snapshot and remains empty o
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("Cloudflare captured live catalog persists and malformed RPC retains last snapshot", async () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(
+      new URL("../fixtures/cloudflare-playground-catalog.json", import.meta.url),
+      "utf8"
+    )
+  );
+  const request = () =>
+    modelsRoute.GET(
+      new Request("http://localhost/api/providers/cloudflare-playground/models?refresh=true"),
+      { params: { id: "cloudflare-playground" } }
+    );
+  __setCloudflareCatalogTransportForTests(async () => fixture);
+  const live = await (await request()).json();
+  assert.equal(live.source, "upstream");
+  assert.equal(live.authoritative, true);
+  assert.equal(live.models.length, 21);
+  const snapshot = await snapshots.readNoAuthModelCatalog("cloudflare-playground");
+  assert.deepEqual(
+    snapshot?.models.map((m) => m.id),
+    live.models.map((m: { id: string }) => m.id)
+  );
+  __setCloudflareCatalogTransportForTests(async () => ({
+    type: "rpc",
+    success: false,
+    done: true,
+  }));
+  const cached = await (await request()).json();
+  assert.equal(cached.source, "cache");
+  assert.match(cached.warning, /unavailable.*last discovered catalog/i);
+  assert.deepEqual(
+    cached.models.map(({ id, name }: { id: string; name: string }) => ({ id, name })),
+    live.models
+  );
+  assert.deepEqual(await snapshots.readNoAuthModelCatalog("cloudflare-playground"), snapshot);
+  __setCloudflareCatalogTransportForTests(async () => ({
+    type: "rpc",
+    id: "catalog-models",
+    success: true,
+    done: true,
+    result: [],
+  }));
+  const empty = await (await request()).json();
+  assert.equal(empty.source, "upstream");
+  assert.deepEqual(empty.models, []);
+  assert.deepEqual((await snapshots.readNoAuthModelCatalog("cloudflare-playground"))?.models, []);
+});
+
+test("Cloudflare discovery failure without snapshot reports unverified local fallback", async () => {
+  const response = await modelsRoute.GET(
+    new Request("http://localhost/api/providers/cloudflare-playground/models?refresh=true"),
+    { params: { id: "cloudflare-playground" } }
+  );
+  const body = await response.json();
+  assert.equal(body.source, "local_catalog");
+  assert.equal(body.authoritative, undefined);
+  assert.match(body.warning, /unavailable.*local catalog/i);
+  assert.equal(await snapshots.readNoAuthModelCatalog("cloudflare-playground"), null);
 });

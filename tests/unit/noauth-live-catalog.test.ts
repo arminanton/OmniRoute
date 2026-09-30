@@ -235,3 +235,26 @@ test("no-auth runtime membership preserves manual models but rejects stale impor
     "model_not_found"
   );
 });
+
+test("validated Cloudflare discovery has provider-scoped authoritative snapshots including empty", async () => {
+  const { getActiveSyncedCatalog } = await import("../../src/lib/db/models/activeSyncedCatalog.ts");
+  const { getModelInfo } = await import("../../src/sse/services/model.ts");
+  const { addCustomModel } = await import("../../src/lib/db/models.ts");
+  await addCustomModel("cloudflare-playground", "manual-choice", "Manual choice");
+  await snapshots.replaceNoAuthModelCatalog("cloudflare-playground", [
+    { id: "vendor/new-catalog-model", name: "New catalog model" },
+  ]);
+  assert.equal(
+    (await getModelInfo("cfp/vendor/new-catalog-model")).provider,
+    "cloudflare-playground"
+  );
+  await snapshots.replaceNoAuthModelCatalog("cloudflare-playground", []);
+  const active = await getActiveSyncedCatalog("cloudflare-playground");
+  assert.equal(active.authoritative, true);
+  assert.deepEqual(
+    active.models.map((model) => model.id),
+    ["manual-choice"]
+  );
+  assert.equal((await getModelInfo("cfp/vendor/new-catalog-model")).errorType, "model_not_found");
+  assert.equal((await getModelInfo("cfp/manual-choice")).provider, "cloudflare-playground");
+});

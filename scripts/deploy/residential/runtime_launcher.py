@@ -134,13 +134,13 @@ def workload_environment(policy: dict, role: str) -> dict[str, str]:
         if policy["helpers"]["codex"]:
             env.update({"OMNIROUTE_CODEX_APPSERVER_WS": "ws://127.0.0.1:1456",
                         "OMNIROUTE_CODEX_APPSERVER_WS_TOKEN_FILE": "/run/codex-appserver/token",
-                        "CODEX_HOME": "/home/node/.codex"})
+                        "CODEX_HOME": "/codex-home"})
     elif role == "browser":
         env.update({"HOME": "/browser-profile/home", "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright"})
     elif role == "browser-login":
         env.update({"HOME": "/var/lib/omniroute-browser-login", "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright"})
     else:
-        env.update({"HOME": "/home/node", "CODEX_HOME": "/home/node/.codex", "RUST_LOG": "warn"})
+        env.update({"HOME": "/codex-home", "CODEX_HOME": "/codex-home", "RUST_LOG": "warn"})
     if role in ("app", "browser-login") and policy["helpers"].get("browserLogin", False):
         env.update({"OMNIROUTE_BROWSER_LOGIN_SOCKET": "/run/omniroute-browser-login/control.sock",
                     "OMNIROUTE_BROWSER_LOGIN_ORIGIN": policy["dashboardOrigin"]})
@@ -182,7 +182,7 @@ def command(policy: dict, role: str, *, boundary_only: bool = False) -> list[str
     elif role == "browser":
         args += ["--mount=" + mount(STATE / "browser-profile", "/browser-profile", writable=True)]
     if role == "codex" or (role == "app" and policy["helpers"]["codex"]):
-        args += ["--mount=" + mount(STATE / "codex-home", "/home/node/.codex", writable=True),
+        args += ["--mount=" + mount(STATE / "codex-home", "/codex-home", writable=True),
                  "--mount=" + mount(STATE / "codex-token", "/run/codex-appserver")]
     if role in ("app", "browser-login") and policy["helpers"].get("browserLogin", False):
         args += ["--mount=" + mount(RUN / "browser-login", "/run/omniroute-browser-login",

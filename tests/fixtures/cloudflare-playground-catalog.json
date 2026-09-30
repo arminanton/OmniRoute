@@ -1,0 +1,354 @@
+{
+  "type": "rpc",
+  "id": "catalog-models",
+  "success": true,
+  "done": true,
+  "result": [
+    {
+      "id": "f9f2250b-1048-4a52-9910-d0bf976616a1",
+      "name": "@cf/openai/gpt-oss-120b",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "e8e8abe4-a372-4c13-815f-4688ba655c8e",
+      "name": "@cf/google/gemma-2b-it-lora",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "lora",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "d9dc8363-66f4-4bb0-8641-464ee7bfc131",
+      "name": "@cf/meta/llama-3.2-3b-instruct",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "lora",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "cc80437b-9a8d-4f1a-9c77-9aaf0d226922",
+      "name": "@cf/meta/llama-guard-3-8b",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "lora",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "c58c317b-0c15-4bda-abb6-93e275f282d9",
+      "name": "@cf/mistral/mistral-7b-instruct-v0.2-lora",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "lora",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "c05fea67-c5a9-49ca-a7ab-446a0d62cb7a",
+      "name": "@cf/zai-org/glm-5.3",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "require_workers_paid",
+          "value": "true"
+        },
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "ad01ab83-baf8-4e7b-8fed-a0a219d4eb45",
+      "name": "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": []
+    },
+    {
+      "id": "9b9c87c6-d4b7-494c-b177-87feab5904db",
+      "name": "@cf/meta/llama-3.1-8b-instruct-fp8",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": []
+    },
+    {
+      "id": "95666467-f984-4211-b48a-7c246dd4adb7",
+      "name": "@cf/zai-org/glm-5.3-flash",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "require_workers_paid",
+          "value": "true"
+        },
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        },
+        {
+          "property_id": "vision",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "906a57fd-b018-4d6c-a43e-a296d4cc5839",
+      "name": "@cf/meta/llama-3.2-1b-instruct",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": []
+    },
+    {
+      "id": "86b3e51a-4b05-43fa-a403-0f27821919d2",
+      "name": "@cf/zai-org/glm-4.7-flash",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "7ed8d8e8-6040-4680-843a-aef402d6b013",
+      "name": "@cf/meta-llama/llama-2-7b-chat-hf-lora",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "lora",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "7a143886-c9bb-4a1c-be95-377b1973bc3b",
+      "name": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "7952d0cc-cb00-4e10-be02-667565c2ee0f",
+      "name": "@cf/ibm-granite/granite-4.0-h-micro",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "51b71d5b-8bc0-4489-a107-95e542b69914",
+      "name": "@cf/qwen/qwen2.5-coder-32b-instruct",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "lora",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "43dbadb4-2b0a-47e9-8479-34a49b971f1e",
+      "name": "@cf/nvidia/nemotron-3-120b-a12b",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "41ca173f-72d5-4420-8915-49e835d2676e",
+      "name": "@cf/aisingapore/gemma-sea-lion-v4-27b-it",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": []
+    },
+    {
+      "id": "4090e54c-eee4-4221-b410-10c1c0f92f17",
+      "name": "@cf/qwen/qwen3-30b-a3b-fp8",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "337170b7-bd2f-4631-9a57-688b579cf6d3",
+      "name": "@cf/google/gemma-7b-it-lora",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "lora",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "328adb49-4a7d-43e3-a2d5-802ae8100fe7",
+      "name": "@cf/google/gemma-4-26b-a4b-it",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        },
+        {
+          "property_id": "vision",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "31690291-ebdc-4f98-bcfc-a44844e215b7",
+      "name": "@cf/mistralai/mistral-small-3.1-24b-instruct",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "2cbc033b-ded8-4e02-bbb2-47cf05d5cfe5",
+      "name": "@cf/meta/llama-3.2-11b-vision-instruct",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "lora",
+          "value": "true"
+        },
+        {
+          "property_id": "vision",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "22338608-b54d-4f04-884e-ab06f3dbbf3e",
+      "name": "@cf/qwen/qwen3.8-27b",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        },
+        {
+          "property_id": "vision",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "188a4e1e-253e-46d0-9616-0bf8c149763f",
+      "name": "@cf/openai/gpt-oss-20b",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "06455e78-19f7-487b-93cd-c05a3dd07813",
+      "name": "@cf/meta/llama-4-scout-17b-16e-instruct",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "function_calling",
+          "value": "true"
+        },
+        {
+          "property_id": "vision",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "id": "02c16efa-29f5-4304-8e6c-3d188889f875",
+      "name": "@cf/qwen/qwq-32b",
+      "task": {
+        "name": "Text Generation"
+      },
+      "properties": [
+        {
+          "property_id": "lora",
+          "value": "true"
+        }
+      ]
+    }
+  ]
+}

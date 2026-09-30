@@ -134,6 +134,10 @@ async function start(input) {
       s.rfbSocket,
       "-rfbport",
       "0",
+      // LibVNCServer owns a separate IPv6 listener; -rfbport 0 only disables IPv4.
+      "-rfbportv6",
+      "0",
+      "-no6",
       "-forever",
       "-shared",
       "-nopw",

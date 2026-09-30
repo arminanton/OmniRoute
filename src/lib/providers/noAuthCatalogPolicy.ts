@@ -1,6 +1,8 @@
 /** Providers with a public, volatile chat catalog. Static-only no-auth providers stay unchanged. */
 export function usesNoAuthLiveCatalog(providerId: string): boolean {
-  return ["aihorde", "opencode", "uncloseai", "duckduckgo-web"].includes(providerId);
+  return ["aihorde", "opencode", "uncloseai", "duckduckgo-web", "cloudflare-playground"].includes(
+    providerId
+  );
 }
 
 /** Imported rows are not explicit user additions, but can still overlay a live same-ID row. */
