@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 export const DEFAULT_SOURCE_PREFIX = "/tmp/docker-cli-tree";
 export const DEFAULT_TARGET_PREFIX = "/usr/local";
 export const CLI_ROOTS = Object.freeze([
-  Object.freeze({ name: "@openai/codex", version: "0.153.2", bin: "codex", entry: "bin/codex.js" }),
+  Object.freeze({ name: "@openai/codex", version: "0.158.0", bin: "codex", entry: "bin/codex.js" }),
   Object.freeze({
     name: "@anthropic-ai/claude-code",
     version: "2.1.260",

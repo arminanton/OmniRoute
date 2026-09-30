@@ -1,3 +1,4 @@
+import { mockGeminiBrowserLease } from "./helpers/geminiBrowserLease.ts";
 // Repro probe for issue #7676:
 // gemini-web executor never reads back the live Playwright cookie jar after a
 // successful run, so rotated __Secure-1PSIDTS / __Secure-1PSIDCC values are
@@ -62,7 +63,7 @@ test("#7676: GeminiWebExecutor persists rotated __Secure-1PSIDTS/__Secure-1PSIDC
   let persistedCredentials: Record<string, unknown> | null = null;
 
   try {
-    const executor = new GeminiWebExecutor();
+    const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
     const result = await executor.execute({
       model: "gemini-3.1-pro",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },

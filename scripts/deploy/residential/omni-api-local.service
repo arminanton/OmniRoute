@@ -1,0 +1,26 @@
+[Unit]
+Description=OmniRoute host-loopback API forward through private ingress namespace
+Requires=omni-egress-topology.service
+BindsTo=omni-egress-topology.service
+After=omni-egress-topology.service
+
+[Service]
+# The socket is created in the host namespace; only the backend connection uses
+# the existing root-only WAN->APP ingress rule. No host routes or firewall edits.
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --exit-idle-time=5min 10.203.242.2:20129
+NetworkNamespacePath=/run/netns/omni-wan
+User=root
+Group=root
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+UMask=0077

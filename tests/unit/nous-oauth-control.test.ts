@@ -733,3 +733,351 @@ test("process-local flow tickets cap per browser session BEFORE a fifth upstream
   assert.equal(denied.status, 429);
   assert.equal(upstreamCalls, 4);
 });
+
+test("public-origin poll and bound cancellation work behind a reverse proxy", async () => {
+  const previous = process.env.OMNIROUTE_PUBLIC_BASE_URL;
+  process.env.OMNIROUTE_PUBLIC_BASE_URL = "https://dashboard.example.test";
+  globalThis.fetch = (async () => Response.json(deviceResponse())) as typeof fetch;
+  try {
+    const start = await route.GET(request("device-code"), context("device-code"));
+    const device = await start.json();
+    const cookie = start.headers.get("set-cookie")!.split(";", 1)[0];
+    const payload = {
+      deviceCode: device.device_code,
+      extraData: { flowId: device.flowId },
+    };
+    const browserRequest = (action: string, origin: string, binding = cookie) => {
+      const req = request(action, payload, binding);
+      req.headers.set("origin", origin);
+      req.headers.set("x-forwarded-host", new URL(origin).host);
+      req.headers.set("x-forwarded-proto", "https");
+      return req;
+    };
+    const publicPoll = await route.POST(
+      browserRequest("poll", "https://dashboard.example.test"),
+      context("poll")
+    );
+    assert.equal(publicPoll.status, 200);
+    assert.equal((await publicPoll.json()).pending, true);
+    const hostile = browserRequest("cancel", "https://evil.example.test");
+    assert.equal((await route.POST(hostile, context("cancel"))).status, 403);
+    const crossSite = browserRequest("cancel", "https://dashboard.example.test");
+    crossSite.headers.set("sec-fetch-site", "cross-site");
+    assert.equal((await route.POST(crossSite, context("cancel"))).status, 403);
+    await route.POST(
+      browserRequest("cancel", "https://dashboard.example.test", "nous_oauth_flow_session=foreign"),
+      context("cancel")
+    );
+    assert.equal(
+      (await (await route.POST(request("poll", payload, cookie), context("poll"))).json()).pending,
+      true
+    );
+    assert.equal(
+      (
+        await route.POST(
+          browserRequest("cancel", "https://dashboard.example.test"),
+          context("cancel")
+        )
+      ).status,
+      200
+    );
+    assert.equal(
+      (await (await route.POST(request("poll", payload, cookie), context("poll"))).json()).error,
+      "expired_token"
+    );
+    // Canceled attempts must release the per-session slot on every retry.
+    for (let i = 0; i < 6; i++) {
+      const retry = await route.GET(
+        request("device-code", undefined, cookie),
+        context("device-code")
+      );
+      assert.equal(retry.status, 200);
+      const data = await retry.json();
+      await route.POST(
+        request(
+          "cancel",
+          { deviceCode: data.device_code, extraData: { flowId: data.flowId } },
+          cookie
+        ),
+        context("cancel")
+      );
+    }
+  } finally {
+    if (previous === undefined) delete process.env.OMNIROUTE_PUBLIC_BASE_URL;
+    else process.env.OMNIROUTE_PUBLIC_BASE_URL = previous;
+  }
+});
+
+test("concurrent device starts reserve slots before contacting Nous", async () => {
+  const cookie = "nous_oauth_flow_session=concurrent-start-test";
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered = 0;
+  let ready!: () => void;
+  const started = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  globalThis.fetch = (async () => {
+    entered++;
+    if (entered === 4) ready();
+    await gate;
+    return Response.json(deviceResponse());
+  }) as typeof fetch;
+  const starts = Array.from({ length: 4 }, () =>
+    route.GET(request("device-code", undefined, cookie), context("device-code"))
+  );
+  await started;
+  // Release upstream after allowing the fifth start to reach its admission check.
+  const fifth = route.GET(request("device-code", undefined, cookie), context("device-code"));
+  setImmediate(release);
+  const denied = await fifth;
+  const responses = await Promise.all(starts);
+  try {
+    assert.equal(denied.status, 429);
+    assert.equal(entered, 4);
+  } finally {
+    for (const response of [...responses, denied]) {
+      const data = await response.json();
+      if (data.flowId)
+        await route.POST(
+          request(
+            "cancel",
+            {
+              deviceCode: data.device_code,
+              extraData: { flowId: data.flowId },
+            },
+            cookie
+          ),
+          context("cancel")
+        );
+    }
+  }
+});
+
+test("Nous origin guard accepts only configured or stamped trusted forwarding", async () => {
+  const names = [
+    "OMNIROUTE_PUBLIC_BASE_URL",
+    "NEXT_PUBLIC_BASE_URL",
+    "NEXT_PUBLIC_APP_URL",
+    "OMNIROUTE_TRUST_PROXY",
+    "OMNIROUTE_PEER_STAMP_TOKEN",
+  ];
+  const previous = names.map((name) => process.env[name]);
+  const { PEER_IP_HEADER } = await import("../../src/server/authz/headers.ts");
+  for (const name of names) delete process.env[name];
+  process.env.OMNIROUTE_TRUST_PROXY = "loopback";
+  process.env.OMNIROUTE_PEER_STAMP_TOKEN = "test-peer-stamp";
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls++;
+    return Response.json(deviceResponse());
+  }) as typeof fetch;
+  try {
+    const req = request("device-code");
+    req.headers.set("origin", "https://proxy.example.test");
+    req.headers.set("x-forwarded-host", "proxy.example.test");
+    req.headers.set("x-forwarded-proto", "https");
+    assert.equal((await route.GET(req, context("device-code"))).status, 403);
+    req.headers.set(PEER_IP_HEADER, "forged|127.0.0.1");
+    assert.equal((await route.GET(req, context("device-code"))).status, 403);
+    assert.equal(calls, 0);
+    req.headers.set(PEER_IP_HEADER, "test-peer-stamp|127.0.0.1");
+    const started = await route.GET(req, context("device-code"));
+    assert.equal(started.status, 200);
+    assert.match(started.headers.get("set-cookie")!, /Secure/i);
+    const data = await started.json();
+    const cookie = started.headers.get("set-cookie")!.split(";", 1)[0];
+    const payload = {
+      deviceCode: data.device_code,
+      extraData: { flowId: data.flowId },
+    };
+    const poll = request("poll", payload, cookie);
+    for (const [key, value] of req.headers) poll.headers.set(key, value);
+    assert.equal((await route.POST(poll, context("poll"))).status, 200);
+    await route.POST(request("cancel", payload, cookie), context("cancel"));
+  } finally {
+    names.forEach((name, index) => {
+      if (previous[index] === undefined) delete process.env[name];
+      else process.env[name] = previous[index];
+    });
+  }
+});
+
+test("failed device starts release reservations and terminal polls release tickets", async () => {
+  const cookie = "nous_oauth_flow_session=failed-start-test";
+  for (let i = 0; i < 6; i++) {
+    globalThis.fetch = (async () => {
+      throw new Error("upstream unavailable");
+    }) as typeof fetch;
+    assert.equal(
+      (await route.GET(request("device-code", undefined, cookie), context("device-code"))).status,
+      502
+    );
+  }
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  globalThis.fetch = (async (url) =>
+    String(url).endsWith("/device/code")
+      ? Response.json(deviceResponse())
+      : Response.json({ error: "access_denied" }, { status: 400 })) as typeof fetch;
+  try {
+    for (let i = 0; i < 6; i++) {
+      const started = await route.GET(
+        request("device-code", undefined, cookie),
+        context("device-code")
+      );
+      assert.equal(started.status, 200);
+      const data = await started.json();
+      const payload = {
+        deviceCode: data.device_code,
+        extraData: { flowId: data.flowId },
+      };
+      now += 2_000;
+      assert.equal(
+        (await (await route.POST(request("poll", payload, cookie), context("poll"))).json()).error,
+        "access_denied"
+      );
+      assert.equal(
+        (await (await route.POST(request("poll", payload, cookie), context("poll"))).json()).error,
+        "expired_token"
+      );
+    }
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("canceling an in-flight poll cannot persist a late successful response", async () => {
+  const cookie = "nous_oauth_flow_session=cancel-in-flight-test";
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered!: () => void;
+  const inFlight = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const connection = await createNousConnection();
+  globalThis.fetch = (async (url) => {
+    if (String(url).endsWith("/device/code")) return Response.json(deviceResponse());
+    entered();
+    await gate;
+    return Response.json({
+      access_token: "late-access",
+      refresh_token: "late-refresh",
+      expires_in: 600,
+    });
+  }) as typeof fetch;
+  try {
+    const req = new Request(
+      `http://localhost/api/oauth/nous-oauth/device-code?connectionId=${connection.id}`,
+      { headers: { Cookie: cookie } }
+    );
+    const data = await (await route.GET(req, context("device-code"))).json();
+    const payload = {
+      deviceCode: data.device_code,
+      connectionId: connection.id,
+      extraData: { flowId: data.flowId },
+    };
+    now += 2_000;
+    const pending = route.POST(request("poll", payload, cookie), context("poll"));
+    await inFlight;
+    // Wrong connection must not remove the active ticket.
+    await route.POST(
+      request("cancel", { ...payload, connectionId: "wrong" }, cookie),
+      context("cancel")
+    );
+    assert.equal(
+      (await (await route.POST(request("poll", payload, cookie), context("poll"))).json()).pending,
+      true
+    );
+    await route.POST(request("cancel", payload, cookie), context("cancel"));
+    release();
+    assert.equal((await (await pending).json()).error, "expired_token");
+    assert.equal((await db.getProviderConnectionById(connection.id))?.accessToken, "access-old");
+  } finally {
+    release();
+    Date.now = realNow;
+  }
+});
+
+test("authenticated reverse-proxy poll keeps session binding and central CSRF origin fallback", async () => {
+  const { SignJWT } = await import("jose");
+  const { issueDashboardCsrfToken } = await import("../../src/server/authz/csrf.ts");
+  const { DASHBOARD_CSRF_HEADER } = await import("../../src/shared/constants/dashboardCsrf.ts");
+  const previousSecret = process.env.JWT_SECRET;
+  const previousOrigin = process.env.OMNIROUTE_PUBLIC_BASE_URL;
+  process.env.JWT_SECRET = "nous-test-dashboard-session-signing-key";
+  process.env.OMNIROUTE_PUBLIC_BASE_URL = "https://dashboard.example.test";
+  const previousPassword = process.env.INITIAL_PASSWORD;
+  process.env.INITIAL_PASSWORD = "nous-test-auth-enabled";
+  await settings.updateSettings({ requireLogin: true });
+  globalThis.fetch = (async () => Response.json(deviceResponse())) as typeof fetch;
+  try {
+    const jwt = await new SignJWT({ sub: "dashboard-test" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setExpirationTime("1h")
+      .sign(new TextEncoder().encode(process.env.JWT_SECRET));
+    const cookie = `auth_token=${jwt}`;
+    const start = await route.GET(
+      request("device-code", undefined, cookie),
+      context("device-code")
+    );
+    const data = await start.json();
+    assert.equal(start.status, 200, JSON.stringify(data));
+    const payload = {
+      deviceCode: data.device_code,
+      extraData: { flowId: data.flowId },
+    };
+    const req = request("poll", payload, cookie);
+    req.headers.set("origin", "https://dashboard.example.test");
+    const initialPoll = await (await route.POST(req, context("poll"))).json();
+    assert.equal(initialPoll.pending, true, JSON.stringify(initialPoll));
+    // An attacker cannot use Origin or forwarded headers as proof of CSRF.
+    const hostile = request("cancel", payload, cookie);
+    hostile.headers.set("origin", "https://hostile.example.test");
+    hostile.headers.set("x-forwarded-host", "hostile.example.test");
+    hostile.headers.set("x-forwarded-proto", "https");
+    assert.equal((await route.POST(hostile.clone(), context("cancel"))).status, 403);
+    hostile.headers.set("sec-fetch-site", "cross-site");
+    assert.equal((await route.POST(hostile.clone(), context("cancel"))).status, 403);
+    // Even a real CSRF token cannot override explicit cross-site fetch metadata.
+    const token = issueDashboardCsrfToken(hostile)!;
+    hostile.headers.set(DASHBOARD_CSRF_HEADER, token.token);
+    assert.equal((await route.POST(hostile.clone(), context("cancel"))).status, 403);
+    // Unknown dashboard origin + authenticated session-bound token matches central middleware.
+    const fallback = request("poll", payload, cookie);
+    fallback.headers.set("origin", "https://alternate-dashboard.example.test");
+    fallback.headers.set(DASHBOARD_CSRF_HEADER, token.token);
+    assert.equal(
+      (await (await route.POST(fallback.clone(), context("poll"))).json()).pending,
+      true
+    );
+    fallback.headers.set(DASHBOARD_CSRF_HEADER, "invalid");
+    assert.equal((await route.POST(fallback.clone(), context("poll"))).status, 403);
+    const otherJwt = await new SignJWT({ sub: "other-dashboard-test" })
+      .setProtectedHeader({ alg: "HS256" })
+      .setExpirationTime("1h")
+      .sign(new TextEncoder().encode(process.env.JWT_SECRET));
+    await route.POST(request("cancel", payload, `auth_token=${otherJwt}`), context("cancel"));
+    assert.equal(
+      (await (await route.POST(request("poll", payload, cookie), context("poll"))).json()).pending,
+      true
+    );
+    await route.POST(request("cancel", payload, cookie), context("cancel"));
+  } finally {
+    await settings.updateSettings({ requireLogin: false });
+    if (previousPassword === undefined) delete process.env.INITIAL_PASSWORD;
+    else process.env.INITIAL_PASSWORD = previousPassword;
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+    if (previousOrigin === undefined) delete process.env.OMNIROUTE_PUBLIC_BASE_URL;
+    else process.env.OMNIROUTE_PUBLIC_BASE_URL = previousOrigin;
+  }
+});

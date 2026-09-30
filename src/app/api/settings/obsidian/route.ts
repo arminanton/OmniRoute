@@ -34,10 +34,12 @@ const obsidianBaseUrlSchema = z
     { message: CLOUD_METADATA_BLOCKED_MESSAGE }
   );
 
-const setTokenSchema = z.object({
-  token: z.string().min(1).max(5000),
-  baseUrl: obsidianBaseUrlSchema.optional(),
-}).strict();
+const setTokenSchema = z
+  .object({
+    token: z.string().min(1).max(5000),
+    baseUrl: obsidianBaseUrlSchema.optional(),
+  })
+  .strict();
 
 export async function GET(request: NextRequest) {
   if (!(await isAuthenticated(request))) {
@@ -89,19 +91,6 @@ export async function POST(request: NextRequest) {
     urlToUse = getObsidianBaseUrl();
   }
 
-  if (urlToUse && /:27124(?:\/|$)/.test(urlToUse)) {
-    return NextResponse.json(
-      {
-        error:
-          "URL uses port 27124, which is the MCP endpoint (HTTPS, self-signed cert). " +
-          "The Obsidian Local REST API uses plain HTTP on port 27123. " +
-          "Please use http://<ip>:27123 instead.",
-        connected: false,
-      },
-      { status: 400 }
-    );
-  }
-
   try {
     const client = createObsidianClient(parsed.data.token, urlToUse);
     const result = await client.checkStatus();
@@ -124,7 +113,10 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ error: sanitizeErrorMessage(msg), connected: false }, { status: 400 });
+    return NextResponse.json(
+      { error: sanitizeErrorMessage(msg), connected: false },
+      { status: 400 }
+    );
   }
 }
 

@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CLI_VERSIONS = Object.freeze({
-  "@openai/codex": "0.153.2",
+  "@openai/codex": "0.158.0",
   "@anthropic-ai/claude-code": "2.1.260",
   droid: "0.212.0",
   openclaw: "2026.9.1",
@@ -243,12 +243,12 @@ export function inspectInstall({
   }
 
   const codexAlias = `@openai/codex-linux-${arch}`;
-  declared(codex, codexAlias, `npm:@openai/codex@0.153.2-linux-${arch}`, true);
+  declared(codex, codexAlias, `npm:@openai/codex@0.158.0-linux-${arch}`, true);
   const codexNative = dependency(
     globalRoot,
     codex,
     codexAlias,
-    `0.153.2-linux-${arch}`,
+    `0.158.0-linux-${arch}`,
     "@openai/codex"
   );
   const target = `${arch === "x64" ? "x86_64" : "aarch64"}-unknown-linux-musl`;
@@ -258,7 +258,7 @@ export function inspectInstall({
   );
   for (const [key, value] of Object.entries({
     layoutVersion: 1,
-    version: "0.153.2",
+    version: "0.158.0",
     target,
     variant: "codex",
     entrypoint: "bin/codex",

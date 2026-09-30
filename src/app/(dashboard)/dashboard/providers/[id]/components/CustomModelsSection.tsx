@@ -31,6 +31,7 @@ import {
   type CompatByProtocolMap,
 } from "../providerPageHelpers";
 import ModelCompatPopover from "./ModelCompatPopover";
+import { retainNoAuthCustomModel } from "@/lib/providers/noAuthCatalogPolicy";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -43,6 +44,7 @@ export interface CustomModelsSectionProps {
   onCopy: (text: string, key: string) => void;
   onModelsChanged?: () => void;
   syncedModelIds?: readonly string[];
+  authoritativeModels?: readonly { id: string }[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,6 +123,7 @@ export default function CustomModelsSection({
   onCopy,
   onModelsChanged,
   syncedModelIds = [],
+  authoritativeModels = null,
 }: CustomModelsSectionProps) {
   const t = useTranslations("providers");
   const notify = useNotificationStore();
@@ -155,6 +158,10 @@ export default function CustomModelsSection({
   const [newIsFree, setNewIsFree] = useState(false);
   const [editingIsFree, setEditingIsFree] = useState(false);
 
+  const visibleCustomModels =
+    authoritativeModels === null
+      ? customModels
+      : customModels.filter((model) => retainNoAuthCustomModel(model, authoritativeModels));
   const customMap = useMemo(() => buildCompatMap(customModels), [customModels]);
   const overrideMap = useMemo(() => buildCompatMap(modelCompatOverrides), [modelCompatOverrides]);
   const syncedModelIdSet = useMemo(() => new Set(syncedModelIds), [syncedModelIds]);
@@ -570,9 +577,9 @@ export default function CustomModelsSection({
       {/* List */}
       {loading ? (
         <p className="text-xs text-text-muted">{t("loading")}</p>
-      ) : customModels.length > 0 ? (
+      ) : visibleCustomModels.length > 0 ? (
         <div className="flex flex-col gap-2">
-          {customModels.map((model) => {
+          {visibleCustomModels.map((model) => {
             const fullModel = `${providerAlias}/${model.id}`;
             const copyKey = `custom-${model.id}`;
             const hasSyncedBase = model.id ? syncedModelIdSet.has(model.id) : false;

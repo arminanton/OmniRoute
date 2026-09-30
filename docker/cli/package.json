@@ -9,7 +9,7 @@
     "npm": "12.1.0"
   },
   "dependencies": {
-    "@openai/codex": "0.153.2",
+    "@openai/codex": "0.158.0",
     "@anthropic-ai/claude-code": "2.1.260",
     "droid": "0.212.0",
     "openclaw": "2026.9.1"

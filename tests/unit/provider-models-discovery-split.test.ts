@@ -8,6 +8,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { DEFAULT_CODEX_CLIENT_VERSION } from "../../src/shared/constants/codexClient.ts";
 
 import {
   asRecord,
@@ -252,8 +253,8 @@ test("codex.normalizeCodexModelsResponse parses the Codex live catalog shape", (
         top_provider: { max_completion_tokens: 64000 },
       },
       {
-        slug: "internal-only",
-        display_name: "Internal Only",
+        slug: "chatgpt-only",
+        display_name: "ChatGPT Only",
         visibility: "list",
         supported_in_api: false,
       },
@@ -265,12 +266,52 @@ test("codex.normalizeCodexModelsResponse parses the Codex live catalog shape", (
     [
       { id: "gpt-5.4", name: "GPT-5.4" },
       { id: "gpt-5.5", name: "GPT-5.5" },
+      { id: "chatgpt-only", name: "ChatGPT Only" },
     ]
   );
   assert.equal(parsed.find((model) => model.id === "gpt-5.4")?.inputTokenLimit, 400000);
   assert.equal(parsed.find((model) => model.id === "gpt-5.4")?.outputTokenLimit, 128000);
   assert.equal(parsed.find((model) => model.id === "gpt-5.5")?.inputTokenLimit, 272000);
   assert.equal(parsed.find((model) => model.id === "gpt-5.5")?.outputTokenLimit, 64000);
+});
+
+test("codex OAuth discovery retains ChatGPT-only models but respects picker visibility", () => {
+  const payload = {
+    models: [
+      { slug: "chatgpt-only", visibility: "list", supported_in_api: false },
+      { slug: "chatgpt-only-camel", visibility: "list", supportedInApi: false },
+      { slug: "internal-hidden", visibility: "hide", supported_in_api: false },
+    ],
+  };
+  for (const normalize of [normalizeCodexModelsResponse, normalizeCodexGithubCatalogResponse]) {
+    assert.deepEqual(
+      normalize(payload).map((model) => model.id),
+      ["chatgpt-only", "chatgpt-only-camel"]
+    );
+  }
+});
+
+test("Codex discovery HTTP identity matches the exact Docker CLI pin", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.resolve("docker/cli/package.json"), "utf8"));
+  assert.equal(DEFAULT_CODEX_CLIENT_VERSION, manifest.dependencies["@openai/codex"]);
+  assert.equal(DEFAULT_CODEX_CLIENT_VERSION, "0.158.0");
+  const previous = process.env.CODEX_CLIENT_VERSION;
+  delete process.env.CODEX_CLIENT_VERSION;
+  try {
+    assert.equal(new URL(buildCodexModelsUrl()).searchParams.get("client_version"), "0.158.0");
+    assert.deepEqual(
+      normalizeCodexModelsResponse({
+        models: [
+          { slug: "gpt-6-sol", minimal_client_version: "0.155.0", visibility: "list" },
+          { slug: "future-model", minimal_client_version: "999.0.0", visibility: "list" },
+        ],
+      }).map((model) => model.id),
+      ["gpt-6-sol"]
+    );
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_CLIENT_VERSION;
+    else process.env.CODEX_CLIENT_VERSION = previous;
+  }
 });
 
 test("codex.normalizeCodexModelsResponse prefers max_context_window over the context_window pricing tier", () => {

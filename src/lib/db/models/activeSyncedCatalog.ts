@@ -9,6 +9,12 @@ import {
 } from "../models";
 import { normalizeSyncedAvailableModels } from "./synced";
 import { getRawProviderConnections } from "../providers";
+import { readNoAuthModelCatalog } from "./noAuthCatalog";
+import {
+  retainNoAuthCustomModel,
+  usesNoAuthLiveCatalog,
+} from "@/lib/providers/noAuthCatalogPolicy";
+import { mergeModelsWithCustomPrecedence } from "@/lib/providers/modelMetadataPrecedence";
 
 export type ActiveSyncedCatalog = {
   authoritative: boolean;
@@ -184,10 +190,12 @@ async function unionCustomModels(
  */
 async function loadConnectionCatalog(storedProviderId: string): Promise<SyncedAvailableModel[]> {
   const [connections, modelsByConnection] = await Promise.all([
-    getRawProviderConnections({ provider: storedProviderId, isActive: true }, undefined, undefined, [
-      "id",
-      "provider",
-    ]),
+    getRawProviderConnections(
+      { provider: storedProviderId, isActive: true },
+      undefined,
+      undefined,
+      ["id", "provider"]
+    ),
     getSyncedAvailableModelsByConnection(storedProviderId),
   ]);
 
@@ -206,6 +214,27 @@ export async function getActiveSyncedCatalog(providerId: string): Promise<Active
   }
 
   try {
+    if (usesNoAuthLiveCatalog(storedProviderId)) {
+      const snapshot = await readNoAuthModelCatalog(storedProviderId);
+      if (snapshot) {
+        const rawCustom = await getCustomModels(storedProviderId).catch(() => []);
+        const custom = Array.isArray(rawCustom)
+          ? rawCustom.filter(
+              (model) => model?.id && retainNoAuthCustomModel(model, snapshot.models)
+            )
+          : [];
+        return {
+          authoritative: true,
+          models: normalizeSyncedAvailableModels(
+            mergeModelsWithCustomPrecedence(
+              snapshot.models.map((model) => ({ ...model })),
+              custom
+            ),
+            storedProviderId
+          ),
+        };
+      }
+    }
     const lookupIds = catalogLookupIds(storedProviderId);
     const siblingCatalogs = await Promise.all(lookupIds.map(loadConnectionCatalog));
     // #12866 unions the agy/antigravity sibling catalogs; #12934 then overlays the

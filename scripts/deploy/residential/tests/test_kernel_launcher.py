@@ -48,6 +48,36 @@ class KernelLauncherTests(unittest.TestCase):
         for key in ("JWT_SECRET", "API_KEY_SECRET", "INITIAL_PASSWORD"):
             self.assertNotIn(key, env)
 
+    def test_browser_pool_and_private_login_mounts(self):
+        policy = self.policy()
+        policy["browserPool"] = True
+        policy["dashboardOrigin"] = "https://omni.example.test"
+        policy["helpers"]["browserLogin"] = True
+        policy["images"]["browser-login"] = "sha256:" + "b" * 64
+        app = launcher.command(policy, "app")
+        helper = launcher.command(policy, "browser-login")
+        self.assertIn("--env=OMNIROUTE_PUBLIC_BASE_URL=https://omni.example.test", app)
+        self.assertFalse(any("OMNIROUTE_PUBLIC_BASE_URL" in x for x in helper))
+        self.assertIn("--env=OMNIROUTE_BROWSER_POOL=true", app)
+        self.assertIn("--env=PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", app)
+        self.assertTrue(any("dst=/run/omniroute-browser-login,ro," in x for x in app))
+        self.assertTrue(any("dst=/run/omniroute-browser-login,rw," in x for x in helper))
+        self.assertTrue(any("dst=/var/lib/omniroute-browser-login,rw," in x for x in helper))
+        for role in ("browser", "codex"):
+            self.assertFalse(any("dst=/run/omniroute-browser-login" in x for x in launcher.command(policy, role)))
+
+    def test_browser_login_requires_explicit_secure_origin(self):
+        policy = self.policy()
+        policy["helpers"]["browserLogin"] = True
+        policy["images"]["browser-login"] = "sha256:" + "b" * 64
+        for origin in (None, "http://omni.example.test", "https://user:password@omni.example.test", "https://omni.example.test/path"):
+            if origin is None:
+                policy.pop("dashboardOrigin", None)
+            else:
+                policy["dashboardOrigin"] = origin
+            with self.assertRaises(launcher.PolicyError):
+                launcher.command(policy, "browser-login")
+
     def test_legacy_stays_locked(self):
         policy = self.policy()
         del policy["profile"]

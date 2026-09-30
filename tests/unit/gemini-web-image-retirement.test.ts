@@ -1,3 +1,4 @@
+import { mockGeminiBrowserLease } from "./helpers/geminiBrowserLease.ts";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import test from "node:test";
@@ -75,7 +76,7 @@ test("Gemini Web executor treats the retired image-mode extension as ordinary ch
     }) as unknown as Awaited<ReturnType<typeof originalLaunch>>) as typeof originalLaunch;
 
   try {
-    const result = await new GeminiWebExecutor().execute({
+    const result = await new GeminiWebExecutor(mockGeminiBrowserLease).execute({
       model: "gemini-3.1-pro",
       body: {
         messages: [{ role: "user", content: "hello" }],

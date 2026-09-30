@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { createHash, randomUUID, timingSafeEqual } from "crypto";
+import { resolvePublicOrigin, validateBrowserMutationOrigin } from "@/server/origin/publicOrigin";
+import { validateDashboardCsrfToken } from "@/server/authz/csrf";
 import {
   getProvider,
   generateAuthData,
@@ -109,6 +111,7 @@ type NousDeviceAttempt = {
 // Short-lived, process-local tickets: restart or another replica requires a
 // new device flow. Limit both global and per-session state before upstream POST.
 const nousDeviceAttempts = new Map<string, NousDeviceAttempt>();
+const nousDeviceStarts = new Map<string, string>();
 const MAX_NOUS_ATTEMPTS = 128;
 const MAX_NOUS_ATTEMPTS_PER_SESSION = 4;
 const NOUS_FLOW_COOKIE = "nous_oauth_flow_session";
@@ -162,6 +165,18 @@ async function nousSessionBinding(request: Request): Promise<string | null> {
   }
   const serverMintedCookie = nousCookie(request, NOUS_FLOW_COOKIE);
   return serverMintedCookie ? createHash("sha256").update(serverMintedCookie).digest("hex") : null;
+}
+
+async function nousOriginAllowed(request: Request): Promise<boolean> {
+  const verdict = validateBrowserMutationOrigin(request);
+  // Match the central authz pipeline: a session-bound CSRF proof may recover an
+  // unknown public origin, but never explicit cross-site fetch metadata.
+  return (
+    verdict.ok ||
+    (verdict.reason === "invalid-origin" &&
+      validateDashboardCsrfToken(request) &&
+      (await isDashboardSessionAuthenticated(request)))
+  );
 }
 
 async function getNousDeviceAttempt(
@@ -222,6 +237,9 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ provider: string; action: string }> }
 ) {
+  let nousStartId: string | null = null;
+  let nousStartSession: string | null = null;
+  let nousSessionSecret: string | null = null;
   // Phase 1 hotfix (2026-05-29): retired PKCE flows return 410 Gone BEFORE auth.
   // The action permanently does not exist for these providers regardless of who
   // is asking — answering 401 first would mislead callers into thinking the
@@ -296,19 +314,33 @@ export async function GET(
 
       const authData = generateAuthData(provider, null);
       if (provider === "nous-oauth") {
+        if (!(await nousOriginAllowed(request))) {
+          return NextResponse.json({ error: "Cross-site OAuth device start denied" }, { status: 403 });
+        }
         const targetId = searchParams.get("connectionId");
         if (hasBlockingProxyAssignmentForProvider(provider) ||
             (targetId && hasBlockingProxyAssignment(targetId, provider))) {
           return NextResponse.json({ error: "Assigned Nous OAuth proxy unavailable" }, { status: 503 });
         }
         pruneNousDeviceAttempts();
-        const session = await nousSessionBinding(request);
+        nousStartSession = await nousSessionBinding(request);
+        if (!nousStartSession) {
+          if (await isAuthRequired(request)) {
+            return NextResponse.json({ error: "Authenticated Nous OAuth session required" }, { status: 401 });
+          }
+          nousSessionSecret = randomUUID();
+          nousStartSession = createHash("sha256").update(nousSessionSecret).digest("hex");
+        }
         const sessionCount = [...nousDeviceAttempts.values()]
-          .filter((attempt) => session && attempt.sessionHash === session).length;
-        if (nousDeviceAttempts.size >= MAX_NOUS_ATTEMPTS ||
+          .filter((attempt) => attempt.sessionHash === nousStartSession).length +
+          [...nousDeviceStarts.values()].filter((session) => session === nousStartSession).length;
+        if (nousDeviceAttempts.size + nousDeviceStarts.size >= MAX_NOUS_ATTEMPTS ||
             sessionCount >= MAX_NOUS_ATTEMPTS_PER_SESSION) {
           return NextResponse.json({ error: "Too many active Nous device flows" }, { status: 429 });
         }
+        // Reserve synchronously before any upstream/proxy await; release in finally.
+        nousStartId = randomUUID();
+        nousDeviceStarts.set(nousStartId, nousStartSession);
       }
       if (provider === "nous-oauth" && searchParams.has("connectionId")) {
         const reauthId = searchParams.get("connectionId");
@@ -397,13 +429,8 @@ export async function GET(
         const connectionId = searchParams.get("connectionId");
         const flowId = randomUUID();
         const intervalMs = Math.max(1000, deviceData.interval * 1000);
-        let sessionHash = await nousSessionBinding(request);
-        const needFlowCookie = !sessionHash;
-        if (needFlowCookie && await isAuthRequired(request)) {
-          return NextResponse.json({ error: "Authenticated Nous OAuth session required" }, { status: 401 });
-        }
-        const sessionSecret = needFlowCookie ? randomUUID() : null;
-        if (sessionSecret) sessionHash = createHash("sha256").update(sessionSecret).digest("hex");
+        const sessionHash = nousStartSession;
+        const sessionSecret = nousSessionSecret;
         nousDeviceAttempts.set(flowId, {
           deviceCode: deviceData.device_code,
           connectionId,
@@ -416,7 +443,7 @@ export async function GET(
         const response = NextResponse.json({ ...deviceData, flowId });
         if (sessionSecret) response.cookies.set(NOUS_FLOW_COOKIE, sessionSecret, {
           httpOnly: true,
-          secure: new URL(request.url).protocol === "https:",
+          secure: new URL(resolvePublicOrigin(request).origin).protocol === "https:",
           sameSite: "strict",
           path: "/api/oauth/nous-oauth",
           maxAge: Math.ceil(deviceData.expires_in),
@@ -459,6 +486,8 @@ export async function GET(
     // swallowed, so a geo-block / upstream outage looked identical to a real server bug in the UI.
     const detail = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
     return NextResponse.json({ error: detail || "Internal server error" }, { status: 500 });
+  } finally {
+    if (nousStartId) nousDeviceStarts.delete(nousStartId);
   }
 }
 
@@ -557,6 +586,7 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ provider: string; action: string }> }
 ) {
+  let reservedNousAttempt: NousDeviceAttempt | null = null;
   // Phase 1 hotfix (2026-05-29): retired PKCE flows return 410 Gone BEFORE auth.
   // See GET handler comment.
   try {
@@ -627,7 +657,7 @@ export async function POST(
         return NextResponse.json({ error: validation.error }, { status: 400 });
       }
       body = validation.data;
-    } else if (action === "poll") {
+    } else if (action === "poll" || (provider === "nous-oauth" && action === "cancel")) {
       const validation = validateBody(oauthPollSchema, rawBody);
       if (isValidationFailure(validation)) {
         return NextResponse.json({ error: validation.error }, { status: 400 });
@@ -745,7 +775,10 @@ export async function POST(
       });
     }
 
-    if (action === "poll") {
+    if (action === "poll" || (provider === "nous-oauth" && action === "cancel")) {
+      if (provider === "nous-oauth" && !(await nousOriginAllowed(request))) {
+        return NextResponse.json({ error: "Cross-site OAuth poll denied" }, { status: 403 });
+      }
       const { deviceCode, codeVerifier, extraData } = body;
       // The generic schema intentionally drops unknown properties, including
       // connectionId. Nous uses this validated, bound re-auth ID only.
@@ -759,15 +792,13 @@ export async function POST(
         ? await getNousDeviceAttempt(nousFlowId, deviceCode, connectionId, request)
         : null;
       if (provider === "nous-oauth") {
+        if (action === "cancel") {
+          if (nousAttempt) nousDeviceAttempts.delete(nousFlowId);
+          return NextResponse.json({ success: true });
+        }
         if (hasBlockingProxyAssignmentForProvider(provider) ||
             (connectionId && hasBlockingProxyAssignment(connectionId, provider))) {
-          if (nousAttempt) nousAttempt.inFlight = false;
           return NextResponse.json({ success: false, pending: true, error: "temporarily_unavailable" });
-        }
-        const origin = request.headers.get("origin");
-        if ((origin && origin !== new URL(request.url).origin) ||
-            request.headers.get("sec-fetch-site") === "cross-site") {
-          return NextResponse.json({ error: "Cross-site OAuth poll denied" }, { status: 403 });
         }
         if (!nousAttempt) {
           return NextResponse.json({ success: false, error: "expired_token", errorDescription: "Nous device authorization expired. Start again." });
@@ -777,6 +808,7 @@ export async function POST(
         }
         // Reserve the next interval BEFORE the await, to prevent parallel grants.
         nousAttempt.inFlight = true;
+        reservedNousAttempt = nousAttempt;
         nousAttempt.nextPollAt = Date.now() + nousAttempt.intervalMs;
       }
 
@@ -785,7 +817,7 @@ export async function POST(
 
       // Poll for token (through proxy if configured)
       if (provider === "nous-oauth" && !isNousOAuthDirectOrConnectProxy(proxy)) {
-        if (nousAttempt) nousAttempt.inFlight = false;
+        if (nousAttempt) nousDeviceAttempts.delete(nousFlowId);
         return NextResponse.json({
           success: false,
           error: "unsupported_proxy",
@@ -836,6 +868,9 @@ export async function POST(
       }
 
       if (provider === "nous-oauth" && nousAttempt) {
+        if (nousDeviceAttempts.get(nousFlowId) !== nousAttempt) {
+          return NextResponse.json({ success: false, error: "expired_token" });
+        }
         if (result.error === "slow_down") {
           nousAttempt.intervalMs += 5000; // RFC 8628: slow_down adds five seconds.
           nousAttempt.nextPollAt = Date.now() + nousAttempt.intervalMs;
@@ -1213,6 +1248,9 @@ export async function POST(
     }
     console.error("OAuth POST error:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+  } finally {
+    // Proxy resolution can throw before the inner poll finally is reached.
+    if (reservedNousAttempt) reservedNousAttempt.inFlight = false;
   }
 }
 

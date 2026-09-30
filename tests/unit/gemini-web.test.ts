@@ -1,3 +1,4 @@
+import { mockGeminiBrowserLease } from "./helpers/geminiBrowserLease.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -14,14 +15,14 @@ test("GeminiWebExecutor is registered in executor index", async () => {
 });
 
 test("GeminiWebExecutor sets correct provider name", () => {
-  const executor = new GeminiWebExecutor();
+  const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
   assert.equal(executor.getProvider(), "gemini-web");
 });
 
 // ─── Input validation ───────────────────────────────────────────────────────
 
 test("Returns 401 when no cookies provided", async () => {
-  const executor = new GeminiWebExecutor();
+  const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
   const result = await executor.execute({
     model: "gemini-3.1-pro",
     body: { messages: [{ role: "user", content: "hi" }], stream: false },
@@ -31,12 +32,12 @@ test("Returns 401 when no cookies provided", async () => {
     log: null,
   });
   assert.equal(result.response.status, 401);
-  const json = (await result.response.json()) as any;
+  const json = (await result.response.json()) as { error: string };
   assert.ok(json.error.includes("Missing Gemini cookies"));
 });
 
 test("Returns 400 when no user message", async () => {
-  const executor = new GeminiWebExecutor();
+  const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
   const result = await executor.execute({
     model: "gemini-3.1-pro",
     body: { messages: [{ role: "system", content: "You are helpful" }], stream: false },
@@ -46,7 +47,7 @@ test("Returns 400 when no user message", async () => {
     log: null,
   });
   assert.equal(result.response.status, 400);
-  const json = (await result.response.json()) as any;
+  const json = (await result.response.json()) as { error: string };
   assert.ok(json.error.includes("No user message"));
 });
 
@@ -63,14 +64,14 @@ test("Reads bulk-imported cookie credentials from providerSpecificData.cookie", 
   };
 
   try {
-    const executor = new GeminiWebExecutor();
+    const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
     const result = await executor.execute({
       model: "gemini-3.1-pro",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
       stream: false,
       credentials: {
         providerSpecificData: { cookie: "__Secure-1PSID=from-bulk-import" },
-      } as any,
+      },
       signal: AbortSignal.timeout(5000),
       log: null,
     });
@@ -86,14 +87,14 @@ test("Reads bulk-imported cookie credentials from providerSpecificData.cookie", 
 });
 
 test("Ignores array-valued providerSpecificData when resolving cookies", async () => {
-  const executor = new GeminiWebExecutor();
+  const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
   const result = await executor.execute({
     model: "gemini-3.1-pro",
     body: { messages: [{ role: "user", content: "hello" }], stream: false },
     stream: false,
     credentials: {
       providerSpecificData: ["__Secure-1PSID=not-a-record"],
-    } as any,
+    } as unknown as Parameters<GeminiWebExecutor["execute"]>[0]["credentials"],
     signal: AbortSignal.timeout(5000),
     log: null,
   });
@@ -126,10 +127,10 @@ test("Normalizes a bare __Secure-1PSID value before adding browser cookies", asy
         }),
       }),
       close: async () => {},
-    }) as any;
+    }) as unknown as Awaited<ReturnType<typeof originalLaunch>>;
 
   try {
-    const executor = new GeminiWebExecutor();
+    const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
     const result = await executor.execute({
       model: "gemini-3.1-pro",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
@@ -168,7 +169,7 @@ test("Provider: gemini-web has correct models", async () => {
   const { REGISTRY } = await import("../../open-sse/config/providerRegistry.ts");
   const models = REGISTRY["gemini-web"].models;
   assert.deepEqual(
-    models.map((m: any) => [m.id, m.name]),
+    models.map((m) => [m.id, m.name]),
     [
       ["gemini-3.1-pro", "Gemini 3.1 Pro"],
       ["gemini-3.7-flash", "Gemini 3.7 Flash"],
@@ -206,7 +207,7 @@ test("#2832/#3516: missing Playwright browser returns an actionable 503 with coo
   };
 
   try {
-    const executor = new GeminiWebExecutor();
+    const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
     const result = await executor.execute({
       model: "gemini-3.1-pro",
       body: { messages: [{ role: "user", content: "hello" }], stream: false },
@@ -223,7 +224,7 @@ test("#2832/#3516: missing Playwright browser returns an actionable 503 with coo
       "connection_cooldown",
       "must signal connection cooldown so the provider breaker is skipped"
     );
-    const json = (await result.response.json()) as any;
+    const json = (await result.response.json()) as { error: string };
     assert.ok(typeof json.error === "string", "error field must be a string");
     assert.match(json.error, /playwright install|not installed/i, "message must be actionable");
     // No raw stack trace / source path leaks into the body.
@@ -243,7 +244,7 @@ test("#2832: GeminiWebExecutor catch block sanitizes Playwright launch errors (i
   // We use an AbortSignal that is already aborted so we bypass the Playwright
   // import entirely and hit the pre-launch abort check — confirming the executor
   // returns a structured Response rather than throwing.
-  const executor = new GeminiWebExecutor();
+  const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
   const controller = new AbortController();
   controller.abort(new Error("Request aborted"));
 
@@ -259,7 +260,7 @@ test("#2832: GeminiWebExecutor catch block sanitizes Playwright launch errors (i
   // Aborted request should return a structured 500, not throw
   assert.ok(result.response instanceof Response, "must return a Response object");
   assert.equal(result.response.status, 500, "aborted request returns 500");
-  const json = (await result.response.json()) as any;
+  const json = (await result.response.json()) as { error: string };
   assert.ok(typeof json.error === "string", "error must be a string");
   assert.ok(!json.error.includes("at /"), "no stack trace path in error response");
 });

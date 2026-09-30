@@ -90,6 +90,29 @@ type OAuthModalProps = {
 type DevicePollResult =
   { status: "pending" | "slow_down" | "success" } | { status: "error"; message: string };
 
+type NousDeviceFlow = {
+  payload: Record<string, unknown>;
+  committed?: boolean;
+  cancelled?: boolean;
+};
+
+async function cancelNousDeviceFlow(flow: NousDeviceFlow | null) {
+  if (!flow || flow.cancelled || flow.committed) return;
+  flow.cancelled = true;
+  // The server discards pending results after cancellation. If a poll already
+  // committed but its response is still in flight, cancel is a harmless no-op.
+  try {
+    await fetch("/api/oauth/nous-oauth/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(flow.payload),
+      keepalive: true,
+    });
+  } catch {
+    // Best effort on navigation/offline; server-side expiry is the fallback.
+  }
+}
+
 function positiveNumberOr(value: unknown, fallback: number): number {
   return Math.max(1, Number(value) || fallback);
 }
@@ -164,6 +187,15 @@ export default function OAuthModal({
   const importTokenOnly = IMPORT_TOKEN_ONLY_PROVIDERS.has(provider);
   const popupRef = useRef(null);
   const deviceFlowRunRef = useRef(0);
+  const deviceRequestRunRef = useRef<number | null>(null);
+  const nousDeviceFlowRef = useRef<NousDeviceFlow | null>(null);
+  const releaseDeviceFlow = useCallback(() => {
+    deviceFlowRunRef.current += 1;
+    deviceRequestRunRef.current = null;
+    const flow = nousDeviceFlowRef.current;
+    nousDeviceFlowRef.current = null;
+    void cancelNousDeviceFlow(flow);
+  }, []);
   const deviceVerificationUrl =
     deviceData?.verification_uri_complete || deviceData?.verification_uri || "";
 
@@ -204,10 +236,10 @@ export default function OAuthModal({
   const flowStartedRef = useRef(false);
 
   const invalidateDeviceFlow = useCallback(() => {
-    deviceFlowRunRef.current += 1;
+    releaseDeviceFlow();
     setPolling(false);
     setDeviceCodeExpiresAt(null);
-  }, []);
+  }, [releaseDeviceFlow]);
 
   // Define all useCallback hooks BEFORE the useEffects that reference them
 
@@ -318,6 +350,7 @@ export default function OAuthModal({
   const startPolling = useCallback(
     async (deviceCode, codeVerifier, interval, expiresIn, extraData) => {
       const runId = ++deviceFlowRunRef.current;
+      const nousFlow = nousDeviceFlowRef.current;
       const safeInterval = positiveNumberOr(interval, 5);
       const safeExpiresIn = positiveNumberOr(expiresIn, safeInterval * 60);
       const deadline = Date.now() + safeExpiresIn * 1000;
@@ -331,7 +364,7 @@ export default function OAuthModal({
         await new Promise((resolve) => setTimeout(resolve, currentInterval * 1000));
         if (runId !== deviceFlowRunRef.current || Date.now() >= deadline) break;
 
-        const result = await pollDeviceCodeOnce(
+        const poll = pollDeviceCodeOnce(
           provider,
           {
             deviceCode,
@@ -341,6 +374,8 @@ export default function OAuthModal({
           },
           t("errorAuthorizationFailed")
         );
+        const result = await poll;
+        if (nousFlow && result.status === "success") nousFlow.committed = true;
         if (runId !== deviceFlowRunRef.current) return;
 
         if (result.status === "success") {
@@ -381,6 +416,9 @@ export default function OAuthModal({
   const startOAuthFlow = useCallback(
     async (opts?: { grokBrowser?: boolean }) => {
       if (!provider) return;
+      // Retry clicks must not allocate multiple simultaneous device codes.
+      if (provider === "nous-oauth" && deviceRequestRunRef.current !== null) return;
+      let requestRunId: number | undefined;
       try {
         setError(null);
 
@@ -389,6 +427,8 @@ export default function OAuthModal({
         // Device code flow
         if (DEVICE_CODE_PROVIDERS.has(provider) && !grokWantsBrowser) {
           invalidateDeviceFlow();
+          requestRunId = deviceFlowRunRef.current;
+          deviceRequestRunRef.current = requestRunId;
           setIsDeviceCode(true);
           setDeviceData(null);
           setStep("waiting");
@@ -430,6 +470,21 @@ export default function OAuthModal({
             throw new Error(errMsg);
           }
 
+          const nousFlow: NousDeviceFlow | null =
+            provider === "nous-oauth"
+              ? {
+                  payload: {
+                    deviceCode: data.device_code,
+                    extraData: { flowId: data.flowId },
+                    connectionId: reauthConnection?.id,
+                  },
+                }
+              : null;
+          if (requestRunId !== deviceFlowRunRef.current) {
+            void cancelNousDeviceFlow(nousFlow);
+            return;
+          }
+          nousDeviceFlowRef.current = nousFlow;
           setDeviceData(data);
 
           // Open verification URL
@@ -620,8 +675,11 @@ export default function OAuthModal({
           }
         }
       } catch (err) {
+        if (requestRunId !== undefined && requestRunId !== deviceFlowRunRef.current) return;
         setError(err.message);
         setStep("error");
+      } finally {
+        if (deviceRequestRunRef.current === requestRunId) deviceRequestRunRef.current = null;
       }
     },
     [
@@ -664,9 +722,9 @@ export default function OAuthModal({
   }
 
   useEffect(() => {
-    deviceFlowRunRef.current += 1;
+    releaseDeviceFlow();
     flowStartedRef.current = false;
-  }, [provider]);
+  }, [provider, releaseDeviceFlow]);
 
   // Same split when the modal closes: state reset during render, ref
   // invalidation in a ref-only effect.
@@ -681,16 +739,17 @@ export default function OAuthModal({
 
   useEffect(() => {
     if (!isOpen) {
-      deviceFlowRunRef.current += 1;
+      releaseDeviceFlow();
       flowStartedRef.current = false;
     }
-  }, [isOpen]);
+  }, [isOpen, releaseDeviceFlow]);
 
   useEffect(
     () => () => {
-      deviceFlowRunRef.current += 1;
+      releaseDeviceFlow();
+      flowStartedRef.current = false;
     },
-    []
+    [releaseDeviceFlow]
   );
 
   // Reset state and start OAuth when modal opens. The synchronous state resets
@@ -1012,9 +1071,9 @@ export default function OAuthModal({
       <div className="flex flex-col gap-4">
         {provider === "nous-oauth" && (
           <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-            EXPERIMENTAL Hermes-compatible Nous device sign-in. This is not official third-party
-            SSO. Approve the device code at Nous Portal. No token import is supported.
-            This connection stays local and is not backed up by cloud sync. Sign in again after restore.
+            Hermes-compatible Nous device sign-in. This is not official third-party SSO. Approve the
+            device code at Nous Portal. No token import is supported. This connection stays local
+            and is not backed up by cloud sync. Sign in again after restore.
           </p>
         )}
         {/* Browser login with an optional token-import fallback. grok-cli adds a

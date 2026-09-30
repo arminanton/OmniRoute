@@ -201,6 +201,11 @@ const EXTRA_MODULE_ENTRIES = [
     dest: ["server-ws.mjs"],
   },
   {
+    label: "browser-login WS proxy (server-ws.mjs dependency)",
+    src: ["scripts", "dev", "browser-login-ws.mjs"],
+    dest: ["browser-login-ws.mjs"],
+  },
+  {
     label: "peer-stamp helper (server-ws.mjs dependency)",
     src: ["scripts", "dev", "peer-stamp.mjs"],
     dest: ["peer-stamp.mjs"],

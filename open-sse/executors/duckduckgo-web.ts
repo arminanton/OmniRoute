@@ -3,6 +3,7 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import vm from "node:vm";
 import { solveDuckDuckGoChallenge, makeDuckDuckGoFeSignals } from "./duckduckgo-web/challenge.ts";
 import {
+  DUCKDUCKGO_MODELS_URL,
   DUCKDUCKGO_DEFAULT_MODEL,
   DUCKDUCKGO_MODEL_ALIASES,
   FE_VERSION_PATTERN,
@@ -14,7 +15,7 @@ import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import { prepareToolMessages, buildToolAwareResult } from "../translator/webTools.ts";
 import type { Session } from "../services/sessionPool/session.ts";
-import { tryBackedChat } from "../services/browserBackedChat.ts";
+import { browserBackedChat } from "../services/browserBackedChat.ts";
 import { sanitizeErrorMessage } from "../utils/error.ts";
 import { normalizeSystemRole } from "../services/roleNormalizer.ts";
 
@@ -84,7 +85,7 @@ const COUNTRY_URL = `${DUCKDUCKGO_BASE}/country.json`;
 export const STATUS_URL = `${DUCKDUCKGO_BASE}/duckchat/v1/status`;
 export const CHAT_URL = `${DUCKDUCKGO_BASE}/duckchat/v1/chat`;
 // Token-free model list (no VQD/challenge required) used to self-heal catalog drift.
-export const MODELS_URL = `${DUCKDUCKGO_BASE}/duckchat/v1/models`;
+export const MODELS_URL = DUCKDUCKGO_MODELS_URL;
 const DEFAULT_FE_VERSION = "serp_20260424_180649_ET-0bdc33b2a02ebf8f235def65d887787f694720a1";
 // Live-served x-fe-version matcher moved to ./duckduckgo-web/models.ts; re-exported
 // for existing importers.
@@ -496,31 +497,85 @@ export class DuckDuckGoWebExecutor extends BaseExecutor {
     if (shouldUseBrowserBacked()) {
       const lastUser = [...messages].reverse().find((m) => m.role === "user");
       const userText = extractDuckDuckGoContent(lastUser ?? { content: "" });
-      const result = await tryBackedChat({
-        poolKey: "duckduckgo-web",
-        chatPageUrl: "https://duck.ai/chat",
-        chatUrl: CHAT_URL,
-        chatUrlMatchDomain: "duck.ai",
-        userMessage: userText || "Reply with OK",
-        inputSelector: "textarea",
-        submitButtonSelector: "button[aria-label='Ask']",
-        signal: signal ?? null,
-        postSubmitWaitMs: 15000,
-      });
-      if (result.status > 0) {
-        // Wrap the captured body as a Response so processResponse
-        // (already a streaming/non-streaming transformer) can be
-        // reused unchanged.
-        const upstreamResp = new Response(Buffer.from(result.body), {
-          status: result.status,
-          headers: {
-            "Content-Type": result.contentType || "text/event-stream",
+      if (!userText) {
+        return errorResponse(400, "DuckDuckGo browser chat requires a text user message");
+      }
+      const normalizedMessages = normalizeSystemRole(
+        messages,
+        "duckduckgo-web",
+        requestedModel
+      ) as typeof messages;
+      let requestPatched = false;
+      let rewriteFailed = false;
+      try {
+        // Let the browser acquire its session/challenge. Never send a generic
+        // HTTP probe: it lacks VQD and can submit the wrong model/history.
+        const result = await browserBackedChat({
+          poolKey: "duckduckgo-web",
+          chatPageUrl: "https://duck.ai/chat",
+          chatUrl: CHAT_URL,
+          chatUrlMatchDomain: "duck.ai",
+          userMessage: userText,
+          inputSelector: "textarea",
+          submitButtonSelector: "button[aria-label='Ask']",
+          signal: signal ?? null,
+          postSubmitWaitMs: 15000,
+          beforeSubmit: async (page) => {
+            await page.route(CHAT_URL, async (route) => {
+              if (route.request().method() !== "POST") {
+                await route.continue();
+                return;
+              }
+              let payload: Record<string, unknown>;
+              try {
+                const value: unknown = route.request().postDataJSON();
+                if (!value || typeof value !== "object" || Array.isArray(value)) {
+                  throw new Error("Unsupported DuckDuckGo browser payload");
+                }
+                payload = value as Record<string, unknown>;
+                if (!Array.isArray(payload.messages) || typeof payload.model !== "string") {
+                  throw new Error("Unsupported DuckDuckGo browser payload");
+                }
+              } catch {
+                rewriteFailed = true;
+                await route.abort("failed");
+                return;
+              }
+              // Keep all browser-generated challenge/session fields and headers.
+              await route.continue({
+                postData: JSON.stringify({
+                  ...payload,
+                  model: requestedModel,
+                  messages: normalizedMessages,
+                  reasoningEffort: getDuckDuckGoModelCapabilities(requestedModel).reasoningEffort,
+                }),
+              });
+              requestPatched = true;
+            });
           },
         });
-        return await this.processResponse(upstreamResp, isStreaming, hasTools, requestedTools);
+        if (rewriteFailed || (!requestPatched && result.status >= 200 && result.status < 300)) {
+          return errorResponse(
+            502,
+            "DuckDuckGo browser request could not preserve the requested model and conversation"
+          );
+        }
+        if (result.status > 0) {
+          const upstreamResp = new Response(Buffer.from(result.body), {
+            status: result.status,
+            headers: { "Content-Type": result.contentType || "text/event-stream" },
+          });
+          return await this.processResponse(upstreamResp, isStreaming, hasTools, requestedTools);
+        }
+        return errorResponse(502, "Browser-backed chat captured no upstream response");
+      } catch (error) {
+        return errorResponse(
+          502,
+          sanitizeErrorMessage(
+            `DuckDuckGo browser session failed: ${error instanceof Error ? error.message : String(error)}`
+          )
+        );
       }
-      // status 0 means no response captured (selector/navigation error).
-      return errorResponse(502, "Browser-backed chat captured no upstream response");
     }
 
     // Acquire session from pool for fingerprint rotation

@@ -59,7 +59,11 @@ After acceptance, set activation to `approved-deployment` and create private
 root-owned `/etc/omni-local-next/activation.json` with exactly:
 
 ```json
-{"schema":1,"profile":"kernel-residential-v1","policySha256":"<SHA256 of exact policy.json bytes>"}
+{
+  "schema": 1,
+  "profile": "kernel-residential-v1",
+  "policySha256": "<SHA256 of exact policy.json bytes>"
+}
 ```
 
 Configuration is `/etc/omni-local-next/policy.json`, root-owned mode0600.
@@ -119,3 +123,29 @@ boundary tests remain applicable. Actual OCI namespace join, native dependencies
 helper startup, writable paths, private ingress/auth and controller fail-closed/
 fallback behavior still require consolidated acceptance. No deployment success,
 remote-service containment or uninterrupted-session claim is made.
+
+## Browser and local API deployment
+
+Use the `runner-browser-cli` target for the combined locked CLI/browser runtime.
+It installs the locked Playwright Chromium revision, Xvfb and noVNC tooling at
+build time. Set policy `browserPool: true` to enable a private headed inference
+display. Enable `helpers.browser` for the headed CDP sidecar and
+`helpers.browserLogin` for the isolated interactive-login helper; the latter
+requires an exact `dashboardOrigin` HTTPS origin and a `browser-login` image ID.
+When configured, `dashboardOrigin` also sets the app's `OMNIROUTE_PUBLIC_BASE_URL`
+so OAuth origin checks recognize the private HTTPS dashboard behind the proxy.
+It does not enable trust in arbitrary forwarded headers.
+The helper's state directory is `/var/lib/omniroute-browser-login` in its container.
+Its UNIX socket directory `/run/omniroute-browser-login` is helper-writable and
+app-read-only, and is not mounted into other helpers. Existing local-only VNC
+routes remain local-only; the new provider-login API is session-authenticated
+and forwards only fixed login operations to the helper.
+
+The optional `omni-api-local.socket` / `.service` pair provides host access at
+`http://localhost:20129/v1` over IPv4 and IPv6 loopback only. The accepted socket
+stays in the host namespace; systemd-socket-proxyd connects to the existing APP
+API endpoint from the ingress WAN namespace using its existing root-only rule.
+It does not publish a LAN socket, alter routes, bypass API authentication, or
+provide TLS on localhost. Private HTTPS remains at the configured Tailscale
+Service hostname. Install/enable only after reviewing these fixed addresses
+against the existing topology. No provider key belongs in either unit.

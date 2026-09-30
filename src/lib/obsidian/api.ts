@@ -118,9 +118,9 @@ function obsidianFetch(
         clearTimeout(timeout);
         throw new ObsidianServerError(
           `Cannot reach Obsidian at ${baseUrl}. Ensure the Local REST API plugin is running ` +
-            `and using the correct port. The REST API uses HTTP on port 27123 — do not use ` +
-            `port 27124 (that is a separate MCP endpoint with HTTPS). If connecting via ` +
-            `Tailscale, use http://<tailscale-ip>:27123.`
+            `and using the correct port. HTTPS on port 27124 serves the REST API ` +
+            `and requires trusting the plugin certificate. Optional HTTP on port 27123 ` +
+            `must be enabled in the plugin settings; use it only over a trusted local path.`
         );
       }
       if (retryCount < MAX_RETRIES - 1) {
@@ -173,6 +173,8 @@ export function createObsidianClient(apiKey: string, baseUrl?: string) {
 
     async readNote(path: string, targetType?: TargetType, target?: string): Promise<unknown> {
       const headers: Record<string, string> = {};
+      // Preserve the legacy delimiter-based targeting contract on Local REST API 5.x.
+      if (targetType || target) headers["Markdown-Patch-Version"] = "1";
       if (targetType) headers["Target-Type"] = targetType;
       if (target) headers["Target"] = encodeURIComponent(target);
       return obsidianFetch(`/vault/${encodePath(path)}`, apiKey, resolvedBaseUrl, { headers });
@@ -237,6 +239,8 @@ export function createObsidianClient(apiKey: string, baseUrl?: string) {
       target?: string
     ): Promise<void> {
       const headers: Record<string, string> = { "Content-Type": "text/markdown" };
+      // Preserve the legacy delimiter-based targeting contract on Local REST API 5.x.
+      if (targetType || target) headers["Markdown-Patch-Version"] = "1";
       if (targetType) headers["Target-Type"] = targetType;
       if (target) headers["Target"] = encodeURIComponent(target);
       await obsidianFetch(`/vault/${encodePath(path)}`, apiKey, resolvedBaseUrl, {
@@ -255,6 +259,7 @@ export function createObsidianClient(apiKey: string, baseUrl?: string) {
       createTargetIfMissing = false
     ): Promise<unknown> {
       const headers: Record<string, string> = {
+        "Markdown-Patch-Version": "1",
         Operation: operation,
         "Target-Type": targetType,
         Target: encodeURIComponent(target),

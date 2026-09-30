@@ -18,6 +18,7 @@ import stat
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 INSTALL = Path("/opt/omni-local-next/runtime")
 CONFIG = Path("/etc/omni-local-next")
@@ -32,6 +33,7 @@ PUBLIC = Path("/run/omni-egress/public")
 NETNS = Path("/run/netns/omni-app")
 RESOLVER = Path("/etc/netns/omni-app/resolv.conf")
 ROLES = ("app", "browser", "codex")
+ALL_ROLES = ROLES + ("browser-login",)
 UID = GID = 10001
 IMAGE = re.compile(r"sha256:[0-9a-f]{64}")
 HEX = re.compile(r"[0-9a-f]{64}")
@@ -65,26 +67,46 @@ def load_json(raw: bytes) -> dict:
 
 
 def validate_policy(policy: dict) -> None:
-    if (set(policy) not in ({"schema", "activation", "images", "helpers"},
-                            {"schema", "activation", "images", "helpers", "profile"})
+    required = {"schema", "activation", "images", "helpers"}
+    optional = {"profile", "browserPool", "dashboardOrigin"}
+    if (not required <= set(policy) or set(policy) - required - optional
             or type(policy["schema"]) is not int or policy["schema"] != 1):
         raise PolicyError("unknown or incomplete runtime policy")
     if "profile" in policy and policy["profile"] != "kernel-residential-v1":
         raise PolicyError("unknown deployment profile")
     if policy["activation"] not in {"disabled-staged", "approved-disposable", "approved-deployment"}:
         raise PolicyError("invalid activation")
-    if not isinstance(policy["images"], dict) or set(policy["images"]) != set(ROLES):
-        raise PolicyError("exact images for three known roles required")
+    if (not isinstance(policy["images"], dict)
+            or set(policy["images"]) not in (set(ROLES), set(ALL_ROLES))):
+        raise PolicyError("only exact known role images are supported")
     for image in policy["images"].values():
         if not isinstance(image, str) or not IMAGE.fullmatch(image):
             raise PolicyError("images must be immutable local sha256 IDs; no tags or pulls")
-    if (not isinstance(policy["helpers"], dict) or set(policy["helpers"]) != {"browser", "codex"}
+    if (not isinstance(policy["helpers"], dict)
+            or set(policy["helpers"]) not in ({"browser", "codex"}, {"browser", "codex", "browserLogin"})
             or any(type(v) is not bool for v in policy["helpers"].values())):
-        raise PolicyError("only explicit boolean browser/codex helper choices are supported")
+        raise PolicyError("only explicit boolean helper choices are supported")
+    if "browserPool" in policy and type(policy["browserPool"]) is not bool:
+        raise PolicyError("browser pool choice must be boolean")
+    if "dashboardOrigin" in policy:
+        origin = policy["dashboardOrigin"]
+        if not isinstance(origin, str) or len(origin) > 2048:
+            raise PolicyError("invalid dashboard origin")
+        parsed = urlsplit(origin)
+        if (parsed.scheme != "https" or not parsed.hostname
+                or parsed.netloc != parsed.hostname or parsed.path or parsed.query or parsed.fragment
+                or not re.fullmatch(r"[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?", parsed.hostname)):
+            raise PolicyError("dashboard origin must be an exact HTTPS origin")
+    if policy["helpers"].get("browserLogin", False):
+        if (policy.get("profile") != "kernel-residential-v1"
+                or "browser-login" not in policy["images"] or "dashboardOrigin" not in policy):
+            raise PolicyError("browser login requires explicit image, kernel profile and HTTPS origin")
 
 
 def role_enabled(policy: dict, role: str) -> bool:
-    return role == "app" or policy["helpers"][role]
+    if role == "browser-login":
+        return policy["helpers"].get("browserLogin", False)
+    return role == "app" or policy["helpers"].get(role, False)
 
 
 def mount(source: Path, target: str, *, writable: bool = False) -> str:
@@ -101,8 +123,12 @@ def workload_environment(policy: dict, role: str) -> dict[str, str]:
                     "LIVE_WS_PORT": "20132", "LIVE_WS_HOST": "0.0.0.0",
                     "REQUIRE_API_KEY": "true", "OMNIROUTE_MIGRATIONS_DIR": "/app/migrations",
                     "NODE_OPTIONS": "--max-old-space-size=2048",
-                    "OMNIROUTE_BROWSER_POOL": "false", "CLI_ALLOW_CONFIG_WRITES": "false",
+                    "OMNIROUTE_BROWSER_POOL": "true" if policy.get("browserPool", False) else "false",
+                    "OMNIROUTE_BROWSER_POOL_MODE": "headedXvfb",
+                    "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright", "CLI_ALLOW_CONFIG_WRITES": "false",
                     "ENABLE_TLS_FINGERPRINT": "true", "TLS_FINGERPRINT_PROVIDERS": "maxai"})
+        if "dashboardOrigin" in policy:
+            env["OMNIROUTE_PUBLIC_BASE_URL"] = policy["dashboardOrigin"]
         if policy["helpers"]["browser"]:
             env["CHATGPT_WEB_CODEX_CDP_URL"] = "http://127.0.0.1:9222"
         if policy["helpers"]["codex"]:
@@ -110,15 +136,20 @@ def workload_environment(policy: dict, role: str) -> dict[str, str]:
                         "OMNIROUTE_CODEX_APPSERVER_WS_TOKEN_FILE": "/run/codex-appserver/token",
                         "CODEX_HOME": "/home/node/.codex"})
     elif role == "browser":
-        env["HOME"] = "/browser-profile/home"
+        env.update({"HOME": "/browser-profile/home", "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright"})
+    elif role == "browser-login":
+        env.update({"HOME": "/var/lib/omniroute-browser-login", "PLAYWRIGHT_BROWSERS_PATH": "/ms-playwright"})
     else:
         env.update({"HOME": "/home/node", "CODEX_HOME": "/home/node/.codex", "RUST_LOG": "warn"})
+    if role in ("app", "browser-login") and policy["helpers"].get("browserLogin", False):
+        env.update({"OMNIROUTE_BROWSER_LOGIN_SOCKET": "/run/omniroute-browser-login/control.sock",
+                    "OMNIROUTE_BROWSER_LOGIN_ORIGIN": policy["dashboardOrigin"]})
     return env
 
 
 def command(policy: dict, role: str, *, boundary_only: bool = False) -> list[str]:
     validate_policy(policy)
-    if role not in ROLES or not role_enabled(policy, role):
+    if role not in ALL_ROLES or not role_enabled(policy, role):
         raise PolicyError("role disabled or unknown")
     args = ["/usr/bin/podman", "--remote=false", f"--hooks-dir={CONFIG}/no-hooks", "run",
             "--name=omni-local-next-" + role, "--pull=never", "--rm", "--init",
@@ -153,6 +184,11 @@ def command(policy: dict, role: str, *, boundary_only: bool = False) -> list[str
     if role == "codex" or (role == "app" and policy["helpers"]["codex"]):
         args += ["--mount=" + mount(STATE / "codex-home", "/home/node/.codex", writable=True),
                  "--mount=" + mount(STATE / "codex-token", "/run/codex-appserver")]
+    if role in ("app", "browser-login") and policy["helpers"].get("browserLogin", False):
+        args += ["--mount=" + mount(RUN / "browser-login", "/run/omniroute-browser-login",
+                                   writable=role == "browser-login")]
+    if role == "browser-login":
+        args += ["--mount=" + mount(STATE / "browser-login-profiles", "/var/lib/omniroute-browser-login", writable=True)]
     for key, value in sorted(workload_environment(policy, role).items()):
         args.append("--env=" + key + "=" + value)
     args += ["--entrypoint=/usr/bin/env", policy["images"][role], "node",
@@ -419,6 +455,12 @@ def kernel_preflight(policy: dict, raw: bytes, role: str) -> tuple[dict, bool]:
         token = protected(STATE / "codex-token/token")
         if token.st_gid != GID or stat.S_IMODE(token.st_mode) != 0o440:
             raise PolicyError("invalid shared capability token provenance")
+    if role in ("app", "browser-login") and policy["helpers"].get("browserLogin", False):
+        protected(RUN / "browser-login", directory=True, writable_uid=UID)
+        protected(INSTALL / "browser-login", directory=True)
+        protected(INSTALL / "browser-login/server.mjs")
+    if role == "browser-login":
+        protected(STATE / "browser-login-profiles", directory=True, writable_uid=UID)
     return policy, False
 
 
@@ -439,10 +481,10 @@ def main() -> int:
     sub = parser.add_subparsers(dest="action", required=True)
     show = sub.add_parser("print-command")
     show.add_argument("policy", type=Path)
-    show.add_argument("role", choices=ROLES)
+    show.add_argument("role", choices=ALL_ROLES)
     for action in ("execute", "stop"):
         child = sub.add_parser(action)
-        child.add_argument("role", choices=ROLES)
+        child.add_argument("role", choices=ALL_ROLES)
     args = parser.parse_args()
     if args.action == "print-command":
         # Intentionally accepts only public placeholder policy, never auth data.

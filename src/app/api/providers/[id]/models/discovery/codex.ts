@@ -147,7 +147,9 @@ function getCodexModelItems(payload: unknown): unknown[] {
 
 function shouldImportCodexModel(record: JsonRecord): boolean {
   if (toNonEmptyString(record.visibility)?.toLowerCase() === "hide") return false;
-  if (record.supported_in_api === false || record.supportedInApi === false) return false;
+  // This catalog serves the ChatGPT OAuth Codex connector, not API-key discovery.
+  // supported_in_api only gates API-key clients in Codex's filter_by_auth;
+  // false does not exclude a ChatGPT-only model. Keep picker visibility separate.
 
   const minimalClientVersion =
     toNonEmptyString(record.minimal_client_version) ||

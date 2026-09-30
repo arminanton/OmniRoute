@@ -27,6 +27,7 @@ import {
   providerUsesCuratedModelsOnly,
 } from "@/lib/providers/modelListingCapability";
 import { mergeProviderModelListing } from "@/lib/providers/mergeProviderModelListing";
+import { retainNoAuthCustomModel } from "@/lib/providers/noAuthCatalogPolicy";
 import { normalizeModelCatalogSource } from "@/shared/utils/modelCatalogSearch";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import useEmailPrivacyStore from "@/store/emailPrivacyStore";
@@ -192,6 +193,8 @@ export default function ProviderDetailPageClient() {
   const {
     modelMeta,
     syncedAvailableModels,
+    authoritativeModels,
+    catalogWarning,
     modelAliases,
     fetchProviderModelMeta,
     fetchAliases,
@@ -294,11 +297,14 @@ export default function ProviderDetailPageClient() {
       providerId,
       registryModels,
       syncedModels: syncedAvailableModels,
+      authoritativeModels,
       customModels: (modelMeta.customModels || []).map((cm) => ({
         ...cm,
         id: cm.id,
         name: cm.name || cm.id,
-        source: normalizeModelCatalogSource(cm.source) === "imported" ? "imported" : "custom",
+        source: ["imported", "auto"].includes(normalizeModelCatalogSource(cm.source))
+          ? "imported"
+          : "custom",
       })),
       usesCuratedModelsOnly,
     });
@@ -306,6 +312,7 @@ export default function ProviderDetailPageClient() {
     providerId,
     registryModels,
     syncedAvailableModels,
+    authoritativeModels,
     modelMeta.customModels,
     usesCuratedModelsOnly,
   ]);
@@ -754,6 +761,11 @@ export default function ProviderDetailPageClient() {
       {!isSearchProvider && !isUpstreamProxyProvider && (
         <Card>
           <h2 className="text-lg font-semibold mb-4">{t("availableModels")}</h2>
+          {catalogWarning && (
+            <p role="status" className="mb-4 text-sm text-amber-600">
+              {catalogWarning}
+            </p>
+          )}
           <ProviderModelsSection
             providerId={providerId}
             providerAlias={providerAlias}
@@ -767,9 +779,18 @@ export default function ProviderDetailPageClient() {
             compatibleSupportsModelImport={compatibleSupportsModelImport}
             allowModelImport={!usesCuratedModelsOnly}
             models={models}
-            modelMeta={modelMeta}
+            modelMeta={
+              authoritativeModels === null
+                ? modelMeta
+                : {
+                    ...modelMeta,
+                    customModels: modelMeta.customModels.filter((model) =>
+                      retainNoAuthCustomModel(model, authoritativeModels)
+                    ),
+                  }
+            }
             modelAliases={modelAliases}
-            syncedAvailableModels={syncedAvailableModels}
+            syncedAvailableModels={authoritativeModels === null ? syncedAvailableModels : models}
             compatibleFallbackModels={compatibleFallbackModels}
             copied={copied}
             onCopy={copy}
@@ -824,7 +845,8 @@ export default function ProviderDetailPageClient() {
             copied={copied}
             onCopy={copy}
             onModelsChanged={fetchProviderModelMeta}
-            syncedModelIds={syncedAvailableModels.map((model) => model.id)}
+            syncedModelIds={(authoritativeModels ?? syncedAvailableModels).map((model) => model.id)}
+            authoritativeModels={authoritativeModels}
           />
         </Card>
       )}

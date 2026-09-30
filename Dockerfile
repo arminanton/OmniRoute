@@ -346,3 +346,19 @@ USER node
 # Prove the installed CLIs and their packaged native bindings work offline as
 # the final runtime user, without login, providers, first-run setup or updates.
 RUN --network=none node /opt/omniroute-docker-build/verify-docker-clis.mjs
+
+# Combined deployment target for CLI and browser-backed providers. The browser
+# revision follows the project's locked Playwright version, never a runtime download.
+FROM runner-cli AS runner-browser-cli
+USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+  apt-get update \
+  && apt-get install -y --no-install-recommends xvfb xauth x11vnc novnc websockify \
+  && node node_modules/playwright/cli.js install chromium --with-deps \
+  && chmod -R a+rX /ms-playwright \
+  && chown root:root /app
+COPY --chmod=444 scripts/build/verify-browser-runtime.mjs /opt/omniroute-docker-build/verify-browser-runtime.mjs
+USER node
+RUN --network=none node /opt/omniroute-docker-build/verify-browser-runtime.mjs

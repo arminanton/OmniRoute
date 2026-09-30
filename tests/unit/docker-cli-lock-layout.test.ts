@@ -134,13 +134,13 @@ test("preflight is read-only and full nested packages, resources, bins and Droid
   const alias = "@openai/codex-linux-arm64";
   f.update(f.roots["@openai/codex"], {
     optionalDependencies: {
-      [alias]: "npm:@openai/codex@0.153.2-linux-arm64",
-      "@openai/codex-linux-x64": "npm:@openai/codex@0.153.2-linux-x64",
+      [alias]: "npm:@openai/codex@0.158.0-linux-arm64",
+      "@openai/codex-linux-x64": "npm:@openai/codex@0.158.0-linux-x64",
     },
   });
   const platform = f.add(f.roots["@openai/codex"], alias, {
     name: "@openai/codex",
-    version: "0.153.2-linux-arm64",
+    version: "0.158.0-linux-arm64",
   });
   const resource = "vendor/aarch64-unknown-linux-musl/codex-resources/zsh/bin/zsh";
   fs.mkdirSync(path.dirname(path.join(platform, resource)), { recursive: true });

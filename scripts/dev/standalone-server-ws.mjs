@@ -1,4 +1,5 @@
 import http from "node:http";
+import { handleBrowserLoginUpgrade } from "./browser-login-ws.mjs";
 import net from "node:net";
 import { randomUUID } from "node:crypto";
 import { createResponsesWsProxy } from "./responses-ws-proxy.mjs";
@@ -113,6 +114,14 @@ function wrapUpgradeListener(server, listener) {
         return listener.call(this, req, socket, head);
       }
 
+      if (
+        await handleBrowserLoginUpgrade(req, socket, head, {
+          port: getPort(server),
+          secret: process.env.OMNIROUTE_WS_BRIDGE_SECRET,
+          scheme: process.env.OMNIROUTE_INTERNAL_SCHEME,
+        })
+      )
+        return;
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
       if (url.pathname === LIVE_WS_PATH || url.pathname.startsWith(LIVE_WS_PATH + "/")) {
         proxyLiveWs(req, socket, head);

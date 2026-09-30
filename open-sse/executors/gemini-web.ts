@@ -13,6 +13,8 @@
  * responses, not chunked streams.
  */
 
+import { createHash, randomUUID } from "node:crypto";
+import { acquireBrowserPageLease, type BrowserPageLease } from "../services/browserPool.ts";
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
 import { normalizeGeminiCookieInput } from "../utils/geminiCookies.ts";
@@ -346,8 +348,15 @@ function resolveGeminiWebCookie(credentials: ExecuteInput["credentials"]): strin
 
 // ─── Executor ───────────────────────────────────────────────────────────────
 
+export function geminiBrowserContextKey(connectionId: string | undefined, cookie: string): string {
+  // Missing connection IDs must never merge unrelated callers into one cookie jar.
+  const account = connectionId?.trim() || randomUUID();
+  const digest = createHash("sha256").update(account).update("\0").update(cookie).digest("hex");
+  return `gemini-web:${digest}`;
+}
+
 export class GeminiWebExecutor extends BaseExecutor {
-  constructor() {
+  constructor(private readonly browserLease = acquireBrowserPageLease) {
     super("gemini-web", { id: "gemini-web", baseUrl: GEMINI_URL });
   }
 
@@ -395,11 +404,8 @@ export class GeminiWebExecutor extends BaseExecutor {
       if (mergedCookie && mergedCookie !== cookie) {
         await onCredentialsRefreshed({ ...credentials, apiKey: mergedCookie });
       }
-    } catch (err) {
-      log?.warn?.(
-        "GEMINI-WEB",
-        `Failed to persist rotated cookie: ${err instanceof Error ? err.message : String(err)}`
-      );
+    } catch {
+      log?.warn?.("GEMINI-WEB", "Failed to persist rotated cookie");
     }
   }
 
@@ -474,40 +480,29 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
-    let browser: any = null;
-    let abortBrowser: (() => void) | null = null;
+    let lease: BrowserPageLease | null = null;
     try {
-      if (signal?.aborted) {
-        throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
-      }
-      const { chromium } = await import("playwright");
-      browser = await chromium.launch({ headless: true });
-      abortBrowser = () => {
-        void browser?.close().catch(() => {});
-      };
-      signal?.addEventListener("abort", abortBrowser, { once: true });
-
-      const context = await browser.newContext({ userAgent: GEMINI_USER_AGENT });
-
-      // Parse cookies — strips attributes like Path, Domain, Expires
-      const cookiePairs = parseCookies(cookie);
-      await context.addCookies(
-        cookiePairs.map(({ name, value }) => ({
-          name,
-          value,
-          domain: ".google.com",
-          path: "/",
-          secure: true,
-        }))
+      signal?.throwIfAborted();
+      // Each account/session owns its cookie jar; each turn owns a separate page.
+      lease = await this.browserLease(
+        geminiBrowserContextKey(credentials.connectionId, cookie),
+        {
+          cookieDomain: "google.com",
+          cookieString: parseCookies(cookie)
+            .map(({ name, value }) => `${name}=${value}`)
+            .join("; "),
+          proxyProviderKey: "gemini-web",
+          userAgent: GEMINI_USER_AGENT,
+        },
+        signal
       );
-
-      const page = await context.newPage();
+      const { context, page } = lease;
 
       // Capture first StreamGenerate response
       let responseText = "";
       let captured = false;
       const responsePromise = new Promise<void>((resolve) => {
-        page.on("response", async (resp: any) => {
+        page.on("response", async (resp) => {
           if (!resp.url().includes("StreamGenerate")) return;
           if (captured) return;
           // Resolve even if reading the body throws, so the flow falls through
@@ -684,15 +679,7 @@ export class GeminiWebExecutor extends BaseExecutor {
         transformedBody: body,
       };
     } finally {
-      if (abortBrowser) signal?.removeEventListener("abort", abortBrowser);
-      // Always close browser to prevent resource leaks
-      if (browser) {
-        try {
-          await browser.close();
-        } catch {
-          /* ignore close errors */
-        }
-      }
+      await lease?.release();
     }
   }
 }

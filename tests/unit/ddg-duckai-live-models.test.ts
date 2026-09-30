@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
+  DUCKDUCKGO_MODELS_URL,
   extractFreeDuckDuckGoModelIds,
   pickDuckDuckGoModel,
   normalizeDuckDuckGoModel,
@@ -79,6 +80,7 @@ test("no-raw-hash guard: solver failure must not fall back to the unsolved chall
 });
 
 test("models endpoint: token-free /models shares the executor host", () => {
-  assert.match(EXECUTOR_SOURCE, /export const MODELS_URL = `\$\{DUCKDUCKGO_BASE\}\/duckchat\/v1\/models`;/);
+  assert.equal(DUCKDUCKGO_MODELS_URL, "https://duck.ai/duckchat/v1/models");
+  assert.match(EXECUTOR_SOURCE, /export const MODELS_URL = DUCKDUCKGO_MODELS_URL;/);
   assert.match(EXECUTOR_SOURCE, /export const DUCKDUCKGO_BASE = "https:\/\/duck\.ai";/);
 });

@@ -14,6 +14,8 @@
  */
 
 import { useState, useCallback } from "react";
+import { usesNoAuthLiveCatalog } from "@/lib/providers/noAuthCatalogPolicy";
+import type { ProviderListingModel } from "@/lib/providers/mergeProviderModelListing";
 import { useTranslations } from "next-intl";
 import { useNotificationStore } from "@/store/notificationStore";
 import { providerText, type CompatModelRow } from "../providerPageHelpers";
@@ -28,6 +30,8 @@ export interface ModelMeta {
 export interface UseProviderModelsReturn {
   modelMeta: ModelMeta;
   syncedAvailableModels: any[];
+  authoritativeModels: ProviderListingModel[] | null;
+  catalogWarning: string | null;
   modelAliases: Record<string, string>;
   fetchProviderModelMeta: () => Promise<void>;
   fetchAliases: () => Promise<void>;
@@ -48,6 +52,11 @@ export function useProviderModels(
   });
   const [syncedAvailableModels, setSyncedAvailableModels] = useState<any[]>([]);
   const [modelAliases, setModelAliases] = useState<Record<string, string>>({});
+  const [liveCatalog, setLiveCatalog] = useState<{
+    providerId: string;
+    models: ProviderListingModel[] | null;
+    warning: string | null;
+  } | null>(null);
 
   const fetchAliases = useCallback(async () => {
     try {
@@ -126,6 +135,26 @@ export function useProviderModels(
         customModels: data.models || [],
         modelCompatOverrides: data.modelCompatOverrides || [],
       });
+      if (usesNoAuthLiveCatalog(providerId)) {
+        try {
+          const liveRes = await fetch(`/api/providers/${encodeURIComponent(providerId)}/models`, {
+            cache: "no-store",
+          });
+          const live = await liveRes.json();
+          if (!liveRes.ok) throw new Error("Catalog request failed");
+          setLiveCatalog({
+            providerId,
+            models: live.authoritative === true && Array.isArray(live.models) ? live.models : null,
+            warning: typeof live.warning === "string" ? live.warning : null,
+          });
+        } catch {
+          setLiveCatalog((previous) => ({
+            providerId,
+            models: previous?.providerId === providerId ? previous.models : null,
+            warning: "Live catalog unavailable — displayed model availability is unverified",
+          }));
+        }
+      }
       try {
         const syncRes = await fetch(
           `/api/synced-available-models?provider=${encodeURIComponent(providerId)}`,
@@ -148,6 +177,8 @@ export function useProviderModels(
   return {
     modelMeta,
     syncedAvailableModels,
+    authoritativeModels: liveCatalog?.providerId === providerId ? liveCatalog.models : null,
+    catalogWarning: liveCatalog?.providerId === providerId ? liveCatalog.warning : null,
     modelAliases,
     fetchProviderModelMeta,
     fetchAliases,

@@ -9,7 +9,7 @@ import {fileURLToPath} from "node:url";
 import {mountAt, validatePublicMetadata} from "../boundary-check.mjs";
 
 const ENTRY = new URL("../workload-entrypoint.mjs", import.meta.url);
-const CORE = new URL("../runtime-policy.mjs", import.meta.url);
+const CORE = new URL("../../../build/runtime-policy.mjs", import.meta.url);
 const coreBytes = fs.readFileSync(CORE);
 const source = fs.readFileSync(ENTRY, "utf8");
 const PIN = "65ef803f048b16df2be39b0057ecd2e757590d23e2ef1cf87bf24b4bb849bd20";
@@ -47,14 +47,18 @@ async function compose(role, options = {}) {
     existsSync(path) { return path === "/ms-playwright/chromium-999/chrome-linux64/chrome"; },
     statSync() { return {isFile: () => true}; },
   };
-  const fakeProcess = {argv: ["node", "fixture", role, "kernel-residential-v1"], env: {}, execPath: "/fixture/node",
+  const fakeProcess = {argv: ["node", "fixture", role, "kernel-residential-v1"], env: {...options.env}, execPath: "/fixture/node",
     on() {}, chdir() { calls.push("chdir"); }, exit(code) { throw new FixtureExit(code); }};
   const fakeSpawn = (binary, args, settings) => {
     calls.push("spawn"); assert.equal(settings.shell, false);
     const child = new EventEmitter(); child.kill = () => {};
+    if (binary === "/usr/bin/Xvfb") {
+      child.stdio = [null, null, null, new EventEmitter()];
+      queueMicrotask(() => child.stdio[3].emit("data", "42\n"));
+    }
     spawns.push({binary, args, child}); return child;
   };
-  const context = vm.createContext({URL, process: fakeProcess, console: {
+  const context = vm.createContext({URL, setTimeout, clearTimeout, process: fakeProcess, console: {
     error: (...values) => logs.push(values.join(" ")), log: (...values) => logs.push(values.join(" "))}});
   const dependencies = {
     "node:fs": {default: fakeFs}, "node:child_process": {spawn: fakeSpawn}, "node:url": {fileURLToPath},
@@ -80,11 +84,11 @@ async function compose(role, options = {}) {
   return {calls, spawns, logs, error};
 }
 
-for (const role of ["app", "browser", "codex"]) {
+for (const role of ["app", "browser", "codex", "browser-login"]) {
   test(`${role}: kernel boundary checked before real-role dispatch without adapter grants`, async () => {
     const result = await compose(role);
     assert.equal(result.error, undefined);
-    assert.equal(result.spawns.length, 1);
+    assert.equal(result.spawns.length, role === "browser" ? 2 : 1);
     assert.ok(result.calls.indexOf("boundary") < result.calls.indexOf("spawn"));
     assert.ok(!result.calls.includes("policy"));
     assert.ok(!result.calls.includes("open-image"));
@@ -97,3 +101,12 @@ for (const role of ["app", "browser", "codex"]) {
     }
   });
 }
+
+test("enabled app pool starts a ready private display before application", async () => {
+  const result = await compose("app", {env: {OMNIROUTE_BROWSER_POOL: "true"}});
+  assert.equal(result.error, undefined);
+  assert.equal(result.spawns.length, 2);
+  assert.equal(result.spawns[0].binary, "/usr/bin/Xvfb");
+  assert.equal(result.spawns[0].args.slice(-2).join(" "), "-nolisten tcp");
+  assert.equal(result.spawns[1].args[0], "/app/dev/run-standalone.mjs");
+});

@@ -1,3 +1,4 @@
+import { mockGeminiBrowserLease } from "./helpers/geminiBrowserLease.ts";
 // Tool calling for the Gemini Web executor (#7286) — Level 2 of the staged
 // approach in the issue: wire the existing `webTools.ts` prompt-emulation
 // shim (already proven across 11 other web-cookie executors) into
@@ -11,9 +12,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { GeminiWebExecutor, buildGeminiToolResponse, buildGeminiToolPrompt } = await import(
-  "../../open-sse/executors/gemini-web.ts"
-);
+const { GeminiWebExecutor, buildGeminiToolResponse, buildGeminiToolPrompt } =
+  await import("../../open-sse/executors/gemini-web.ts");
 
 interface ToolCallLike {
   function: { name: string; arguments: string };
@@ -238,11 +238,10 @@ async function withMockedGeminiBrowser<T>(
 }
 
 test("#7286: executor integration — tools[] present reaches tool_calls end to end", async () => {
-  const responseText =
-    '<tool>{"name":"get_weather","arguments":{"city":"Berlin"}}</tool>';
+  const responseText = '<tool>{"name":"get_weather","arguments":{"city":"Berlin"}}</tool>';
 
   await withMockedGeminiBrowser(responseText, async () => {
-    const executor = new GeminiWebExecutor();
+    const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
     const result = await executor.execute({
       model: "gemini-3.1-pro",
       body: {
@@ -266,7 +265,7 @@ test("#7286: executor integration — tools[] present reaches tool_calls end to 
 
 test("#7286: no-tool passthrough regression — unchanged prompt derivation + response shape when tools absent", async () => {
   await withMockedGeminiBrowser("Just chatting, no tools here.", async (typedPrompt) => {
-    const executor = new GeminiWebExecutor();
+    const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
     const result = await executor.execute({
       model: "gemini-3.1-pro",
       body: {

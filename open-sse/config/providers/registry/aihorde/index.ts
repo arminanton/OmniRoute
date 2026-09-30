@@ -28,6 +28,7 @@ import { buildOpenAiCompatibleRegistryEntry } from "../../shared.ts";
  */
 export const aihordeProvider: RegistryEntry = buildOpenAiCompatibleRegistryEntry({
   id: "aihorde",
+  alias: "horde",
   baseUrl: "https://oai.aihorde.net/v1/chat/completions",
   modelsUrl: "https://oai.aihorde.net/v1/models",
   passthroughModels: true,

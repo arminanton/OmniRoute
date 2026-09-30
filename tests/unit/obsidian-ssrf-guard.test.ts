@@ -98,6 +98,36 @@ function isNonRetryable(error: unknown) {
   return true;
 }
 
+// Local REST API 5.3.1 requires an explicit version for legacy header targeting.
+test("Obsidian header targeting selects Markdown Patch version 1", async (t) => {
+  const fixture = transport(t);
+  const client = createObsidianClient(TOKEN);
+  await client.readNote("note.md", "heading", "Parent::Child");
+  await client.appendNote("note.md", "addition", "heading", "Parent::Child");
+  await client.patchNote("note.md", "replace", "heading", "Parent::Child", "replacement", true);
+  assert.equal(fixture.sockets.length, 3);
+  for (const socket of fixture.sockets) {
+    assert.match(socket.request, /markdown-patch-version: 1\r?$/im);
+    assert.match(socket.request, /target-type: heading\r?$/im);
+    assert.match(socket.request, /target: Parent%3A%3AChild\r?$/im);
+  }
+  assert.match(fixture.sockets[2].request, /operation: replace\r?$/im);
+  assert.match(fixture.sockets[2].request, /create-target-if-missing: true\r?$/im);
+  await assertClosed(fixture);
+});
+
+test("Obsidian whole-note operations do not opt into legacy targeting", async (t) => {
+  const fixture = transport(t);
+  const client = createObsidianClient(TOKEN);
+  await client.readNote("note.md");
+  await client.appendNote("note.md", "addition");
+  await client.writeNote("note.md", "replacement");
+  for (const socket of fixture.sockets) {
+    assert.doesNotMatch(socket.request, /markdown-patch-version:/i);
+  }
+  await assertClosed(fixture);
+});
+
 test("obsidianFetch never dials the cloud-metadata endpoint", async (t) => {
   const fixture = transport(t);
   const client = createObsidianClient(TOKEN, "http://169.254.169.254");
@@ -473,6 +503,23 @@ test(
     await assertClosed(fixture);
   }
 );
+
+test("POST /api/settings/obsidian accepts authenticated HTTPS REST on 27124", async (t) => {
+  const fixture = transport(t);
+  const { POST } = await import("../../src/app/api/settings/obsidian/route.ts");
+  const { getObsidianBaseUrl } = await import("../../src/lib/db/obsidian.ts");
+  const baseUrl = "https://127.0.0.1:27124";
+  const request = await makeManagementSessionRequest("http://localhost/api/settings/obsidian", {
+    method: "POST",
+    body: { baseUrl, token: TOKEN },
+  });
+  const response = await POST(request as never);
+  assert.equal(response.status, 200);
+  assert.equal(getObsidianBaseUrl(), baseUrl);
+  assert.equal(fixture.dials.length, 1);
+  assert.match(fixture.sockets[0].request, /authorization: Bearer obsidian-fixture-token/i);
+  await assertClosed(fixture);
+});
 
 test("POST /api/settings/obsidian rejects metadata before any dial or persistence", async (t) => {
   const fixture = transport(t);

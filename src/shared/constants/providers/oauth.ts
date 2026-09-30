@@ -38,7 +38,7 @@ export const OAUTH_PROVIDERS = {
     id: "nous-oauth",
     serviceKinds: ["llm"],
     alias: "nso",
-    name: "Nous OAuth (experimental)",
+    name: "Nous OAuth",
     icon: "terminal",
     color: "#6A4FCB",
     textIcon: "NO",
@@ -50,7 +50,7 @@ export const OAUTH_PROVIDERS = {
     subscriptionRisk: true,
     riskNoticeVariant: "oauth",
     authHint:
-      "EXPERIMENTAL Hermes-compatible Nous device sign-in. This uses the Hermes CLI public client; it is not official third-party SSO. Sign in through Nous Portal in your browser. No token import is supported.",
+      "Hermes-compatible Nous device sign-in. This uses the Hermes CLI public client; it is not official third-party SSO. Sign in through Nous Portal in your browser. No token import is supported.",
   },
   openference: {
     id: "openference",

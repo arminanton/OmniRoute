@@ -5,6 +5,7 @@ import { getCachedProviderNodes, getCachedSettings } from "@/lib/db/readCache";
 
 import { getSyncedAutoAliases } from "@/lib/providerModels/syncedAutoAliases.ts";
 import { getActiveSyncedCatalog } from "@/lib/db/models/activeSyncedCatalog";
+import { usesNoAuthLiveCatalog } from "@/lib/providers/noAuthCatalogPolicy";
 import { getModelCompatOverrides } from "@/lib/db/models/compat";
 import { getNoAuthHydrationProviderIds } from "./noAuthProviderSiblings";
 import {
@@ -385,8 +386,15 @@ async function lookupModelMeta(
     const liveBackedEffortVariant =
       effortBaseModelId !== null && syncedModels.some((model) => model.id === effortBaseModelId);
 
+    // Anonymous snapshots already include explicit manual models. A stale imported
+    // custom row must not bypass their authoritative membership (including []).
     const available =
-      !liveCatalog.authoritative || Boolean(customMatch || syncedMatch || liveBackedEffortVariant);
+      !liveCatalog.authoritative ||
+      Boolean(
+        syncedMatch ||
+        liveBackedEffortVariant ||
+        (!usesNoAuthLiveCatalog(providerId) && customMatch)
+      );
 
     const metadata = buildRuntimeModelMeta(
       customMatch,

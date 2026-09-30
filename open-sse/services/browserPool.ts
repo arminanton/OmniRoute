@@ -118,6 +118,7 @@ interface PoolState {
   evictTimer: NodeJS.Timeout | null;
   cloakLaunch: ((opts: unknown) => Promise<Browser>) | null;
   cloakLaunchResolved: boolean;
+  activeLeases: number;
   metrics: BrowserPoolMetrics;
 }
 
@@ -143,6 +144,7 @@ const state: PoolState = {
   cloakLaunch: null,
   cloakLaunchResolved: false,
   metrics: createBrowserPoolMetrics(),
+  activeLeases: 0,
 };
 
 function getCloakbrowserModuleId(): string {
@@ -178,12 +180,14 @@ function isPoolEnabled(): boolean {
 function resetIdleTimer(): void {
   if (state.idleTimer) clearTimeout(state.idleTimer);
   state.idleTimer = setTimeout(() => {
-    void shutdownPool("idle-timeout");
+    if (state.activeLeases > 0) resetIdleTimer();
+    else void shutdownPool("idle-timeout");
   }, POOL_IDLE_TIMEOUT_MS);
   state.idleTimer.unref?.();
 }
 
 function evictStaleContexts(): void {
+  if (state.activeLeases > 0) return;
   const now = Date.now();
   for (const [key, pooled] of state.contexts) {
     if (now - pooled.lastUsed > CONTEXT_TTL_MS) {
@@ -315,13 +319,26 @@ function clearBrowserLaunch(headless: boolean, launch: Promise<Browser>): void {
   if (currentBrowserLaunch(headless) === launch) setBrowserLaunch(headless, null);
 }
 
+/** Explicit caller mode wins; headedXvfb uses the deployment-owned DISPLAY. */
+export function resolveBrowserPoolHeadless(
+  options: Pick<BrowserPoolContextOptions, "headless">,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  if (typeof options.headless === "boolean") return options.headless;
+  const mode = env.OMNIROUTE_BROWSER_POOL_MODE;
+  if (mode && mode !== "headless" && mode !== "headedXvfb") {
+    throw new Error("OMNIROUTE_BROWSER_POOL_MODE must be headless or headedXvfb");
+  }
+  return mode !== "headedXvfb";
+}
+
 export function resolvePlainBrowserLaunchOptions(
   options: Pick<BrowserPoolContextOptions, "headless" | "executablePath">
 ): import("playwright").LaunchOptions {
-  const headless = options.headless !== false;
+  const headless = resolveBrowserPoolHeadless(options);
   return {
     headless,
-    ...(!headless && options.executablePath ? { executablePath: options.executablePath } : {}),
+    ...(options.executablePath ? { executablePath: options.executablePath } : {}),
     args: [
       "--no-sandbox",
       "--disable-dev-shm-usage",
@@ -372,7 +389,7 @@ async function launchBrowserInstance(
 }
 
 async function launchBrowser(options: BrowserPoolContextOptions): Promise<Browser> {
-  const headless = options.headless !== false;
+  const headless = resolveBrowserPoolHeadless(options);
   assertBrowserPoolRuntime(headless);
   const existing = currentBrowser(headless);
   if (existing) return existing;
@@ -517,7 +534,7 @@ export async function acquireBrowserContext(
       "browserPool: OMNIROUTE_BROWSER_POOL=off — context requested but pool is disabled"
     );
   }
-  const headless = options.headless !== false;
+  const headless = resolveBrowserPoolHeadless(options);
   assertBrowserPoolRuntime(headless);
   const locked = getRuntimePolicy().mode === "locked";
   const admittedProxy = locked ? await resolveBrowserContextProxy(key, options) : undefined;
@@ -587,6 +604,52 @@ export async function acquireBrowserContext(
   return createPromise;
 }
 
+export interface BrowserPageLease {
+  context: BrowserContext;
+  page: Page;
+  release(): Promise<void>;
+}
+
+/** Keep the shared engine alive; each request owns only its page. */
+export async function acquireBrowserPageLease(
+  key: string,
+  options: BrowserPoolContextOptions,
+  signal?: AbortSignal,
+  deps = { acquire: acquireBrowserContext }
+): Promise<BrowserPageLease> {
+  signal?.throwIfAborted();
+  state.activeLeases++;
+  let page: Page | null = null;
+  let released = false;
+  const abort = () => {
+    void release();
+  };
+  const release = async () => {
+    if (released) return;
+    released = true;
+    signal?.removeEventListener("abort", abort);
+    try {
+      await page?.close();
+    } catch {
+      // An aborted navigation may already have closed the page.
+    } finally {
+      state.activeLeases--;
+      resetIdleTimer();
+    }
+  };
+  try {
+    const pooled = await deps.acquire(key, options);
+    signal?.throwIfAborted();
+    page = await pooled.context.newPage();
+    signal?.throwIfAborted();
+    signal?.addEventListener("abort", abort, { once: true });
+    return { context: pooled.context, page, release };
+  } catch (error) {
+    await release();
+    throw error;
+  }
+}
+
 export async function openPage(pooled: PooledContext): Promise<Page> {
   return pooled.context.newPage();
 }
@@ -605,7 +668,7 @@ export async function releaseBrowserContext(key: string): Promise<void> {
   } catch {
     /* ignore */
   }
-  if (state.contexts.size === 0) {
+  if (state.contexts.size === 0 && state.activeLeases === 0) {
     await shutdownPool("last-context-closed");
   }
 }
@@ -663,6 +726,7 @@ export async function shutdownPool(reason: string): Promise<void> {
 export function getBrowserPoolStatus(): {
   enabled: boolean;
   contexts: number;
+  activeLeases: number;
   browserRunning: boolean;
   engine: PoolEngine | null;
   stealthAvailable: boolean;
@@ -671,6 +735,7 @@ export function getBrowserPoolStatus(): {
   return {
     enabled: isPoolEnabled(),
     contexts: state.contexts.size,
+    activeLeases: state.activeLeases,
     browserRunning: state.browser !== null || state.headedBrowser !== null,
     engine: state.engine,
     stealthAvailable: state.engine === "obscura" || state.cloakLaunch !== null,

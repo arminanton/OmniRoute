@@ -63,6 +63,41 @@ function start(binary, args) {
   return child;
 }
 
+let virtualDisplay;
+async function startVirtualDisplay() {
+  // Xvfb chooses a free display and reports it only after becoming ready. No
+  // TCP X listener, shell command interpolation, or host display socket exists.
+  virtualDisplay = spawn("/usr/bin/Xvfb", ["-displayfd", "3", "-screen", "0", "1440x900x24", "-nolisten", "tcp"],
+    {stdio: ["ignore", "inherit", "inherit", "pipe"], env: process.env, shell: false});
+  process.on("exit", () => virtualDisplay?.kill("SIGTERM"));
+  await new Promise((resolve, reject) => {
+    let ready = false;
+    let output = "";
+    const timeout = setTimeout(() => {
+      virtualDisplay.kill("SIGTERM");
+      reject(new Error("display startup timed out"));
+    }, 15000);
+    const failed = () => {
+      clearTimeout(timeout);
+      if (ready) fail();
+      else reject(new Error("display startup failed"));
+    };
+    virtualDisplay.once("error", failed);
+    virtualDisplay.once("exit", failed);
+    virtualDisplay.stdio[3].on("data", (chunk) => {
+      if (ready) return;
+      output += chunk.toString();
+      if (output.length > 16 || /[^0-9\n]/.test(output)) return failed();
+      const match = /^([0-9]{1,5})\n$/.exec(output);
+      if (!match) return;
+      clearTimeout(timeout);
+      ready = true;
+      process.env.DISPLAY = `:${match[1]}`;
+      resolve();
+    });
+  });
+}
+
 function chromiumPath() {
   // Pinned Playwright browser image, no runtime downloader or arbitrary command.
   const candidates = [];
@@ -102,13 +137,19 @@ try {
     if (!fs.statSync("/app/server-ws.mjs").isFile()) throw new Error("missing app wrapper");
     fs.mkdirSync("/app/data/home", {recursive: true, mode: 0o700});
     process.chdir("/app");
+    if (process.env.OMNIROUTE_BROWSER_POOL === "true") await startVirtualDisplay();
     start(process.execPath, ["/app/dev/run-standalone.mjs"]);
   } else if (role === "browser") {
     assertLocalHelper({role: "browser-cdp", endpoint: "http://127.0.0.1:9222", phase: "configured"});
     fs.mkdirSync("/browser-profile/home", {recursive: true, mode: 0o700});
-    start(chromiumPath(), ["--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--no-proxy-server",
+    await startVirtualDisplay();
+    start(chromiumPath(), ["--no-sandbox", "--disable-dev-shm-usage", "--no-proxy-server",
       "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=9222",
       "--user-data-dir=/browser-profile/chromium", "--no-first-run", "--no-default-browser-check", "about:blank"]);
+  } else if (role === "browser-login") {
+    if (!kernelProfile) throw new Error("browser login requires kernel profile");
+    process.chdir("/app");
+    start(process.execPath, ["/opt/omni-runtime/browser-login/server.mjs"]);
   } else if (role === "codex") {
     assertLocalHelper({role: "codex-app-server", endpoint: "ws://127.0.0.1:1456", phase: "configured"});
     start("/usr/local/bin/codex", ["app-server", "--listen", "ws://127.0.0.1:1456",

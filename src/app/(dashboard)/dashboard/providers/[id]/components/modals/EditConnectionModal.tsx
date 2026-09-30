@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import BrowserLoginPanel from "@/lib/providerBrowserLogin/BrowserLoginPanel";
 import { useTranslations } from "next-intl";
 import { Button, Badge, Input, Modal, Toggle, Select } from "@/shared/components";
 import { CHATGPT_WEB_CODEX_CONNECTOR_NAME } from "@/shared/constants/chatgptWebCodex";
@@ -804,6 +805,11 @@ export default function EditConnectionModal({
   return (
     <Modal isOpen={isOpen} title={t("editConnection")} onClose={onClose}>
       <div className="flex flex-col gap-4">
+        {isOpen &&
+          connection?.id &&
+          ["gemini-web", "chatgpt-web", "chatgpt-web-codex"].includes(provider) && (
+            <BrowserLoginPanel connectionId={connection.id} onCaptured={onClose} />
+          )}
         <Input
           label={t("nameLabel")}
           value={formData.name}

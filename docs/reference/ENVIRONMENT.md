@@ -788,6 +788,10 @@ REQUEST_TIMEOUT_MS (global override)
 | `OMNIROUTE_NOTION_TLS_TIMEOUT_MS`         | `30000`              | Native wreq-js request timeout (`notionTlsClient.ts`); `notion-web` raises it per request to `180000` for long generations.                                      |
 | `OMNIROUTE_NOTION_TLS_GRACE_MS`           | `10000`              | Absolute JS hard-deadline grace added on top of the native timeout.                                                                                              |
 | `OMNIROUTE_BROWSER_POOL`                  | `on`                 | Shared Playwright browser pool for browser-backed web-cookie chat (`browserPool.ts`); set `off` to disable.                                                     |
+| `OMNIROUTE_BROWSER_POOL_MODE` | `headless` | Default pool mode: `headless` or `headedXvfb`; an explicit caller mode takes precedence. Residential browser runtime supplies Xvfb. |
+| `OMNIROUTE_BROWSER_LOGIN_ORIGIN` | unset | Exact HTTPS dashboard origin allowed by the private browser-login helper. Requires separately provisioned helper; does not enable public CDP or VNC. |
+| `OMNIROUTE_BROWSER_LOGIN_SOCKET` | `/run/omniroute-browser-login/control.sock` | Private UNIX control socket for the interactive browser-login helper. |
+| `PLAYWRIGHT_BROWSERS_PATH` | Playwright default | Installed Playwright browser cache location. Combined residential image uses `/ms-playwright`. |
 | `OBSCURA_BIN`                             | `auto-detect`        | Path to the `obscura` binary used as the primary engine by the browser pool and Cloudflare Playground executor (`open-sse/services/obscura.ts`); auto-detected from the system PATH when unset. |
 | `OBSCURA_CDP_ENDPOINT`                    | _(unset)_            | Point at an already-running Obscura (`http://host:port`) instead of spawning one; the module does not own that process (`open-sse/services/obscura.ts`).            |
 | `OBSCURA_PORT`                            | `random free port`   | Explicit port for the spawned `obscura serve`; a free port is chosen automatically when unset (`open-sse/services/obscura.ts`).                                   |

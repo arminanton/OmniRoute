@@ -4,6 +4,7 @@
  * live synced catalog when non-empty.
  */
 
+import { retainNoAuthCustomModel } from "./noAuthCatalogPolicy";
 import { ensureCursorAutoCatalogEntry } from "@/lib/providerModels/cursorAutoCatalog";
 import { mergeModelsWithCustomPrecedence } from "@/lib/providers/modelMetadataPrecedence";
 import {
@@ -24,6 +25,7 @@ export type MergeProviderModelListingInput = {
   syncedModels: Array<{ id: string; name?: string; [key: string]: unknown }>;
   customModels: Array<{ id: string; name?: string; source?: string; [key: string]: unknown }>;
   usesCuratedModelsOnly?: boolean;
+  authoritativeModels?: Array<{ id: string; name?: string; [key: string]: unknown }> | null;
 };
 
 function normalizeCustomSource(source: unknown): "imported" | "custom" {
@@ -45,6 +47,12 @@ export function mergeProviderModelListing(
     input.usesCuratedModelsOnly === true || providerUsesCuratedModelsOnly(input.providerId);
   const synced = curated ? [] : input.syncedModels.filter((m) => m?.id);
   const custom = curated ? [] : input.customModels.filter((m) => m?.id);
+
+  if (!curated && input.authoritativeModels != null) {
+    const live = input.authoritativeModels.map((model) => ({ ...model, source: "imported" }));
+    const retained = custom.filter((model) => retainNoAuthCustomModel(model, live));
+    return dedupeById(mergeModelsWithCustomPrecedence(live, retained));
+  }
 
   const exclusive = providerUsesExclusiveSyncedListing(input.providerId) && synced.length > 0;
 

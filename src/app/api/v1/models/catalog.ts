@@ -47,6 +47,8 @@ import {
   getHiddenModelsByProvider,
 } from "@/lib/db/models";
 import { getAllActiveSyncedModels } from "@/lib/db/models/activeSyncedCatalog";
+import { getAllNoAuthModelCatalogs } from "@/lib/db/models/noAuthCatalog";
+import { retainNoAuthCustomModel } from "@/lib/providers/noAuthCatalogPolicy";
 import {
   getModelCatalogCacheVersion,
   getCachedRawProviderConnections,
@@ -984,6 +986,12 @@ async function buildUnifiedModelsResponseCore(
       // DB unavailable — log and fall through; static models remain as defaults.
       console.log("[catalog] Could not fetch synced available models:", e);
     }
+    // Public catalogs are provider-scoped: no fabricated connection is needed.
+    // Presence, not length, makes a successful empty discovery authoritative.
+    const noAuthCatalogs = await getAllNoAuthModelCatalogs();
+    for (const [providerId, snapshot] of Object.entries(noAuthCatalogs)) {
+      syncedModelsByProvider[providerId] = snapshot.models;
+    }
     const providersWithSyncedModels = new Set(
       Object.keys(syncedModelsByProvider).filter((pid) => {
         if (providerUsesCuratedModelsOnly(pid)) return false;
@@ -1034,6 +1042,7 @@ async function buildUnifiedModelsResponseCore(
         continue;
       }
 
+      if (noAuthCatalogs[canonicalProviderId]) continue;
       for (const model of providerModels) {
         // Synced models replace static base entries they COVER, but they do not
         // carry aliases registered for provider-specific reasoning variants, and
@@ -1652,6 +1661,8 @@ async function buildUnifiedModelsResponseCore(
           continue;
 
         for (const model of providerCustomModels) {
+          const snapshot = noAuthCatalogs[canonicalProviderId];
+          if (snapshot && !retainNoAuthCustomModel(model, snapshot.models)) continue;
           const modelId = typeof model.id === "string" ? model.id : null;
           if (!modelId) continue;
           if (!isUnifiedChatSourceModelSelectable(canonicalProviderId, { ...model, id: modelId }))

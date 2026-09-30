@@ -25,14 +25,17 @@ interface AmeliaSession {
   cookieHeader: string;
 }
 
-class AmeliaClient {
+export class AmeliaClient {
   private session: AmeliaSession | null = null;
   private ws: import("ws").WebSocket | null = null;
   private stompConnected = false;
   private messageCallbacks: Map<string, (msg: string) => void> = new Map();
   private connectPromise: Promise<void> | null = null;
 
-  async init(): Promise<void> {
+  async init(signal?: AbortSignal | null): Promise<void> {
+    const timeout = AbortSignal.timeout(15_000);
+    const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    requestSignal.throwIfAborted();
     const res = await fetch(`${BASE_URL}/Amelia/api/init`, {
       headers: {
         "User-Agent":
@@ -41,6 +44,7 @@ class AmeliaClient {
         Referer: `${BASE_URL}/Amelia/ui/chipotle/chat?embed=iframe`,
       },
       redirect: "manual",
+      signal: requestSignal,
     });
 
     if (!res.ok) throw new Error(`Amelia init failed: ${res.status}`);
@@ -60,11 +64,12 @@ class AmeliaClient {
     };
   }
 
-  async connect(): Promise<void> {
+  async connect(signal?: AbortSignal | null): Promise<void> {
     if (!this.session) throw new Error("Call init() first");
     if (this.connectPromise !== null) return this.connectPromise;
 
-    this.connectPromise = this._connect();
+    signal?.throwIfAborted();
+    this.connectPromise = this._connect(signal);
     try {
       await this.connectPromise;
     } finally {
@@ -72,41 +77,61 @@ class AmeliaClient {
     }
   }
 
-  private async _connect(): Promise<void> {
+  protected async openSocket(url: string): Promise<import("ws").WebSocket> {
     const { WebSocket } = await import("ws");
+    return new WebSocket(url, {
+      headers: {
+        Cookie: this.session!.cookieHeader,
+        Origin: BASE_URL,
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+      },
+    });
+  }
+
+  private async _connect(signal?: AbortSignal | null): Promise<void> {
     const server = randomServerId();
     const sessionId = randomSessionId();
     const wsUrl = `wss://amelia.chipotle.com/Amelia/api/sock/${server}/${sessionId}/websocket`;
+    const ws = await this.openSocket(wsUrl);
+    this.ws = ws;
 
     return new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("WS connect timeout")), 15_000);
-
-      const ws = new WebSocket(wsUrl, {
-        headers: {
-          Cookie: this.session!.cookieHeader,
-          Origin: BASE_URL,
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        },
-      });
-
-      ws.on("open", () => {});
-
-      ws.on("message", (raw: Buffer | string) => {
-        const data = raw.toString();
-        this.handleSockJSFrame(data, resolve, reject, timeout);
-      });
-
-      ws.on("error", (err: Error) => {
+      let settled = false;
+      const cleanup = () => {
         clearTimeout(timeout);
-        reject(err);
-      });
-
-      ws.on("close", () => {
+        signal?.removeEventListener("abort", onAbort);
+      };
+      const fail = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
         this.stompConnected = false;
         this.ws = null;
+        ws.terminate();
+        reject(error);
+      };
+      const succeed = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+      const onAbort = () => fail(new DOMException("Aborted", "AbortError"));
+      const timeout = setTimeout(() => fail(new Error("WS connect timeout")), 15_000);
+      ws.on("message", (raw: Buffer | string) => {
+        if (!settled) this.handleSockJSFrame(raw.toString(), succeed, fail, timeout);
+        else if (this.stompConnected) {
+          this.handleSockJSFrame(raw.toString(), succeed, fail, timeout);
+        }
       });
-
-      this.ws = ws;
+      ws.on("error", fail);
+      ws.on("close", () => {
+        this.stompConnected = false;
+        if (this.ws === ws) this.ws = null;
+        fail(new Error("WebSocket closed before STOMP connection"));
+      });
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) onAbort();
     });
   }
 
@@ -199,8 +224,8 @@ class AmeliaClient {
 
   async chat(message: string, timeoutMs = 15_000, signal?: AbortSignal | null): Promise<string> {
     if (!this.stompConnected) {
-      await this.init();
-      await this.connect();
+      await this.init(signal);
+      await this.connect(signal);
     }
 
     if (signal?.aborted) {
@@ -273,12 +298,17 @@ class AmeliaClient {
 const POOL_MAX = 5;
 const pool: AmeliaClient[] = [];
 
-async function getClient(): Promise<AmeliaClient> {
+async function getClient(signal?: AbortSignal | null): Promise<AmeliaClient> {
   if (pool.length > 0) return pool.pop()!;
   const client = new AmeliaClient();
-  await client.init();
-  await client.connect();
-  return client;
+  try {
+    await client.init(signal);
+    await client.connect(signal);
+    return client;
+  } catch (error) {
+    await client.close();
+    throw error;
+  }
 }
 
 function releaseClient(client: AmeliaClient): void {
@@ -347,7 +377,7 @@ export class ChipotleExecutor extends BaseExecutor {
 
     let client: AmeliaClient | null = null;
     try {
-      client = await getClient();
+      client = await getClient(signal);
       log?.info?.("CHIPOTLE", `Sending to Pepper (model=${model})`);
 
       const responseText = await client.chat(prompt, 15_000, signal);
@@ -405,7 +435,8 @@ export class ChipotleExecutor extends BaseExecutor {
       };
     } catch (err) {
       if (client) client.close().catch(() => {});
-      const msg = err instanceof Error ? err.message : String(err);
+      const aborted = signal?.aborted === true;
+      const msg = aborted ? "Request aborted" : err instanceof Error ? err.message : String(err);
       log?.error?.("CHIPOTLE", `Error: ${msg}`);
 
       return {
@@ -414,12 +445,12 @@ export class ChipotleExecutor extends BaseExecutor {
             JSON.stringify({
               error: {
                 message: sanitizeErrorMessage(msg),
-                type: "upstream_error",
-                code: "CHIPOTLE_ERROR",
+                type: aborted ? "abort" : "upstream_error",
+                code: aborted ? "ABORTED" : "CHIPOTLE_ERROR",
               },
             })
           ),
-          { status: 502, headers: { "Content-Type": "application/json" } }
+          { status: aborted ? 499 : 502, headers: { "Content-Type": "application/json" } }
         ),
         url: this.buildUrl(model, stream),
         headers: this.buildHeaders(input.credentials),
