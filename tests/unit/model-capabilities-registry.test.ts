@@ -50,6 +50,54 @@ test.after(() => {
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
+test("direct Codex GPT-5.6/6/6.1 metadata falls back to 872K without catalog registration", () => {
+  for (const provider of ["cx", "codex"]) {
+    for (const model of [
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-6",
+      "gpt-6-astra",
+      "gpt-6.1",
+      "gpt-6.1-sol",
+      "gpt-6.1-sol-high",
+      "gpt-6.1-sol-xhigh",
+      "gpt-6.1-sol-ultra",
+    ]) {
+      const resolved = modelCapabilities.getResolvedModelCapabilities(`${provider}/${model}`);
+      assert.equal(resolved.contextWindow, 872000, `${provider}/${model}`);
+      assert.equal(resolved.maxInputTokens, 872000, `${provider}/${model}`);
+    }
+  }
+  assert.equal(
+    modelCapabilities.getResolvedModelCapabilities("codex/gpt-6.1-sol").maxOutputTokens,
+    null
+  );
+  // Existing public static specs still win; no blanket rewrite of GPT metadata.
+  assert.equal(
+    modelCapabilities.getResolvedModelCapabilities("codex/gpt-5.6").contextWindow,
+    1050000
+  );
+  for (const id of ["openai/gpt-6.1-sol", "codex/gpt-6.2-sol", "codex/gpt-60"]) {
+    assert.equal(modelCapabilities.getResolvedModelCapabilities(id).contextWindow, null, id);
+  }
+});
+
+test("Codex family context fallback preserves exact lower and higher provider limits", () => {
+  for (const limit of [200000, 1000000]) {
+    modelsDevSync.saveModelsDevCapabilities({
+      codex: {
+        "gpt-6.1-sol": buildCapability({ limit_context: limit, limit_input: limit - 1000 }),
+      },
+    });
+    for (const provider of ["cx", "codex"]) {
+      const resolved = modelCapabilities.getResolvedModelCapabilities(`${provider}/gpt-6.1-sol`);
+      assert.equal(resolved.contextWindow, limit);
+      assert.equal(resolved.maxInputTokens, limit - 1000);
+    }
+  }
+});
+
 test("canonical model capability resolver lets exact synced metadata override global specs", () => {
   modelsDevSync.saveModelsDevCapabilities({
     openai: {

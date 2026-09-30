@@ -2,6 +2,7 @@ import {
   PROVIDER_ID_TO_ALIAS,
   PROVIDER_MODELS,
 } from "@omniroute/open-sse/config/providerModels.ts";
+import { GPT_5_6_CODEX_CAPABILITIES } from "@omniroute/open-sse/config/providers/shared.ts";
 import { parseModel, resolveCanonicalProviderModel } from "@omniroute/open-sse/services/model.ts";
 import {
   findModelSpecIdByExactOrAlias,
@@ -828,7 +829,10 @@ export function getResolvedModelCapabilities(
     synced?.limit_context ??
     (typeof registryModel?.contextLength === "number" ? registryModel.contextLength : null) ??
     spec?.contextWindow ??
-    null;
+    // Direct Codex family metadata only; does not add models to the catalog.
+    (resolved.provider === "codex" && /^gpt-(?:5\.6|6(?:\.1)?)(?:-|$)/.test(resolved.model || "")
+      ? GPT_5_6_CODEX_CAPABILITIES.contextLength
+      : null);
 
   const maxInputOverride = !usePersistedOverrides
     ? null
