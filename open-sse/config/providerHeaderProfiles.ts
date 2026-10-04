@@ -8,7 +8,7 @@ import type { AntigravityClientProfile } from "@/shared/constants/antigravityCli
 // (gemini-3.x, gpt-5.4-nano, the full opus reasoning range) where `vscode-chat`
 // returns a narrower list. Version strings track the live-captured CLI 1.0.81-6.
 export const GITHUB_COPILOT_API_VERSION = "2026-08-01";
-export const GITHUB_COPILOT_CLI_VERSION = "1.0.81-6";
+export const GITHUB_COPILOT_CLI_VERSION = "1.0.92-3";
 const GITHUB_COPILOT_VERSION_OVERRIDE_ENV = "GITHUB_COPILOT_CLI_VERSION";
 const SAFE_COPILOT_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/;
 
