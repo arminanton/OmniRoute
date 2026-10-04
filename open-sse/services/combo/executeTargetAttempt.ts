@@ -651,10 +651,9 @@ export async function executeTargetAttempt(opts: {
         void (async () => {
           try {
             const { setLKGP } = await import("@/lib/db/settings");
-            await Promise.all([
-              setLKGP(deps.combo.name, target.executionKey, provider, connId),
-              setLKGP(deps.combo.name, deps.combo.id || deps.combo.name, provider, connId),
-            ]);
+            const comboKey = deps.combo.id || deps.combo.name;
+            const writeKeys = target.executionKey === comboKey ? [comboKey] : [target.executionKey, comboKey];
+            await Promise.all(writeKeys.map((k) => setLKGP(deps.combo.name, k, provider, connId)));
           } catch (err) {
             deps.log.warn(
               "COMBO",
