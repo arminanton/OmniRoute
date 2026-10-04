@@ -1300,7 +1300,7 @@ export async function updateProviderConnection(id: string, data: JsonRecord) {
   invalidateDbCache("connections"); // Bust connections read cache
   bumpProxyConfigGeneration();
 
-  if (data.priority !== undefined) {
+  if (data.priority === 0) {
     const existingRecord = toRecord(existing);
     const providerId =
       typeof existingRecord.provider === "string"
