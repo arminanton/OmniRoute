@@ -180,19 +180,27 @@ function makeStreamGenerateChunk(text: string): string {
 }
 
 function makeStreamGenerateRaw(text: string): string {
-  return `)]}'\n10\n${makeStreamGenerateChunk(text)}`;
+  const frame = makeStreamGenerateChunk(text);
+  return `)]}'\n${frame.length}\n${frame}`;
+}
+
+interface FakePlaywrightRequest {
+  url: () => string;
 }
 
 interface FakePlaywrightResponse {
-  url: () => string;
+  url: () => string; status: () => number;
   text: () => Promise<string>;
+  request: () => FakePlaywrightRequest;
 }
 
+type FakeRequestHandler = (request: FakePlaywrightRequest) => void;
 type FakeResponseHandler = (resp: FakePlaywrightResponse) => Promise<void>;
 
 async function withMockedGeminiBrowser<T>(
   responseText: string,
-  fn: (typedPrompt: { value: string }) => Promise<T>
+  fn: (typedPrompt: { value: string }) => Promise<T>,
+  staleResponseText?: string
 ): Promise<T> {
   const playwright = await import("playwright");
   const originalLaunch = playwright.chromium.launch;
@@ -202,12 +210,29 @@ async function withMockedGeminiBrowser<T>(
     newContext: async () => ({
       addCookies: async () => {},
       newPage: async () => {
+        let reqHandler: FakeRequestHandler | null = null;
         let respHandler: FakeResponseHandler | null = null;
+        const streamUrl = "https://gemini.google.com/_/BardChatUi/data/.../StreamGenerate?x";
+        const emitResponse = async (text: string, request: FakePlaywrightRequest) => {
+          await respHandler?.({
+            url: () => streamUrl,
+            text: async () => makeStreamGenerateRaw(text),
+            status: () => 200,
+            request: () => request,
+          });
+        };
         const page = {
-          on: (event: string, cb: FakeResponseHandler) => {
-            if (event === "response") respHandler = cb;
+          on: (event: string, cb: FakeRequestHandler | FakeResponseHandler) => {
+            if (event === "request") reqHandler = cb as FakeRequestHandler;
+            if (event === "response") respHandler = cb as FakeResponseHandler;
           },
-          goto: async () => {},
+          goto: async () => {
+            if (staleResponseText) {
+              const staleRequest = { url: () => streamUrl };
+              reqHandler?.(staleRequest);
+              await emitResponse(staleResponseText, staleRequest);
+            }
+          },
           waitForTimeout: async () => {},
           waitForSelector: async () => ({ click: async () => {} }),
           keyboard: {
@@ -215,12 +240,10 @@ async function withMockedGeminiBrowser<T>(
               typedPrompt.value = text;
             },
             press: async () => {
-              if (respHandler) {
-                await respHandler({
-                  url: () => "https://gemini.google.com/_/BardChatUi/data/.../StreamGenerate?x",
-                  text: async () => makeStreamGenerateRaw(responseText),
-                });
-              }
+              await Promise.resolve();
+              const promptRequest = { url: () => streamUrl };
+              reqHandler?.(promptRequest);
+              await emitResponse(responseText, promptRequest);
             },
           },
         };
@@ -289,4 +312,23 @@ test("#7286: no-tool passthrough regression — unchanged prompt derivation + re
     assert.equal(choice.message.tool_calls, undefined);
     assert.equal(choice.finish_reason, "stop");
   });
+});
+
+
+test("Gemini Web ignores stale StreamGenerate response and returns prompt response", async () => {
+  await withMockedGeminiBrowser("matching prompt response", async () => {
+    const executor = new GeminiWebExecutor(mockGeminiBrowserLease);
+    const result = await executor.execute({
+      model: "gemini-3.1-pro",
+      body: { messages: [{ role: "user", content: "hello" }] },
+      stream: false,
+      credentials: { apiKey: "test-cookie" },
+      signal: AbortSignal.timeout(10000),
+      log: null,
+    });
+
+    assert.equal(result.response.status, 200);
+    const json = (await result.response.json()) as ChatCompletionLike;
+    assert.equal(json.choices[0].message.content, "matching prompt response");
+  }, "stale background response");
 });

@@ -6,6 +6,7 @@ import { mockGeminiBrowserLease } from "./helpers/geminiBrowserLease.ts";
 // callback contract used by web-session executors.
 import test from "node:test";
 import assert from "node:assert/strict";
+import { GEMINI_WEB_COOKIE_ROTATION_KEY } from "../../open-sse/utils/geminiCookies.ts";
 
 const { GeminiWebExecutor } = await import("../../open-sse/executors/gemini-web.ts");
 
@@ -27,35 +28,43 @@ test("#7676: GeminiWebExecutor persists rotated __Secure-1PSIDTS/__Secure-1PSIDC
       newContext: async () => ({
         addCookies: async () => {},
         cookies: async () => rotatedJarCookies,
-        newPage: async () => ({
-          on: (
-            event: string,
-            handler: (resp: { url: () => string; text: () => Promise<string> }) => void
-          ) => {
-            if (event === "response") {
-              const body =
-                ")]}'\n" +
-                "30\n" +
-                JSON.stringify([
-                  [
-                    "wrb.fr",
-                    null,
-                    JSON.stringify([null, null, null, null, [[null, ["hello back"]]]]),
-                  ],
-                ]) +
-                "\n";
-              handler({
-                url: () =>
-                  "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate",
-                text: async () => body,
-              });
-            }
-          },
-          goto: async () => {},
-          waitForTimeout: async () => {},
-          waitForSelector: async () => ({ click: async () => {} }),
-          keyboard: { type: async () => {}, press: async () => {} },
-        }),
+        newPage: async () => {
+          let requestHandler!: (request: { url: () => string }) => void;
+          let responseHandler!: (response: {
+            url: () => string;
+            text: () => Promise<string>;
+            status: () => number;
+            request: () => { url: () => string };
+          }) => Promise<void>;
+          const streamUrl = "https://gemini.google.com/_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate";
+          return {
+            on: (event: string, handler: unknown) => {
+              if (event === "request") requestHandler = handler as typeof requestHandler;
+              if (event === "response") responseHandler = handler as typeof responseHandler;
+            },
+            goto: async () => {},
+            waitForTimeout: async () => {},
+            waitForSelector: async () => ({ click: async () => {} }),
+            keyboard: {
+              type: async () => {},
+              press: async () => {
+                await Promise.resolve();
+                const request = { url: () => streamUrl };
+                requestHandler(request);
+                const frame = JSON.stringify([["wrb.fr", null,
+                  JSON.stringify([null, null, null, null, [[null, ["hello back"]]]]),
+                ]]);
+                const body = `)]}'\n${frame.length}\n${frame}\n`;
+                await responseHandler({
+                  url: () => streamUrl,
+                  text: async () => body,
+                  status: () => 200,
+                  request: () => request,
+                });
+              },
+            },
+          };
+        },
       }),
       close: async () => {},
     }) as unknown as typeof originalLaunch;
@@ -90,6 +99,10 @@ test("#7676: GeminiWebExecutor persists rotated __Secure-1PSIDTS/__Secure-1PSIDC
       persistedCredentials.apiKey.includes("ROTATED_CC_VALUE"),
       `persisted apiKey must contain the rotated __Secure-1PSIDCC value, got: ${persistedCredentials?.apiKey}`
     );
+    assert.deepEqual(persistedCredentials[GEMINI_WEB_COOKIE_ROTATION_KEY], {
+      baseCookie: staleCookie,
+      rotatedCookie: persistedCredentials.apiKey,
+    });
   } finally {
     playwright.chromium.launch = originalLaunch;
   }

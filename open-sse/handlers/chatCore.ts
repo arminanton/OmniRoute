@@ -263,7 +263,15 @@ import {
   isStreamRecoveryExplicitlyConfigured,
 } from "@/lib/resilience/settings";
 import { classifyProviderError, PROVIDER_ERROR_TYPES } from "../services/errorClassifier.ts";
-import { updateProviderConnection, getProviderConnectionById } from "@/lib/db/providers";
+import {
+  updateProviderConnection,
+  getProviderConnectionById,
+  persistGeminiWebCookieRotation,
+} from "@/lib/db/providers";
+import {
+  GEMINI_WEB_COOKIE_ROTATION_KEY,
+  type GeminiWebCookieRotation,
+} from "@omniroute/open-sse/utils/geminiCookies.ts";
 import { wasRefreshTokenRotated } from "@omniroute/open-sse/services/refreshSerializer.ts";
 import { connectionHasExtraKeys } from "../services/apiKeyRotator.ts";
 import { recordKeyHealthStatus as recordKeyHealthStatusFor } from "./chatCore/keyHealth.ts";
@@ -3670,6 +3678,20 @@ export async function handleChatCore({
   // The pipeline owns the first non-streaming send. Keep the local refresh
   // mutex/CAS persistence path when it retries a 401/403, rather than silently
   // dropping the provider's refreshed credentials on that extracted leg.
+  const splitGeminiCookieRotation = (updated: Record<string, unknown>) => {
+    const hasMetadata = Object.prototype.hasOwnProperty.call(updated, GEMINI_WEB_COOKIE_ROTATION_KEY);
+    const metadata = updated[GEMINI_WEB_COOKIE_ROTATION_KEY];
+    const credentialUpdate = { ...updated };
+    delete credentialUpdate[GEMINI_WEB_COOKIE_ROTATION_KEY];
+    const rotation =
+      metadata &&
+      typeof metadata === "object" &&
+      typeof (metadata as GeminiWebCookieRotation).baseCookie === "string" &&
+      typeof (metadata as GeminiWebCookieRotation).rotatedCookie === "string"
+        ? (metadata as GeminiWebCookieRotation)
+        : null;
+    return { hasMetadata, credentialUpdate, rotation };
+  };
   let pipelineRefreshPersistRan = false;
   const pipelineHadStreamOptions =
     targetFormat === FORMATS.OPENAI_RESPONSES &&
@@ -3697,16 +3719,25 @@ export async function handleChatCore({
     const persistFn = onCredentialsRefreshed
       ? async (updated: Record<string, unknown>) => {
           pipelineRefreshPersistRan = true;
-          Object.assign(refreshTarget, updated);
-          Object.assign(credentials, updated);
+          const { hasMetadata, credentialUpdate, rotation } = splitGeminiCookieRotation(updated);
+          Object.assign(refreshTarget, credentialUpdate);
+          Object.assign(credentials, credentialUpdate);
           const refreshConnectionId =
             typeof refreshTarget.connectionId === "string"
               ? refreshTarget.connectionId
               : connectionId;
-          if (refreshConnectionId && connectionId && refreshConnectionId !== connectionId) {
-            await updateProviderConnection(refreshConnectionId, updated);
+          if (hasMetadata) {
+            if (provider === "gemini-web" && rotation && refreshConnectionId) {
+              persistGeminiWebCookieRotation(
+                refreshConnectionId,
+                rotation.baseCookie,
+                rotation.rotatedCookie
+              );
+            }
+          } else if (refreshConnectionId && connectionId && refreshConnectionId !== connectionId) {
+            await updateProviderConnection(refreshConnectionId, credentialUpdate);
           } else {
-            await onCredentialsRefreshed(updated);
+            await onCredentialsRefreshed(credentialUpdate);
           }
         }
       : undefined;
@@ -3763,15 +3794,31 @@ export async function handleChatCore({
     return updated;
   };
   const persistPipelineRefresh = async (updated: Record<string, unknown>) => {
-    Object.assign(credentials, updated);
+    const { hasMetadata, credentialUpdate, rotation } = splitGeminiCookieRotation(updated);
+    Object.assign(credentials, credentialUpdate);
+    if (hasMetadata) {
+      pipelineRefreshPersistRan = true;
+      if (provider === "gemini-web" && rotation) {
+        const refreshConnectionId =
+          typeof credentials?.connectionId === "string" ? credentials.connectionId : connectionId;
+        if (refreshConnectionId) {
+          persistGeminiWebCookieRotation(
+            refreshConnectionId,
+            rotation.baseCookie,
+            rotation.rotatedCookie
+          );
+        }
+      }
+      return;
+    }
     if (!pipelineRefreshPersistRan && onCredentialsRefreshed) {
       pipelineRefreshPersistRan = true;
       const refreshConnectionId =
         typeof credentials?.connectionId === "string" ? credentials.connectionId : connectionId;
       if (refreshConnectionId && connectionId && refreshConnectionId !== connectionId) {
-        await updateProviderConnection(refreshConnectionId, updated);
+        await updateProviderConnection(refreshConnectionId, credentialUpdate);
       } else {
-        await onCredentialsRefreshed(updated);
+        await onCredentialsRefreshed(credentialUpdate);
       }
     }
   };

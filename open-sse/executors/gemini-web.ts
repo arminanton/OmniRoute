@@ -14,10 +14,15 @@
  */
 
 import { createHash, randomUUID } from "node:crypto";
-import { acquireBrowserPageLease, type BrowserPageLease } from "../services/browserPool.ts";
+import { acquireBrowserPageLease, releaseBrowserContext, type BrowserPageLease } from "../services/browserPool.ts";
 import { BaseExecutor, type ExecuteInput } from "./base.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "../utils/error.ts";
-import { normalizeGeminiCookieInput } from "../utils/geminiCookies.ts";
+import {
+  GEMINI_WEB_COOKIE_ROTATION_KEY,
+  normalizeGeminiCookieInput,
+} from "../utils/geminiCookies.ts";
+import { parseGeminiWebResponse } from "./gemini-web/responseParser.ts";
+import { captureGeminiWebAccountCatalog, type GeminiWebAccountCatalog } from "./gemini-web/accountCapture.ts";
 import { prepareToolMessages } from "../translator/webTools.ts";
 import { buildToolModeResponse } from "./chatgptWebTools.ts";
 import {
@@ -383,7 +388,7 @@ export class GeminiWebExecutor extends BaseExecutor {
   }
 
   /**
-   * Read the live Playwright cookie jar back after a successful run and, if
+   * Read the live Playwright cookie jar back before releasing each page and, if
    * Google rotated any of the __Secure-1PSID* cookies, forward the merged
    * cookie string through onCredentialsRefreshed so it gets persisted to the
    * encrypted provider_connections.api_key field. Mirrors the rotate-and-
@@ -402,10 +407,51 @@ export class GeminiWebExecutor extends BaseExecutor {
       const jarCookies = await context.cookies();
       const mergedCookie = mergeRotatedGeminiCookies(cookie, jarCookies);
       if (mergedCookie && mergedCookie !== cookie) {
-        await onCredentialsRefreshed({ ...credentials, apiKey: mergedCookie });
+        await onCredentialsRefreshed({
+          ...credentials,
+          apiKey: mergedCookie,
+          [GEMINI_WEB_COOKIE_ROTATION_KEY]: { baseCookie: cookie, rotatedCookie: mergedCookie },
+        });
       }
     } catch {
       log?.warn?.("GEMINI-WEB", "Failed to persist rotated cookie");
+    }
+  }
+
+  async captureAccountModels(
+    input: Pick<ExecuteInput, "credentials" | "signal" | "onCredentialsRefreshed" | "log">
+  ): Promise<GeminiWebAccountCatalog> {
+    const { credentials, signal, onCredentialsRefreshed, log } = input;
+    const cookie = resolveGeminiWebCookie(credentials);
+    if (!cookie) throw new Error("Missing Gemini cookies");
+    let lease: BrowserPageLease | null = null;
+    try {
+      signal?.throwIfAborted();
+      lease = await this.browserLease(
+        geminiBrowserContextKey(credentials.connectionId, cookie),
+        {
+          cookieDomain: "google.com",
+          cookieString: parseCookies(cookie)
+            .map(({ name, value }) => `${name}=${value}`)
+            .join("; "),
+          proxyProviderKey: "gemini-web",
+          userAgent: GEMINI_USER_AGENT,
+        },
+        signal
+      );
+      const session = await lease.context.newCDPSession(lease.page);
+      return await captureGeminiWebAccountCatalog(lease.page, session, undefined, undefined, signal);
+    } finally {
+      if (lease) {
+        await this.persistRotatedCookies(
+          lease.context,
+          cookie,
+          credentials,
+          onCredentialsRefreshed,
+          log
+        );
+        await lease.release();
+      }
     }
   }
 
@@ -480,12 +526,13 @@ export class GeminiWebExecutor extends BaseExecutor {
       };
     }
 
+    const contextKey = `${geminiBrowserContextKey(credentials.connectionId, cookie)}:${randomUUID()}`;
     let lease: BrowserPageLease | null = null;
     try {
       signal?.throwIfAborted();
-      // Each account/session owns its cookie jar; each turn owns a separate page.
+      // Each inference owns its own context so parallel calls cannot share chat state.
       lease = await this.browserLease(
-        geminiBrowserContextKey(credentials.connectionId, cookie),
+        contextKey,
         {
           cookieDomain: "google.com",
           cookieString: parseCookies(cookie)
@@ -496,22 +543,41 @@ export class GeminiWebExecutor extends BaseExecutor {
         },
         signal
       );
-      const { context, page } = lease;
+      const { page } = lease;
 
-      // Capture first StreamGenerate response
+      // Capture response for StreamGenerate request triggered by this prompt.
       let responseText = "";
+      let upstreamError: { status: number; message: string } | null = null;
+      let promptSent = false;
+      let req: import("playwright").Request | null = null;
       let captured = false;
+      page.on("request", (request) => {
+        if (promptSent && !req && request.url().includes("StreamGenerate")) req = request;
+      });
       const responsePromise = new Promise<void>((resolve) => {
         page.on("response", async (resp) => {
-          if (!resp.url().includes("StreamGenerate")) return;
+          if (!resp.url().includes("StreamGenerate") || !req || resp.request() !== req) return;
           if (captured) return;
           // Resolve even if reading the body throws, so the flow falls through
           // to the "No response from Gemini" 502 instead of burning the full
           // wait window.
           captured = true;
           try {
-            const raw = await resp.text();
-            responseText = parseStreamResponse(raw);
+            const status = resp.status();
+            if (status >= 400) {
+              upstreamError = { status, message: `Gemini upstream returned HTTP ${status}` };
+            } else {
+              const raw = await resp.text();
+              const parsed = parseGeminiWebResponse(raw);
+              if (parsed.error) {
+                const status = ({ "1037": 429, "1050": 400, "1052": 400, "1060": 503 } as Record<string, number>)[parsed.error.code] ?? 502;
+                upstreamError = { status, message: parsed.error.message };
+              } else if (parsed.malformed || parsed.truncated) {
+                upstreamError = { status: 502, message: "Invalid or incomplete Gemini response" };
+              } else {
+                responseText = parsed.text ?? "";
+              }
+            }
           } catch {
             /* ignore */
           }
@@ -529,14 +595,35 @@ export class GeminiWebExecutor extends BaseExecutor {
       const inputEl = await page.waitForSelector(".ql-editor, [contenteditable='true']", {
         timeout: 10000,
       });
+      if (!inputEl) {
+        return {
+          response: new Response(JSON.stringify({ error: "Gemini input not found. Check cookies." }), {
+            status: 401, headers: { "Content-Type": "application/json" },
+          }),
+          url: GEMINI_URL, headers: {}, transformedBody: body,
+        };
+      }
+
       await inputEl.click();
       await page.keyboard.type(prompt, { delay: 10 });
       await page.waitForTimeout(300);
-      await page.keyboard.press("Enter");
+      const sendPrompt = page.keyboard.press("Enter");
+      promptSent = true;
+      await sendPrompt;
 
       await Promise.race([responsePromise, page.waitForTimeout(30000)]);
       if (signal?.aborted) {
         throw signal.reason instanceof Error ? signal.reason : new Error("Request aborted");
+      }
+
+      if (upstreamError) {
+        const { status, message } = upstreamError;
+        return {
+          response: new Response(JSON.stringify(buildErrorBody(status, message)), {
+            status, headers: { "Content-Type": "application/json" },
+          }),
+          url: GEMINI_URL, headers: {}, transformedBody: body,
+        };
       }
 
       if (!responseText) {
@@ -550,8 +637,6 @@ export class GeminiWebExecutor extends BaseExecutor {
           transformedBody: body,
         };
       }
-
-      await this.persistRotatedCookies(context, cookie, credentials, onCredentialsRefreshed, log);
 
       const modelId = model || "gemini-2.5-pro";
 
@@ -679,7 +764,19 @@ export class GeminiWebExecutor extends BaseExecutor {
         transformedBody: body,
       };
     } finally {
-      await lease?.release();
+      try {
+        if (lease) {
+          try {
+            await this.persistRotatedCookies(
+              lease.context, cookie, credentials, onCredentialsRefreshed, log
+            );
+          } finally {
+            await lease.release();
+          }
+        }
+      } finally {
+        await releaseBrowserContext(contextKey);
+      }
     }
   }
 }

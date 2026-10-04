@@ -1,5 +1,11 @@
 type CookieRecord = Record<string, unknown>;
 
+export const GEMINI_WEB_COOKIE_ROTATION_KEY = "__geminiWebCookieRotation";
+export interface GeminiWebCookieRotation {
+  baseCookie: string;
+  rotatedCookie: string;
+}
+
 function cookiePairsFromJson(raw: string): string[] {
   if (!raw.startsWith("{")) return [];
   try {

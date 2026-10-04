@@ -46,31 +46,43 @@ test("Gemini Web executor treats the retired image-mode extension as ordinary ch
   extensions[7] = [[[[null, null, null, "https://lh3.googleusercontent.com/retired-image"]]]];
   candidate[12] = extensions;
   const payload = JSON.stringify([null, [], null, null, [candidate]]);
-  const raw = `)]}'\n42\n${JSON.stringify([["wrb.fr", null, payload]])}\n`;
+  const frame = JSON.stringify([["wrb.fr", null, payload]]);
+  const raw = `)]}'\n${frame.length}\n${frame}\n`;
 
   playwright.chromium.launch = (async () =>
     ({
       newContext: async () => ({
         addCookies: async () => {},
-        newPage: async () => ({
-          on: (
-            event: string,
-            handler: (response: { url: () => string; text: () => Promise<string> }) => void
-          ) => {
-            if (event === "response") {
-              void handler({
-                url: () => "https://gemini.google.com/_/StreamGenerate",
-                text: async () => raw,
-              });
-            }
-          },
-          goto: async () => {},
-          waitForTimeout: async (duration: number) => {
-            waitDurations.push(duration);
-          },
-          waitForSelector: async () => ({ click: async () => {} }),
-          keyboard: { type: async () => {}, press: async () => {} },
-        }),
+        newPage: async () => {
+          let requestHandler: (request: any) => void;
+          let responseHandler: (response: any) => Promise<void>;
+          const streamUrl = "https://gemini.google.com/_/StreamGenerate";
+          return {
+            on: (event: string, handler: any) => {
+              if (event === "request") requestHandler = handler;
+              if (event === "response") responseHandler = handler;
+            },
+            goto: async () => {},
+            waitForTimeout: async (duration: number) => {
+              waitDurations.push(duration);
+            },
+            waitForSelector: async () => ({ click: async () => {} }),
+            keyboard: {
+              type: async () => {},
+              press: async () => {
+                await Promise.resolve();
+                const request = { url: () => streamUrl };
+                requestHandler(request);
+                await responseHandler({
+                  url: () => streamUrl,
+                  text: async () => raw,
+                  status: () => 200,
+                  request: () => request,
+                });
+              },
+            },
+          };
+        },
       }),
       close: async () => {},
     }) as unknown as Awaited<ReturnType<typeof originalLaunch>>) as typeof originalLaunch;

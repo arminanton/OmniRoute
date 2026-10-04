@@ -15,18 +15,15 @@ import {
   encryptConnectionFields,
   decryptConnectionFields,
   encrypt,
-  migrateLegacyEncryptedString,
+  decrypt,
+  looksEncrypted,
 } from "./encryption";
 import { createLazyRowProxy } from "./providers/lazyConnectionView";
 import { invalidateDbCache, getCachedRawProviderConnections } from "./readCache";
 import { reorderConnections } from "./providers/deletion";
-import {
-  removeConnectionHealth,
-  removeConnectionIndex,
-} from "@omniroute/open-sse/services/apiKeyRotator.ts";
-import { invalidateReasoningRoutingRuleCache } from "./reasoningRoutingRules";
 import { normalizeProviderSpecificData } from "@/lib/providers/requestDefaults";
 import { withDerivedCookieExpiry } from "@/shared/utils/webCookieExpiry";
+import { normalizeGeminiCookieInput } from "@omniroute/open-sse/utils/geminiCookies.ts";
 import { WEB_COOKIE_PROVIDERS } from "@/shared/constants/providers";
 import { ensureCodexFingerprintSeed } from "@omniroute/open-sse/config/codexIdentity.ts";
 import {
@@ -189,6 +186,7 @@ interface StatementLike<TRow = unknown> {
 interface DbLike {
   prepare: <TRow = unknown>(sql: string) => StatementLike<TRow>;
   transaction: <T>(fn: () => T) => () => T;
+  immediate: (fn: () => void) => void;
 }
 
 // Real column set for provider_connections (must match the CREATE TABLE in
@@ -1151,6 +1149,95 @@ function _updateConnectionRow(db: DbLike, id: string, data: JsonRecord) {
     WHERE id = @id
   `
   ).run(_buildUpdateConnectionRowParams(id, data, now));
+}
+
+const GEMINI_WEB_ROTATABLE_COOKIES = ["__Secure-1PSID", "__Secure-1PSIDTS", "__Secure-1PSIDCC"];
+
+function parseCookieValues(cookie: string): Map<string, string> {
+  const values = new Map<string, string>();
+  for (const part of cookie.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    const name = part.slice(0, separator).trim();
+    if (name) values.set(name, part.slice(separator + 1).trim());
+  }
+  return values;
+}
+
+/** Persist only Gemini Set-Cookie rotations, merging against the latest encrypted row. */
+export function persistGeminiWebCookieRotation(
+  id: string,
+  baseCookie: string,
+  rotatedCookie: string
+): boolean {
+  if (!id || typeof baseCookie !== "string" || typeof rotatedCookie !== "string") return false;
+
+  const db = getDbInstance() as unknown as DbLike;
+  let persisted = false;
+  db.immediate(() => {
+    const existing = db.prepare("SELECT id, provider, auth_type, api_key FROM provider_connections WHERE id = ?").get(id) as
+      | { id: string; provider: string; auth_type: string | null; api_key: string | null }
+      | undefined;
+    if (
+      !existing ||
+      existing.provider !== "gemini-web" ||
+      !["apikey", "cookie"].includes(existing.auth_type?.toLowerCase() ?? "") ||
+      typeof existing.api_key !== "string" ||
+      !existing.api_key
+    ) {
+      return;
+    }
+
+    const expectedCiphertext = existing.api_key;
+    const currentCookie = decrypt(expectedCiphertext, { quiet: true });
+    if (looksEncrypted(expectedCiphertext) && currentCookie === null) {
+      throw new Error("Could not decrypt Gemini Web cookie; refusing rotation");
+    }
+    if (typeof currentCookie !== "string" || !currentCookie) return;
+
+    const normalizedCurrentCookie = normalizeGeminiCookieInput(currentCookie);
+    const baseValues = parseCookieValues(baseCookie);
+    const rotatedValues = parseCookieValues(rotatedCookie);
+    const currentValues = parseCookieValues(normalizedCurrentCookie);
+    const changes = new Map<string, string>();
+    for (const name of GEMINI_WEB_ROTATABLE_COOKIES) {
+      if (!rotatedValues.has(name)) continue; // Missing jar cookie is not deletion.
+      const baseHas = baseValues.has(name);
+      const rotatedValue = rotatedValues.get(name)!;
+      if (baseHas && baseValues.get(name) === rotatedValue) continue;
+      if (currentValues.has(name) !== baseHas) continue;
+      if (baseHas && currentValues.get(name) !== baseValues.get(name)) continue;
+      changes.set(name, rotatedValue);
+    }
+    if (changes.size === 0) return;
+
+    const parts = normalizedCurrentCookie.split(";").map((part) => part.trim()).filter(Boolean);
+    const written = new Set<string>();
+    const mergedParts = parts.map((part) => {
+      const separator = part.indexOf("=");
+      if (separator < 0) return part;
+      const name = part.slice(0, separator).trim();
+      if (!changes.has(name)) return part;
+      written.add(name);
+      return `${name}=${changes.get(name)}`;
+    });
+    for (const [name, value] of changes) {
+      if (!written.has(name)) mergedParts.push(`${name}=${value}`);
+    }
+    const encryptedCookie = encrypt(mergedParts.join("; "));
+    const result = db.prepare(
+      "UPDATE provider_connections SET api_key = ?, updated_at = ? WHERE id = ? AND provider = ? AND auth_type = ? AND api_key = ?"
+    ).run(encryptedCookie, new Date().toISOString(), id, "gemini-web", existing.auth_type, expectedCiphertext);
+    if (result.changes !== 1) return;
+    persisted = true;
+  });
+
+  if (persisted) {
+    backupDbFile("pre-write");
+    invalidateDbCache("connections");
+    bumpProxyConfigGeneration();
+  }
+  return persisted;
 }
 
 export async function updateProviderConnection(id: string, data: JsonRecord) {
