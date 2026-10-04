@@ -333,11 +333,13 @@ function applyAntigravityGenerationDefaults(
       ? (generationConfig.thinkingConfig as Record<string, unknown>)
       : null;
   const thinkingBudget = Number(thinkingConfig?.thinkingBudget);
-  const maxOutputTokens = Number(generationConfig.maxOutputTokens);
-  if (
+  if (thinkingConfig && Number.isFinite(thinkingBudget) && thinkingBudget <= 0) {
+    // #15491: omit zero-budget thinkingConfig to prevent upstream 400 on Flash-Lite/non-thinking models
+    delete generationConfig.thinkingConfig;
+  } else if (
     Number.isFinite(thinkingBudget) &&
     thinkingBudget > 0 &&
-    (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= thinkingBudget)
+    (!Number.isFinite(Number(generationConfig.maxOutputTokens)) || Number(generationConfig.maxOutputTokens) <= thinkingBudget)
   ) {
     generationConfig.maxOutputTokens = Math.floor(thinkingBudget) + 1;
   }
