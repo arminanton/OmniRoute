@@ -313,6 +313,7 @@ const TLS_ALLOWED_OPTION_KEYS: Record<string, true> = {
   body: true,
   headers: true,
   method: true,
+  next: true,
   redirect: true,
   signal: true,
 };
