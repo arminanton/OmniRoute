@@ -471,10 +471,15 @@ export interface ApplyStickinessResult {
  * @param namespace       Combo identity that owns this sticky binding.
  * @returns               Result with (possibly reordered) targets.
  */
+export interface ApplyStickinessOptions {
+  respectDeclaredOrder?: boolean;
+}
+
 export async function applySessionStickiness(
   orderedTargets: ResolvedComboTarget[],
   messages: Array<{ role?: string; content?: unknown }> | null | undefined,
-  namespace?: string
+  namespace?: string,
+  options?: ApplyStickinessOptions
 ): Promise<ApplyStickinessResult> {
   const noOp: ApplyStickinessResult = { targets: orderedTargets, messageHash: null, stuck: false };
 
@@ -527,6 +532,10 @@ export async function applySessionStickiness(
     ) {
       // Connection saturated or durably unhealthy — rebind on next success
       clearStickyBinding(messageHash);
+      return { targets: orderedTargets, messageHash, stuck: false };
+    }
+
+    if (options?.respectDeclaredOrder && stickyIdx > 0) {
       return { targets: orderedTargets, messageHash, stuck: false };
     }
 

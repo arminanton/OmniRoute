@@ -500,7 +500,8 @@ async function applyContinuityFilters(
         // #7270: normalize both wire shapes (.messages / Responses-API .input) so the
         // stickiness key is derivable on the /v1/responses surface, not just Chat Completions.
         normalizeStickinessMessages(body as { messages?: unknown; input?: unknown }),
-        combo.name
+        combo.name,
+        { respectDeclaredOrder: strategy === "priority" }
       );
   let orderedTargets = sticky.targets;
   if (!cacheStrategyAffinityApplied) {
