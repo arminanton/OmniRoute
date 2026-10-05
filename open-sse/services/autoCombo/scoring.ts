@@ -299,7 +299,9 @@ export function calculateFactors(
   // affinities) so a single bad input can't produce a negative or >1 factor
   // that distorts the weighted score.
   return {
-    quota: clamp01(candidate.quotaRemaining / 100),
+    quota: Number.isFinite(candidate.quotaRemaining) && candidate.quotaRemaining >= 0
+      ? clamp01(candidate.quotaRemaining / 100)
+      : 0.1, // Degrade malformed/unreadable quota instead of scoring 100% (#15347 / #15348)
     health:
       candidate.circuitBreakerState === "CLOSED"
         ? 1.0
