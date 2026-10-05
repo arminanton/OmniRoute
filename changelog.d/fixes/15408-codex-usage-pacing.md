@@ -1,0 +1,1 @@
+- **fix(providers):** pace Codex status/quota usage reads through the shared minimum-interval gate (#15172, #15408).
