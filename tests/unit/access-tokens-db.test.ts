@@ -63,26 +63,71 @@ test("only the hash is stored — the plaintext secret never lands in the DB", (
   assert.equal(row.token_hash.length, 64, "sha-256 hex");
 });
 
-test("verifyAccessToken stamps last_used_at", () => {
+test("verifyAccessToken stamps last_used_at and avoids repeat writes within a minute", () => {
   const { secret, record } = at.createAccessToken({ name: "touch", scope: "read" });
   assert.equal(at.getAccessToken(record.id)?.lastUsedAt, null);
   at.verifyAccessToken(secret);
   assert.notEqual(at.getAccessToken(record.id)?.lastUsedAt, null);
+
+  const db = core.getDbInstance();
+  const recentStamp = new Date(Date.now() - 5_000).toISOString();
+  db.prepare("UPDATE cli_access_tokens SET last_used_at = ? WHERE id = ?").run(
+    recentStamp,
+    record.id
+  );
+  at.verifyAccessToken(secret);
+  assert.equal(at.getAccessToken(record.id)?.lastUsedAt, recentStamp);
+
+  const staleStamp = new Date(Date.now() - 61_000).toISOString();
+  db.prepare("UPDATE cli_access_tokens SET last_used_at = ? WHERE id = ?").run(
+    staleStamp,
+    record.id
+  );
+  at.verifyAccessToken(secret);
+  assert.notEqual(at.getAccessToken(record.id)?.lastUsedAt, staleStamp);
 });
 
 test("revoked tokens fail verification", () => {
   const { secret, record } = at.createAccessToken({ name: "to-revoke", scope: "write" });
   assert.ok(at.verifyAccessToken(secret));
-  assert.equal(at.revokeAccessToken(record.id), true);
+  assert.deepEqual(at.revokeAccessToken(record.id), {
+    revoked: true,
+    alreadyRevoked: false,
+    ambiguous: false,
+  });
   assert.equal(at.verifyAccessToken(secret), null);
-  // idempotent: revoking again is a no-op
-  assert.equal(at.revokeAccessToken(record.id), false);
+  assert.deepEqual(at.revokeAccessToken(record.id), {
+    revoked: true,
+    alreadyRevoked: true,
+    ambiguous: false,
+  });
 });
 
 test("revokeAccessToken works by display prefix too", () => {
   const { secret, record } = at.createAccessToken({ name: "by-prefix", scope: "read" });
-  assert.equal(at.revokeAccessToken(record.tokenPrefix), true);
+  assert.deepEqual(at.revokeAccessToken(record.tokenPrefix), {
+    revoked: true,
+    alreadyRevoked: false,
+    ambiguous: false,
+  });
   assert.equal(at.verifyAccessToken(secret), null);
+});
+
+test("revokeAccessToken refuses an ambiguous prefix without revoking either token", () => {
+  const first = at.createAccessToken({ name: "ambiguous-a", scope: "read" });
+  const second = at.createAccessToken({ name: "ambiguous-b", scope: "write" });
+  core
+    .getDbInstance()
+    .prepare("UPDATE cli_access_tokens SET token_prefix = ? WHERE id = ?")
+    .run(first.record.tokenPrefix, second.record.id);
+
+  assert.deepEqual(at.revokeAccessToken(first.record.tokenPrefix), {
+    revoked: false,
+    alreadyRevoked: false,
+    ambiguous: true,
+  });
+  assert.equal(at.getAccessToken(first.record.id)?.revokedAt, null);
+  assert.equal(at.getAccessToken(second.record.id)?.revokedAt, null);
 });
 
 test("expired tokens fail verification", () => {

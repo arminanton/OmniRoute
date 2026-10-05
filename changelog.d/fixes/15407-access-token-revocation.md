@@ -1,0 +1,1 @@
+- **fix(auth):** make access-token revocation retries safe, refuse ambiguous prefixes, and throttle duplicate last-used writes (#15407).

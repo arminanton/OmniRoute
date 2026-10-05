@@ -15,6 +15,7 @@ const TOKEN_RANDOM_BYTES = 32;
 const TOKEN_SECRET_PREFIX = "oma_live_";
 /** How many leading chars of the secret are kept for display (prefix). */
 const DISPLAY_PREFIX_LEN = TOKEN_SECRET_PREFIX.length + 6;
+const LAST_USED_WRITE_INTERVAL_MS = 60_000;
 
 export interface AccessTokenRecord {
   id: string;
@@ -32,6 +33,12 @@ export interface VerifiedAccessToken {
   id: string;
   name: string;
   scope: AccessScope;
+}
+
+export interface RevokeAccessTokenResult {
+  revoked: boolean;
+  alreadyRevoked: boolean;
+  ambiguous: boolean;
 }
 
 interface AccessTokenRow {
@@ -135,14 +142,18 @@ export function verifyAccessToken(secret: string | null | undefined): VerifiedAc
   if (row.revoked_at) return null;
   if (isExpired(row.expires_at)) return null;
 
-  // Best-effort usage stamp; never block validation on the write.
-  try {
-    db.prepare("UPDATE cli_access_tokens SET last_used_at = ? WHERE id = ?").run(
-      new Date().toISOString(),
-      row.id
-    );
-  } catch {
-    /* non-fatal */
+  // Repeated management checks in one request should reuse the recent usage stamp.
+  const lastUsedMs = row.last_used_at ? Date.parse(row.last_used_at) : Number.NaN;
+  const elapsedMs = Date.now() - lastUsedMs;
+  if (!Number.isFinite(lastUsedMs) || elapsedMs < 0 || elapsedMs >= LAST_USED_WRITE_INTERVAL_MS) {
+    try {
+      db.prepare("UPDATE cli_access_tokens SET last_used_at = ? WHERE id = ?").run(
+        new Date().toISOString(),
+        row.id
+      );
+    } catch {
+      /* non-fatal */
+    }
   }
 
   return { id: row.id, name: row.name, scope: normalizeScope(row.scope) };
@@ -161,23 +172,38 @@ export function listAccessTokens(): AccessTokenRecord[] {
 export function getAccessToken(id: string): AccessTokenRecord | null {
   const db = getDbInstance();
   const row = db.prepare("SELECT * FROM cli_access_tokens WHERE id = ?").get(id) as
-    | AccessTokenRow
-    | undefined;
+    AccessTokenRow | undefined;
   return row ? rowToRecord(row) : null;
 }
 
 /**
- * Revoke a token by id or by its display prefix. Idempotent: revoking an
- * already-revoked token is a no-op. Returns true when a row was newly revoked.
+ * Revoke by id or by a display prefix that matches exactly one live token.
+ * Ambiguous prefixes revoke nothing; retries of an already-revoked token succeed.
  */
-export function revokeAccessToken(idOrPrefix: string): boolean {
-  if (!idOrPrefix) return false;
+export function revokeAccessToken(idOrPrefix: string): RevokeAccessTokenResult {
+  const none = { revoked: false, alreadyRevoked: false, ambiguous: false };
+  if (!idOrPrefix) return none;
   const db = getDbInstance();
-  const res = db
-    .prepare(
-      `UPDATE cli_access_tokens SET revoked_at = ?
-         WHERE (id = ? OR token_prefix = ?) AND revoked_at IS NULL`
-    )
-    .run(new Date().toISOString(), idOrPrefix, idOrPrefix);
-  return res.changes > 0;
+  const matches = db
+    .prepare("SELECT id, revoked_at FROM cli_access_tokens WHERE id = ? OR token_prefix = ?")
+    .all(idOrPrefix, idOrPrefix) as Array<{ id: string; revoked_at: string | null }>;
+  if (matches.length === 0) return none;
+
+  const exact = matches.find((row) => row.id === idOrPrefix);
+  const live = matches.filter((row) => row.revoked_at == null);
+  let target = exact ?? null;
+  if (!target) {
+    if (live.length > 1) return { revoked: false, alreadyRevoked: false, ambiguous: true };
+    if (live.length === 1) target = live[0];
+    else if (matches.length === 1) target = matches[0];
+    else return none;
+  }
+  if (target.revoked_at) return { revoked: true, alreadyRevoked: true, ambiguous: false };
+
+  const result = db
+    .prepare("UPDATE cli_access_tokens SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+    .run(new Date().toISOString(), target.id);
+  return result.changes > 0
+    ? { revoked: true, alreadyRevoked: false, ambiguous: false }
+    : { revoked: true, alreadyRevoked: true, ambiguous: false };
 }
