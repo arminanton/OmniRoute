@@ -303,12 +303,12 @@ Every compressed request includes stats in the server logs:
 
 ## Phase Roadmap
 
-| Phase    | Modes                                                                                                        | Status                                                                 |
-| -------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
-| Phase 1  | Off, Lite                                                                                                    | ✅ Shipped                                                             |
-| Phase 2  | Standard, Aggressive, Ultra                                                                                  | ✅ Shipped                                                             |
-| Phase 3  | RTK, Stacked, Compression Combos                                                                             | ✅ Shipped                                                             |
-| Phase 4  | Output Styles, SLM-tier Ultra, eval harness                                                                  | ✅ Shipped                                                             |
+| Phase    | Modes                                                                                                                                         | Status     |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| Phase 1  | Off, Lite                                                                                                                                     | ✅ Shipped |
+| Phase 2  | Standard, Aggressive, Ultra                                                                                                                   | ✅ Shipped |
+| Phase 3  | RTK, Stacked, Compression Combos                                                                                                              | ✅ Shipped |
+| Phase 4  | Output Styles, SLM-tier Ultra, eval harness                                                                                                   | ✅ Shipped |
 | Phase 4C | Adaptive context-budget ("dial") — compute engine + API (`contextBudget` on `PUT /api/settings/compression`) + dashboard mode/policy controls | ✅ Shipped |
 
 ---
@@ -407,44 +407,26 @@ const { messages: aged, saved } = applyAging(messages, {
 
 #### When to use
 
-Progressive aging is **always on** for `aggressive` and `ultra` modes. It's
-particularly effective for:
-
-- Long-running coding sessions
-- Multi-day conversations
-- Agentic workflows with many tool calls
-
-### Caveman Output Mode
-
-The `outputMode.ts` module injects **system prompt instructions** to make the
-model itself produce compressed, terse output (a "caveman" style).
-
-#### How it works
-
-Instead of compressing the input, this mode adds a system prompt like:
-
-> "Reply in minimal words. Skip pleasantries. Use short sentences."
-
-This works particularly well for:
-
-- Code generation (terser output = fewer tokens)
-- Quick Q&A (no need for elaborate explanations)
-- Batch processing (maximize throughput)
-
-#### When to use
-
-Caveman output mode is **opt-in** — set it via the combo config:
+Caveman output mode is **opt-in**. With compression on (`enabled: true`, the master toggle
+on the Compression Settings page), turn it on with `cavemanOutputMode.enabled`; `intensity`
+picks `lite`, `full` or `ultra`:
 
 ```json
 {
-  "strategy": "auto",
-  "config": {
-    "auto": {
-      "outputMode": "caveman"
-    }
+  "enabled": true,
+  "cavemanOutputMode": {
+    "enabled": true,
+    "intensity": "full"
   }
 }
 ```
+
+A compression combo's **Output Mode** toggle (`outputMode`, level in `outputModeIntensity`)
+sets the same switch for the requests that combo applies to, and the
+`omniroute_set_compression_engine` MCP tool writes it through its boolean `outputMode`
+argument. A non-empty `outputStyles` selection takes precedence over this switch. In the
+dashboard, enabling the **Terse prose** output style injects the same block (see Output
+Styles below).
 
 ### Output Styles (catalog)
 
@@ -454,33 +436,59 @@ into a catalog of composable output styles: `OUTPUT_STYLE_CATALOG` in
 instruction that makes the model itself produce cheaper output; styles can be enabled
 together and are injected in catalog order.
 
-| Style | `id` | What it does | Instruction languages |
-| --- | --- | --- | --- |
-| Terse prose | `terse-prose` | Drop filler/articles/hedging; keep technical substance exact. Same text as the legacy caveman output mode (referenced, not re-typed). | en, pt-BR, es, de, fr, it, ru, zh, ja, id, vi |
-| Less code | `less-code` | YAGNI ladder: smallest working change, no unrequested abstractions. | en, pt-BR, es, de, fr, it, ru, zh, ja, id, vi |
-| Ponytail (lazy senior dev) | `ponytail` | "The best code is the code never written": reuse > rewrite, root cause > symptom, shortest working diff. | en, pt-BR, es, de, fr, it, ru, zh, ja, id, vi |
-| I have ADHD (action-first) | `i-have-adhd` | Action first (command/path/snippet before prose), numbered bounded steps, ONE concrete next step, no preamble/recap/closers. Adapted from [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd) (MIT). | en, pt-BR, es, de, fr, it, ru, zh, ja, id, vi |
-| Terse CJK (文言) | `terse-cjk` | Classical-Chinese ultra-terse style. | zh (locale-gated: only offered when the resolved language is `zh`) |
+| Style                      | `id`          | What it does                                                                                                                                                                                                 | Instruction languages                                              |
+| -------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| Terse prose                | `terse-prose` | Drop filler/articles/hedging; keep technical substance exact. Same text as the legacy caveman output mode (referenced, not re-typed).                                                                        | en, pt-BR, es, de, fr, it, ru, zh, ja, id, vi                      |
+| Less code                  | `less-code`   | YAGNI ladder: smallest working change, no unrequested abstractions.                                                                                                                                          | en, pt-BR, es, de, fr, it, ru, zh, ja, id, vi                      |
+| Ponytail (lazy senior dev) | `ponytail`    | "The best code is the code never written": reuse > rewrite, root cause > symptom, shortest working diff.                                                                                                     | en, pt-BR, es, de, fr, it, ru, zh, ja, id, vi                      |
+| I have ADHD (action-first) | `i-have-adhd` | Action first (command/path/snippet before prose), numbered bounded steps, ONE concrete next step, no preamble/recap/closers. Adapted from [ayghri/i-have-adhd](https://github.com/ayghri/i-have-adhd) (MIT). | en, pt-BR, es, de, fr, it, ru, zh, ja, id, vi                      |
+| Terse CJK (文言)           | `terse-cjk`   | Classical-Chinese ultra-terse style.                                                                                                                                                                         | zh (locale-gated: only offered when the resolved language is `zh`) |
 
 Every style ships three intensity levels — `lite`, `full`, `ultra` — and every level
-ends with the shared boundaries clause, which keeps code blocks, file paths, commands,
-error strings, URLs and identifiers verbatim.
+ends with the shared boundaries clause (`SHARED_BOUNDARIES` in `outputMode.ts`), which
+keeps code blocks, file paths, commands, errors and URLs exact. The `terse-prose` and
+`terse-cjk` level texts add identifiers to that list.
 
 #### How injection works
 
 `applyOutputStyles()` (`open-sse/services/compression/outputStyles/apply.ts`) resolves
 the selection against the catalog (unknown ids and locale-mismatched styles are
 dropped, never an error), concatenates the selected instructions in catalog order,
-appends the boundaries clause **once**, and front-loads the result into the system
-prompt behind a single idempotency marker (`[OmniRoute Output Styles]`) — re-applying
-is a no-op. When the detected request language has a translation, the localized
+appends the boundaries clause **once** (plus the safety clause, `SAFETY_BOUNDARIES` or its
+translation, when `less-code` or `ponytail` is selected), and starts the block with a
+single idempotency marker (`[OmniRoute Output Styles]`), so re-applying is a no-op. When
+the resolved language (see Language selection below) has a translation, the localized
 instruction is injected instead of English.
+
+On a body with `messages`, a content bypass (`shouldBypassCavemanOutputMode()` in
+`open-sse/services/compression/outputMode.ts`) checks the last three messages and skips
+the styles for the whole turn when they match its security, irreversible-action,
+clarification, or order-sensitive keywords. The bypass runs while the **Auto-Clarity
+Bypass** toggle (`cavemanOutputMode.autoClarity`, on by default) is on; turning the
+toggle off skips the keyword check.
+
+When the bypass lets the turn through, `placeSystemInstruction()` (same file), which
+never creates a new `messages[0]`, places the block in the first of these it finds:
+
+1. A leading system message with string content: the block is appended after its text.
+2. The top-level `system` field: the block is appended after the text of a string, or
+   added as a new text block to a content-block array.
+3. The first later system message with string content: the block is appended after its
+   text.
+4. None of the above: the block goes into a new system message at the end of `messages`.
+
+On a body without `messages`, the block is appended to a string `instructions` field,
+or becomes `instructions` when the body carries `input` (a string or an array). A body
+with neither `instructions` nor `input` is skipped as `no_messages`.
 
 #### How to enable
 
-In the dashboard: **Context → Settings → Compression** — one row per style with an
-on/off toggle and a level selector. Programmatically, the compression config persists
-the selection as:
+In the dashboard: **Compression Context → Compression Settings**
+(`/dashboard/context/settings`), Output styles section: one row per style with an on/off
+toggle and a level selector. Styles inject while compression itself is on (the page's
+master toggle, `enabled`). The **Auto-Clarity Bypass** toggle is on the **Caveman**
+page (`/dashboard/context/caveman`), in its **Output Mode** card. Programmatically, the
+compression config persists the selection as:
 
 ```json
 {
@@ -491,8 +499,14 @@ the selection as:
 }
 ```
 
-Back-compat: the legacy `outputMode: "caveman"` combo setting still works and maps to
-`terse-prose`, byte-identical to the old injection in every legacy language.
+Back-compat: while `outputStyles` is empty, the legacy `cavemanOutputMode.enabled`
+setting maps to `terse-prose` at `cavemanOutputMode.intensity`. The block then starts
+with the `[OmniRoute Output Styles]` marker, where the legacy `applyCavemanOutputMode()`
+injector wrote `[OmniRoute Caveman Output Mode]`. Below the marker, the text matches the
+legacy injection in en, pt-BR, es, de, fr, it, ru, id and vi; in ja and zh it carries one
+extra space before the boundaries clause. `terse-prose` translates into pt-BR, es, de,
+fr, it, ru, zh, ja, id and vi, so a request whose resolved language is `hu` gets the
+English text where the legacy injector used its Hungarian one.
 
 Language selection: with `languageConfig.enabled` on, `autoDetect` picks the
 language of the latest user message (same detector as the input engines);

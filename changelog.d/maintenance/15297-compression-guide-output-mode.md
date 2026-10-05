@@ -1,0 +1,1 @@
+- **docs(compression):** document the actual `cavemanOutputMode.enabled` switch, output-style precedence, Auto-Clarity bypass, and legacy injection differences (#15297).
