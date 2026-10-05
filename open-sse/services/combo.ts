@@ -20,11 +20,7 @@ import {
 
 import { getHiddenModelsByProvider } from "@/models";
 
-import {
-  evaluateQuotaCutoff,
-  getQuotaFetcher,
-  type QuotaInfo,
-} from "./quotaPreflight.ts";
+import { evaluateQuotaCutoff, getQuotaFetcher, type QuotaInfo } from "./quotaPreflight.ts";
 import { resolveProviderId } from "../../src/shared/constants/providers.ts";
 import { getQuotaFetchScope } from "./antigravityQuotaFamily.ts";
 import { getCircuitBreaker } from "../../src/shared/utils/circuitBreaker";
@@ -37,10 +33,7 @@ import { type ProviderCandidate } from "./autoCombo/scoring.ts";
 
 import { getSessionConnection } from "./sessionManager.ts";
 import { getOAuthSessionAvailability } from "./oauthSessionOccupancy.ts";
-import {
-  clearStickyBinding,
-  peekStickyConnectionId,
-} from "./combo/sessionStickiness.ts";
+import { clearStickyBinding, peekStickyConnectionId } from "./combo/sessionStickiness.ts";
 
 import { lookupPositiveCap } from "./combo/concurrencyCaps.ts";
 import { acquireQuotaShareConcurrencySlot } from "./combo/quotaShareConcurrency.ts";
@@ -107,20 +100,13 @@ import {
   tryPipelineDispatch,
   tryRuntimeUnitDispatch,
 } from "./combo/dispatchPrelude.ts";
-import {
-  resolveShadowTargets,
-  scheduleShadowRouting,
-} from "./combo/shadowRouting.ts";
+import { resolveShadowTargets, scheduleShadowRouting } from "./combo/shadowRouting.ts";
 import {
   filterTargetsByRequestCompatibility,
   resolveComboRuntimeUnits,
   resolveComboTargets,
 } from "./combo/comboStructure.ts";
-import {
-  createInvocationId,
-  getComboTrace,
-  startComboTrace,
-} from "./combo/decisionTrace.ts";
+import { createInvocationId, getComboTrace, startComboTrace } from "./combo/decisionTrace.ts";
 import {
   QUOTA_SOFT_DEPRIORITIZE_FACTOR,
   setCandidateQuotaSoftPenalty,
@@ -135,20 +121,14 @@ import {
   calculateResetWindowAffinity,
   type ResetWindowConfig,
 } from "./combo/quotaScoring.ts";
-import {
-  fetchResetAwareQuotaWithCache,
-  preScreenTargets,
-} from "./combo/quotaStrategies.ts";
+import { fetchResetAwareQuotaWithCache, preScreenTargets } from "./combo/quotaStrategies.ts";
 import { buildAutoQuotaThresholds } from "./combo/quotaExhaustionCutoff.ts";
 import { expandTargetsByFingerprints } from "./combo/fingerprintExpansion.ts";
 import { resolveComboTargetPipeline } from "./combo/targetResolution.ts";
 import { dispatchWithCooldownRetry } from "./combo/comboAttemptLoop.ts";
 import { evaluateExecuteTargetGates } from "./combo/executeTargetGates.ts";
 import { executeTargetAttempt } from "./combo/executeTargetAttempt.ts";
-import type {
-  AttemptLoopDeps,
-  AttemptLoopState,
-} from "./combo/attemptLoopTypes.ts";
+import type { AttemptLoopDeps, AttemptLoopState } from "./combo/attemptLoopTypes.ts";
 
 export { RESET_WINDOW_NAMES, QUOTA_SOFT_DEPRIORITIZE_FACTOR, setCandidateQuotaSoftPenalty };
 export { scoreAutoTargets, expandAutoComboCandidatePool };
@@ -396,6 +376,7 @@ export async function buildAutoCandidates(
       const contextAffinity = calculateTargetContextAffinity(target, sessionId);
       let resetWindowAffinity = 0.5;
       let quotaRemaining = 100;
+      let quotaUnreadable = false;
       let quotaCutoffBlocked = false;
       let quotaCutoffReason: string | undefined;
       // #10877: `provider` here may be a legacy/user-facing alias spelling
@@ -452,12 +433,14 @@ export async function buildAutoCandidates(
         const quota = await quotaPromises.get(quotaKey)!;
         resetWindowAffinity = calculateResetWindowAffinity(quota, resetWindowConfig);
         if (!quotaCutoffBlocked) {
-          quotaRemaining = quotaRemainingPercentFromQuota(quota, {
+          const remaining = quotaRemainingPercentFromQuota(quota, {
             provider,
             requestedModel: modelStr,
           });
+          quotaUnreadable = remaining === null;
+          quotaRemaining = remaining ?? 0;
         }
-        if (!quotaCutoffBlocked && quotaCutoffEnabled) {
+        if (!quotaCutoffBlocked && !quotaUnreadable && quotaCutoffEnabled) {
           const cutoffDecision = evaluateQuotaCutoff(
             quota as QuotaInfo | null,
             buildAutoQuotaThresholds(provider, connection, resilienceSettings),
@@ -481,6 +464,7 @@ export async function buildAutoCandidates(
         provider,
         model,
         quotaRemaining,
+        quotaUnreadable,
         quotaTotal: 100,
         circuitBreakerState,
         costPer1MTokens,
@@ -1014,4 +998,3 @@ async function handleComboChatInner({
     _unregisterExecutionCandidates(_registeredExecutionKeys);
   }
 }
-

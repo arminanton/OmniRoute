@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { calculateFactors, calculateScore, DEFAULT_WEIGHTS, validateWeights } from "../scoring";
 import type { ProviderCandidate, ScoringWeights } from "../scoring";
+import { quotaRemainingPercentFromQuota } from "../../combo/comboPredicates";
 import {
   getTaskFitness,
   getTaskFitnessWithSource,
@@ -61,6 +62,62 @@ describe("Scoring", () => {
     const healthy = calculateScore(healthyFactors, DEFAULT_WEIGHTS);
     const unhealthy = calculateScore(unhealthyFactors, DEFAULT_WEIGHTS);
     expect(healthy).toBeGreaterThan(unhealthy);
+  });
+
+  it("scores malformed quota below otherwise-identical verified quota", () => {
+    const verified = calculateFactors(
+      { ...candidate, quotaRemaining: 0 },
+      [candidate],
+      "coding",
+      getTaskFitness
+    );
+    const unreadable = calculateFactors(
+      { ...candidate, quotaRemaining: 0, quotaUnreadable: true },
+      [candidate],
+      "coding",
+      getTaskFitness
+    );
+    expect(calculateScore(unreadable, DEFAULT_WEIGHTS)).toBeLessThan(
+      calculateScore(verified, DEFAULT_WEIGHTS)
+    );
+  });
+
+  it("distinguishes absent quota from malformed snapshots", () => {
+    expect(quotaRemainingPercentFromQuota(undefined)).toBe(100);
+    expect(quotaRemainingPercentFromQuota(null)).toBe(100);
+    expect(quotaRemainingPercentFromQuota({})).toBeNull();
+    for (const percentUsed of [null, "", "  ", false]) {
+      expect(quotaRemainingPercentFromQuota({ percentUsed })).toBeNull();
+    }
+    expect(quotaRemainingPercentFromQuota({ percentUsed: 0 })).toBe(100);
+    expect(quotaRemainingPercentFromQuota({ percentUsed: 1 })).toBe(0);
+    expect(
+      quotaRemainingPercentFromQuota({
+        windows: {
+          session: { percentUsed: 0.2 },
+          weekly: { percentUsed: 0.6 },
+        },
+      })
+    ).toBeCloseTo(40);
+    expect(
+      quotaRemainingPercentFromQuota({
+        windows: {
+          session: { percentUsed: 0.2 },
+          weekly: { percentUsed: 0.6, fractionReported: false },
+        },
+      })
+    ).toBeNull();
+    expect(
+      quotaRemainingPercentFromQuota({
+        windows: {
+          session: { percentUsed: 0.2 },
+          weekly: { percentUsed: null },
+        },
+      })
+    ).toBeNull();
+    expect(
+      quotaRemainingPercentFromQuota({ windows: { short: { percentUsed: null } } })
+    ).toBeNull();
   });
 
   it("should validate weights sum to 1.0", () => {

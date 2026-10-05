@@ -36,6 +36,8 @@ export interface ScoringFactors {
    * observations is neutral at 0.5, a failure rate with no observations is 0.
    */
   reliability?: number;
+  /** Snapshot was present but malformed; soft-rank below verified quota readings. */
+  quotaUnreadable?: boolean;
 }
 
 export interface ScoringWeights {
@@ -109,6 +111,7 @@ export interface ProviderCandidate {
   provider: string;
   model: string;
   quotaRemaining: number; // percentage 0..100
+  quotaUnreadable?: boolean;
   quotaTotal: number;
   circuitBreakerState: "CLOSED" | "HALF_OPEN" | "OPEN";
   costPer1MTokens: number;
@@ -161,7 +164,7 @@ export function calculateScore(factors: ScoringFactors, weights: ScoringWeights)
   // to 0, so a single bad input can't yield NaN (which sorts nondeterministically)
   // or a score >1 from float drift in weights that nominally sum to 1.
   return clamp01(
-    weights.quota * factors.quota +
+    (weights.quota * factors.quota +
       weights.health * factors.health +
       weights.costInv * factors.costInv +
       weights.latencyInv * factors.latencyInv +
@@ -180,7 +183,8 @@ export function calculateScore(factors: ScoringFactors, weights: ScoringWeights)
       (weights.quality ?? 0) * (factors.quality ?? 0.5) +
       // Missing reliability factor -> neutral 1, not 0.5: a candidate with no
       // observations has not failed anything. See the field doc on ScoringFactors.
-      (weights.reliability ?? 0) * (factors.reliability ?? 1)
+      (weights.reliability ?? 0) * (factors.reliability ?? 1)) *
+      (factors.quotaUnreadable ? 0.5 : 1)
   );
 }
 
@@ -299,9 +303,11 @@ export function calculateFactors(
   // affinities) so a single bad input can't produce a negative or >1 factor
   // that distorts the weighted score.
   return {
-    quota: Number.isFinite(candidate.quotaRemaining) && candidate.quotaRemaining >= 0
-      ? clamp01(candidate.quotaRemaining / 100)
-      : 0.1, // Degrade malformed/unreadable quota instead of scoring 100% (#15347 / #15348)
+    quota:
+      Number.isFinite(candidate.quotaRemaining) && candidate.quotaRemaining >= 0
+        ? clamp01(candidate.quotaRemaining / 100)
+        : 0,
+    quotaUnreadable: candidate.quotaUnreadable,
     health:
       candidate.circuitBreakerState === "CLOSED"
         ? 1.0

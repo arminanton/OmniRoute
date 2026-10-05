@@ -76,6 +76,15 @@ export function quotaWindowNamesForScope(
   return scoped.length > 0 ? scoped : names;
 }
 
+function finitePercentUsed(raw: unknown): number | null {
+  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 /** Min remaining % across scoped windows, or 100 when an Antigravity family scope matched none. */
 export function remainingPercentFromQuotaWindows(
   rawWindows: Record<string, unknown>,
@@ -85,10 +94,13 @@ export function remainingPercentFromQuotaWindows(
   const namesToScan = quotaWindowNamesForScope(names, scope);
   let minRemaining: number | null = null;
   for (const name of namesToScan) {
+    if (!Object.prototype.hasOwnProperty.call(rawWindows, name)) continue;
     const windowInfo = rawWindows[name];
-    if (!windowInfo || typeof windowInfo !== "object") continue;
-    const percentUsed = Number((windowInfo as Record<string, unknown>).percentUsed);
-    if (!Number.isFinite(percentUsed)) continue;
+    if (!windowInfo || typeof windowInfo !== "object" || Array.isArray(windowInfo)) return null;
+    const windowRecord = windowInfo as Record<string, unknown>;
+    if (windowRecord.fractionReported === false) return null;
+    const percentUsed = finitePercentUsed(windowRecord.percentUsed);
+    if (percentUsed === null) return null;
     const remaining = Math.max(0, Math.min(100, (1 - percentUsed) * 100));
     minRemaining = minRemaining === null ? remaining : Math.min(minRemaining, remaining);
   }
@@ -134,5 +146,7 @@ export function selectAntigravityQuotaWindowNames(
   const scoped = [...exactWindows, ...aggregateWindows];
   if (scoped.length > 0) return scoped;
 
-  return quotaNames.filter((windowName) => getAntigravityQuotaFamily(windowName) === requestedFamily);
+  return quotaNames.filter(
+    (windowName) => getAntigravityQuotaFamily(windowName) === requestedFamily
+  );
 }

@@ -445,9 +445,13 @@ export function clampPercent(value: number): number {
 export function quotaRemainingPercentFromQuota(
   quota: unknown,
   scope?: { provider?: string | null; requestedModel?: string | null }
-): number {
-  if (!quota || typeof quota !== "object") return 100;
+): number | null {
+  // Missing snapshot means no signal; malformed present data must not become full quota.
+  if (quota == null) return 100;
+  if (typeof quota !== "object") return null;
   const record = quota as Record<string, unknown>;
+  if (record.limitReached === true) return 0;
+  if (record.fractionReported === false) return null;
 
   const windows = record.windows;
   if (windows && typeof windows === "object" && !Array.isArray(windows)) {
@@ -455,11 +459,14 @@ export function quotaRemainingPercentFromQuota(
     if (fromWindows !== null) return fromWindows;
   }
 
-  if (record.limitReached === true) return 0;
-
-  const percentUsed = Number(record.percentUsed);
-  if (Number.isFinite(percentUsed)) return clampPercent((1 - percentUsed) * 100);
-  return 100;
+  const rawPercentUsed = record.percentUsed;
+  const percentUsed =
+    typeof rawPercentUsed === "number"
+      ? rawPercentUsed
+      : typeof rawPercentUsed === "string" && rawPercentUsed.trim() !== ""
+        ? Number(rawPercentUsed)
+        : Number.NaN;
+  return Number.isFinite(percentUsed) ? clampPercent((1 - percentUsed) * 100) : null;
 }
 
 export const QUOTA_BLOCKING_CONNECTION_STATUSES = new Set([
