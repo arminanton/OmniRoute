@@ -1,0 +1,1 @@
+- **fix(providers):** load the ChatGPT Web validator only when that provider is tested, so optional Playwright dependencies cannot break unrelated provider validation ([#15516](https://github.com/diegosouzapw/OmniRoute/pull/15516)).
