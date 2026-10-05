@@ -110,13 +110,16 @@ export function useModelVisibilityHandlers({
 }: UseModelVisibilityHandlersParams): UseModelVisibilityHandlersReturn {
   const [compatSavingModelId, setCompatSavingModelId] = useState<string | null>(null);
   const [togglingModelId, setTogglingModelId] = useState<string | null>(null);
+  const [blacklistingModelId, setBlacklistingModelId] = useState<string | null>(null);
   const [bulkVisibilityAction, setBulkVisibilityAction] = useState<"select" | "deselect" | null>(
     null
   );
   const [clearingModels, setClearingModels] = useState(false);
   const [modelFilter, setModelFilter] = useState("");
   const [testingModelId, setTestingModelId] = useState<string | null>(null);
-  const [modelTestStatus, setModelTestStatus] = useState<Record<string, "ok" | "error" | "quota">>({});
+  const [modelTestStatus, setModelTestStatus] = useState<Record<string, "ok" | "error" | "quota">>(
+    {}
+  );
   const [testingAll, setTestingAll] = useState(false);
   const [testProgress, setTestProgress] = useState<{ done: number; total: number } | null>(null);
   const [autoHideFailed, setAutoHideFailed] = useState(false);
@@ -225,6 +228,42 @@ export function useModelVisibilityHandlers({
       notify.error(t("failedSaveCustomModel"));
     } finally {
       setTogglingModelId(null);
+    }
+  };
+
+  // #15690 — Blacklist a model: hide it immediately and notify the user.
+  // Reuses the existing isHidden persistence as the eye toggle, but provides
+  // a more visible entry point for models that error with forbidden/per-model-
+  // access errors.
+  const handleBlacklistModel = async (modelId: string, fullModel: string): Promise<void> => {
+    setBlacklistingModelId(modelId);
+    try {
+      const res = await fetch(
+        `/api/provider-models?provider=${encodeURIComponent(providerId)}&modelId=${encodeURIComponent(modelId)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isHidden: true }),
+        }
+      );
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        notify.error(detail || t("failedSaveCustomModel"));
+        return;
+      }
+      await Promise.all([fetchProviderModelMeta().catch(() => {}), fetchAliases().catch(() => {})]);
+      notify.success(
+        providerText(
+          t,
+          "modelBlacklisted",
+          "Blacklisted model {model} — it has been hidden from this provider.",
+          { model: fullModel }
+        )
+      );
+    } catch {
+      notify.error(t("failedSaveCustomModel"));
+    } finally {
+      setBlacklistingModelId(null);
     }
   };
 
@@ -437,6 +476,8 @@ export function useModelVisibilityHandlers({
     handleClearAllModels,
     onTestModel,
     handleTestAll,
+    handleBlacklistModel,
+    blacklistingModelId,
     onModelTestStatusChange: (modelId: string, status: "ok" | "error" | "quota") =>
       setModelTestStatus((prev) => ({ ...prev, [modelId]: status })),
   };

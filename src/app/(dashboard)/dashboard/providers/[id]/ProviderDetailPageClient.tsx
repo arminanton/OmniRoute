@@ -519,6 +519,8 @@ export default function ProviderDetailPageClient() {
     handleClearAllModels,
     onTestModel,
     handleTestAll,
+    handleBlacklistModel,
+    blacklistingModelId,
     onModelTestStatusChange,
   } = useModelVisibilityHandlers({
     providerId,
@@ -831,6 +833,8 @@ export default function ProviderDetailPageClient() {
             handleClearAllModels={handleClearAllModels}
             onTestModel={onTestModel}
             handleTestAll={handleTestAll}
+            onBlacklistModel={handleBlacklistModel}
+            blacklistingModelId={blacklistingModelId}
             effectiveModelNormalize={effectiveModelNormalize}
             effectiveModelPreserveDeveloper={effectiveModelPreserveDeveloper}
             effectiveModelHidden={effectiveModelHidden}

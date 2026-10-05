@@ -280,6 +280,8 @@ export interface ModelRowProps {
   onTestModel?: (modelId: string, fullModel: string) => Promise<void>;
   testStatus?: "ok" | "error" | "quota" | null;
   testingModel?: boolean;
+  onBlacklistModel?: (modelId: string, fullModel: string) => Promise<void>;
+  blacklistingModelId?: string | null;
 }
 
 export default function ModelRow({
@@ -303,6 +305,8 @@ export default function ModelRow({
   onTestModel,
   testStatus,
   testingModel,
+  onBlacklistModel,
+  blacklistingModelId,
 }: ModelRowProps) {
   const isHidden = Boolean(model.isHidden);
   const [editing, setEditing] = useState(false);
@@ -430,6 +434,21 @@ export default function ModelRow({
             ) : (
               <span className="material-symbols-outlined text-sm">play_circle</span>
             )}
+          </button>
+        )}
+        {testStatus === "error" && onBlacklistModel && (
+          <button
+            onClick={() => onBlacklistModel(model.id, fullModel)}
+            disabled={blacklistingModelId === model.id}
+            className="flex items-center gap-1 rounded p-1 text-xs font-medium text-red-400 hover:bg-red-500/10 disabled:opacity-40 disabled:cursor-not-allowed"
+            title={providerText(
+              t,
+              "blacklistModelTooltip",
+              "Blacklist this model (hide from provider)"
+            )}
+          >
+            <span className="material-symbols-outlined text-sm">block</span>
+            <span>{providerText(t, "blacklistModel", "Blacklist")}</span>
           </button>
         )}
         {onToggleHidden && (

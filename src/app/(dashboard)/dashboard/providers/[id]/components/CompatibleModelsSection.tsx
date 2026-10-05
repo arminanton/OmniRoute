@@ -69,6 +69,8 @@ export interface CompatibleModelsSectionProps {
   onTestModel?: (modelId: string, fullModel: string) => Promise<void>;
   modelTestStatus?: Record<string, "ok" | "error" | "quota" | null>;
   testingModelId?: string | null;
+  onBlacklistModel?: (modelId: string, fullModel: string) => Promise<void>;
+  blacklistingModelId?: string | null;
   onTestAll?: (targets: Array<{ modelId: string; fullModel: string }>) => Promise<void>;
   testingAll?: boolean;
   testProgress?: { done: number; total: number } | null;
@@ -463,6 +465,8 @@ export default function CompatibleModelsSection({
                   onTestModel={onTestModel}
                   testStatus={modelTestStatus?.[modelId] || null}
                   testingModel={testingModelId === modelId}
+                  onBlacklistModel={onBlacklistModel}
+                  blacklistingModelId={blacklistingModelId === modelId ? modelId : null}
                 />
               );
             })}

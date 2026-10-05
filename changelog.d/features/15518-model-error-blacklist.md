@@ -1,0 +1,1 @@
+- **feat(dashboard):** add a prominent Blacklist action for provider models whose connection test fails; the action hides the selected model without disabling the provider ([#15518](https://github.com/diegosouzapw/OmniRoute/pull/15518)).

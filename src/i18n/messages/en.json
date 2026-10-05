@@ -6471,7 +6471,10 @@
     "savedModelEndpointSettings": "Saved model endpoint settings",
     "searchByModelAria": "Search by model",
     "selectSupportedEndpoint": "Select at least one supported endpoint",
-    "antigravityClientProfileHarness": "Harness / CLI"
+    "antigravityClientProfileHarness": "Harness / CLI",
+    "blacklistModel": "Blacklist",
+    "blacklistModelTooltip": "Blacklist this model (hide from provider)",
+    "modelBlacklisted": "Blacklisted model {model} — it has been hidden from this provider."
   },
   "settings": {
     "title": "Settings",

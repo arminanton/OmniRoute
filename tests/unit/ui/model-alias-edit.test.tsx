@@ -16,10 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) => {
     if (values) {
-      return Object.entries(values).reduce(
-        (acc, [k, v]) => acc.replace(`{${k}}`, String(v)),
-        key
-      );
+      return Object.entries(values).reduce((acc, [k, v]) => acc.replace(`{${k}}`, String(v)), key);
     }
     return key;
   },
@@ -40,20 +37,15 @@ vi.mock("@/shared/utils/modelCatalogSearch", () => ({
   normalizeModelCatalogSource: () => "system",
 }));
 
-const { default: PassthroughModelRow } = await import(
-  "../../../src/app/(dashboard)/dashboard/providers/[id]/components/PassthroughModelRow"
-);
+const { default: PassthroughModelRow } =
+  await import("../../../src/app/(dashboard)/dashboard/providers/[id]/components/PassthroughModelRow");
 
-const { default: ModelRow } = await import(
-  "../../../src/app/(dashboard)/dashboard/providers/[id]/components/ModelRow"
-);
+const { default: ModelRow } =
+  await import("../../../src/app/(dashboard)/dashboard/providers/[id]/components/ModelRow");
 
 const t = (key: string, values?: Record<string, unknown>) => {
   if (values) {
-    return Object.entries(values).reduce(
-      (acc, [k, v]) => acc.replace(`{${k}}`, String(v)),
-      key
-    );
+    return Object.entries(values).reduce((acc, [k, v]) => acc.replace(`{${k}}`, String(v)), key);
   }
   return key;
 };
@@ -165,6 +157,19 @@ describe("PassthroughModelRow — inline alias edit", () => {
     });
 
     expect(onSetAlias).toHaveBeenCalledWith("new-alias");
+  });
+
+  it("shows a blacklist action for failed catalog models", async () => {
+    const onBlacklistModel = vi.fn(async () => {});
+    const el = mountModelRow({ testStatus: "error", onBlacklistModel });
+    const button = Array.from(el.querySelectorAll("button")).find((candidate) =>
+      candidate.textContent?.includes("block")
+    );
+    expect(button).toBeTruthy();
+    await act(async () => {
+      button!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onBlacklistModel).toHaveBeenCalledWith("gpt-4o", "openai/gpt-4o");
   });
 
   it("Escape cancels without calling onSetAlias", () => {

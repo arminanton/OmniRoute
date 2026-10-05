@@ -119,4 +119,39 @@ describe("useModelVisibilityHandlers", () => {
     ).toBe(false);
     expect(hook.get().modelTestStatus["claude-opus-4-8"]).toBe("error");
   });
+
+  it("blacklists a failed model only after persistence succeeds", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce({ ok: true } as Response);
+    const hook = renderHook();
+
+    await act(async () => {
+      await hook.get().handleBlacklistModel("model-x", "provider/model-x");
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/provider-models?provider=anthropic-compatible-cc-test&modelId=model-x",
+      expect.objectContaining({ method: "PATCH", body: JSON.stringify({ isHidden: true }) })
+    );
+    expect(notify.success).toHaveBeenCalledTimes(1);
+    expect(notify.error).not.toHaveBeenCalled();
+    expect(hook.get().blacklistingModelId).toBeNull();
+  });
+
+  it("does not report blacklist success when persistence fails", async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      text: () => Promise.resolve("save failed"),
+    } as Response);
+    const hook = renderHook();
+
+    await act(async () => {
+      await hook.get().handleBlacklistModel("model-x", "provider/model-x");
+    });
+
+    expect(notify.success).not.toHaveBeenCalled();
+    expect(notify.error).toHaveBeenCalledWith("save failed");
+    expect(hook.get().blacklistingModelId).toBeNull();
+  });
 });

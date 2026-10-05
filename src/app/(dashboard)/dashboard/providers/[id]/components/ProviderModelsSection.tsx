@@ -103,6 +103,8 @@ export interface ProviderModelsSectionProps {
   handleClearAllModels: () => Promise<void>;
   onTestModel: (modelId: string, fullModel: string) => Promise<void>;
   handleTestAll: (targets: Array<{ modelId: string; fullModel: string }>) => Promise<void>;
+  onBlacklistModel: (modelId: string, fullModel: string) => Promise<void>;
+  blacklistingModelId: string | null;
 
   // Compat state (from useModelCompatState)
   effectiveModelNormalize: (modelId: string, protocol?: string) => boolean;
@@ -170,6 +172,8 @@ export default function ProviderModelsSection({
   handleClearAllModels,
   onTestModel,
   handleTestAll,
+  onBlacklistModel,
+  blacklistingModelId,
   effectiveModelNormalize,
   effectiveModelPreserveDeveloper,
   effectiveModelHidden,
@@ -351,6 +355,8 @@ export default function ProviderModelsSection({
           testProgress={testProgress}
           autoHideFailed={autoHideFailed}
           onAutoHideFailedChange={setAutoHideFailed}
+          onBlacklistModel={onBlacklistModel}
+          blacklistingModelId={blacklistingModelId}
         />
       </div>
     );
@@ -436,6 +442,8 @@ export default function ProviderModelsSection({
           connectionId={isNousOAuth ? liveNousConnectionId : (selectedConnection?.id ?? "")}
           autoHideFailed={autoHideFailed}
           onAutoHideFailedChange={setAutoHideFailed}
+          onBlacklistModel={onBlacklistModel}
+          blacklistingModelId={blacklistingModelId}
         />
       </div>
     );
@@ -580,6 +588,8 @@ export default function ProviderModelsSection({
               onTestModel={onTestModel}
               testStatus={modelTestStatus[model.id] || null}
               testingModel={testingModelId === model.id}
+              onBlacklistModel={onBlacklistModel}
+              blacklistingModelId={blacklistingModelId}
             />
           );
         })}
