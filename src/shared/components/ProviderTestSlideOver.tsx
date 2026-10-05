@@ -113,20 +113,21 @@ function ProviderTestSlideOverPanel({
         )}
         <SlideOverTabs tab={tab} onChange={setTab} />
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
-          {tab === "test" && (
-            <div className="flex-1 min-h-0 flex flex-col pl-4 pr-2 py-3">
-              <LlmChatCard
-                providerId={providerId}
-                embedded
-                hideToolbar
-                model={model}
-                onModelChange={setModel}
-                selectedKey={selectedKey}
-                onSelectedKeyChange={setSelectedKey}
-                onControlsChange={onControlsChange}
-              />
-            </div>
-          )}
+          <div
+            className={tab === "test" ? "flex-1 min-h-0 flex flex-col pl-4 pr-2 py-3" : "hidden"}
+            aria-hidden={tab !== "test"}
+          >
+            <LlmChatCard
+              providerId={providerId}
+              embedded
+              hideToolbar
+              model={model}
+              onModelChange={setModel}
+              selectedKey={selectedKey}
+              onSelectedKeyChange={setSelectedKey}
+              onControlsChange={onControlsChange}
+            />
+          </div>
           {tab === "logs" && <LogsTab providerId={providerId} />}
         </div>
       </div>

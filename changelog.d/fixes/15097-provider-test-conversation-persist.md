@@ -1,0 +1,1 @@
+- **fix(dashboard):** preserve a provider-test conversation when switching between Test and Logs tabs (#15097).
