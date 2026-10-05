@@ -557,6 +557,35 @@ test("createStreamController aborts after delayed disconnect and tolerates abort
   assert.equal(errorOnlyController.signal.aborted, false);
 });
 
+test("pipeWithDisconnect treats reasoning/signature chunks as raw stream liveness", async () => {
+  const encoder = new TextEncoder();
+  const source = new ReadableStream<Uint8Array>({
+    start(controller) {
+      void (async () => {
+        for (const reasoning of ["thinking-1", "thinking-2", "signature-3", "signature-4"]) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: reasoning } }] })}\n\n`
+            )
+          );
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+        controller.close();
+      })();
+    },
+  });
+  const stream = pipeWithDisconnect(
+    new Response(source),
+    new TransformStream(),
+    createStreamController(),
+    {
+      stallTimeoutMs: 300,
+    }
+  );
+  const text = await readStreamText(stream);
+  assert.match(text, /signature-4/);
+});
+
 test("pipeWithDisconnect pipes transformed bytes and marks the controller complete", async () => {
   const source = new ReadableStream({
     start(controller) {
