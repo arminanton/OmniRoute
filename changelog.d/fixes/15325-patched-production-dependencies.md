@@ -1,0 +1,1 @@
+- **security(deps):** pin IBM Cloud SDK to the patched root Axios release and update patched production dependencies; Docker-bundled npm tools are tracked separately pending lock-safe update (#15325).
