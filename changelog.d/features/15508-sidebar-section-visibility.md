@@ -1,0 +1,1 @@
+- **feat(dashboard):** add independent show/hide controls for hideable sidebar sections; hidden sections remain searchable and child-item visibility is preserved ([#15508](https://github.com/diegosouzapw/OmniRoute/pull/15508)).

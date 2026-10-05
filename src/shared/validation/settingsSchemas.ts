@@ -223,6 +223,9 @@ export const updateSettingsSchema = z.object({
   debugMode: z.boolean().optional(),
   logToolSources: z.boolean().optional(),
   hiddenSidebarItems: z.array(z.enum(HIDEABLE_SIDEBAR_ITEM_IDS)).optional(),
+  hiddenSidebarSections: z
+    .array(z.enum(SIDEBAR_SECTIONS.map((s) => s.id) as [string, ...string[]]))
+    .optional(),
   hiddenSidebarGroupLabels: z.array(z.enum(HIDEABLE_SIDEBAR_GROUP_IDS)).optional(),
   sidebarSectionOrder: z
     .array(z.enum(SIDEBAR_SECTIONS.map((s) => s.id) as [string, ...string[]]))
