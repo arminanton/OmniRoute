@@ -650,10 +650,14 @@ export async function executeTargetAttempt(opts: {
         const connId = effectiveConnectionId || undefined;
         void (async () => {
           try {
-            const { setLKGP } = await import("@/lib/db/settings");
-            const comboKey = deps.combo.id || deps.combo.name;
-            const writeKeys = target.executionKey === comboKey ? [comboKey] : [target.executionKey, comboKey];
-            await Promise.all(writeKeys.map((k) => setLKGP(deps.combo.name, k, provider, connId)));
+            const { recordLkgpPin } = await import("./recordLkgpPin.ts");
+            await recordLkgpPin({
+              comboName: deps.combo.name,
+              comboId: deps.combo.id,
+              executionKey: target.executionKey,
+              provider,
+              connectionId: connId,
+            });
           } catch (err) {
             deps.log.warn(
               "COMBO",

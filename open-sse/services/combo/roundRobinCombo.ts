@@ -793,10 +793,14 @@ export async function handleRoundRobinCombo({
               const connId = effectiveConnectionId || undefined;
               void (async () => {
                 try {
-                  const { setLKGP } = await import("@/lib/db/settings");
-                  const comboKey = combo.id || combo.name;
-                  const writeKeys = target.executionKey === comboKey ? [comboKey] : [target.executionKey, comboKey];
-                  await Promise.all(writeKeys.map((k) => setLKGP(combo.name, k, provider, connId)));
+                  const { recordLkgpPin } = await import("./recordLkgpPin.ts");
+                  await recordLkgpPin({
+                    comboName: combo.name,
+                    comboId: combo.id,
+                    executionKey: target.executionKey,
+                    provider,
+                    connectionId: connId,
+                  });
                 } catch (err) {
                   log.warn(
                     "COMBO-RR",
