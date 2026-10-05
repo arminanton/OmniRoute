@@ -19,6 +19,21 @@ Current collected snapshot: 341 PRs, 338 non-PR issues, 519 discussions (1,198 u
 
 The committed version pins, broad thinking-budget removal, quota scoring change, and model-family context-limit guesses require review before release. A commit alone is not a validated fix.
 
+## Existing-commit audit: release blockers
+
+Read-only source/evidence audit: `/home/ubuntu/_/omni/audit/committed-change-audit.md`. No tests were run by this audit. KEEP means retain for testing, not release-ready. Earlier claims of complete implementation were incorrect.
+
+| Commit | Disposition | Required follow-up |
+|---|---|---|
+| `071d7e91dc` | Correction required | Scope zero-budget omission to the supported Flash-Lite cases; preserve non-lite zero and dynamic-budget behavior. Source: issue #15491 / PR #15492. |
+| `f936ca1368` | Correction required | Replace model-name guesses with actual catalog limits/capabilities and preserve existing config. Source: issue #15198 / PR #15406. |
+| `c072071403` | Correction required | Distinguish missing, malformed, and incomplete quota; implement supported scoring and regression tests. Source: #15347, #15348 / PR #15358. |
+| `1f43d2fc0e` | Correction required | Verify DB key semantics and match the full missing/equal combo-ID dedup contract. Source: PR #15432. |
+| `3d6213bb3d` | Incomplete | Review model IDs, gateway metadata, docs and tests, not only base URLs. Source: issue #15385 / PR #15520. |
+| `eed359b42f` | Revert recommended; not yet executed | Wire identity changes lack sufficient captured evidence; installed version alone does not establish SDK/runtime/header values. |
+| `62c63ad529` | Hold for verification | Local blue parity change: verify abort, capture, cookie CAS, authorization and cleanup. Preserve original blue changes. |
+| `1981df574a`, `d47aeb28b2`, `0754b0f945`, `8846ea82a6`, `6a4461b165`, `49704b42a6` | Retain pending tests | Source-level audit recommends keeping; focused regression and integration validation remain required. |
+
 ## Tracked upstream items
 
 | Type | ID | Title | Status | Local commit evidence |
