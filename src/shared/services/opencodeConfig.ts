@@ -61,14 +61,22 @@ export const buildOpenCodeProviderConfig = ({
     string,
     { name: string; limit: { context: number; output: number } }
   > = {};
+  const resolveModelLimits = (modelId: string): { context: number; output: number } => {
+    const id = modelId.toLowerCase();
+    if (id.includes("1m") || id.includes("fable-5-1") || id.includes("opus-5") || id.includes("gemini")) {
+      return { context: 1_000_000, output: 64_000 };
+    }
+    if (id.includes("claude") || id.includes("gpt-4") || id.includes("gpt-5") || id.includes("deepseek") || id.includes("qwen") || id.includes("glm")) {
+      return { context: 200_000, output: 64_000 };
+    }
+    return { context: 128_000, output: 8_192 };
+  };
+
   for (const m of uniqueModels) {
     if (m) {
       modelsRecord[m] = {
         name: getModelEntryName(m, normalizedLabels),
-        limit: {
-          context: 128_000,
-          output: 8_192,
-        },
+        limit: resolveModelLimits(m),
       };
     }
   }
