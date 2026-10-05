@@ -244,6 +244,42 @@ test("updateProviderConnection reorders priorities and returns decrypted payload
   );
 });
 
+test("updateProviderConnection preserves explicit positive priority without compacting siblings", async () => {
+  const first = await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: "Priority first",
+    apiKey: "first-key",
+  });
+  const second = await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: "Priority second",
+    apiKey: "second-key",
+  });
+  const third = await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: "Priority third",
+    apiKey: "third-key",
+  });
+  const before = await providersDb.getProviderConnections({ provider: "openai" });
+  const untouched = new Map(
+    before.filter((c) => c.id !== second.id).map((c) => [c.id, c.priority])
+  );
+
+  const updated = await providersDb.updateProviderConnection(second.id, { priority: 17 });
+  const after = await providersDb.getProviderConnections({ provider: "openai" });
+
+  assert.equal(updated.priority, 17);
+  assert.equal(after.find((c) => c.id === second.id)?.priority, 17);
+  assert.deepEqual(
+    after.filter((c) => c.id !== second.id).map((c) => [c.id, c.priority]),
+    [...untouched.entries()]
+  );
+  assert.ok([first.id, third.id].every((id) => untouched.has(id)));
+});
+
 test("deleteProviderConnection reorders remaining rows and bulk delete reports changes", async () => {
   const first = await providersDb.createProviderConnection({
     provider: "anthropic",
