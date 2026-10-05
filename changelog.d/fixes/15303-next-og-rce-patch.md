@@ -1,0 +1,1 @@
+- **security(deps):** update Next.js to 16.3.8 to close the critical `next/og` ImageResponse RCE advisory; non-critical npm advisories remain for separate review (#15303, #15454).
