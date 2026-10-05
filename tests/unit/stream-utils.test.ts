@@ -2514,3 +2514,23 @@ test("createSSEStream passthrough does not swallow false positive textual tool c
   assert.equal(choice.message.tool_calls, undefined);
   assert.match(text, /\[Tool call: terminal\] was skipped/);
 });
+
+test("Responses passthrough drops a replayed event whose sequence_number is a string", async () => {
+  const events = [
+    { type: "response.output_text.delta", sequence_number: "1", delta: "first" },
+    { type: "response.output_text.delta", sequence_number: 1, delta: "replayed" },
+    { type: "response.output_text.delta", sequence_number: "2", delta: "second" },
+  ];
+  const chunks = events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  const text = await readTransformed(chunks, {
+    mode: "passthrough",
+    sourceFormat: FORMATS.OPENAI_RESPONSES,
+    provider: "openai",
+    model: "gpt-5",
+    body: { input: [{ role: "user", content: "hello" }] },
+  });
+  assert.equal((text.match(/response.output_text.delta/g) || []).length, 2);
+  assert.ok(text.includes("first"));
+  assert.ok(text.includes("second"));
+  assert.ok(!text.includes("replayed"));
+});
