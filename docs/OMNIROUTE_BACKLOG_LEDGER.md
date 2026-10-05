@@ -11,6 +11,8 @@ Single tracking file for upstream PRs, issues, discussions, and local integratio
 - Only mark **Implemented; verified** after source comparison and relevant passing tests are recorded.
 - No deployment/reload is authorized. i18n remains last priority.
 
+- **Rejected** requires a per-item reason and evidence; unreviewed, blocked, or low-priority items are not rejected. **Implemented; verified** requires the correction commit and passing test command/result, not merely a clean git diff.
+
 ## Coverage and evidence limitations
 
 Earlier reports overstated completion and assigned incorrect meanings to some upstream IDs. Treat report summaries as leads, not verified facts. PR #15457, for example, concerns the Claude Code/OpenAI tool-history bridge, not a proven general canonical-JSON cache fix.
@@ -157,7 +159,7 @@ Read-only source/evidence audit: `/home/ubuntu/_/omni/audit/committed-change-aud
 | Issue | [#15497](https://github.com/diegosouzapw/OmniRoute/issues/15497) | PII sanitizer corrupts code responses: IPv6 pattern redacts any '::' (Python slices, Haskell/Rust/C++ syntax) | Not reviewed | — |
 | Issue | [#15496](https://github.com/diegosouzapw/OmniRoute/issues/15496) | fix(usage): handle separate reasoning token counts in cost calculation | Not reviewed | — |
 | Issue | [#15493](https://github.com/diegosouzapw/OmniRoute/issues/15493) | [BUG] Windows portable desktop 3.8.51: MCP endpoints return 500 — bundled node_modules/zod is missing package.json/index.js | Not reviewed | — |
-| Issue | [#15491](https://github.com/diegosouzapw/OmniRoute/issues/15491) | fix(providers): omit thinkingBudget 0 on Gemini Flash-Lite models to prevent AI Studio 400 | Committed; validation pending | `071d7e91dc` |
+| Issue | [#15491](https://github.com/diegosouzapw/OmniRoute/issues/15491) | fix(providers): omit thinkingBudget 0 on Gemini Flash-Lite models to prevent AI Studio 400 | Correction implemented; tests blocked | `071d7e91dc` requires correction; working-tree fix scopes zero-budget omission to Flash-Lite and preserves other fields/-1. Regression tests added; execution blocked by missing alias-aware runner/dependencies. |
 | Issue | [#15489](https://github.com/diegosouzapw/OmniRoute/issues/15489) | [BUG] Codex streaming request returns 502 "Provider returned empty content" in a long OpenCode session | Not reviewed | — |
 | Issue | [#15488](https://github.com/diegosouzapw/OmniRoute/issues/15488) | fix(sse): a clean Claude end_turn with no content block becomes a 502 (breaks Claude Code prompt suggestions) | Not reviewed | — |
 | Issue | [#15471](https://github.com/diegosouzapw/OmniRoute/issues/15471) | feat(api): serve observed model availability alongside the catalog | Not reviewed | — |
@@ -186,8 +188,8 @@ Read-only source/evidence audit: `/home/ubuntu/_/omni/audit/committed-change-aud
 | Issue | [#15366](https://github.com/diegosouzapw/OmniRoute/issues/15366) | feat(provider): Cursor grok 4.7 | Not reviewed | — |
 | Issue | [#15351](https://github.com/diegosouzapw/OmniRoute/issues/15351) | fix(providers): Claude predictive weekly warning is treated as exhausted at 92% usage | Not reviewed | — |
 | Issue | [#15349](https://github.com/diegosouzapw/OmniRoute/issues/15349) | feat(auto-combo): score quota burn against window length using the existing burn-rate estimator | Not reviewed | — |
-| Issue | [#15348](https://github.com/diegosouzapw/OmniRoute/issues/15348) | feat(auto-combo): a partial quota reading must not score better than a complete one | Committed; validation pending | `c072071403` |
-| Issue | [#15347](https://github.com/diegosouzapw/OmniRoute/issues/15347) | feat(auto-combo): an unreadable quota must not score as a full one | Committed; validation pending | `c072071403` |
+| Issue | [#15348](https://github.com/diegosouzapw/OmniRoute/issues/15348) | feat(auto-combo): a partial quota reading must not score better than a complete one | Partial implementation; acceptance review pending | Incomplete-window coverage not yet demonstrated; do not count malformed-snapshot work alone as completing this issue. |
+| Issue | [#15347](https://github.com/diegosouzapw/OmniRoute/issues/15347) | feat(auto-combo): an unreadable quota must not score as a full one | Correction implemented; review/tests pending | `c072071403` correction in working tree; regression tests added. Caller null handling and scoring edge cases under follow-up review; tests not run. |
 | Issue | [#15341](https://github.com/diegosouzapw/OmniRoute/issues/15341) | feat: Add Import All (.tar.gz) to match Export All (.tar.gz) | Not reviewed | — |
 | Issue | [#15339](https://github.com/diegosouzapw/OmniRoute/issues/15339) | Crash guard re-throws RELAY_TIMEOUT as an unhandledRejection, killing the server with exit code 7 | Not reviewed | — |
 | Issue | [#15336](https://github.com/diegosouzapw/OmniRoute/issues/15336) | feat(providers): add freebuff provider support and OAuth authentication | Not reviewed | — |
@@ -229,7 +231,7 @@ Read-only source/evidence audit: `/home/ubuntu/_/omni/audit/committed-change-aud
 | Issue | [#15212](https://github.com/diegosouzapw/OmniRoute/issues/15212) | fix(api): GET /api/v1/providers/{provider}/models copies Content-Length of the full /v1/models catalog — response never completes, Playground model list stuck on "loading" | Not reviewed | — |
 | Issue | [#15211](https://github.com/diegosouzapw/OmniRoute/issues/15211) | feat: native planner/executor agentic pipeline | Not reviewed | — |
 | Issue | [#15202](https://github.com/diegosouzapw/OmniRoute/issues/15202) | fix(api): synthetic /v1/responses frames carry response.id: null (regression from #14330) — strict clients abort the stream | Not reviewed | — |
-| Issue | [#15198](https://github.com/diegosouzapw/OmniRoute/issues/15198) | fix: Dashboard OpenCode writer still hardcodes 128K/8K limits and wipes per-model capability flags (CLI path already fixed) | Committed; validation pending | `f936ca1368` |
+| Issue | [#15198](https://github.com/diegosouzapw/OmniRoute/issues/15198) | fix: Dashboard OpenCode writer still hardcodes 128K/8K limits and wipes per-model capability flags (CLI path already fixed) | Correction implemented; tests pending | `f936ca1368` family guesses replaced in working tree by catalog metadata and preserved config. Tests added; project runner unavailable. |
 | Issue | [#15190](https://github.com/diegosouzapw/OmniRoute/issues/15190) | fix(startup): Electron 3.8.51 AppImage started with an empty database after update (providers and combos missing) | Not reviewed | — |
 | Issue | [#15184](https://github.com/diegosouzapw/OmniRoute/issues/15184) | fix(docker): :3.8.51 and :latest resolve to a 2026-09-24 release-branch pre-release on amd64 (stale digests from self-hosted runner in the manifest index) | Not reviewed | — |
 | Issue | [#15180](https://github.com/diegosouzapw/OmniRoute/issues/15180) | 🌙 nightly-compat: Node 24/26 failures on release/v3.8.52 | Not reviewed | — |
@@ -492,7 +494,7 @@ Read-only source/evidence audit: `/home/ubuntu/_/omni/audit/committed-change-aud
 | PR | [#15498](https://github.com/diegosouzapw/OmniRoute/pull/15498) | fix(pii): stop redacting code syntax as IPv6 | Committed; validation pending | `49704b42a6` |
 | PR | [#15495](https://github.com/diegosouzapw/OmniRoute/pull/15495) | search: make the search deadlines configurable | Not reviewed | — |
 | PR | [#15494](https://github.com/diegosouzapw/OmniRoute/pull/15494) | fix(combo): lock a model after a local target timeout | Not reviewed | — |
-| PR | [#15492](https://github.com/diegosouzapw/OmniRoute/pull/15492) | fix(providers): omit thinkingBudget 0 on Flash-Lite models (#15491) | Not reviewed | — |
+| PR | [#15492](https://github.com/diegosouzapw/OmniRoute/pull/15492) | fix(providers): omit thinkingBudget 0 on Flash-Lite models (#15491) | Correction implemented; tests blocked | Source evidence reviewed; Flash-Lite correction in working tree. Not committed or runtime-validated. |
 | PR | [#15487](https://github.com/diegosouzapw/OmniRoute/pull/15487) | fix(providers): sync missing account catalogs before model tests | Considered; unverified | — |
 | PR | [#15486](https://github.com/diegosouzapw/OmniRoute/pull/15486) | fix(routing): keep native turns retryable during quota cooldowns | Not reviewed | — |
 | PR | [#15485](https://github.com/diegosouzapw/OmniRoute/pull/15485) | fix(db): preserve explicit provider priorities on edit | Committed; validation pending | `0754b0f945` |
@@ -554,7 +556,7 @@ Read-only source/evidence audit: `/home/ubuntu/_/omni/audit/committed-change-aud
 | PR | [#15410](https://github.com/diegosouzapw/OmniRoute/pull/15410) | feat(providers): add Ollama System One handler and decision-model discovery | Considered; unverified | — |
 | PR | [#15408](https://github.com/diegosouzapw/OmniRoute/pull/15408) | fix(providers): pace Codex usage fetches that bypass the quota gate | Considered; unverified | — |
 | PR | [#15407](https://github.com/diegosouzapw/OmniRoute/pull/15407) | fix(auth): revoke one access token by prefix and stop rewriting last use | Not reviewed | — |
-| PR | [#15406](https://github.com/diegosouzapw/OmniRoute/pull/15406) | fix(dashboard): read OpenCode model limits from the catalog | Considered; unverified | — |
+| PR | [#15406](https://github.com/diegosouzapw/OmniRoute/pull/15406) | fix(dashboard): read OpenCode model limits from the catalog | Correction implemented; tests pending | Source and comments reviewed; server-side catalog plumbing plus writer regressions added. No passing test evidence or correction commit yet. |
 | PR | [#15402](https://github.com/diegosouzapw/OmniRoute/pull/15402) | fix(auth): answer a paused no-auth provider with a retryable cooldown | Considered; unverified | — |
 | PR | [#15399](https://github.com/diegosouzapw/OmniRoute/pull/15399) | fix(i18n): stop an apostrophe from turning a placeholder into literal text | Not reviewed | — |
 | PR | [#15398](https://github.com/diegosouzapw/OmniRoute/pull/15398) | ci: run the scheduled workflows only in the upstream repository | Not reviewed | — |
@@ -592,7 +594,7 @@ Read-only source/evidence audit: `/home/ubuntu/_/omni/audit/committed-change-aud
 | PR | [#15361](https://github.com/diegosouzapw/OmniRoute/pull/15361) | fix(providers): do not treat a Claude weekly warning as exhaustion | Not reviewed | — |
 | PR | [#15360](https://github.com/diegosouzapw/OmniRoute/pull/15360) | fix(api): accept a per-combo universal handoff setting | Not reviewed | — |
 | PR | [#15359](https://github.com/diegosouzapw/OmniRoute/pull/15359) | fix(usage): keep Antigravity family weekly quota keys | Committed; validation pending | `d47aeb28b2` |
-| PR | [#15358](https://github.com/diegosouzapw/OmniRoute/pull/15358) | fix(auto-combo): a malformed quota snapshot no longer scores as a full one (#15347) | Not reviewed | — |
+| PR | [#15358](https://github.com/diegosouzapw/OmniRoute/pull/15358) | fix(auto-combo): a malformed quota snapshot no longer scores as a full one (#15347) | Correction implemented; review/tests pending | Upstream patch reviewed; missing versus malformed quota distinction implemented in working tree. Follow-up caller review and tests required. |
 | PR | [#15357](https://github.com/diegosouzapw/OmniRoute/pull/15357) | fix: prevent proxied stream crashes and normalize Groq reasoning | Not reviewed | — |
 | PR | [#15356](https://github.com/diegosouzapw/OmniRoute/pull/15356) | fix(ci): register the cycles ratchet script in the gate manifest | Not reviewed | — |
 | PR | [#15355](https://github.com/diegosouzapw/OmniRoute/pull/15355) | fix(mcp): read cost totals from the analytics summary | Considered; unverified | — |
