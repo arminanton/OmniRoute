@@ -67,9 +67,27 @@ test("getMode: empty string falls back to redact", () => {
 
 // ── IPv6 regex — compressed-form detection ────────────────────────────────────
 
-test("IPv6 :: (all-zeros) alone is redacted", () => {
+test("bare :: is preserved because it is ambiguous with source syntax", () => {
   const result = sanitizePII("::");
-  assert.ok(result.text.includes("[IP_REDACTED]"), "bare :: should be redacted as IPv6 all-zeros");
+  assert.equal(result.text, "::");
+});
+
+test("double-colon code syntax and identifier subscripts are preserved", () => {
+  for (const code of [
+    "s[::-1]",
+    "use ::std::io::Read;",
+    "std::vector<int> v;",
+    "x :: Int",
+    ":::note",
+    "s[::1]",
+  ]) {
+    assert.equal(sanitizePII(code).text, code);
+  }
+});
+
+test("bracketed IPv6 URL literal is still redacted", () => {
+  const result = sanitizePII("open http://[::1]:8080/");
+  assert.ok(result.text.includes("[IP_REDACTED]"));
 });
 
 test("IPv6 ::1 (loopback) standalone is redacted", () => {
