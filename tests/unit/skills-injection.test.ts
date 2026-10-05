@@ -142,6 +142,39 @@ test("injectSkills expands shorthand property types into valid JSON Schemas", as
   }
 });
 
+test("injectSkills promotes property-level required flags to the root schema", async () => {
+  await skillRegistry.register({
+    name: "requiredSearch",
+    version: "1.0.0",
+    description: "search with a required query",
+    schema: {
+      input: {
+        query: { type: "string", description: "search query", required: true },
+        limit: { type: "integer", required: false },
+      },
+      output: {},
+    },
+    handler: "required-search-handler",
+    enabled: true,
+    apiKeyId: "key-a",
+  });
+
+  type ToolShape = {
+    function?: { parameters: { properties: Record<string, unknown>; required?: string[] } };
+    input_schema?: { properties: Record<string, unknown>; required?: string[] };
+    parameters?: { properties: Record<string, unknown>; required?: string[] };
+  };
+  for (const provider of ["openai", "anthropic", "google", "other"] as const) {
+    const tool = injectSkills({ provider, apiKeyId: "key-a" })[0] as ToolShape;
+    const schema = tool.function?.parameters ?? tool.input_schema ?? tool.parameters;
+    assert.deepEqual(schema.required, ["query"]);
+    assert.deepEqual(schema.properties, {
+      query: { type: "string", description: "search query" },
+      limit: { type: "integer" },
+    });
+  }
+});
+
 test("injectSkills includes global skills without leaking another API key's skills", async () => {
   await skillRegistry.register({
     name: "releaseNotes",

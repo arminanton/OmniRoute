@@ -1,0 +1,1 @@
+- **fix(skills):** promote legacy property `required` booleans into valid root JSON Schema; verify enabled state reloads from SQLite (#15274).

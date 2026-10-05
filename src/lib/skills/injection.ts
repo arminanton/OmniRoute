@@ -68,15 +68,30 @@ function normalizeInputSchema(input: Record<string, unknown>): Record<string, un
   // validators — Zhipu GLM served through opencode-go (upstream error [1210]
   // "Invalid API parameter") — reject the shorthand as malformed JSON Schema,
   // which 400s every request the skill tools are injected into. Expand string
-  // values to { type: value }; non-string values pass through untouched.
+  // values to { type: value }; property-level `required: boolean` flags are
+  // moved to the parent object's `required` array.
   const properties: Record<string, unknown> = {};
+  const required: string[] = [];
   for (const [key, value] of Object.entries(input)) {
-    properties[key] = typeof value === "string" ? { type: value } : value;
+    if (typeof value === "string") {
+      properties[key] = { type: value };
+      continue;
+    }
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+      const propertySchema = value as Record<string, unknown>;
+      if (typeof propertySchema.required === "boolean") {
+        if (propertySchema.required) required.push(key);
+        const normalizedPropertySchema = { ...propertySchema };
+        delete normalizedPropertySchema.required;
+        properties[key] = normalizedPropertySchema;
+        continue;
+      }
+    }
+    properties[key] = value;
   }
-  return {
-    type: "object",
-    properties,
-  };
+  return required.length > 0
+    ? { type: "object", properties, required }
+    : { type: "object", properties };
 }
 
 function skillToOpenAI(skill: Skill): OpenAITool {

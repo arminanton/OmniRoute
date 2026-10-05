@@ -230,6 +230,11 @@ test("skillRegistry updates enabled state by ID without duplicate registration",
   assert.equal(skillRegistry.list("key-a").length, 1);
   assert.equal(skillRegistry.getSkill(skill.id, "key-a")?.enabled, true);
   assert.equal(await skillRegistry.setEnabledById(skill.id, "key-b", false), undefined);
+
+  resetRegistryState();
+  coreDb.resetDbInstance();
+  await skillRegistry.loadFromDatabase("key-a");
+  assert.equal(skillRegistry.getSkill(skill.id, "key-a")?.enabled, true);
 });
 
 test("skillRegistry unregisters by version, by name/apiKey and by id", async () => {
