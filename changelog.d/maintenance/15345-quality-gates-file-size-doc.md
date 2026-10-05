@@ -1,0 +1,1 @@
+- **docs:** clarify `check:file-size` whole-tree base-relative PR behavior and source/test caps (#15345).
