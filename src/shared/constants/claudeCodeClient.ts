@@ -8,11 +8,11 @@
  * advertise the version on the wire must go through getClaudeCodeClientVersion()
  * so operators can bump past Anthropic's model gate without a rebuild (#12417).
  */
-export const CLAUDE_CODE_CLIENT_VERSION = "2.1.289";
+export const CLAUDE_CODE_CLIENT_VERSION = "2.1.258";
 export const CLAUDE_CODE_CLIENT_BUILD_REVISION = "1e2";
 export const CLAUDE_CODE_CLIENT_BILLING_VERSION = `${CLAUDE_CODE_CLIENT_VERSION}.${CLAUDE_CODE_CLIENT_BUILD_REVISION}`;
-export const CLAUDE_CODE_SDK_PACKAGE_VERSION = "0.131.0";
-export const CLAUDE_CODE_RUNTIME_VERSION = "v26.8.0";
+export const CLAUDE_CODE_SDK_PACKAGE_VERSION = "0.112.1";
+export const CLAUDE_CODE_RUNTIME_VERSION = "v26.3.0";
 
 export type ClaudeCodeEntrypoint = "cli" | "sdk-cli";
 
