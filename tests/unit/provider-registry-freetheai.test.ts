@@ -25,17 +25,23 @@ test("#6670 freetheai is registered in the executor registry with an OpenAI-comp
   assert.ok(entry, "freetheai should be present in the executor registry");
   assert.equal(entry.format, "openai");
   assert.equal(entry.executor, "default");
-  assert.equal(entry.baseUrl, "https://api.freetheai.xyz/v1/chat/completions");
-  assert.equal(entry.modelsUrl, "https://api.freetheai.xyz/v1/models");
+  assert.equal(entry.baseUrl, "https://api.freetheai.org/v1/chat/completions");
+  assert.equal(entry.modelsUrl, "https://api.freetheai.org/v1/models");
   assert.equal(entry.authType, "apikey");
   assert.equal(entry.authHeader, "bearer");
   assert.equal(entry.passthroughModels, true);
-  assert.ok(Array.isArray(entry.models) && entry.models.length > 0, "must seed a fallback model list");
+  assert.ok(
+    Array.isArray(entry.models) && entry.models.length > 0,
+    "must seed a fallback model list"
+  );
 });
 
 test("#6670 freetheai resolves through getExecutor() as a DefaultExecutor instance", async () => {
   const executor = await getExecutor("freetheai");
-  assert.ok(executor instanceof DefaultExecutor, "freetheai has no custom executor — must fall through to DefaultExecutor");
+  assert.ok(
+    executor instanceof DefaultExecutor,
+    "freetheai has no custom executor — must fall through to DefaultExecutor"
+  );
 });
 
 test("#6670 freetheai is classified as an aggregator/gateway provider", () => {
@@ -50,8 +56,30 @@ test("#6670 freetheai has provider metadata with free-tier info", () => {
   assert.ok(meta, "freetheai should have an APIKEY_PROVIDERS metadata entry");
   assert.equal(meta.id, "freetheai");
   assert.equal(meta.name, "FreeTheAi");
-  assert.equal(meta.website, "https://freetheai.xyz");
+  assert.equal(meta.website, "https://freetheai.org");
   assert.equal(meta.hasFree, true);
   assert.equal(typeof meta.freeNote, "string");
   assert.ok((meta.freeNote as string).length > 0);
+});
+
+test("#15385 freetheai seeds only fully-qualified fta/ model ids", () => {
+  const entry = (REGISTRY as Record<string, Record<string, unknown>>).freetheai;
+  const models = entry.models as Array<{ id: string }>;
+  const retired = ["gpt-4o-mini", "llama-3.3-70b-instruct", "deepseek-chat"];
+  for (const model of models) {
+    assert.ok(
+      model.id.startsWith("fta/"),
+      `seeded model "${model.id}" must include the fta/ namespace`
+    );
+    assert.ok(!retired.includes(model.id), `retired model "${model.id}" must not be seeded`);
+  }
+});
+
+test("#15385 freetheai signup copy references the current domain", () => {
+  const meta = (APIKEY_PROVIDERS as Record<string, Record<string, unknown>>).freetheai;
+  for (const field of ["freeNote", "authHint"] as const) {
+    const copy = String(meta[field] ?? "");
+    assert.ok(!/freetheai\.xyz/.test(copy));
+    assert.match(copy, /freetheai\.org/);
+  }
 });

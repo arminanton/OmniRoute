@@ -1,0 +1,1 @@
+- **fix(providers):** FreeTheAI now uses `freetheai.org`; signup moved off Discord, and fully-qualified `fta/<group>/<model>` IDs are seeded ([#15385](https://github.com/diegosouzapw/OmniRoute/issues/15385)).
