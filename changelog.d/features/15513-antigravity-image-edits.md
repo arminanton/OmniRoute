@@ -1,0 +1,1 @@
+- **feat(images):** support Antigravity Gemini image-to-image edits through `/v1/images/edits`, forwarding multipart or data-URI inputs as Gemini `inlineData` ([#15292](https://github.com/diegosouzapw/OmniRoute/issues/15292), [#15513](https://github.com/diegosouzapw/OmniRoute/pull/15513)).

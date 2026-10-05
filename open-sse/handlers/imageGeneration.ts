@@ -1082,6 +1082,32 @@ async function handleGeminiImageGeneration({ model, providerConfig, body, creden
     });
   }
 
+  const imageInput = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+  const sourceImageBytes = imageInput.imageBytes;
+  const sourceImageUrl = typeof imageInput.image_url === "string" ? imageInput.image_url : "";
+  const requestedImageMime = typeof imageInput.imageMime === "string" ? imageInput.imageMime : "";
+  let inlineImage: { inlineData: { mimeType: string; data: string } } | null = null;
+  if (Buffer.isBuffer(sourceImageBytes)) {
+    inlineImage = {
+      inlineData: {
+        mimeType: requestedImageMime || "image/png",
+        data: sourceImageBytes.toString("base64"),
+      },
+    };
+  } else if (typeof sourceImageBytes === "string" && sourceImageBytes.length > 0) {
+    inlineImage = {
+      inlineData: {
+        mimeType: requestedImageMime || "image/png",
+        data: sourceImageBytes,
+      },
+    };
+  } else if (sourceImageUrl.startsWith("data:")) {
+    const match = sourceImageUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.*)$/);
+    if (match) {
+      inlineImage = { inlineData: { mimeType: match[1] || "image/png", data: match[2] } };
+    }
+  }
+
   const antigravityBody = {
     project: projectId,
     requestId: `image_gen/${Date.now()}/${randomUUID()}/0`,
@@ -1089,7 +1115,7 @@ async function handleGeminiImageGeneration({ model, providerConfig, body, creden
       contents: [
         {
           role: "user",
-          parts: [{ text: promptText }],
+          parts: [...(inlineImage ? [inlineImage] : []), { text: promptText }],
         },
       ],
       generationConfig: {
