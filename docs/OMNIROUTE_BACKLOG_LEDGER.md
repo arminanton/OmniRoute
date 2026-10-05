@@ -15,7 +15,7 @@ Single tracking file for upstream PRs, issues, discussions, and local integratio
 
 Earlier reports overstated completion and assigned incorrect meanings to some upstream IDs. Treat report summaries as leads, not verified facts. PR #15457, for example, concerns the Claude Code/OpenAI tool-history bridge, not a proven general canonical-JSON cache fix.
 
-Inventory is a historical snapshot, not the whole live backlog. Discussion inventory contains only the first 100 fetched records; remaining pages and comments still need review. Prior category counts were keyword estimates, not coverage guarantees.
+Current collected snapshot: 341 PRs, 338 non-PR issues, 519 discussions (1,198 unique records). All comment/review/reply manifests report complete evidence; collection does not mean substantive review. Historical ledger-only entries are retained, not counted in this snapshot. Prior category counts were keyword estimates, not coverage guarantees. Evidence and item-level reconciliation: `/home/ubuntu/_/omni/audit/coverage-reconciliation.json`; raw evidence: `/home/ubuntu/_/omni/audit/backlog/`.
 
 The committed version pins, broad thinking-budget removal, quota scoring change, and model-family context-limit guesses require review before release. A commit alone is not a validated fix.
 
@@ -831,6 +831,429 @@ The committed version pins, broad thinking-budget removal, quota scoring change,
 | Unverified type | #14313 | Referenced locally; upstream record not in snapshot | Considered; unverified | — |
 | Unverified type | #14329 | Referenced locally; upstream record not in snapshot | Considered; unverified | — |
 | Unverified type | #15690 | Referenced locally; upstream record not in snapshot | Considered; unverified | — |
+
+| Discussion | [#138](https://github.com/diegosouzapw/OmniRoute/discussions/138) | 👋 Welcome to OmniRoute Discussions! | Not reviewed | — |
+| Discussion | [#139](https://github.com/diegosouzapw/OmniRoute/discussions/139) | How do you configure OmniRoute for multi-provider failover? | Not reviewed | — |
+| Discussion | [#141](https://github.com/diegosouzapw/OmniRoute/discussions/141) | Is OmniRoute "safe" when it comes to Claude OAuth? | Not reviewed | — |
+| Discussion | [#162](https://github.com/diegosouzapw/OmniRoute/discussions/162) | Opencode Auth | Not reviewed | — |
+| Discussion | [#266](https://github.com/diegosouzapw/OmniRoute/discussions/266) | Multi-Modal Stream Handling | Not reviewed | — |
+| Discussion | [#267](https://github.com/diegosouzapw/OmniRoute/discussions/267) | Semantic Cache Privacy | Not reviewed | — |
+| Discussion | [#268](https://github.com/diegosouzapw/OmniRoute/discussions/268) | Header Spoofing Updates | Not reviewed | — |
+| Discussion | [#269](https://github.com/diegosouzapw/OmniRoute/discussions/269) | Error Propagation | Not reviewed | — |
+| Discussion | [#270](https://github.com/diegosouzapw/OmniRoute/discussions/270) | Logging & Auditing | Not reviewed | — |
+| Discussion | [#304](https://github.com/diegosouzapw/OmniRoute/discussions/304) | Add Provider LM Studio(local) | Not reviewed | — |
+| Discussion | [#305](https://github.com/diegosouzapw/OmniRoute/discussions/305) | Support for smart routing logic | Not reviewed | — |
+| Discussion | [#310](https://github.com/diegosouzapw/OmniRoute/discussions/310) | Login Travado | Not reviewed | — |
+| Discussion | [#430](https://github.com/diegosouzapw/OmniRoute/discussions/430) | Contribution roadmap — aligning on directions and next steps | Not reviewed | — |
+| Discussion | [#469](https://github.com/diegosouzapw/OmniRoute/discussions/469) | WhatsApp | Not reviewed | — |
+| Discussion | [#540](https://github.com/diegosouzapw/OmniRoute/discussions/540) | Per-model Combo Support | Not reviewed | — |
+| Discussion | [#564](https://github.com/diegosouzapw/OmniRoute/discussions/564) | Minimax oauth | Not reviewed | — |
+| Discussion | [#584](https://github.com/diegosouzapw/OmniRoute/discussions/584) | Codex Models Prompt Caching Support | Not reviewed | — |
+| Discussion | [#611](https://github.com/diegosouzapw/OmniRoute/discussions/611) | discord | Not reviewed | — |
+| Discussion | [#654](https://github.com/diegosouzapw/OmniRoute/discussions/654) | Additional Github actions that could be incorporated to the workflows? | Not reviewed | — |
+| Discussion | [#668](https://github.com/diegosouzapw/OmniRoute/discussions/668) | How do i handle the cli binaraies on a docker environment? | Not reviewed | — |
+| Discussion | [#669](https://github.com/diegosouzapw/OmniRoute/discussions/669) | Add support for Qoder Oauth | Not reviewed | — |
+| Discussion | [#675](https://github.com/diegosouzapw/OmniRoute/discussions/675) | Openclaw issue | Not reviewed | — |
+| Discussion | [#694](https://github.com/diegosouzapw/OmniRoute/discussions/694) | CLIProxyAPI & Omniroute Version Manager | Not reviewed | — |
+| Discussion | [#695](https://github.com/diegosouzapw/OmniRoute/discussions/695) | Are builds paused? | Not reviewed | — |
+| Discussion | [#714](https://github.com/diegosouzapw/OmniRoute/discussions/714) | Any fellow Void Linux user here? | Not reviewed | — |
+| Discussion | [#744](https://github.com/diegosouzapw/OmniRoute/discussions/744) | Antigravity OAuth experiences | Not reviewed | — |
+| Discussion | [#767](https://github.com/diegosouzapw/OmniRoute/discussions/767) | Builder ID: unlimited? | Not reviewed | — |
+| Discussion | [#845](https://github.com/diegosouzapw/OmniRoute/discussions/845) | Suggestion - consolidate and don't vibe code the project into breaking changes just to keep up the pace | Not reviewed | — |
+| Discussion | [#852](https://github.com/diegosouzapw/OmniRoute/discussions/852) | Qwen OAuth Authorization Issue in OmniRoute - Non-functional Integration | Not reviewed | — |
+| Discussion | [#897](https://github.com/diegosouzapw/OmniRoute/discussions/897) | Has there been a removal of round robin toggle within a provider? | Not reviewed | — |
+| Discussion | [#919](https://github.com/diegosouzapw/OmniRoute/discussions/919) | LKGP (Last Known Good Providers) | Not reviewed | — |
+| Discussion | [#1008](https://github.com/diegosouzapw/OmniRoute/discussions/1008) | Opencode Go subscription | Not reviewed | — |
+| Discussion | [#1035](https://github.com/diegosouzapw/OmniRoute/discussions/1035) | Page for playground LLM | Not reviewed | — |
+| Discussion | [#1084](https://github.com/diegosouzapw/OmniRoute/discussions/1084) | Providers as plugins/addons? | Not reviewed | — |
+| Discussion | [#1113](https://github.com/diegosouzapw/OmniRoute/discussions/1113) | What the best practice for setting combo on one model but multiple accounts | Not reviewed | — |
+| Discussion | [#1127](https://github.com/diegosouzapw/OmniRoute/discussions/1127) | How do i import my backups? | Not reviewed | — |
+| Discussion | [#1134](https://github.com/diegosouzapw/OmniRoute/discussions/1134) | Proposal: Add a Stable Release Channel | Not reviewed | — |
+| Discussion | [#1138](https://github.com/diegosouzapw/OmniRoute/discussions/1138) | how to get opus from kiro? | Not reviewed | — |
+| Discussion | [#1139](https://github.com/diegosouzapw/OmniRoute/discussions/1139) | claude code | Not reviewed | — |
+| Discussion | [#1142](https://github.com/diegosouzapw/OmniRoute/discussions/1142) | This error occurs when you try to create an api key | Not reviewed | — |
+| Discussion | [#1143](https://github.com/diegosouzapw/OmniRoute/discussions/1143) | i cant login with the 123... password | Not reviewed | — |
+| Discussion | [#1147](https://github.com/diegosouzapw/OmniRoute/discussions/1147) | password error | Not reviewed | — |
+| Discussion | [#1169](https://github.com/diegosouzapw/OmniRoute/discussions/1169) | OpenClaw configuration | Not reviewed | — |
+| Discussion | [#1183](https://github.com/diegosouzapw/OmniRoute/discussions/1183) | Antigravity Credits | Not reviewed | — |
+| Discussion | [#1247](https://github.com/diegosouzapw/OmniRoute/discussions/1247) | Best way to handle multiple delivery windows for same route? | Not reviewed | — |
+| Discussion | [#1249](https://github.com/diegosouzapw/OmniRoute/discussions/1249) | How to update? | Not reviewed | — |
+| Discussion | [#1275](https://github.com/diegosouzapw/OmniRoute/discussions/1275) | Can't add Copilot provider | Not reviewed | — |
+| Discussion | [#1371](https://github.com/diegosouzapw/OmniRoute/discussions/1371) | How to add friend account in my panel? | Not reviewed | — |
+| Discussion | [#1372](https://github.com/diegosouzapw/OmniRoute/discussions/1372) | How to add friend account in my panel? | Not reviewed | — |
+| Discussion | [#1388](https://github.com/diegosouzapw/OmniRoute/discussions/1388) | "Configure Password" bug | Not reviewed | — |
+| Discussion | [#1395](https://github.com/diegosouzapw/OmniRoute/discussions/1395) | How can I see which exact model is being used for a request? | Not reviewed | — |
+| Discussion | [#1428](https://github.com/diegosouzapw/OmniRoute/discussions/1428) | Qwen Coder | Not reviewed | — |
+| Discussion | [#1451](https://github.com/diegosouzapw/OmniRoute/discussions/1451) | How can I start MITM server with npm omniroute? | Not reviewed | — |
+| Discussion | [#1502](https://github.com/diegosouzapw/OmniRoute/discussions/1502) | Generate Image using Oauth OpenAI | Not reviewed | — |
+| Discussion | [#1525](https://github.com/diegosouzapw/OmniRoute/discussions/1525) | How-To: Integrate it to PicoClaw | Not reviewed | — |
+| Discussion | [#1543](https://github.com/diegosouzapw/OmniRoute/discussions/1543) | unsupported_country_region_territory (bug?) | Not reviewed | — |
+| Discussion | [#1552](https://github.com/diegosouzapw/OmniRoute/discussions/1552) | Tavily in combos | Not reviewed | — |
+| Discussion | [#1558](https://github.com/diegosouzapw/OmniRoute/discussions/1558) | waiting for gpt5.5 pls | Not reviewed | — |
+| Discussion | [#1561](https://github.com/diegosouzapw/OmniRoute/discussions/1561) | Problem with password setup (again) | Not reviewed | — |
+| Discussion | [#1567](https://github.com/diegosouzapw/OmniRoute/discussions/1567) | Proposal: API-first management for OmniRoute — management-scoped API keys & settings endpoints | Not reviewed | — |
+| Discussion | [#1583](https://github.com/diegosouzapw/OmniRoute/discussions/1583) | problem with codex | Not reviewed | — |
+| Discussion | [#1625](https://github.com/diegosouzapw/OmniRoute/discussions/1625) | Internal server error | Not reviewed | — |
+| Discussion | [#1651](https://github.com/diegosouzapw/OmniRoute/discussions/1651) | successfuly fixed grok web! | Not reviewed | — |
+| Discussion | [#1671](https://github.com/diegosouzapw/OmniRoute/discussions/1671) | Rate limit strangeness (works on OmniRoute 3.6.5, fails on 3.7.1) | Not reviewed | — |
+| Discussion | [#1688](https://github.com/diegosouzapw/OmniRoute/discussions/1688) | How to connect Cursor IDE as provider? How can I get Access Token? | Not reviewed | — |
+| Discussion | [#1698](https://github.com/diegosouzapw/OmniRoute/discussions/1698) | About ChatGPT Account Ban | Not reviewed | — |
+| Discussion | [#1747](https://github.com/diegosouzapw/OmniRoute/discussions/1747) | v3.7.3 | Not reviewed | — |
+| Discussion | [#1749](https://github.com/diegosouzapw/OmniRoute/discussions/1749) | Utilize chat.deepseek to be universal API | Not reviewed | — |
+| Discussion | [#1774](https://github.com/diegosouzapw/OmniRoute/discussions/1774) | Regarding bug #1773 - I'm getting 'SQLITE_ERROR' and I don't know why | Not reviewed | — |
+| Discussion | [#1780](https://github.com/diegosouzapw/OmniRoute/discussions/1780) | v3.7.4 | Not reviewed | — |
+| Discussion | [#1795](https://github.com/diegosouzapw/OmniRoute/discussions/1795) | Routing between combos | Not reviewed | — |
+| Discussion | [#1809](https://github.com/diegosouzapw/OmniRoute/discussions/1809) | Kiro limits | Not reviewed | — |
+| Discussion | [#1835](https://github.com/diegosouzapw/OmniRoute/discussions/1835) | DEVIN AI | Not reviewed | — |
+| Discussion | [#1908](https://github.com/diegosouzapw/OmniRoute/discussions/1908) | Error Termux | Not reviewed | — |
+| Discussion | [#1910](https://github.com/diegosouzapw/OmniRoute/discussions/1910) | Alternative to quota issue | Not reviewed | — |
+| Discussion | [#1911](https://github.com/diegosouzapw/OmniRoute/discussions/1911) | Issues with Kilo Code | Not reviewed | — |
+| Discussion | [#1912](https://github.com/diegosouzapw/OmniRoute/discussions/1912) | [Bug] ChatGPT Web provider validation always fails despite correct session token | Not reviewed | — |
+| Discussion | [#1913](https://github.com/diegosouzapw/OmniRoute/discussions/1913) | Time to drop node 20 support | Not reviewed | — |
+| Discussion | [#1922](https://github.com/diegosouzapw/OmniRoute/discussions/1922) | SQLite3 error persists during cloud sync after manual NPM installation | Not reviewed | — |
+| Discussion | [#1953](https://github.com/diegosouzapw/OmniRoute/discussions/1953) | Button Start Onboarding not working | Not reviewed | — |
+| Discussion | [#1983](https://github.com/diegosouzapw/OmniRoute/discussions/1983) | Compatibility requirements for OpenAI compatible API translation layer? | Not reviewed | — |
+| Discussion | [#1995](https://github.com/diegosouzapw/OmniRoute/discussions/1995) | All Claude accounts returning 429 Upstream on every model. Accounts have full quota | Not reviewed | — |
+| Discussion | [#2003](https://github.com/diegosouzapw/OmniRoute/discussions/2003) | Can you add api.airforce? | Not reviewed | — |
+| Discussion | [#2038](https://github.com/diegosouzapw/OmniRoute/discussions/2038) | What is "anonymous" session | Not reviewed | — |
+| Discussion | [#2064](https://github.com/diegosouzapw/OmniRoute/discussions/2064) | [Feature Request] Ability to disable API Compression on a API Actions basis | Not reviewed | — |
+| Discussion | [#2070](https://github.com/diegosouzapw/OmniRoute/discussions/2070) | Circuit breaker treats 429-rate-limit and 429-quota-exhausted the same | Not reviewed | — |
+| Discussion | [#2098](https://github.com/diegosouzapw/OmniRoute/discussions/2098) | How to increase Timed out cooldown from 20s to higher? | Not reviewed | — |
+| Discussion | [#2121](https://github.com/diegosouzapw/OmniRoute/discussions/2121) | Не получается получить новый ключ | Not reviewed | — |
+| Discussion | [#2126](https://github.com/diegosouzapw/OmniRoute/discussions/2126) | Can use windsurf | Not reviewed | — |
+| Discussion | [#2155](https://github.com/diegosouzapw/OmniRoute/discussions/2155) | I use Eggent and I can't use OmniRoute API and BaseURL | Not reviewed | — |
+| Discussion | [#2167](https://github.com/diegosouzapw/OmniRoute/discussions/2167) | When I press the button, nothing happens. v3.7.9 | Not reviewed | — |
+| Discussion | [#2174](https://github.com/diegosouzapw/OmniRoute/discussions/2174) | Error accessing OmniRoute | Not reviewed | — |
+| Discussion | [#2175](https://github.com/diegosouzapw/OmniRoute/discussions/2175) | Proxies Not Working | Not reviewed | — |
+| Discussion | [#2186](https://github.com/diegosouzapw/OmniRoute/discussions/2186) | How to connect provider without API key? | Not reviewed | — |
+| Discussion | [#2200](https://github.com/diegosouzapw/OmniRoute/discussions/2200) | Guide on how to get cookies for ChatGPT Web, Grok Web, Perplexity Web, Blackbox Web | Not reviewed | — |
+| Discussion | [#2212](https://github.com/diegosouzapw/OmniRoute/discussions/2212) | Combos only using the top 3-5 models. Can I have it use more/explore more? | Not reviewed | — |
+| Discussion | [#2220](https://github.com/diegosouzapw/OmniRoute/discussions/2220) | How do I add a model backed by AWS Bedrock | Not reviewed | — |
+| Discussion | [#2237](https://github.com/diegosouzapw/OmniRoute/discussions/2237) | How to properly setup thinking and how to know if a model supports it? | Not reviewed | — |
+| Discussion | [#2244](https://github.com/diegosouzapw/OmniRoute/discussions/2244) | QODER Provider not connect | Not reviewed | — |
+| Discussion | [#2301](https://github.com/diegosouzapw/OmniRoute/discussions/2301) | How to deploy it using Cloudflare Workers | Not reviewed | — |
+| Discussion | [#2304](https://github.com/diegosouzapw/OmniRoute/discussions/2304) | Qwen doesn't connect | Not reviewed | — |
+| Discussion | [#2311](https://github.com/diegosouzapw/OmniRoute/discussions/2311) | I have errors with Cline and Qoder providers. | Not reviewed | — |
+| Discussion | [#2320](https://github.com/diegosouzapw/OmniRoute/discussions/2320) | [ERROR] [429]: Too many requests, please wait before trying again. | Not reviewed | — |
+| Discussion | [#2371](https://github.com/diegosouzapw/OmniRoute/discussions/2371) | [ERROR] [429]: Too many requests, please wait before trying again. | Not reviewed | — |
+| Discussion | [#2372](https://github.com/diegosouzapw/OmniRoute/discussions/2372) | I have made a dashboard on ESP32-C6 and 2.0TFT screen to monitoring OmniRoute usage | Not reviewed | — |
+| Discussion | [#2410](https://github.com/diegosouzapw/OmniRoute/discussions/2410) | API Error: 400 [400]: Improperly formed request. | Not reviewed | — |
+| Discussion | [#2413](https://github.com/diegosouzapw/OmniRoute/discussions/2413) | how to force routing? | Not reviewed | — |
+| Discussion | [#2416](https://github.com/diegosouzapw/OmniRoute/discussions/2416) | Connection failed при добавлении кастомного OpenAI-compatible провайдера (CORS?) | Not reviewed | — |
+| Discussion | [#2426](https://github.com/diegosouzapw/OmniRoute/discussions/2426) | Missing 3.8.0 for Docker deployment. | Not reviewed | — |
+| Discussion | [#2450](https://github.com/diegosouzapw/OmniRoute/discussions/2450) | DeepSeek Web Provider | Not reviewed | — |
+| Discussion | [#2475](https://github.com/diegosouzapw/OmniRoute/discussions/2475) | ominroute server is not booting | Not reviewed | — |
+| Discussion | [#2505](https://github.com/diegosouzapw/OmniRoute/discussions/2505) | Gemini-web | Not reviewed | — |
+| Discussion | [#2507](https://github.com/diegosouzapw/OmniRoute/discussions/2507) | Gemini Google AI STUIO 404 | Not reviewed | — |
+| Discussion | [#2510](https://github.com/diegosouzapw/OmniRoute/discussions/2510) | How can I connect OmniRoute with multiple ChatGPT Plus accounts (GPT-5.5) to the Codex App on Windows 11? | Not reviewed | — |
+| Discussion | [#2555](https://github.com/diegosouzapw/OmniRoute/discussions/2555) | How to save more than 300 logs? | Not reviewed | — |
+| Discussion | [#2566](https://github.com/diegosouzapw/OmniRoute/discussions/2566) | How to use Cursor | Not reviewed | — |
+| Discussion | [#2623](https://github.com/diegosouzapw/OmniRoute/discussions/2623) | GEMINI (Google AI Studio) MODEL PULL | Not reviewed | — |
+| Discussion | [#2651](https://github.com/diegosouzapw/OmniRoute/discussions/2651) | Anthropic models disappeared from Antigravity provider | Not reviewed | — |
+| Discussion | [#2664](https://github.com/diegosouzapw/OmniRoute/discussions/2664) | API Error: 400 [400]: Improperly formed request. | Not reviewed | — |
+| Discussion | [#2679](https://github.com/diegosouzapw/OmniRoute/discussions/2679) | [Feature Request] Add Qwen Web Cookie Provider (for Qwen 3.7 Max) | Not reviewed | — |
+| Discussion | [#2680](https://github.com/diegosouzapw/OmniRoute/discussions/2680) | [BUG] [deepseek-web] 502 Error: DeepSeek error: onmessage is not defined | Not reviewed | — |
+| Discussion | [#2682](https://github.com/diegosouzapw/OmniRoute/discussions/2682) | [Feature Request] Add Z.ai (GLM) Web Cookie Provider (for GLM 5.1) | Not reviewed | — |
+| Discussion | [#2683](https://github.com/diegosouzapw/OmniRoute/discussions/2683) | [Feature Request] Add Kimi Web Cookie Provider (for Kimi K2.6) | Not reviewed | — |
+| Discussion | [#2684](https://github.com/diegosouzapw/OmniRoute/discussions/2684) | [Feature Request] Add MiniMax Web Cookie Provider (for MiniMax M2.7) | Not reviewed | — |
+| Discussion | [#2696](https://github.com/diegosouzapw/OmniRoute/discussions/2696) | [Question] Best practices for removing duplicate installation and setting up simple updates (config migration) | Not reviewed | — |
+| Discussion | [#2698](https://github.com/diegosouzapw/OmniRoute/discussions/2698) | n8n connect | Not reviewed | — |
+| Discussion | [#2716](https://github.com/diegosouzapw/OmniRoute/discussions/2716) | proxy | Not reviewed | — |
+| Discussion | [#2735](https://github.com/diegosouzapw/OmniRoute/discussions/2735) | Latest release docker image | Not reviewed | — |
+| Discussion | [#2754](https://github.com/diegosouzapw/OmniRoute/discussions/2754) | When you try to add any provider (Kiro AI and others) through the Dashboard, a modal window appears that loads endlessly and never loads the form. The same thing happens when checking the proxy speed. | Not reviewed | — |
+| Discussion | [#2762](https://github.com/diegosouzapw/OmniRoute/discussions/2762) | Bug reasoning omni + opencode | Not reviewed | — |
+| Discussion | [#2779](https://github.com/diegosouzapw/OmniRoute/discussions/2779) | Documentation Docker Compose | Not reviewed | — |
+| Discussion | [#2794](https://github.com/diegosouzapw/OmniRoute/discussions/2794) | [BUG] DeepSeek Web Cookie Provider fails to translate Tool Calls (Function Calling) back to OpenAI format | Not reviewed | — |
+| Discussion | [#2829](https://github.com/diegosouzapw/OmniRoute/discussions/2829) | [BUG] Wrong model keeps getting called (gpt-5.5-medium instead of gpt-5.5-xhigh) | Not reviewed | — |
+| Discussion | [#2879](https://github.com/diegosouzapw/OmniRoute/discussions/2879) | Claude models produce very long “Thinking” output in Vietnamese and cannot process images through OmniRoute | Not reviewed | — |
+| Discussion | [#2892](https://github.com/diegosouzapw/OmniRoute/discussions/2892) | Using ccswitch to configure how to intelligently switch models in claudecode | Not reviewed | — |
+| Discussion | [#2898](https://github.com/diegosouzapw/OmniRoute/discussions/2898) | Add Notion Provider Support | Not reviewed | — |
+| Discussion | [#2906](https://github.com/diegosouzapw/OmniRoute/discussions/2906) | Adding a custom model claude-opus-4.8 to the KiroAI provider. | Not reviewed | — |
+| Discussion | [#2925](https://github.com/diegosouzapw/OmniRoute/discussions/2925) | [Proof of Concept] Enabling Agentic Tool-Calling & Persistent Memory on deepseek-web | Not reviewed | — |
+| Discussion | [#3001](https://github.com/diegosouzapw/OmniRoute/discussions/3001) | ollamacloud | Not reviewed | — |
+| Discussion | [#3038](https://github.com/diegosouzapw/OmniRoute/discussions/3038) | Opencode Free | Not reviewed | — |
+| Discussion | [#3042](https://github.com/diegosouzapw/OmniRoute/discussions/3042) | Chatgpt OTP | Not reviewed | — |
+| Discussion | [#3117](https://github.com/diegosouzapw/OmniRoute/discussions/3117) | GitLab authentication is broken on startup (connection failed / internal server error) | Not reviewed | — |
+| Discussion | [#3168](https://github.com/diegosouzapw/OmniRoute/discussions/3168) | Having a hard time finding gemini 3.5 models inside omniroute | Not reviewed | — |
+| Discussion | [#3182](https://github.com/diegosouzapw/OmniRoute/discussions/3182) | Confused About the Differences in how credits work Between , Antigravity CLI, and Google AI Studio | Not reviewed | — |
+| Discussion | [#3293](https://github.com/diegosouzapw/OmniRoute/discussions/3293) | Remove Completions.me it is a rickroll api provider | Not reviewed | — |
+| Discussion | [#3328](https://github.com/diegosouzapw/OmniRoute/discussions/3328) | is mini max 3 blind on opencode provider | Not reviewed | — |
+| Discussion | [#3351](https://github.com/diegosouzapw/OmniRoute/discussions/3351) | Antigravity CLI Gemini not working with Claude Code? | Not reviewed | — |
+| Discussion | [#3356](https://github.com/diegosouzapw/OmniRoute/discussions/3356) | How i can resolve "Error short : an error occured" on dashboard/analytics | Not reviewed | — |
+| Discussion | [#3411](https://github.com/diegosouzapw/OmniRoute/discussions/3411) | [Goose] - [OmniRoute] Upstream returned an empty response. Please retry. | Not reviewed | — |
+| Discussion | [#3412](https://github.com/diegosouzapw/OmniRoute/discussions/3412) | OmniRoute Routing Mismatch | Not reviewed | — |
+| Discussion | [#3502](https://github.com/diegosouzapw/OmniRoute/discussions/3502) | [Goose] [OmniRoute] Upstream returned an empty response. Please retry. | Not reviewed | — |
+| Discussion | [#3548](https://github.com/diegosouzapw/OmniRoute/discussions/3548) | publicai.co does not seem to be free | Not reviewed | — |
+| Discussion | [#3549](https://github.com/diegosouzapw/OmniRoute/discussions/3549) | How to identify this as an error and then automatically switch to another model?  "The model does not exist in https://api.airforce discord.gg/airforce " | Not reviewed | — |
+| Discussion | [#3607](https://github.com/diegosouzapw/OmniRoute/discussions/3607) | The latest Antigravity models respond to 404 | Not reviewed | — |
+| Discussion | [#3737](https://github.com/diegosouzapw/OmniRoute/discussions/3737) | Update model | Not reviewed | — |
+| Discussion | [#3781](https://github.com/diegosouzapw/OmniRoute/discussions/3781) | I don't know where to get the cookie token for lmarena free and qwen web free | Not reviewed | — |
+| Discussion | [#3845](https://github.com/diegosouzapw/OmniRoute/discussions/3845) | [502]: This job timed out after 90000 ms / Stream ended before producing useful content | Not reviewed | — |
+| Discussion | [#3895](https://github.com/diegosouzapw/OmniRoute/discussions/3895) | Bug: Qwen Web (Free) provider integration issues (False-positive cookie validation, 502 & empty content errors) | Not reviewed | — |
+| Discussion | [#4040](https://github.com/diegosouzapw/OmniRoute/discussions/4040) | Feedback on Monolithic Bloat, Broken Routing, and Communication | Not reviewed | — |
+| Discussion | [#4090](https://github.com/diegosouzapw/OmniRoute/discussions/4090) | glm-5.2 on ollama cloud | Not reviewed | — |
+| Discussion | [#4241](https://github.com/diegosouzapw/OmniRoute/discussions/4241) | web cookies provider always failed | Not reviewed | — |
+| Discussion | [#4261](https://github.com/diegosouzapw/OmniRoute/discussions/4261) | How to use CLI Code's feature | Not reviewed | — |
+| Discussion | [#4263](https://github.com/diegosouzapw/OmniRoute/discussions/4263) | Log Usage Removed | Not reviewed | — |
+| Discussion | [#4404](https://github.com/diegosouzapw/OmniRoute/discussions/4404) | [HuggingFace] [No credentials for provider: openai-compatible-responses] | Not reviewed | — |
+| Discussion | [#4444](https://github.com/diegosouzapw/OmniRoute/discussions/4444) | Current assessment? | Not reviewed | — |
+| Discussion | [#4470](https://github.com/diegosouzapw/OmniRoute/discussions/4470) | Qoder PAT and OAUTH | Not reviewed | — |
+| Discussion | [#4520](https://github.com/diegosouzapw/OmniRoute/discussions/4520) | Problem with updating/installing Omniroute from npm | Not reviewed | — |
+| Discussion | [#4601](https://github.com/diegosouzapw/OmniRoute/discussions/4601) | Does Antigravity-IDE work with Agent-bridge? | Not reviewed | — |
+| Discussion | [#4672](https://github.com/diegosouzapw/OmniRoute/discussions/4672) | Readme claims "kr/claude-sonnet-4.5 ← FREE, unlimited (never fails)" .. Seems untrue? | Not reviewed | — |
+| Discussion | [#4673](https://github.com/diegosouzapw/OmniRoute/discussions/4673) | Does this work for the Codex VSCode Extension? | Not reviewed | — |
+| Discussion | [#4724](https://github.com/diegosouzapw/OmniRoute/discussions/4724) | Error 502 crashes the API | Not reviewed | — |
+| Discussion | [#4744](https://github.com/diegosouzapw/OmniRoute/discussions/4744) | v3.8.34 crashout after running from .exe | Not reviewed | — |
+| Discussion | [#4924](https://github.com/diegosouzapw/OmniRoute/discussions/4924) | Not working Onboarding wizard | Not reviewed | — |
+| Discussion | [#4984](https://github.com/diegosouzapw/OmniRoute/discussions/4984) | mimo-auto illegal access | Not reviewed | — |
+| Discussion | [#4995](https://github.com/diegosouzapw/OmniRoute/discussions/4995) | Looking for public OmniRoute MCP startup failure logs to test safe failure-window extraction | Not reviewed | — |
+| Discussion | [#5000](https://github.com/diegosouzapw/OmniRoute/discussions/5000) | antigravity | Not reviewed | — |
+| Discussion | [#5001](https://github.com/diegosouzapw/OmniRoute/discussions/5001) | Could you please tell me when KiroAi's quota resets? | Not reviewed | — |
+| Discussion | [#5098](https://github.com/diegosouzapw/OmniRoute/discussions/5098) | v3.8.37 not working onboarding wizard | Not reviewed | — |
+| Discussion | [#5099](https://github.com/diegosouzapw/OmniRoute/discussions/5099) | How to setup fallback provider for a single model? | Not reviewed | — |
+| Discussion | [#5561](https://github.com/diegosouzapw/OmniRoute/discussions/5561) | Is there any stable version? | Not reviewed | — |
+| Discussion | [#5700](https://github.com/diegosouzapw/OmniRoute/discussions/5700) | model prefix `codex/` vs `cx/` | Not reviewed | — |
+| Discussion | [#5710](https://github.com/diegosouzapw/OmniRoute/discussions/5710) | Easy way to only enable selected providers? | Not reviewed | — |
+| Discussion | [#5718](https://github.com/diegosouzapw/OmniRoute/discussions/5718) | Why codexSessionAffinityTtlMs is 0 by default? | Not reviewed | — |
+| Discussion | [#5814](https://github.com/diegosouzapw/OmniRoute/discussions/5814) | how to get API from inputed provider? | Not reviewed | — |
+| Discussion | [#5862](https://github.com/diegosouzapw/OmniRoute/discussions/5862) | Disable builtin "auto-routing catalog"? | Not reviewed | — |
+| Discussion | [#5864](https://github.com/diegosouzapw/OmniRoute/discussions/5864) | Why is `CLI Fingerprint Matching` not enabled by default? | Not reviewed | — |
+| Discussion | [#5900](https://github.com/diegosouzapw/OmniRoute/discussions/5900) | Q&A: OpenCode vs Claude Code with OmniRoute — which coding agent do you recommend? | Not reviewed | — |
+| Discussion | [#5930](https://github.com/diegosouzapw/OmniRoute/discussions/5930) | Avast removing README.md | Not reviewed | — |
+| Discussion | [#5951](https://github.com/diegosouzapw/OmniRoute/discussions/5951) | GitLab Duo / claude-fable-5 route does not support OpenAI tool calls; Hermes Agent stops after plain text instead of receiving tool_calls | Not reviewed | — |
+| Discussion | [#6068](https://github.com/diegosouzapw/OmniRoute/discussions/6068) | The size of this Docker container is truly terrifying. | Not reviewed | — |
+| Discussion | [#6094](https://github.com/diegosouzapw/OmniRoute/discussions/6094) | [Help] Cert is already added to Keychain but not trusted on MacOs. | Not reviewed | — |
+| Discussion | [#6096](https://github.com/diegosouzapw/OmniRoute/discussions/6096) | image analysis capabilities | Not reviewed | — |
+| Discussion | [#6100](https://github.com/diegosouzapw/OmniRoute/discussions/6100) | Beginner questions about Omnirouter + Freebuff | Not reviewed | — |
+| Discussion | [#6121](https://github.com/diegosouzapw/OmniRoute/discussions/6121) | How to get debug logs printed to console? | Not reviewed | — |
+| Discussion | [#6129](https://github.com/diegosouzapw/OmniRoute/discussions/6129) | Help: [400]: A 'system' message can only appear at index 0 of the messages array. Move it to the start of the conversation. | Not reviewed | — |
+| Discussion | [#6157](https://github.com/diegosouzapw/OmniRoute/discussions/6157) | Provider Quota Ai Studio | Not reviewed | — |
+| Discussion | [#6175](https://github.com/diegosouzapw/OmniRoute/discussions/6175) | Default APP_LOG_FILE_PATH ? | Not reviewed | — |
+| Discussion | [#6179](https://github.com/diegosouzapw/OmniRoute/discussions/6179) | How to connect qoder models on remotely deployed instance of omniroute? | Not reviewed | — |
+| Discussion | [#6185](https://github.com/diegosouzapw/OmniRoute/discussions/6185) | Congrats on 11K stars 🎉 | Not reviewed | — |
+| Discussion | [#6201](https://github.com/diegosouzapw/OmniRoute/discussions/6201) | Does encrypted reasoning affect the cache? | Not reviewed | — |
+| Discussion | [#6217](https://github.com/diegosouzapw/OmniRoute/discussions/6217) | Gitlab Tool-calls now returned, but the agent gets stuck in a call loop instead of progressing (+ occasional formatting glitches) | Not reviewed | — |
+| Discussion | [#6243](https://github.com/diegosouzapw/OmniRoute/discussions/6243) | The 'high-availability' model is not supported when using Codex with a ChatGPT account. | Not reviewed | — |
+| Discussion | [#6266](https://github.com/diegosouzapw/OmniRoute/discussions/6266) | carrer | Not reviewed | — |
+| Discussion | [#6350](https://github.com/diegosouzapw/OmniRoute/discussions/6350) | mcp/a2a gateway | Not reviewed | — |
+| Discussion | [#6357](https://github.com/diegosouzapw/OmniRoute/discussions/6357) | 🙏 SWITCHING BETWEEN API KEYS | Not reviewed | — |
+| Discussion | [#6573](https://github.com/diegosouzapw/OmniRoute/discussions/6573) | Omniroute Internal Server Error | Not reviewed | — |
+| Discussion | [#6575](https://github.com/diegosouzapw/OmniRoute/discussions/6575) | dd | Not reviewed | — |
+| Discussion | [#6585](https://github.com/diegosouzapw/OmniRoute/discussions/6585) | Omniroute WSL2 Local Agent Detection | Not reviewed | — |
+| Discussion | [#6633](https://github.com/diegosouzapw/OmniRoute/discussions/6633) | About ~/.omniroute/mitm/server.crt | Not reviewed | — |
+| Discussion | [#6639](https://github.com/diegosouzapw/OmniRoute/discussions/6639) | Easy way to export auth files via cli? | Not reviewed | — |
+| Discussion | [#6746](https://github.com/diegosouzapw/OmniRoute/discussions/6746) | Is Free Provider Rankings REAL? | Not reviewed | — |
+| Discussion | [#6767](https://github.com/diegosouzapw/OmniRoute/discussions/6767) | 404 Not Found and 429 Rate Limit errors for v0-vercel/v0-1.5-md even with protection enabled | Not reviewed | — |
+| Discussion | [#6770](https://github.com/diegosouzapw/OmniRoute/discussions/6770) | How the new "native proxy-pool round-robin / egress IP rotation" works? | Not reviewed | — |
+| Discussion | [#6775](https://github.com/diegosouzapw/OmniRoute/discussions/6775) | After update omniroute i got error additionalModelRequestFields is not supported for this model (kiro sonnet 4.5) | Not reviewed | — |
+| Discussion | [#6861](https://github.com/diegosouzapw/OmniRoute/discussions/6861) | Unable to load the dashboard | Not reviewed | — |
+| Discussion | [#6910](https://github.com/diegosouzapw/OmniRoute/discussions/6910) | How to update GPT models in the CodeX provider? | Not reviewed | — |
+| Discussion | [#6941](https://github.com/diegosouzapw/OmniRoute/discussions/6941) | Enable Caveman skill by default | Not reviewed | — |
+| Discussion | [#6956](https://github.com/diegosouzapw/OmniRoute/discussions/6956) | How to Improve build times and save disk space and network bandwidth | Not reviewed | — |
+| Discussion | [#7019](https://github.com/diegosouzapw/OmniRoute/discussions/7019) | The installation process is overly complicated. windows11, wsl2, all failed. | Not reviewed | — |
+| Discussion | [#7043](https://github.com/diegosouzapw/OmniRoute/discussions/7043) | Windows GUI Manager & Installer for OmniRoute | Not reviewed | — |
+| Discussion | [#7126](https://github.com/diegosouzapw/OmniRoute/discussions/7126) | After install, the new issue is coming ... the task stopped automatically without any notification or any prompts. | Not reviewed | — |
+| Discussion | [#7142](https://github.com/diegosouzapw/OmniRoute/discussions/7142) | Just tried to use web cookie providers (Claude and Gemini) as a model on Opencode | Not reviewed | — |
+| Discussion | [#7144](https://github.com/diegosouzapw/OmniRoute/discussions/7144) | Windows 11 x64: versions after 3.8.44 fail with black screen and HTTP 500 when using existing storage.sqlite | Not reviewed | — |
+| Discussion | [#7150](https://github.com/diegosouzapw/OmniRoute/discussions/7150) | OmniRoute is featured in Repository Radar PR#38 📡 | Not reviewed | — |
+| Discussion | [#7343](https://github.com/diegosouzapw/OmniRoute/discussions/7343) | How to use effort and thinking parameters in UI - not shown? | Not reviewed | — |
+| Discussion | [#7345](https://github.com/diegosouzapw/OmniRoute/discussions/7345) | [BUG] macOS Electron desktop app is completely broken: instrumentation hook fails with ERR_MODULE_NOT_FOUND for every externalized package | Not reviewed | — |
+| Discussion | [#7487](https://github.com/diegosouzapw/OmniRoute/discussions/7487) | Kimi K3 Coming out, Started implanting | Not reviewed | — |
+| Discussion | [#7491](https://github.com/diegosouzapw/OmniRoute/discussions/7491) | Free contribution: Omniroute-LIMPAKUS browser extension for OmniRoute users | Not reviewed | — |
+| Discussion | [#7554](https://github.com/diegosouzapw/OmniRoute/discussions/7554) | Hugging face chat provider not able to add. | Not reviewed | — |
+| Discussion | [#7593](https://github.com/diegosouzapw/OmniRoute/discussions/7593) | How to use codex cli with NVIDIA NIM ? | Not reviewed | — |
+| Discussion | [#7741](https://github.com/diegosouzapw/OmniRoute/discussions/7741) | Qwen 3.8 Spotted now | Not reviewed | — |
+| Discussion | [#7783](https://github.com/diegosouzapw/OmniRoute/discussions/7783) | When will there be a full-fledged guide on how to connect a provider via Web Cookie Providers? | Not reviewed | — |
+| Discussion | [#7792](https://github.com/diegosouzapw/OmniRoute/discussions/7792) | some bugs | Not reviewed | — |
+| Discussion | [#7850](https://github.com/diegosouzapw/OmniRoute/discussions/7850) | How to use Copilot BizChat correctly | Not reviewed | — |
+| Discussion | [#7877](https://github.com/diegosouzapw/OmniRoute/discussions/7877) | Is Claude supposed to work without extra usage? | Not reviewed | — |
+| Discussion | [#7931](https://github.com/diegosouzapw/OmniRoute/discussions/7931) | npm fix | Not reviewed | — |
+| Discussion | [#7947](https://github.com/diegosouzapw/OmniRoute/discussions/7947) | After enabling CCR/Session Dedup, AI doesn't know how to retrieve original content by hash | Not reviewed | — |
+| Discussion | [#8012](https://github.com/diegosouzapw/OmniRoute/discussions/8012) | Compression and embedding models | Not reviewed | — |
+| Discussion | [#8103](https://github.com/diegosouzapw/OmniRoute/discussions/8103) | Is it by default? PROVIDER_COOLDOWN_ENABLED=false | Not reviewed | — |
+| Discussion | [#8130](https://github.com/diegosouzapw/OmniRoute/discussions/8130) | error using Claude desktop | Not reviewed | — |
+| Discussion | [#8172](https://github.com/diegosouzapw/OmniRoute/discussions/8172) | gemini-code assistant is useless now | Not reviewed | — |
+| Discussion | [#8191](https://github.com/diegosouzapw/OmniRoute/discussions/8191) | Is it just me or translated docs are not translated at all? | Not reviewed | — |
+| Discussion | [#8253](https://github.com/diegosouzapw/OmniRoute/discussions/8253) | How do I enable some free tier providers? | Not reviewed | — |
+| Discussion | [#8267](https://github.com/diegosouzapw/OmniRoute/discussions/8267) | Ponytail? | Not reviewed | — |
+| Discussion | [#8273](https://github.com/diegosouzapw/OmniRoute/discussions/8273) | O OmniRoute está excessivamente inchado, fragmentado e seguindo uma direção errada | Not reviewed | — |
+| Discussion | [#8288](https://github.com/diegosouzapw/OmniRoute/discussions/8288) | When will v3.4.48 crash be fixed? | Not reviewed | — |
+| Discussion | [#8351](https://github.com/diegosouzapw/OmniRoute/discussions/8351) | Using main image to fix `Invalid value: 'output_text'.` but it's not helping | Not reviewed | — |
+| Discussion | [#8352](https://github.com/diegosouzapw/OmniRoute/discussions/8352) | Provider card back-navigating updates | Not reviewed | — |
+| Discussion | [#8373](https://github.com/diegosouzapw/OmniRoute/discussions/8373) | Disable compression per API key (not per-request) | Not reviewed | — |
+| Discussion | [#8398](https://github.com/diegosouzapw/OmniRoute/discussions/8398) | Login is not work | Not reviewed | — |
+| Discussion | [#8556](https://github.com/diegosouzapw/OmniRoute/discussions/8556) | New Release? | Not reviewed | — |
+| Discussion | [#8625](https://github.com/diegosouzapw/OmniRoute/discussions/8625) | url updates with search filter in Providers page | Not reviewed | — |
+| Discussion | [#8670](https://github.com/diegosouzapw/OmniRoute/discussions/8670) | API Error: 400 Ambiguous model 'claude-opus-4-8'. | Not reviewed | — |
+| Discussion | [#8671](https://github.com/diegosouzapw/OmniRoute/discussions/8671) | web cookie connected models not work | Not reviewed | — |
+| Discussion | [#8672](https://github.com/diegosouzapw/OmniRoute/discussions/8672) | Not importing the Opus 5 model | Not reviewed | — |
+| Discussion | [#8683](https://github.com/diegosouzapw/OmniRoute/discussions/8683) | Set pricing for custom models | Not reviewed | — |
+| Discussion | [#8737](https://github.com/diegosouzapw/OmniRoute/discussions/8737) | Error encounter 400 | Not reviewed | — |
+| Discussion | [#8742](https://github.com/diegosouzapw/OmniRoute/discussions/8742) | OmniRoute installation | Not reviewed | — |
+| Discussion | [#8745](https://github.com/diegosouzapw/OmniRoute/discussions/8745) | ● API Error: 400 InvokeModelWithResponseStream: operation error Bedrock Runtime: InvokeModelWithResponseStream, https response error StatusCode: 400, RequestID: c75af3a2-46dc-4242-9d85-031caf6ec39e, ValidationException: ***.***.***.***.***.thinking: Field required (request id: 2026072705071775339101flAO3Gf3) (request id: 202607270507032191156724o976cFa) [trace_id=c141877c6ce90859ffe5587486349bff] (request id: 20260727130700711928810fjf28YjI2YVOm) first i need how to fix this issue,does both agentrouter and omniroute same | Not reviewed | — |
+| Discussion | [#8754](https://github.com/diegosouzapw/OmniRoute/discussions/8754) | Omniroute shows $0.0267 estimated costs after just saying hello to Kiro... | Not reviewed | — |
+| Discussion | [#8761](https://github.com/diegosouzapw/OmniRoute/discussions/8761) | CLI-code tool for codex writes wrong  value in config on reset | Not reviewed | — |
+| Discussion | [#8822](https://github.com/diegosouzapw/OmniRoute/discussions/8822) | Does this tool conflict with the CC switch? | Not reviewed | — |
+| Discussion | [#8832](https://github.com/diegosouzapw/OmniRoute/discussions/8832) | Antigravity +5 account | Not reviewed | — |
+| Discussion | [#8840](https://github.com/diegosouzapw/OmniRoute/discussions/8840) | Intelligent auto purpose | Not reviewed | — |
+| Discussion | [#8850](https://github.com/diegosouzapw/OmniRoute/discussions/8850) | OmniRoute ACP Custom-Agent Remote Code Execution | Not reviewed | — |
+| Discussion | [#8881](https://github.com/diegosouzapw/OmniRoute/discussions/8881) | BUG OrcaRouter | Not reviewed | — |
+| Discussion | [#8896](https://github.com/diegosouzapw/OmniRoute/discussions/8896) | I created a combo but i can't assign/find it on Opencode | Not reviewed | — |
+| Discussion | [#8898](https://github.com/diegosouzapw/OmniRoute/discussions/8898) | I'm really having a hardtime using this Omniroute | Not reviewed | — |
+| Discussion | [#8920](https://github.com/diegosouzapw/OmniRoute/discussions/8920) | Omniroute configuration is too complex. Is there any easy way to SRE? | Not reviewed | — |
+| Discussion | [#8924](https://github.com/diegosouzapw/OmniRoute/discussions/8924) | Omniroute size is so huge -> 3Gb !!!!!!! | Not reviewed | — |
+| Discussion | [#8937](https://github.com/diegosouzapw/OmniRoute/discussions/8937) | Add New Provider and Fix Old Provider | Not reviewed | — |
+| Discussion | [#8952](https://github.com/diegosouzapw/OmniRoute/discussions/8952) | Claude Max account blocked for "Suspicious Behavior" when used behind an internal AI gateway | Not reviewed | — |
+| Discussion | [#8963](https://github.com/diegosouzapw/OmniRoute/discussions/8963) | No models or connection bug | Not reviewed | — |
+| Discussion | [#9019](https://github.com/diegosouzapw/OmniRoute/discussions/9019) | Github models Dead, time to move Microsoft Foundry | Not reviewed | — |
+| Discussion | [#9127](https://github.com/diegosouzapw/OmniRoute/discussions/9127) | lmarena.ai account adding problem | Not reviewed | — |
+| Discussion | [#9129](https://github.com/diegosouzapw/OmniRoute/discussions/9129) | Strategic Intervention Material Week 5 | Not reviewed | — |
+| Discussion | [#9188](https://github.com/diegosouzapw/OmniRoute/discussions/9188) | HOW CAN I INSTALL IT | Not reviewed | — |
+| Discussion | [#9216](https://github.com/diegosouzapw/OmniRoute/discussions/9216) | Kiro AI upstream ban | Not reviewed | — |
+| Discussion | [#9220](https://github.com/diegosouzapw/OmniRoute/discussions/9220) | Providers added automatically | Not reviewed | — |
+| Discussion | [#9263](https://github.com/diegosouzapw/OmniRoute/discussions/9263) | How to enable to show the email addresses? | Not reviewed | — |
+| Discussion | [#9265](https://github.com/diegosouzapw/OmniRoute/discussions/9265) | Can someone confirm if Omniroute has already fixed the token invalid or revoked issue on OpenAI Codex and for the Antigravity "Antigravity quota API authentication expired. Chat may still work." | Not reviewed | — |
+| Discussion | [#9267](https://github.com/diegosouzapw/OmniRoute/discussions/9267) | Qoder unavailable (502) | Not reviewed | — |
+| Discussion | [#9285](https://github.com/diegosouzapw/OmniRoute/discussions/9285) | how to add reasoning effort in opencode zen free models? | Not reviewed | — |
+| Discussion | [#9302](https://github.com/diegosouzapw/OmniRoute/discussions/9302) | sabari college final list | Not reviewed | — |
+| Discussion | [#9331](https://github.com/diegosouzapw/OmniRoute/discussions/9331) | The Login is not working | Not reviewed | — |
+| Discussion | [#9352](https://github.com/diegosouzapw/OmniRoute/discussions/9352) | oauth callback URL always is localhost even using public vps and setting NEXT_PUBLIC_BASE_URL-ENV | Not reviewed | — |
+| Discussion | [#9426](https://github.com/diegosouzapw/OmniRoute/discussions/9426) | LMArena config with session cookie is not working | Not reviewed | — |
+| Discussion | [#9434](https://github.com/diegosouzapw/OmniRoute/discussions/9434) | Claude models API key missing issue | Not reviewed | — |
+| Discussion | [#9450](https://github.com/diegosouzapw/OmniRoute/discussions/9450) | API Error: 400 Ambiguous model 'claude-sonnet-5'. Use provider/model prefix (ex: anthropic/claude-sonnet-5 or lma/claude-sonnet-5). | Not reviewed | — |
+| Discussion | [#9516](https://github.com/diegosouzapw/OmniRoute/discussions/9516) | zed ide import error | Not reviewed | — |
+| Discussion | [#9583](https://github.com/diegosouzapw/OmniRoute/discussions/9583) | QWEN WEB RETURN EMPTY CONTENT ERROR | Not reviewed | — |
+| Discussion | [#9607](https://github.com/diegosouzapw/OmniRoute/discussions/9607) | Modular integration of additional free provider adapters from free-claude-code | Not reviewed | — |
+| Discussion | [#9636](https://github.com/diegosouzapw/OmniRoute/discussions/9636) | MITM?? | Not reviewed | — |
+| Discussion | [#9690](https://github.com/diegosouzapw/OmniRoute/discussions/9690) | zero tokens, | Not reviewed | — |
+| Discussion | [#9700](https://github.com/diegosouzapw/OmniRoute/discussions/9700) | Help me to setup | Not reviewed | — |
+| Discussion | [#9739](https://github.com/diegosouzapw/OmniRoute/discussions/9739) | Delete | Not reviewed | — |
+| Discussion | [#9767](https://github.com/diegosouzapw/OmniRoute/discussions/9767) | Antigravity Models states Bash : No such tools available | Not reviewed | — |
+| Discussion | [#9823](https://github.com/diegosouzapw/OmniRoute/discussions/9823) | Break claude code token limits - Kiroai | Not reviewed | — |
+| Discussion | [#9831](https://github.com/diegosouzapw/OmniRoute/discussions/9831) | Memory Management in Omniroute and Optimization of CCR Searches in Hermes Agent | Not reviewed | — |
+| Discussion | [#9915](https://github.com/diegosouzapw/OmniRoute/discussions/9915) | Add model scoring and penalty mechanism | Not reviewed | — |
+| Discussion | [#9930](https://github.com/diegosouzapw/OmniRoute/discussions/9930) | when will v3.8.50 will be released | Not reviewed | — |
+| Discussion | [#10006](https://github.com/diegosouzapw/OmniRoute/discussions/10006) | 0 of 15 modals working.............. | Not reviewed | — |
+| Discussion | [#10008](https://github.com/diegosouzapw/OmniRoute/discussions/10008) | CHATGPT WILL BE FREE | Not reviewed | — |
+| Discussion | [#10027](https://github.com/diegosouzapw/OmniRoute/discussions/10027) | Antygravity pede cooldown de mais de 50 horas para resetar e outros provedores com erros como: 422, 502 e 503 | Not reviewed | — |
+| Discussion | [#10035](https://github.com/diegosouzapw/OmniRoute/discussions/10035) | VIDEO | Not reviewed | — |
+| Discussion | [#10069](https://github.com/diegosouzapw/OmniRoute/discussions/10069) | API Error: 400 [400]: Requests ending with a model turn are not supported. | Not reviewed | — |
+| Discussion | [#10073](https://github.com/diegosouzapw/OmniRoute/discussions/10073) | What is the cache impact on Compression Settings tab? | Not reviewed | — |
+| Discussion | [#10106](https://github.com/diegosouzapw/OmniRoute/discussions/10106) | Could TS7 compatibility be checked before release changes are merged? | Not reviewed | — |
+| Discussion | [#10129](https://github.com/diegosouzapw/OmniRoute/discussions/10129) | How to configure Modal.com | Not reviewed | — |
+| Discussion | [#10163](https://github.com/diegosouzapw/OmniRoute/discussions/10163) | API Error: 503 | Not reviewed | — |
+| Discussion | [#10164](https://github.com/diegosouzapw/OmniRoute/discussions/10164) | How to setup force fallback for error 400 Command code | Not reviewed | — |
+| Discussion | [#10173](https://github.com/diegosouzapw/OmniRoute/discussions/10173) | Feature request: Add support for Antigravity CLI (agi) as a CLI-Code tool | Not reviewed | — |
+| Discussion | [#10191](https://github.com/diegosouzapw/OmniRoute/discussions/10191) | New models founded | Not reviewed | — |
+| Discussion | [#10267](https://github.com/diegosouzapw/OmniRoute/discussions/10267) | Proposal: Provider Manager — codegen add/remove for the registry (evidence: PR #10186) | Not reviewed | — |
+| Discussion | [#10269](https://github.com/diegosouzapw/OmniRoute/discussions/10269) | No chance to test REALLY free models w/o subscriptions? | Not reviewed | — |
+| Discussion | [#10294](https://github.com/diegosouzapw/OmniRoute/discussions/10294) | new to github | Not reviewed | — |
+| Discussion | [#10298](https://github.com/diegosouzapw/OmniRoute/discussions/10298) | need help understanding everthing | Not reviewed | — |
+| Discussion | [#10338](https://github.com/diegosouzapw/OmniRoute/discussions/10338) | Claude Code OAuth expires every day and after OmniRoute restart — expected behavior? | Not reviewed | — |
+| Discussion | [#10355](https://github.com/diegosouzapw/OmniRoute/discussions/10355) | Snapshot an auto combo so user can tweak it | Not reviewed | — |
+| Discussion | [#10361](https://github.com/diegosouzapw/OmniRoute/discussions/10361) | qwen-web models return "error: Provider returned empty content" | Not reviewed | — |
+| Discussion | [#10368](https://github.com/diegosouzapw/OmniRoute/discussions/10368) | How to setup for beginner to get the claude for free or any Ai model? | Not reviewed | — |
+| Discussion | [#10377](https://github.com/diegosouzapw/OmniRoute/discussions/10377) | error when i add account in chatgpt web(codex) | Not reviewed | — |
+| Discussion | [#10412](https://github.com/diegosouzapw/OmniRoute/discussions/10412) | Daily routine | Not reviewed | — |
+| Discussion | [#10414](https://github.com/diegosouzapw/OmniRoute/discussions/10414) | Pop up Msg Asks Claude code can be used with Subscription (despite having installed Omniroute free providers ) | Not reviewed | — |
+| Discussion | [#10439](https://github.com/diegosouzapw/OmniRoute/discussions/10439) | Release 3.8.50 ZED | Not reviewed | — |
+| Discussion | [#10440](https://github.com/diegosouzapw/OmniRoute/discussions/10440) | 🤖 OmniRoute on Android via Termux — one-command launcher (omnicode) + full setup writeup | Not reviewed | — |
+| Discussion | [#10480](https://github.com/diegosouzapw/OmniRoute/discussions/10480) | Time to Eliminate Gemini 3.5 3.6 Flash | Not reviewed | — |
+| Discussion | [#10526](https://github.com/diegosouzapw/OmniRoute/discussions/10526) | Where are internal features/bugs tracked under /implement-fix-bugs workflow? | Not reviewed | — |
+| Discussion | [#10576](https://github.com/diegosouzapw/OmniRoute/discussions/10576) | What is the best settings for Oh-My-Openagent? | Not reviewed | — |
+| Discussion | [#10580](https://github.com/diegosouzapw/OmniRoute/discussions/10580) | Is it possible to use OmniRoute as the AI model/API layer for a custom chatbot embedded on a website? | Not reviewed | — |
+| Discussion | [#10611](https://github.com/diegosouzapw/OmniRoute/discussions/10611) | Hermes Agent `/model` hot-swap fails with OmniRoute, and NVIDIA NIM DeepSeek V4 Flash collapses to XML output before context window limit | Not reviewed | — |
+| Discussion | [#10619](https://github.com/diegosouzapw/OmniRoute/discussions/10619) | Does `ChatGPT Web (Plus/Pro)` also work for free accounts? | Not reviewed | — |
+| Discussion | [#10624](https://github.com/diegosouzapw/OmniRoute/discussions/10624) | New ChatGPT Web models coming soon | Not reviewed | — |
+| Discussion | [#10669](https://github.com/diegosouzapw/OmniRoute/discussions/10669) | Release cadence | Not reviewed | — |
+| Discussion | [#10675](https://github.com/diegosouzapw/OmniRoute/discussions/10675) | Token-level usage limits (quotas) to block expired keys | Not reviewed | — |
+| Discussion | [#10678](https://github.com/diegosouzapw/OmniRoute/discussions/10678) | OmniRoute + OpenCode Zen (Free Tier) constantly hitting rate limits | Not reviewed | — |
+| Discussion | [#10754](https://github.com/diegosouzapw/OmniRoute/discussions/10754) | Server did not respond within 60s | Not reviewed | — |
+| Discussion | [#10845](https://github.com/diegosouzapw/OmniRoute/discussions/10845) | Release v3.8.50 | Not reviewed | — |
+| Discussion | [#10864](https://github.com/diegosouzapw/OmniRoute/discussions/10864) | stuck start running omniroute, please help | Not reviewed | — |
+| Discussion | [#10937](https://github.com/diegosouzapw/OmniRoute/discussions/10937) | Follow-up on Security Advisory Progress and Confirmation of Next Steps | Not reviewed | — |
+| Discussion | [#10938](https://github.com/diegosouzapw/OmniRoute/discussions/10938) | [BUG] `Missing key provider.omniroute.models.{model}.limit.output` | Not reviewed | — |
+| Discussion | [#10975](https://github.com/diegosouzapw/OmniRoute/discussions/10975) | Cline Models Won't Work | Not reviewed | — |
+| Discussion | [#11112](https://github.com/diegosouzapw/OmniRoute/discussions/11112) | ChaosSearch - search combos | Not reviewed | — |
+| Discussion | [#11115](https://github.com/diegosouzapw/OmniRoute/discussions/11115) | 0 connection displaying for me | Not reviewed | — |
+| Discussion | [#11121](https://github.com/diegosouzapw/OmniRoute/discussions/11121) | How to setup kiro AI | Not reviewed | — |
+| Discussion | [#11127](https://github.com/diegosouzapw/OmniRoute/discussions/11127) | claude through omniroute | Not reviewed | — |
+| Discussion | [#11131](https://github.com/diegosouzapw/OmniRoute/discussions/11131) | User account management and model list enabling/disabling | Not reviewed | — |
+| Discussion | [#11273](https://github.com/diegosouzapw/OmniRoute/discussions/11273) | [Bug? 3.8.50] Hidden models still show up in v1/models list | Not reviewed | — |
+| Discussion | [#11349](https://github.com/diegosouzapw/OmniRoute/discussions/11349) | Comment brancher omniroute a Code Claude | Not reviewed | — |
+| Discussion | [#11373](https://github.com/diegosouzapw/OmniRoute/discussions/11373) | [422]: Missing Google projectId for Antigravity account. Auto-discovery via loadCodeAssist found no Cloud Code project. Please reconnect OAuth in Providers → Antigravity (and ensure the Google account has completed Gemini Code Assist onboarding). | Not reviewed | — |
+| Discussion | [#11395](https://github.com/diegosouzapw/OmniRoute/discussions/11395) | How can we use MonkeyCode via Omniroute | Not reviewed | — |
+| Discussion | [#11416](https://github.com/diegosouzapw/OmniRoute/discussions/11416) | INVESTISSEMENT EN ALGERIE | Not reviewed | — |
+| Discussion | [#11422](https://github.com/diegosouzapw/OmniRoute/discussions/11422) | Tool calls fail with "No such tool available: bash/websearch" —on v3.8.49 | Not reviewed | — |
+| Discussion | [#11424](https://github.com/diegosouzapw/OmniRoute/discussions/11424) | cré moi une aplication mobile E-FGA pour indemnisé les accidentée de la voix publique et digitalisé les constats routiers  comforme ohada et cema  véhicule non assuré, délit de fuite  en inter operabilite avec les assurances pour suivre leur dossier, la police/gendarmerie pour valider les PV , usage pour sa déclaration de constat , un reçu numérique délivré avec un numéro unique. les sapeurs pompiers s'il des blessé  avec un registre national des accidents digitalisé, | Not reviewed | — |
+| Discussion | [#11447](https://github.com/diegosouzapw/OmniRoute/discussions/11447) | Energy Efficiency | Not reviewed | — |
+| Discussion | [#11451](https://github.com/diegosouzapw/OmniRoute/discussions/11451) | How to use fusion? | Not reviewed | — |
+| Discussion | [#11457](https://github.com/diegosouzapw/OmniRoute/discussions/11457) | Discord is spammed with a bunch of spam bots | Not reviewed | — |
+| Discussion | [#11472](https://github.com/diegosouzapw/OmniRoute/discussions/11472) | [403]: Claude Web API error (403) | Not reviewed | — |
+| Discussion | [#11612](https://github.com/diegosouzapw/OmniRoute/discussions/11612) | LOR | Not reviewed | — |
+| Discussion | [#11645](https://github.com/diegosouzapw/OmniRoute/discussions/11645) | Update Omniroute | Not reviewed | — |
+| Discussion | [#11648](https://github.com/diegosouzapw/OmniRoute/discussions/11648) | Diff Context | Not reviewed | — |
+| Discussion | [#11693](https://github.com/diegosouzapw/OmniRoute/discussions/11693) | Design: consolidate Antigravity catalogs + family-based pricing (zero-edit model launches) | Not reviewed | — |
+| Discussion | [#11697](https://github.com/diegosouzapw/OmniRoute/discussions/11697) | how do i get Vision models to work, what should i add? | Not reviewed | — |
+| Discussion | [#11717](https://github.com/diegosouzapw/OmniRoute/discussions/11717) | Proposal: Native DeepSeek Family Routing — V4 Flash/Pro + Dynamic Reasoning Effort | Not reviewed | — |
+| Discussion | [#11730](https://github.com/diegosouzapw/OmniRoute/discussions/11730) | What's the benefits and their differences of export/import database and export/import json? | Not reviewed | — |
+| Discussion | [#11765](https://github.com/diegosouzapw/OmniRoute/discussions/11765) | Open code | Not reviewed | — |
+| Discussion | [#11769](https://github.com/diegosouzapw/OmniRoute/discussions/11769) | Proposal: Provider Model Catalog v2 — canonical identities, visibility boundaries, and generated contracts | Not reviewed | — |
+| Discussion | [#11778](https://github.com/diegosouzapw/OmniRoute/discussions/11778) | Please merge this PR | Not reviewed | — |
+| Discussion | [#11785](https://github.com/diegosouzapw/OmniRoute/discussions/11785) | (502) ERROR IN Z.AI WEB | Not reviewed | — |
+| Discussion | [#11788](https://github.com/diegosouzapw/OmniRoute/discussions/11788) | Failed to resolve release metadata: 403 error in chatgpt-web | Not reviewed | — |
+| Discussion | [#11793](https://github.com/diegosouzapw/OmniRoute/discussions/11793) | When will be version 3.8.50 fully released? | Not reviewed | — |
+| Discussion | [#11820](https://github.com/diegosouzapw/OmniRoute/discussions/11820) | Error "No active credentials for provider" | Not reviewed | — |
+| Discussion | [#11831](https://github.com/diegosouzapw/OmniRoute/discussions/11831) | How to setup Devin CLI in Omniroute? | Not reviewed | — |
+| Discussion | [#11898](https://github.com/diegosouzapw/OmniRoute/discussions/11898) | HUGGINGFACE SPACE | Not reviewed | — |
+| Discussion | [#11913](https://github.com/diegosouzapw/OmniRoute/discussions/11913) | Omniroute is not available on NPM | Not reviewed | — |
+| Discussion | [#11939](https://github.com/diegosouzapw/OmniRoute/discussions/11939) | Issue With Claude Code | Not reviewed | — |
+| Discussion | [#12039](https://github.com/diegosouzapw/OmniRoute/discussions/12039) | Free token grant dashboard | Not reviewed | — |
+| Discussion | [#12040](https://github.com/diegosouzapw/OmniRoute/discussions/12040) | AppImage for latest v3.8.50 is not published, hence ArchLinux package is stale now | Not reviewed | — |
+| Discussion | [#12077](https://github.com/diegosouzapw/OmniRoute/discussions/12077) | Électronique | Not reviewed | — |
+| Discussion | [#12088](https://github.com/diegosouzapw/OmniRoute/discussions/12088) | PR #11784 — Waiting for review or is there a blocker? | Not reviewed | — |
+| Discussion | [#12100](https://github.com/diegosouzapw/OmniRoute/discussions/12100) | [Proposal] Restore common ChatGPT Web via a documented clean-room implementation | Not reviewed | — |
+| Discussion | [#12119](https://github.com/diegosouzapw/OmniRoute/discussions/12119) | Baoli | Not reviewed | — |
+| Discussion | [#12153](https://github.com/diegosouzapw/OmniRoute/discussions/12153) | omniroute 3.8.50 Backup fails | Not reviewed | — |
+| Discussion | [#12195](https://github.com/diegosouzapw/OmniRoute/discussions/12195) | Free Combo Preset | Not reviewed | — |
+| Discussion | [#12238](https://github.com/diegosouzapw/OmniRoute/discussions/12238) | Guide to use Omnicopilot | Not reviewed | — |
+| Discussion | [#12384](https://github.com/diegosouzapw/OmniRoute/discussions/12384) | Auto Routing Control Plane — a synthesis roadmap for auto/* | Not reviewed | — |
+| Discussion | [#12483](https://github.com/diegosouzapw/OmniRoute/discussions/12483) | Why dose it take too long to publish new versions for the pnpm instaltion? | Not reviewed | — |
+| Discussion | [#12490](https://github.com/diegosouzapw/OmniRoute/discussions/12490) | Proposal: Consider a complete migration from npm to pnpm | Not reviewed | — |
+| Discussion | [#12582](https://github.com/diegosouzapw/OmniRoute/discussions/12582) | How to add new Gemini 3.8 flash to the list? | Not reviewed | — |
+| Discussion | [#12625](https://github.com/diegosouzapw/OmniRoute/discussions/12625) | umm open code not working | Not reviewed | — |
+| Discussion | [#12716](https://github.com/diegosouzapw/OmniRoute/discussions/12716) | Best combo for cost-per-task optimization with cache priority + fast inference? | Not reviewed | — |
+| Discussion | [#12728](https://github.com/diegosouzapw/OmniRoute/discussions/12728) | How to change model context window per session? | Not reviewed | — |
+| Discussion | [#12752](https://github.com/diegosouzapw/OmniRoute/discussions/12752) | Omniroute LTS | Not reviewed | — |
+| Discussion | [#12757](https://github.com/diegosouzapw/OmniRoute/discussions/12757) | Keyword routing/model groups, possible already? | Not reviewed | — |
+| Discussion | [#12824](https://github.com/diegosouzapw/OmniRoute/discussions/12824) | Is Degoog As Web_Search Tool Possible? | Not reviewed | — |
+| Discussion | [#12840](https://github.com/diegosouzapw/OmniRoute/discussions/12840) | PR Preference? | Not reviewed | — |
+| Discussion | [#12924](https://github.com/diegosouzapw/OmniRoute/discussions/12924) | Proposal: Make Node 24 the minimum to match our TS7 modernization and reduce runtime overhead | Not reviewed | — |
+| Discussion | [#12936](https://github.com/diegosouzapw/OmniRoute/discussions/12936) | Add EU Sovereign Routers + Models / Filter by Model Training | Not reviewed | — |
+| Discussion | [#12943](https://github.com/diegosouzapw/OmniRoute/discussions/12943) | New Provider: GreenPT | Not reviewed | — |
+| Discussion | [#12944](https://github.com/diegosouzapw/OmniRoute/discussions/12944) | New Provider: EURouter | Not reviewed | — |
+| Discussion | [#13028](https://github.com/diegosouzapw/OmniRoute/discussions/13028) | Error while using omni route api | Not reviewed | — |
+| Discussion | [#13039](https://github.com/diegosouzapw/OmniRoute/discussions/13039) | Opencode-Zen Plugin update | Not reviewed | — |
+| Discussion | [#13049](https://github.com/diegosouzapw/OmniRoute/discussions/13049) | Support for ChatGPT Business team/workspace accounts with the Codex OAuth provider | Not reviewed | — |
+| Discussion | [#13086](https://github.com/diegosouzapw/OmniRoute/discussions/13086) | Error | Not reviewed | — |
+| Discussion | [#13181](https://github.com/diegosouzapw/OmniRoute/discussions/13181) | gitlab duo agent | Not reviewed | — |
+| Discussion | [#13186](https://github.com/diegosouzapw/OmniRoute/discussions/13186) | ## Round Robin not cycling across multiple accounts of the same provider | Not reviewed | — |
+| Discussion | [#13208](https://github.com/diegosouzapw/OmniRoute/discussions/13208) | unexpected status 503 Service Unavailable: Service temporarily unavailable: all targets were skipped by pre-dispatch filters | Not reviewed | — |
+| Discussion | [#13310](https://github.com/diegosouzapw/OmniRoute/discussions/13310) | How can I identify unknown clients using my provider accounts? | Not reviewed | — |
+| Discussion | [#13346](https://github.com/diegosouzapw/OmniRoute/discussions/13346) | Bag request agentrouter glm-5.3 | Not reviewed | — |
+| Discussion | [#13360](https://github.com/diegosouzapw/OmniRoute/discussions/13360) | how to get omni route and how to run it | Not reviewed | — |
+| Discussion | [#13366](https://github.com/diegosouzapw/OmniRoute/discussions/13366) | Need help. For jailbreak | Not reviewed | — |
+| Discussion | [#13393](https://github.com/diegosouzapw/OmniRoute/discussions/13393) | Site Web | Not reviewed | — |
+| Discussion | [#13458](https://github.com/diegosouzapw/OmniRoute/discussions/13458) | Omniroute not installing | Not reviewed | — |
+| Discussion | [#13465](https://github.com/diegosouzapw/OmniRoute/discussions/13465) | help me setup omnirout its bugged for me plsss | Not reviewed | — |
+| Discussion | [#13517](https://github.com/diegosouzapw/OmniRoute/discussions/13517) | QoderCLI Provider 499 error | Not reviewed | — |
+| Discussion | [#13559](https://github.com/diegosouzapw/OmniRoute/discussions/13559) | High Latency and Delay in Model Combos for Large Project Contexts | Not reviewed | — |
+| Discussion | [#13629](https://github.com/diegosouzapw/OmniRoute/discussions/13629) | NO AVAILABLE PROVIDERS WHY? | Not reviewed | — |
+| Discussion | [#13830](https://github.com/diegosouzapw/OmniRoute/discussions/13830) | eot | Not reviewed | — |
+| Discussion | [#13869](https://github.com/diegosouzapw/OmniRoute/discussions/13869) | Anthropic oauth account ban - thanks Omniroute!! | Not reviewed | — |
+| Issue | [#15534](https://github.com/diegosouzapw/OmniRoute/issues/15534) | [BUG] combo codex -> claude fallback: codex encrypted reasoning forwarded as a Claude thinking block with a non-empty foreign signature (400 Invalid signature), still on v3.8.51 | Not reviewed | — |
+| PR | [#15532](https://github.com/diegosouzapw/OmniRoute/pull/15532) | fix(dashboard): mobile-first layout for the dashboard and shared responsive primitives | Not reviewed | — |
+| PR | [#15533](https://github.com/diegosouzapw/OmniRoute/pull/15533) | fix(reasoning): preserve explicit opt-outs through OpenAI-compatible gateways | Not reviewed | — |
 
 ## Local changes without an upstream item mapping
 
