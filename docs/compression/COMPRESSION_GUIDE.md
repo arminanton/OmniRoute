@@ -454,8 +454,8 @@ keeps code blocks, file paths, commands, errors and URLs exact. The `terse-prose
 `applyOutputStyles()` (`open-sse/services/compression/outputStyles/apply.ts`) resolves
 the selection against the catalog (unknown ids and locale-mismatched styles are
 dropped, never an error), concatenates the selected instructions in catalog order,
-appends the boundaries clause **once** (plus the safety clause, `SAFETY_BOUNDARIES` or its
-translation, when `less-code` or `ponytail` is selected), and starts the block with a
+appends the boundaries clause **once** (plus the shared safety clause or its translation,
+when `less-code` or `ponytail` is selected), and starts the block with a
 single idempotency marker (`[OmniRoute Output Styles]`), so re-applying is a no-op. When
 the resolved language (see Language selection below) has a translation, the localized
 instruction is injected instead of English.
