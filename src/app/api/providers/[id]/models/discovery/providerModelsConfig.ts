@@ -1,10 +1,10 @@
 import { getAntigravityModelsDiscoveryUrls } from "@omniroute/open-sse/config/antigravityUpstream.ts";
 import {
-  GROK_BUILD_DEFAULT_CONTEXT_WINDOW,
   getGrokBuildModelsHeaders,
   GROK_BUILD_MODELS_URL,
   GROK_BUILD_SUPPORTED_REASONING_EFFORTS,
 } from "@omniroute/open-sse/config/grokBuild.ts";
+import { grok_cliProvider } from "@omniroute/open-sse/config/providers/registry/grok-cli/index.ts";
 import { getAntigravityContentHeaders } from "@omniroute/open-sse/services/antigravityHeaders.ts";
 import { parseGeminiModelsList } from "@/lib/providerModels/geminiModelsParser";
 import { buildClaudeModelsHeaders } from "@/lib/providerModels/claudeModelsHeaders";
@@ -130,11 +130,9 @@ export type ProviderModelsConfigEntry = {
 export function assembleProviderModelsHeaders(
   config: ProviderModelsConfigEntry,
   token: string,
-  context?: ProviderModelsHeaderContext,
+  context?: ProviderModelsHeaderContext
 ): Record<string, string> {
-  const headers = config.buildHeaders
-    ? config.buildHeaders(token, context)
-    : { ...config.headers };
+  const headers = config.buildHeaders ? config.buildHeaders(token, context) : { ...config.headers };
   if (!config.buildHeaders && config.authHeader && !config.authQuery) {
     headers[config.authHeader] = (config.authPrefix || "") + token;
   }
@@ -247,6 +245,32 @@ function grokBuildPositiveNumber(...values: unknown[]): number | undefined {
   );
 }
 
+// Prefer the maintained per-model catalog over Grok Build's blanket context window.
+const GROK_CLI_REGISTRY_CONTEXT_BY_ID = new Map<string, number>(
+  grok_cliProvider.models.flatMap((model) => {
+    const window = model.contextLength;
+    return typeof window === "number" && Number.isInteger(window) && window > 0
+      ? ([[model.id, window]] as Array<[string, number]>)
+      : [];
+  })
+);
+
+function resolveGrokBuildInputTokenLimit(
+  model: GrokBuildModelRecord,
+  metadata: GrokBuildModelRecord,
+  id: string
+): number | undefined {
+  return (
+    GROK_CLI_REGISTRY_CONTEXT_BY_ID.get(id) ??
+    grokBuildPositiveNumber(
+      model.contextWindow,
+      model.context_window,
+      metadata.contextWindow,
+      metadata.totalContextTokens
+    )
+  );
+}
+
 function getGrokBuildModelItems(data: unknown): unknown[] {
   const envelope = asGrokBuildRecord(data);
   if (Array.isArray(data)) return data;
@@ -339,13 +363,7 @@ function normalizeGrokBuildModel(value: unknown): GrokBuildModelRecord | null {
   // here would route their request shape to the wrong upstream endpoint.
   if (backend !== "responses") return null;
 
-  const inputTokenLimit =
-    grokBuildPositiveNumber(
-      model.contextWindow,
-      model.context_window,
-      metadata.contextWindow,
-      metadata.totalContextTokens
-    ) || GROK_BUILD_DEFAULT_CONTEXT_WINDOW;
+  const inputTokenLimit = resolveGrokBuildInputTokenLimit(model, metadata, id);
   const outputTokenLimit = grokBuildPositiveNumber(
     model.maxCompletionTokens,
     model.max_completion_tokens
@@ -359,7 +377,7 @@ function normalizeGrokBuildModel(value: unknown): GrokBuildModelRecord | null {
     name: grokBuildString(model.name, id) || id,
     owned_by: "grok-cli",
     ...(description ? { description } : {}),
-    inputTokenLimit,
+    ...(typeof inputTokenLimit === "number" ? { inputTokenLimit } : {}),
     ...(outputTokenLimit ? { outputTokenLimit } : {}),
     ...(supportsThinking ? { supportsThinking: true } : {}),
     ...(supportedThinkingEfforts.length > 0 ? { supportedThinkingEfforts } : {}),

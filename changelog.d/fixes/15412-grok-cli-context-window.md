@@ -1,0 +1,1 @@
+- **fix(grok-cli):** prefer vetted per-model context windows over the blanket discovery value; remove stale auto-discovery pins when upstream omits a window (#15412).

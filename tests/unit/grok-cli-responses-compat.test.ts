@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import { grok_cliProvider } from "../../open-sse/config/providers/registry/grok-cli/index.ts";
 import {
-  GROK_BUILD_DEFAULT_CONTEXT_WINDOW,
   getGrokBuildClientVersion,
   getGrokBuildUserAgent,
   GROK_BUILD_MODELS_URL,
@@ -185,9 +184,25 @@ test("grok-cli live model discovery uses the authenticated session contract", ()
       id: "session-only-alias",
       name: "Session Only",
       owned_by: "grok-cli",
-      inputTokenLimit: GROK_BUILD_DEFAULT_CONTEXT_WINDOW,
       apiFormat: "responses",
       supportedEndpoints: ["responses"],
     },
   ]);
+});
+
+test("grok-cli discovery prefers per-model registry windows", () => {
+  const config = PROVIDER_MODELS_CONFIG["grok-cli"];
+  const models = config.parseResponse({
+    data: [
+      { id: "grok-4.6", contextWindow: 256000, apiBackend: "responses" },
+      { id: "grok-4.5", apiBackend: "responses" },
+      { id: "grok-next-build", contextWindow: 256000, apiBackend: "responses" },
+      { id: "session-only-alias", apiBackend: "responses" },
+    ],
+  });
+  const byId = Object.fromEntries(models.map((model) => [model.id, model]));
+  assert.equal(byId["grok-4.6"].inputTokenLimit, 500000);
+  assert.equal(byId["grok-4.5"].inputTokenLimit, 500000);
+  assert.equal(byId["grok-next-build"].inputTokenLimit, 256000);
+  assert.equal("inputTokenLimit" in byId["session-only-alias"], false);
 });

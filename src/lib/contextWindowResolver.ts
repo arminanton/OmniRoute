@@ -52,7 +52,13 @@ export function reconcileContextWindows(
   for (const { provider, modelId, window } of discovered) {
     result.scanned++;
     if (!provider || !modelId) continue;
-    if (typeof window !== "number" || !Number.isInteger(window) || window <= 0) continue;
+    if (typeof window !== "number" || !Number.isInteger(window) || window <= 0) {
+      if (deps.getExistingSource(provider, modelId) === "auto:discovery") {
+        deps.removeOverride(provider, modelId);
+        result.removed++;
+      }
+      continue;
+    }
 
     const existingSource = deps.getExistingSource(provider, modelId);
     if (existingSource === "manual") {
