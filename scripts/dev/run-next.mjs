@@ -8,6 +8,7 @@ import { bootstrapEnv } from "../build/bootstrap-env.mjs";
 import { resolveRuntimePorts, withRuntimePortEnv } from "../build/runtime-env.mjs";
 import { createOmnirouteWsBridge } from "./v1-ws-bridge.mjs";
 import { createResponsesWsProxy } from "./responses-ws-proxy.mjs";
+import { createNextUpgradeRelay } from "./next-upgrade-relay.mjs";
 import { ensurePeerStampToken, stampPeerIp } from "./peer-stamp.mjs";
 import methodGuard from "./http-method-guard.cjs";
 import headResponseGuard from "./head-response-guard.cjs";
@@ -16,10 +17,7 @@ import { isTurbopackCacheCorruption, purgeAllTurbopackCaches } from "./turbopack
 import { randomUUID } from "node:crypto";
 import { getMainServerTimeoutConfig } from "./main-server-timeouts.mjs";
 import { createSystemdNotifier } from "./systemd-notify.mjs";
-import {
-  attachRequestStreamGuards,
-  installProcessCrashGuard,
-} from "./httpClientAbortGuard.mjs";
+import { attachRequestStreamGuards, installProcessCrashGuard } from "./httpClientAbortGuard.mjs";
 
 const { maybeHandleDisallowedMethod } = methodGuard;
 const { wrapRequestListenerWithHeadResponseGuard } = headResponseGuard;
@@ -126,6 +124,10 @@ ensurePeerStampToken();
 if (!useTurbopack) {
   delete process.env.TURBOPACK;
 }
+// Next attaches its own upgrade listener to `httpServer` (default: the server of the first
+// request), which would end upgrades the dispatcher below already owns (/v1/responses, /v1/ws).
+// See next-upgrade-relay.mjs.
+const nextUpgradeRelay = createNextUpgradeRelay();
 function createNextApp() {
   return next({
     dev,
@@ -134,6 +136,7 @@ function createNextApp() {
     port: dashboardPort,
     turbopack: useTurbopack,
     webpack: !useTurbopack,
+    httpServer: nextUpgradeRelay.target,
   });
 }
 
@@ -218,6 +221,8 @@ async function start() {
       if (responsesWsHandled) return;
       const handled = await wsBridge.handleUpgrade(req, socket, head);
       if (handled) return;
+      // Next's router upgrade handler (dev HMR) — only for upgrades nothing above claimed.
+      if (nextUpgradeRelay.forward(req, socket, head)) return;
       await upgradeHandler(req, socket, head);
     } catch (error) {
       if (!socket.destroyed) {
