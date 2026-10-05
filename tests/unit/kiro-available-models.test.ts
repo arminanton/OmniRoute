@@ -117,6 +117,29 @@ test("fetchKiroAvailableModels carries upstream prompt-caching metadata to model
   }
 });
 
+test("Kiro discovery omits an invented context window when upstream omits it", async () => {
+  const fetchImpl = (async () =>
+    jsonResponse({
+      models: [
+        { modelId: "claude-sonnet-5" },
+        { modelId: "claude-sonnet-4.6", tokenLimits: { maxInputTokens: 200000 } },
+      ],
+    })) as unknown as typeof fetch;
+
+  const result = await fetchKiroAvailableModels({
+    accessToken: "tok",
+    providerSpecificData: {},
+    fetchImpl,
+    fallbackModels: FALLBACK,
+  });
+
+  const omitted = result.models.filter((model) => model.upstreamModelId === "claude-sonnet-5");
+  const declared = result.models.filter((model) => model.upstreamModelId === "claude-sonnet-4.6");
+  assert.ok(omitted.length > 0 && declared.length > 0);
+  for (const model of omitted) assert.equal("contextLength" in model, false);
+  for (const model of declared) assert.equal(model.contextLength, 200000);
+});
+
 test("resolveKiroRegion prefers stored region, then profileArn, else us-east-1", () => {
   assert.equal(resolveKiroRegion({ region: "eu-central-1" }), "eu-central-1");
   assert.equal(

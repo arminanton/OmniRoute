@@ -1,0 +1,1 @@
+- **fix(kiro):** omit undisclosed input limits instead of inventing a 200k context window (#15413).
