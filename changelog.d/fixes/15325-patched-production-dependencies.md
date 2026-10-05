@@ -1,1 +1,1 @@
-- **security(deps):** pin IBM Cloud SDK to the patched root Axios release and update patched production dependencies; Docker-bundled npm tools are tracked separately pending lock-safe update (#15325).
+- **security(deps):** patch the Next.js ImageResponse RCE, force patched Axios for IBM Cloud SDK, update DOMPurify/gRPC-js, and refresh the isolated Docker npm tool tree against bundled-package CVEs (#15325). High/moderate audit advisories remain tracked.

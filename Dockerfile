@@ -30,10 +30,10 @@ RUN --mount=type=cache,id=s/92ca8a61-c1ba-421f-a389-d48ac7258c2d-apt-cache,targe
 # /usr/local/lib/node_modules/npm/node_modules and reports 9 HIGH/MEDIUM CVEs.
 #
 # Refreshing npm does NOT fix them. Measured on npm@12.0.2 (2026-08-12, latest):
-#   brace-expansion 5.0.7  (needs >= 5.0.9)   CVE-2026-69152, CVE-2026-14257
-#   ip-address      10.2.0 (needs >= 10.3.1)  CVE-2026-69192/-69198/-54272
-#   tar             7.5.19 (needs >= 7.5.21)  GHSA-r292-9mhp-454m
-#   undici          6.27.0 (needs >= 6.28.0)  CVE-2026-16729/-16728/-15157
+#   brace-expansion 5.0.7  (patched by 5.0.12) CVE-2026-69152, CVE-2026-14257
+#   ip-address      10.2.0 (patched by 10.7.3) CVE-2026-69192/-69198/-54272
+#   tar             7.5.19 (patched by 7.5.22) GHSA-r292-9mhp-454m
+#   undici          6.27.0 (patched by 6.29.0) CVE-2026-16729/-16728/-15157
 # Pin the complete npm12.1.0 closure and the four replacements in a private
 # integrity lock. The immutable image's bundled npm11.19.1 only bootstraps this
 # tree; every later install and runtime npm/npx uses the locked npm12.1.0.
@@ -46,7 +46,7 @@ RUN --network=none --mount=type=bind,from=npm-tool-tree,source=/tmp/docker-npm-t
   set -eux; \
   chmod 755 /opt/omniroute-docker-build; \
   node /opt/omniroute-docker-build/install-docker-npm-tree.mjs; \
-  node -e "const assert=require('node:assert/strict'); for (const [p,v] of Object.entries({'brace-expansion':'5.0.9','ip-address':'10.5.0','tar':'7.5.22','undici':'6.28.0'})) { assert.equal(require('/usr/local/lib/node_modules/npm/node_modules/'+p+'/package.json').version,v); console.log(p,v); }"; \
+  node -e "const assert=require('node:assert/strict'); for (const [p,v] of Object.entries({'brace-expansion':'5.0.12','ip-address':'10.7.3','tar':'7.5.22','undici':'6.29.0'})) { assert.equal(require('/usr/local/lib/node_modules/npm/node_modules/'+p+'/package.json').version,v); console.log(p,v); }"; \
   test "$(npm --version)" = 12.1.0; \
   test "$(npx --version)" = 12.1.0; \
   test "$(npm root -g)" = /usr/local/lib/node_modules

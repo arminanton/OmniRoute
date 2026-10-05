@@ -15,10 +15,10 @@ import {
 type Fixture = { root: string; source: string; prefix: string; installed: string };
 const pins: Record<string, string> = {
   npm: "12.1.0",
-  "brace-expansion": "5.0.9",
-  "ip-address": "10.5.0",
+  "brace-expansion": "5.0.12",
+  "ip-address": "10.7.3",
   tar: "7.5.22",
-  undici: "6.28.0",
+  undici: "6.29.0",
 };
 const originalPins: Record<string, string> = {
   "brace-expansion": "5.0.7",
@@ -268,7 +268,7 @@ test("requires all four npm bundled overlay target directories, like the old tes
 
 test("rejects a hoisted dependency outside an overlay's own closure", () => {
   withFixture((value) => {
-    updateManifest(path.join(value.source, "tar"), { dependencies: { undici: "6.28.0" } });
+    updateManifest(path.join(value.source, "tar"), { dependencies: { undici: "6.29.0" } });
     rejectWithoutMutation(value, /missing contained dependency undici required by tar/);
   });
 });
