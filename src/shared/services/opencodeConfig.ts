@@ -1,11 +1,27 @@
 import { applyEdits, modify, parse, printParseErrorCode, type ParseError } from "jsonc-parser";
 
+export type OpenCodeCatalogModel = {
+  id: string;
+  context_length?: number;
+  max_context_window_tokens?: number;
+  max_output_tokens?: number;
+  capabilities?: {
+    attachment?: boolean;
+    reasoning?: boolean;
+    temperature?: boolean;
+    tool_calling?: boolean;
+    vision?: boolean;
+  };
+  input_modalities?: string[];
+};
+
 type OpenCodeConfigInput = {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
   models?: string[];
   modelLabels?: Record<string, string>;
+  catalog?: OpenCodeCatalogModel[];
 };
 
 const OPENCODE_DEFAULT_MODELS = [
@@ -44,6 +60,7 @@ export const buildOpenCodeProviderConfig = ({
   model,
   models,
   modelLabels,
+  catalog,
 }: OpenCodeConfigInput): Record<string, any> => {
   const normalizedBaseUrl = String(baseUrl || "")
     .trim()
@@ -59,24 +76,47 @@ export const buildOpenCodeProviderConfig = ({
 
   const modelsRecord: Record<
     string,
-    { name: string; limit: { context: number; output: number } }
+    {
+      name: string;
+      limit: { context: number; output: number };
+      attachment?: boolean;
+      reasoning?: boolean;
+      temperature?: boolean;
+      tool_call?: boolean;
+    }
   > = {};
-  const resolveModelLimits = (modelId: string): { context: number; output: number } => {
-    const id = modelId.toLowerCase();
-    if (id.includes("1m") || id.includes("fable-5-1") || id.includes("opus-5") || id.includes("gemini")) {
-      return { context: 1_000_000, output: 64_000 };
-    }
-    if (id.includes("claude") || id.includes("gpt-4") || id.includes("gpt-5") || id.includes("deepseek") || id.includes("qwen") || id.includes("glm")) {
-      return { context: 200_000, output: 64_000 };
-    }
-    return { context: 128_000, output: 8_192 };
+  const catalogById = new Map<string, OpenCodeCatalogModel>(
+    (catalog || [])
+      .filter((entry) => entry && typeof entry.id === "string" && entry.id.trim())
+      .map((entry): [string, OpenCodeCatalogModel] => [entry.id.trim(), entry])
+  );
+  const positiveNumber = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  const resolveCatalogModel = (modelId: string) => {
+    const entry = catalogById.get(modelId);
+    const context =
+      positiveNumber(entry?.context_length) ??
+      positiveNumber(entry?.max_context_window_tokens) ??
+      128_000;
+    const output = positiveNumber(entry?.max_output_tokens) ?? 8_192;
+    const caps = entry?.capabilities;
+    const flags: Record<string, boolean> = {};
+    if (typeof caps?.attachment === "boolean") flags.attachment = caps.attachment;
+    else if (caps?.vision === true || entry?.input_modalities?.includes("image"))
+      flags.attachment = true;
+    if (caps?.reasoning === true) flags.reasoning = true;
+    if (caps?.temperature === true) flags.temperature = true;
+    if (caps?.tool_calling === true) flags.tool_call = true;
+    return { limit: { context, output }, flags };
   };
 
   for (const m of uniqueModels) {
     if (m) {
+      const resolved = resolveCatalogModel(m);
       modelsRecord[m] = {
         name: getModelEntryName(m, normalizedLabels),
-        limit: resolveModelLimits(m),
+        ...resolved.flags,
+        limit: resolved.limit,
       };
     }
   }
@@ -92,9 +132,7 @@ export const buildOpenCodeProviderConfig = ({
   };
 };
 
-export const buildOpenCodeV2ProviderConfig = (
-  input: OpenCodeConfigInput
-): Record<string, any> => {
+export const buildOpenCodeV2ProviderConfig = (input: OpenCodeConfigInput): Record<string, any> => {
   const v1Config = buildOpenCodeProviderConfig(input);
   return {
     name: v1Config.name,
@@ -137,17 +175,45 @@ export const mergeOpenCodeConfig = (
     existingProviders && typeof existingProviders === "object" && !Array.isArray(existingProviders)
       ? (existingProviders as Record<string, unknown>)
       : {};
+  const oldV1 = safeProvider.omniroute as Record<string, any> | undefined;
+  const oldV2 = safeProviders.omniroute as Record<string, any> | undefined;
+  const preserveModelSettings = (generated: Record<string, any>, existing: unknown) => {
+    const oldModels =
+      existing && typeof existing === "object" ? (existing as Record<string, any>) : {};
+    return Object.fromEntries(
+      Object.entries(generated).map(([id, entry]) => {
+        const old = oldModels[id] && typeof oldModels[id] === "object" ? oldModels[id] : {};
+        return [
+          id,
+          {
+            ...entry,
+            ...old,
+            name: entry.name,
+            limit: entry.limit,
+            attachment: typeof old.attachment === "boolean" ? old.attachment : entry.attachment,
+            reasoning: typeof old.reasoning === "boolean" ? old.reasoning : entry.reasoning,
+            temperature: typeof old.temperature === "boolean" ? old.temperature : entry.temperature,
+            tool_call: typeof old.tool_call === "boolean" ? old.tool_call : entry.tool_call,
+          },
+        ];
+      })
+    );
+  };
+  const v1 = buildOpenCodeProviderConfig(input);
+  const v2 = buildOpenCodeV2ProviderConfig(input);
+  v1.models = preserveModelSettings(v1.models, oldV1?.models);
+  v2.models = preserveModelSettings(v2.models, oldV2?.models);
 
   return {
     ...safeConfig,
     $schema: safeConfig.$schema || "https://opencode.ai/config.json",
     provider: {
       ...safeProvider,
-      omniroute: buildOpenCodeProviderConfig(input),
+      omniroute: v1,
     },
     providers: {
       ...safeProviders,
-      omniroute: buildOpenCodeV2ProviderConfig(input),
+      omniroute: v2,
     },
   };
 };

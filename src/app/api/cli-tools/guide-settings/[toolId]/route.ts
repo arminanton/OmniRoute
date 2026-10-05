@@ -6,7 +6,11 @@ import * as yaml from "js-yaml";
 import { requireCliToolsAuth } from "@/lib/api/requireCliToolsAuth";
 import { getRuntimePorts } from "@/lib/runtime/ports";
 import { getCliPrimaryConfigPath, getOpenCodeConfigPath } from "@/shared/services/cliRuntime";
-import { mergeOpenCodeConfigText } from "@/shared/services/opencodeConfig";
+import {
+  mergeOpenCodeConfigText,
+  type OpenCodeCatalogModel,
+} from "@/shared/services/opencodeConfig";
+import { fetchOmniRouteCatalog } from "@/lib/cli-helper/config-generator/opencode";
 import { guideSettingsSaveSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { resolveApiKey, getOrCreateApiKey } from "@/shared/services/apiKeyResolver";
@@ -217,12 +221,20 @@ async function saveOpenCodeConfig({ baseUrl, apiKey, model, models, modelLabels 
     // File doesn't exist — start fresh.
   }
 
+  let catalog: OpenCodeCatalogModel[] | undefined;
+  try {
+    const result = await fetchOmniRouteCatalog(normalizedBaseUrl, apiKey || "");
+    catalog = [...result.byId.values()];
+  } catch {
+    // Keep config writes available if the local catalog is temporarily unavailable.
+  }
   const nextConfigText = mergeOpenCodeConfigText(existingConfigText, {
     baseUrl: normalizedBaseUrl,
     apiKey,
     model,
     models,
     modelLabels,
+    catalog,
   });
 
   await fs.writeFile(configPath, nextConfigText, "utf-8");
