@@ -13,10 +13,7 @@ import {
   getAntigravityOAuthUserAgent,
 } from "../services/antigravityHeaders.ts";
 import { classify429, decide429, type Decision } from "../services/antigravity429Engine.ts";
-import {
-  parseRetryFromErrorText,
-  type RetryHintProvenance,
-} from "../services/accountFallback.ts";
+import { parseRetryFromErrorText, type RetryHintProvenance } from "../services/accountFallback.ts";
 import { parseDetailedRetryHintFromJsonBody } from "../services/retryAfterJson.ts";
 import {
   shouldRetryWithCredits,
@@ -333,13 +330,18 @@ function applyAntigravityGenerationDefaults(
       ? (generationConfig.thinkingConfig as Record<string, unknown>)
       : null;
   const thinkingBudget = Number(thinkingConfig?.thinkingBudget);
-  if (thinkingConfig && Number.isFinite(thinkingBudget) && thinkingBudget <= 0) {
-    // #15491: omit zero-budget thinkingConfig to prevent upstream 400 on Flash-Lite/non-thinking models
-    delete generationConfig.thinkingConfig;
+  if (
+    thinkingConfig &&
+    thinkingBudget === 0 &&
+    /(?:^|[-_/])flash-lite(?:$|[-_.])/i.test(modelId ?? "")
+  ) {
+    // #15491: AI Studio rejects thinkingBudget: 0 on Flash-Lite models.
+    delete thinkingConfig.thinkingBudget;
   } else if (
     Number.isFinite(thinkingBudget) &&
     thinkingBudget > 0 &&
-    (!Number.isFinite(Number(generationConfig.maxOutputTokens)) || Number(generationConfig.maxOutputTokens) <= thinkingBudget)
+    (!Number.isFinite(Number(generationConfig.maxOutputTokens)) ||
+      Number(generationConfig.maxOutputTokens) <= thinkingBudget)
   ) {
     generationConfig.maxOutputTokens = Math.floor(thinkingBudget) + 1;
   }
@@ -387,7 +389,9 @@ const COMPETITIVE_AGENT_PROMPT_PATTERNS: RegExp[] = [
  */
 export function stripCompetitiveAgentPrompts(systemInstruction: unknown): unknown {
   const record = asRecord(systemInstruction);
-  const parts = Array.isArray(record?.parts) ? (record.parts as Array<Record<string, unknown>>) : [];
+  const parts = Array.isArray(record?.parts)
+    ? (record.parts as Array<Record<string, unknown>>)
+    : [];
   if (parts.length === 0) return systemInstruction;
 
   let changed = false;
@@ -395,7 +399,10 @@ export function stripCompetitiveAgentPrompts(systemInstruction: unknown): unknow
     if (typeof part.text !== "string" || part.text.length === 0) return part;
     let text = part.text;
     for (const pattern of COMPETITIVE_AGENT_PROMPT_PATTERNS) {
-      const stripped = text.replace(pattern, "").replace(/\n{3,}/g, "\n\n").trimStart();
+      const stripped = text
+        .replace(pattern, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trimStart();
       if (stripped !== text) {
         changed = true;
         text = stripped;
@@ -605,7 +612,9 @@ export class AntigravityExecutor extends BaseExecutor {
     // account-scoped; never union another account's model capabilities.
     for (const provider of ["agy", "antigravity"]) {
       const models = await getSyncedAvailableModelsForConnection(provider, connectionId);
-      if (models.some((entry) => entry.id === baseModel && entry.supportsAdaptiveThinking === true)) {
+      if (
+        models.some((entry) => entry.id === baseModel && entry.supportsAdaptiveThinking === true)
+      ) {
         return true;
       }
     }
@@ -742,19 +751,32 @@ export class AntigravityExecutor extends BaseExecutor {
 
     const requestedClaude = splitAntigravityClaudeEffort(model);
     const thinkingLevel = getAntigravityClaudeThinkingLevel(model, bodyRecord);
-    const adaptiveClaude = (requestedClaude.effort !== null || thinkingLevel !== null) &&
-      await this.supportsAdaptiveClaudeForConnection(model, credentials.connectionId);
+    const adaptiveClaude =
+      (requestedClaude.effort !== null || thinkingLevel !== null) &&
+      (await this.supportsAdaptiveClaudeForConnection(model, credentials.connectionId));
     if (requestedClaude.effort && (!adaptiveClaude || !thinkingLevel)) {
-      return new Response(JSON.stringify(buildErrorBody(400,
-        "Claude effort alias requires authenticated adaptive-thinking capability and a supported low/medium/high effort."
-      )), { status: 400, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify(
+          buildErrorBody(
+            400,
+            "Claude effort alias requires authenticated adaptive-thinking capability and a supported low/medium/high effort."
+          )
+        ),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
     }
     const dispatchModel = adaptiveClaude ? requestedClaude.baseModel : model;
     const upstreamModel = await cleanModelName(dispatchModel, modelIdOverride);
     if (requestedClaude.effort && upstreamModel !== requestedClaude.baseModel) {
-      return new Response(JSON.stringify(buildErrorBody(400,
-        "Claude effort alias cannot be applied to a different upstream model."
-      )), { status: 400, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify(
+          buildErrorBody(
+            400,
+            "Claude effort alias cannot be applied to a different upstream model."
+          )
+        ),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
     }
     const isClaude = upstreamModel.toLowerCase().includes("claude");
     // #10104: newer Gemini endpoints reject a request ending on a `model` turn with
@@ -770,8 +792,12 @@ export class AntigravityExecutor extends BaseExecutor {
       ? stripCloudCodeThinkingConfig(baseBody)
       : baseBody;
     const normalizedRequest = asRecord(normalizedBody.request);
-    if (adaptiveClaude && thinkingLevel && normalizedRequest &&
-        upstreamModel === requestedClaude.baseModel) {
+    if (
+      adaptiveClaude &&
+      thinkingLevel &&
+      normalizedRequest &&
+      upstreamModel === requestedClaude.baseModel
+    ) {
       normalizedRequest.generationConfig = {
         ...asRecord(normalizedRequest.generationConfig),
         thinkingConfig: { thinkingLevel },
@@ -1666,10 +1692,17 @@ export class AntigravityExecutor extends BaseExecutor {
           updateAntigravityRemainingCredits
         );
         if (creditsResult) return { kind: "return", result: creditsResult };
-        if (retryMs && (decision.kind === "full_quota_exhausted" || decision.kind === "short_cooldown_switch_auth")) {
+        if (
+          retryMs &&
+          (decision.kind === "full_quota_exhausted" ||
+            decision.kind === "short_cooldown_switch_auth")
+        ) {
           markConnectionQuotaExhausted(accountId, retryMs, ctx.model);
         }
-      } else if (decision.kind === "full_quota_exhausted" || decision.kind === "short_cooldown_switch_auth") {
+      } else if (
+        decision.kind === "full_quota_exhausted" ||
+        decision.kind === "short_cooldown_switch_auth"
+      ) {
         if (retryMs) markConnectionQuotaExhausted(accountId, retryMs, ctx.model);
       }
 

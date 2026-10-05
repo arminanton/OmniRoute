@@ -82,6 +82,40 @@ test("an unknown model id falls back to the conservative ceiling", () => {
   assert.equal(clampFor("no-such-model-xyz", 65535), MAX_ANTIGRAVITY_OUTPUT_TOKENS);
 });
 
+test("zero thinking budget is omitted only for Flash-Lite models", () => {
+  for (const modelId of ["gemini-3.1-flash-lite", "gemini-flash-lite-latest"]) {
+    const request = {
+      generationConfig: {
+        thinkingConfig: { thinkingBudget: 0, includeThoughts: false, customField: "keep" },
+      },
+    };
+    applyAntigravityGenerationDefaults(request, modelId);
+    assert.deepEqual(request.generationConfig.thinkingConfig, {
+      includeThoughts: false,
+      customField: "keep",
+    });
+  }
+});
+
+test("non-lite zero and dynamic negative thinking budgets are preserved", () => {
+  for (const [modelId, thinkingBudget] of [
+    ["gemini-2.5-pro", 0],
+    ["gemini-3.1-flash-lite", -1],
+  ] as const) {
+    const request = {
+      generationConfig: {
+        thinkingConfig: { thinkingBudget, includeThoughts: true, customField: "keep" },
+      },
+    };
+    applyAntigravityGenerationDefaults(request, modelId);
+    assert.deepEqual(request.generationConfig.thinkingConfig, {
+      thinkingBudget,
+      includeThoughts: true,
+      customField: "keep",
+    });
+  }
+});
+
 test("retired Antigravity Flash ids cannot inherit provider-neutral output caps", () => {
   for (const modelId of [
     "gemini-3.6-flash-low",
