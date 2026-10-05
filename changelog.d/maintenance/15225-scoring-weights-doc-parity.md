@@ -1,0 +1,1 @@
+- **docs(routing):** add a parity test for Auto-Combo scoring weights and include the missing zero-weight reliability factor in the Mermaid source diagram (#15225). The exported SVG is pending regeneration.
