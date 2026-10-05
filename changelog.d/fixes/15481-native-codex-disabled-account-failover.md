@@ -1,0 +1,1 @@
+- **fix(routing):** allow a native Codex turn pinned to a disabled account to continue on an eligible same-provider/model sibling without resurrecting the disabled connection ([#15481](https://github.com/diegosouzapw/OmniRoute/pull/15481)).
