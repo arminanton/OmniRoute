@@ -11,6 +11,7 @@
  */
 import {
   generateSignature as defaultGenerateSignature,
+  getSemanticCacheRequestOptions,
   setCachedResponse as defaultSetCachedResponse,
   isCacheableForWrite as defaultIsCacheableForWrite,
 } from "@/lib/semanticCache";
@@ -69,7 +70,8 @@ function writeStreamingCacheEntry(
       args.body.messages ?? args.body.input,
       args.body.temperature,
       args.body.top_p,
-      args.apiKeyId ?? undefined
+      args.apiKeyId ?? undefined,
+      getSemanticCacheRequestOptions(args.body)
     );
     const tokensSaved = streamTokensSaved(args.streamUsage);
     deps.setCachedResponse(sig, args.model, cleanBody, tokensSaved);

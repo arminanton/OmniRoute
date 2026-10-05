@@ -151,13 +151,15 @@ export function generateSignature(
   conversation,
   temperature = 0,
   topP = 1,
-  apiKeyId?: string
+  apiKeyId?: string,
+  requestOptions: Record<string, unknown> = {}
 ) {
   const payload = JSON.stringify({
     model,
     messages: normalizeConversation(conversation),
     temperature,
     top_p: topP,
+    requestOptions,
   });
   const digest = crypto.createHash("sha256").update(payload).digest("hex");
   // Per-key cache isolation (#3740) namespaces the signature with the apiKeyId as a
@@ -168,6 +170,39 @@ export function generateSignature(
   // preserves isolation + determinism and avoids the false-positive
   // CodeQL js/insufficient-password-hash on a cache signature.
   return apiKeyId ? `${apiKeyId}.${digest}` : digest;
+}
+
+const SEMANTIC_CACHE_REQUEST_OPTION_KEYS = [
+  "tools",
+  "tool_choice",
+  "functions",
+  "function_call",
+  "response_format",
+  "logit_bias",
+  "max_tokens",
+  "max_completion_tokens",
+  "stop",
+  "n",
+  "presence_penalty",
+  "frequency_penalty",
+  "seed",
+  "reasoning",
+  "reasoning_effort",
+  "thinking",
+  "modalities",
+  "audio",
+  "service_tier",
+] as const;
+
+/** Include output-shaping fields in semantic-cache identity to prevent cross-contract hits. */
+export function getSemanticCacheRequestOptions(
+  body: Record<string, unknown>
+): Record<string, unknown> {
+  const options: Record<string, unknown> = {};
+  for (const key of SEMANTIC_CACHE_REQUEST_OPTION_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) options[key] = body[key];
+  }
+  return options;
 }
 
 function stringifyForSignature(value: unknown): string {

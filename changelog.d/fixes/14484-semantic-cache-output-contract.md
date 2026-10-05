@@ -1,0 +1,1 @@
+- **fix(cache):** include tools, tool selection, output contracts and other generation settings in semantic-cache signatures to prevent cross-contract cache hits (#14484). Related embedding SSRF and settings-secret findings remain separate open work.

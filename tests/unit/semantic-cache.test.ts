@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   generateSignature,
+  getSemanticCacheRequestOptions,
   isCacheableForRead,
   isCacheableForWrite,
 } from "../../src/lib/semanticCache.ts";
@@ -106,6 +107,42 @@ describe("Semantic Cache", () => {
       const sigKeyed = generateSignature("gpt-4o", messages, 0, 1, "some-key-id");
       const sigKeyless = generateSignature("gpt-4o", messages, 0, 1, undefined);
       assert.notEqual(sigKeyed, sigKeyless);
+    });
+
+    it("separates semantic cache keys by tools, choice, output contract, and token limits (#14484)", () => {
+      const messages = [{ role: "user", content: "summarize this" }];
+      const signature = (options: Record<string, unknown>) =>
+        generateSignature("gpt-4o", messages, 0, 1, "key-a", options);
+      const base = signature({});
+      assert.notEqual(
+        base,
+        signature({ tools: [{ type: "function", function: { name: "lookup" } }] })
+      );
+      assert.notEqual(base, signature({ tool_choice: "required" }));
+      assert.notEqual(base, signature({ response_format: { type: "json_object" } }));
+      assert.notEqual(base, signature({ max_tokens: 8 }));
+      assert.equal(
+        signature({
+          tools: [{ type: "function", function: { name: "lookup" } }],
+          tool_choice: "auto",
+        }),
+        signature({
+          tools: [{ type: "function", function: { name: "lookup" } }],
+          tool_choice: "auto",
+        })
+      );
+    });
+
+    it("projects only response-affecting request options", () => {
+      assert.deepEqual(
+        getSemanticCacheRequestOptions({
+          stream: true,
+          tools: [],
+          tool_choice: "none",
+          temperature: 0,
+        }),
+        { tools: [], tool_choice: "none" }
+      );
     });
   });
 
