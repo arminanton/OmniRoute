@@ -37,7 +37,9 @@ const {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-function makeTarget(connectionId: string): import("../../open-sse/services/combo/types.ts").ResolvedComboTarget {
+function makeTarget(
+  connectionId: string
+): import("../../open-sse/services/combo/types.ts").ResolvedComboTarget {
   return {
     kind: "model",
     stepId: `step-${connectionId}`,
@@ -465,4 +467,23 @@ test("peekStickyConnectionId: reflects the current binding without mutating it",
   assert.equal(peekStickyConnectionId(hash), "conn-peek");
   // Peeking again must not clear or otherwise mutate the binding.
   assert.equal(peekStickyConnectionId(hash), "conn-peek");
+});
+
+test("priority combos preserve declared target order when stickiness points later", async () => {
+  injectSat({ util5h: 0.2, util7d: 0.2 });
+  injectConnectionHealth({});
+  const targets = [makeTarget("conn-A"), makeTarget("conn-B")];
+  const messages = [{ role: "user", content: "priority order" }];
+  const hash = deriveMessageHash(messages)!;
+  recordStickyBinding(hash, "conn-B");
+
+  const result = await applySessionStickiness(targets, messages, "priority-combo", {
+    respectDeclaredOrder: true,
+  });
+
+  assert.equal(result.stuck, false);
+  assert.deepEqual(
+    result.targets.map((target) => target.connectionId),
+    ["conn-A", "conn-B"]
+  );
 });
