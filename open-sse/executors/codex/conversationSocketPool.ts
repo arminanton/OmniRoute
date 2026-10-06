@@ -52,6 +52,8 @@ export interface CodexSocketRequest {
   connect: CodexConversationConnect;
   signal?: AbortSignal | null;
   reuse?: boolean;
+  /** Trusted private principal/conversation scope; never derived solely from native headers. */
+  ownerKey?: string | null;
   encode: (raw: string) => { sse: string; terminal: boolean };
   failure: (code: string) => string;
   beforeSend?: (wireBody: string) => Promise<void>;
@@ -72,7 +74,7 @@ function keyFor(request: CodexSocketRequest): string {
     .filter(([k]) => !["x-request-id", "x-client-request-id", "x-correlation-id"].includes(k))
     .sort();
   return createHash("sha256")
-    .update(JSON.stringify([request.url, headers]))
+    .update(JSON.stringify([request.ownerKey ?? null, request.url, headers]))
     .digest("hex");
 }
 function abortReason(signal?: AbortSignal | null): Error {
@@ -216,7 +218,7 @@ export class CodexConversationSocketPool {
   }
   async request(request: CodexSocketRequest): Promise<Response> {
     const started = Date.now();
-    const reusable = request.reuse === true;
+    const reusable = request.reuse === true && Boolean(request.ownerKey);
     const session = await this.acquire(
       reusable ? keyFor(request) : `${keyFor(request)}:${crypto.randomUUID()}`,
       request.signal

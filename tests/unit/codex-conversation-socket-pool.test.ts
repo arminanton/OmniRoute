@@ -72,11 +72,26 @@ function req(
     body,
     connect,
     reuse: true,
+    ownerKey: `synthetic-principal:conversation:${thread}`,
     encode,
     failure,
   };
 }
 const user = { role: "user", content: "lookup" };
+
+test("identical native thread headers cannot share sockets across API principals", async () => {
+  const pool = new CodexConversationSocketPool();
+  const f = fixture();
+  const request = req(f.connect, { input: [user] });
+  await (await pool.request({ ...request, ownerKey: "principal-a" })).text();
+  await (await pool.request({ ...request, ownerKey: "principal-b" })).text();
+  assert.equal(f.counts().connections, 2);
+  assert.equal(f.bodies[1].previous_response_id, undefined);
+  await (await pool.request({ ...request, ownerKey: null })).text();
+  await (await pool.request({ ...request, ownerKey: null })).text();
+  assert.equal(f.counts().connections, 4);
+  pool.close();
+});
 
 test("physical send observation excludes turns cancelled during request capture", async () => {
   const pool = new CodexConversationSocketPool();
