@@ -288,6 +288,61 @@ test("getApiKeyUsageLimitStatus cuts weekly USD spend at observed provider quota
   assert.equal(status.weeklySpentUsd, 2);
 });
 
+test("getApiKeyWeeklyWindowSetting defaults to provider and falls back from an invalid timezone", () => {
+  const processTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  assert.deepEqual(usageLimits.getApiKeyWeeklyWindowSetting({}), {
+    mode: "provider",
+    timeZone: processTimeZone,
+  });
+  assert.deepEqual(
+    usageLimits.getApiKeyWeeklyWindowSetting({
+      OMNIROUTE_API_KEY_WEEKLY_WINDOW: "calendar",
+      OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE: "Asia/Shanghai",
+    }),
+    { mode: "calendar", timeZone: "Asia/Shanghai" }
+  );
+  assert.deepEqual(
+    usageLimits.getApiKeyWeeklyWindowSetting({
+      OMNIROUTE_API_KEY_WEEKLY_WINDOW: "calendar",
+      OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE: "Not/AZone",
+    }),
+    { mode: "calendar", timeZone: processTimeZone }
+  );
+  assert.equal(
+    usageLimits.getApiKeyWeeklyWindowSetting({ OMNIROUTE_API_KEY_WEEKLY_WINDOW: "unknown" }).mode,
+    "provider"
+  );
+});
+
+test("getApiKeyUsageLimitStatus uses the configured calendar week", async () => {
+  const previousMode = process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW;
+  const previousTimeZone = process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE;
+  process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW = "calendar";
+  process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE = "Asia/Shanghai";
+  try {
+    const created = await apiKeysDb.createApiKey("Calendar Window Key", "machine-calendar-01");
+    const metadata = await apiKeysDb.getApiKeyMetadata(created.key);
+    assert.ok(metadata);
+    const status = await usageLimits.getApiKeyUsageLimitStatus(
+      { ...metadata, allowedConnections: [] },
+      {
+        now: () => NOW,
+        getProviderConnectionById: async () => null,
+        getProviderConnections: async () => [],
+        getProviderLimitsCache: () => null,
+        getAllProviderLimitsCache: () => ({}),
+      }
+    );
+    assert.equal(status.weeklyWindowStartIso, "2026-06-14T16:00:00.000Z");
+    assert.equal(status.weeklyResetAtIso, "2026-06-21T16:00:00.000Z");
+  } finally {
+    if (previousMode === undefined) delete process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW;
+    else process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW = previousMode;
+    if (previousTimeZone === undefined) delete process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE;
+    else process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE = previousTimeZone;
+  }
+});
+
 test("buildApiKeyUsageLimitText returns API-key quota spend percentage and reset lines", async () => {
   const text = usageLimits.buildApiKeyUsageLimitText(
     {

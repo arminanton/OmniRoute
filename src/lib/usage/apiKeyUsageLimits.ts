@@ -3,6 +3,10 @@ import type { ProviderLimitsCacheEntry } from "@/lib/db/providerLimits";
 import { getProviderQuotaWindowStartIso } from "@/lib/db/quotaResetEvents";
 import { calculateCost } from "./costCalculator";
 import { buildErrorBody, sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
+import {
+  calendarWeekWindowMs,
+  isValidIanaTimeZone,
+} from "@omniroute/open-sse/services/dailyQuotaReset.ts";
 
 const FORTALEZA_UTC_OFFSET_MS = 3 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -373,6 +377,53 @@ async function getProviderWeeklyWindow(
   };
 }
 
+export type ApiKeyWeeklyWindowMode = "provider" | "calendar";
+
+export interface ApiKeyWeeklyWindowSetting {
+  mode: ApiKeyWeeklyWindowMode;
+  timeZone: string;
+}
+
+const warnedWeeklyWindowValues = new Set<string>();
+
+function warnWeeklyWindowValueOnce(message: string): void {
+  if (warnedWeeklyWindowValues.has(message)) return;
+  warnedWeeklyWindowValues.add(message);
+  console.warn(`[apiKeyUsageLimits] ${message}`);
+}
+
+function getProcessTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+/** Weekly USD limit window configuration; provider mode preserves existing behavior. */
+export function getApiKeyWeeklyWindowSetting(
+  env: Record<string, string | undefined> = process.env
+): ApiKeyWeeklyWindowSetting {
+  const rawMode = (env.OMNIROUTE_API_KEY_WEEKLY_WINDOW ?? "").trim().toLowerCase();
+  let mode: ApiKeyWeeklyWindowMode = "provider";
+  if (rawMode === "calendar") {
+    mode = "calendar";
+  } else if (rawMode && rawMode !== "provider") {
+    warnWeeklyWindowValueOnce(
+      `OMNIROUTE_API_KEY_WEEKLY_WINDOW="${rawMode}" is not provider|calendar; using provider`
+    );
+  }
+
+  let timeZone = getProcessTimeZone();
+  const configuredTimeZone = env.OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE?.trim();
+  if (mode === "calendar" && configuredTimeZone) {
+    if (isValidIanaTimeZone(configuredTimeZone)) {
+      timeZone = configuredTimeZone;
+    } else {
+      warnWeeklyWindowValueOnce(
+        `OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE="${configuredTimeZone}" is invalid; using process timezone`
+      );
+    }
+  }
+  return { mode, timeZone };
+}
+
 async function getApiKeyUsdSpendSince(apiKeyId: string, sinceIso: string): Promise<number> {
   if (!apiKeyId) return 0;
   const db = getDbInstance();
@@ -432,13 +483,23 @@ export async function getApiKeyUsageLimitStatus(
   const now = resolvedDeps.now();
   const dailyWindowStartIso = getFortalezaDayStartIso(now);
   const dailyResetAtIso = getFortalezaDayResetIso(now);
-  const weeklyWindow = await getProviderWeeklyWindow(metadata, resolvedDeps, now);
-  const weeklyResetAtIso = weeklyWindow.resetAtIso;
-  const weeklyWindowStartIso = weeklyWindow.windowStartIso
-    ? weeklyWindow.windowStartIso
-    : weeklyResetAtIso
-      ? new Date(Date.parse(weeklyResetAtIso) - WEEK_MS).toISOString()
-      : getRollingWeekStartIso(now);
+  const weeklySetting = getApiKeyWeeklyWindowSetting();
+  const weeklyWindow =
+    weeklySetting.mode === "calendar"
+      ? calendarWeekWindowMs(weeklySetting.timeZone, now)
+      : await getProviderWeeklyWindow(metadata, resolvedDeps, now);
+  const weeklyResetAtIso =
+    "resetMs" in weeklyWindow
+      ? new Date(weeklyWindow.resetMs).toISOString()
+      : weeklyWindow.resetAtIso;
+  const weeklyWindowStartIso =
+    "startMs" in weeklyWindow
+      ? new Date(weeklyWindow.startMs).toISOString()
+      : weeklyWindow.windowStartIso
+        ? weeklyWindow.windowStartIso
+        : weeklyResetAtIso
+          ? new Date(Date.parse(weeklyResetAtIso) - WEEK_MS).toISOString()
+          : getRollingWeekStartIso(now);
   const dailyLimitUsd = normalizeLimitUsd(metadata.dailyUsageLimitUsd);
   const weeklyLimitUsd = normalizeLimitUsd(metadata.weeklyUsageLimitUsd);
   const enabled = metadata.usageLimitEnabled === true;

@@ -57,7 +57,11 @@ function zonedParts(ms: number, timeZone: string): ZonedParts {
   };
 }
 
-function addCalendarDay(year: number, month: number, day: number): {
+function addCalendarDay(
+  year: number,
+  month: number,
+  day: number
+): {
   year: number;
   month: number;
   day: number;
@@ -75,7 +79,7 @@ function zonedLocalToUtc(
   hour: number,
   minute: number,
   second: number,
-  timeZone: string,
+  timeZone: string
 ): number {
   const wanted = Date.UTC(year, month - 1, day, hour, minute, second);
   let guess = wanted;
@@ -104,6 +108,29 @@ export function nextDailyResetAtMs(timezone: string, hour: number, nowMs: number
   return next;
 }
 
+/** Local Monday 00:00 → next Monday 00:00 window containing `nowMs`. */
+export function calendarWeekWindowMs(
+  timezone: string,
+  nowMs: number
+): { startMs: number; resetMs: number } {
+  const now = zonedParts(nowMs, timezone);
+  const weekday = new Date(Date.UTC(now.year, now.month - 1, now.day)).getUTCDay();
+  const daysSinceMonday = (weekday + 6) % 7;
+  const toUtc = (dayOffset: number) => {
+    const date = new Date(Date.UTC(now.year, now.month - 1, now.day + dayOffset));
+    return zonedLocalToUtc(
+      date.getUTCFullYear(),
+      date.getUTCMonth() + 1,
+      date.getUTCDate(),
+      0,
+      0,
+      0,
+      timezone
+    );
+  };
+  return { startMs: toUtc(-daysSinceMonday), resetMs: toUtc(7 - daysSinceMonday) };
+}
+
 export function parseTpdLimitFromText(text: string): number | null {
   const m = /limit:\s*(\d+)/i.exec(text);
   if (!m) return null;
@@ -130,7 +157,7 @@ export type TpdCooldownOptions = {
  */
 export function resolveTpdCooldownMs(
   errorText: string | null | undefined,
-  options: TpdCooldownOptions = {},
+  options: TpdCooldownOptions = {}
 ): number | null {
   if (!isTpdRateLimit(errorText)) return null;
   const now = options.nowMs ?? Date.now();
