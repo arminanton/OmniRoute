@@ -1,0 +1,1 @@
+- **fix(routing):** route reported GHE Copilot GPT-6 model IDs to `/responses` while preserving existing Claude and chat routes ([#15499](https://github.com/diegosouzapw/OmniRoute/pull/15499)).
