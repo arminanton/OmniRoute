@@ -26,7 +26,11 @@ import {
   getCreditsMode,
   handleCreditsFailure,
 } from "../services/antigravityCredits.ts";
-import { persistCreditBalance, getAllPersistedCreditBalanceEntries } from "@/lib/db/creditBalance";
+import {
+  persistCreditBalance,
+  getAllPersistedCreditBalanceEntries,
+  getPersistedCreditBalanceEntry,
+} from "@/lib/db/creditBalance";
 import { setConnectionRateLimitUntil } from "@/lib/db/providers";
 import { markAntigravityModelQuotaExhausted } from "../services/antigravityFamilyCooldown.ts";
 import { getMitmAlias, getSyncedAvailableModelsForConnection } from "@/lib/db/models";
@@ -229,8 +233,29 @@ if (typeof _creditBalanceSweep === "object" && "unref" in _creditBalanceSweep) {
   (_creditBalanceSweep as { unref?: () => void }).unref?.();
 }
 
+/** Shared generations can publish a newer observation while this process remains alive. */
+function refreshSharedCreditObservation(accountId: string): void {
+  try {
+    const shared = getPersistedCreditBalanceEntry(accountId);
+    if (!shared) return;
+    const observedAt = Date.parse(shared.updatedAt);
+    const local = creditBalanceCache.get(accountId);
+    if (!local || observedAt >= (local.observedAt ?? local.updatedAt)) {
+      creditBalanceCache.set(accountId, {
+        balance: shared.balance,
+        updatedAt: observedAt,
+        observedAt,
+      });
+      evictStaleCreditBalanceEntries();
+    }
+  } catch {
+    // Keep the last observation when shared storage is temporarily unavailable.
+  }
+}
+
 export function getAntigravityRemainingCredits(accountId: string): number | null {
   hydrateCreditCacheFromDb();
+  refreshSharedCreditObservation(accountId);
   const entry = creditBalanceCache.get(accountId);
   if (!entry) return null;
   if (Date.now() - entry.updatedAt > CREDIT_BALANCE_TTL_MS) {
@@ -246,15 +271,17 @@ export function updateAntigravityRemainingCredits(
   observedAt = Date.now()
 ): void {
   if (!Number.isFinite(balance) || balance < 0 || !Number.isFinite(observedAt)) return;
+  refreshSharedCreditObservation(accountId);
   const previous = creditBalanceCache.get(accountId);
   if (previous && observedAt < (previous.observedAt ?? previous.updatedAt)) return;
   if (creditBalanceCache.size >= MAX_CREDIT_BALANCE_ENTRIES && !creditBalanceCache.has(accountId)) {
     const oldestKey = creditBalanceCache.keys().next().value;
     if (oldestKey !== undefined) creditBalanceCache.delete(oldestKey);
   }
-  creditBalanceCache.set(accountId, { balance, updatedAt: Date.now(), observedAt });
+  creditBalanceCache.set(accountId, { balance, updatedAt: observedAt, observedAt });
   try {
     persistCreditBalance(accountId, balance, observedAt);
+    refreshSharedCreditObservation(accountId);
   } catch {}
 }
 

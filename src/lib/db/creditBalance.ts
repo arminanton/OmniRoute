@@ -43,6 +43,11 @@ function parseJson(raw: string): unknown {
  * Returns the balance number, or null if not found.
  */
 export function getPersistedCreditBalance(accountId: string): number | null {
+  return getPersistedCreditBalanceEntry(accountId)?.balance ?? null;
+}
+
+/** Read the shared observation epoch without making its age fresh on access. */
+export function getPersistedCreditBalanceEntry(accountId: string): CreditBalanceEntry | null {
   if (isBuildPhase || isCloud) return null;
   const db = getDbInstance() as unknown as DbLike;
   const row = db
@@ -50,8 +55,14 @@ export function getPersistedCreditBalance(accountId: string): number | null {
     .get(NAMESPACE, accountId) as KeyValueRow | undefined;
   if (!row?.value) return null;
   const parsed = parseJson(row.value) as CreditBalanceEntry | null;
-  if (!parsed || typeof parsed.balance !== "number") return null;
-  return parsed.balance;
+  if (
+    !parsed ||
+    !Number.isFinite(parsed.balance) ||
+    parsed.balance < 0 ||
+    !Number.isFinite(Date.parse(parsed.updatedAt))
+  )
+    return null;
+  return parsed;
 }
 
 /**
