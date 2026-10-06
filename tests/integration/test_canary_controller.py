@@ -285,3 +285,16 @@ class RetirementObservationTest(unittest.TestCase):
             a.retirement_observed([{"Id": cid}], cid)
         with self.assertRaises(c.Refused):
             a.retirement_observed([{"ID": cid, "State": "running"}], cid)
+
+
+class ProxyMasterTest(unittest.TestCase):
+    def test_stale_or_unrelated_pid_cannot_receive_reload(self):
+        a = importlib.import_module("scripts.deploy.canary.adapter")
+        config = "/run/omni-local-next/canary/nginx.conf"
+        snapshot = {"uid": 0, "exeIdentity": (1, 2), "cmdline": "nginx: master process /usr/sbin/nginx -c " + config}
+        a.validate_proxy_master_snapshot(100, snapshot, (1, 2), config)
+        for changed in ({**snapshot, "uid": 1001}, {**snapshot, "exeIdentity": (1, 3)}, {**snapshot, "cmdline": "other process"}):
+            with self.assertRaises(c.Refused):
+                a.validate_proxy_master_snapshot(100, changed, (1, 2), config)
+        with self.assertRaises(c.Refused):
+            a.validate_proxy_master_snapshot(1, snapshot, (1, 2), config)
