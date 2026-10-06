@@ -3,6 +3,14 @@ import {
   consumeCurrentGenerationAttempt,
 } from "../services/logicalRetryBudget.ts";
 import { beginGenerationLifetime, bindGenerationResponse } from "../services/generationLifetime.ts";
+import {
+  getCodexConversationOwner,
+  getCodexConversationOwnerKey,
+} from "../services/codexConversationIdentity.ts";
+import {
+  getCodexResponseIdOwnership,
+  rememberCodexResponseId,
+} from "../services/conversationState/codexResponseOwnership.ts";
 import { responsesErrorEvent } from "../utils/responsesErrorEvent.ts";
 import { CodexConversationSocketPool } from "./codex/conversationSocketPool.ts";
 import { getDeclaredCodexMaxEffort } from "./codex/effortCapabilities.ts";
@@ -935,6 +943,33 @@ export class CodexExecutor extends BaseExecutor {
     delete transformedBody.stream;
     delete transformedBody.stream_options;
 
+    const authorization = headers.authorization;
+    const actualCredentials =
+      typeof authorization === "string" && /^Bearer\s+/i.test(authorization)
+        ? { ...nextInput.credentials, accessToken: authorization.replace(/^Bearer\s+/i, "") }
+        : nextInput.credentials;
+    const owner = getCodexConversationOwner(actualCredentials, String(transformedBody.model));
+    const previousId = transformedBody.previous_response_id;
+    if (
+      typeof previousId === "string" &&
+      getCodexResponseIdOwnership(owner, previousId) !== "owned"
+    ) {
+      return {
+        response: new Response(
+          JSON.stringify({
+            error: projectCodexPublicError({
+              status: 409,
+              code: "previous_response_not_found",
+            }),
+          }),
+          { status: 409, headers: { "content-type": "application/json" } }
+        ),
+        url,
+        headers,
+        transformedBody,
+      };
+    }
+
     const websocketFn = getCodexWebSocketTransport();
     if (!websocketFn) {
       return {
@@ -955,6 +990,10 @@ export class CodexExecutor extends BaseExecutor {
         body: transformedBody,
         connect: websocketFn,
         signal: nextInput.signal,
+        ownerKey: getCodexConversationOwnerKey(actualCredentials, String(transformedBody.model)),
+        onCompleted: (response) => {
+          if (owner && typeof response.id === "string") rememberCodexResponseId(owner, response.id);
+        },
         reuse:
           (nextInput.credentials?.providerSpecificData as Record<string, unknown> | undefined)
             ?.codexWebSocketSessionReuse !== false,

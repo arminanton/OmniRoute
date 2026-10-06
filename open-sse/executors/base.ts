@@ -12,6 +12,7 @@ export {
   stripVersionedToolModelPrefix,
 } from "./base/requestHelpers.ts";
 import { classifyUpstreamPolicyRejection } from "../services/upstreamPolicyRejection.ts";
+import { isUncertainGenerationAcceptance } from "../services/generationReplay.ts";
 import {
   backoffGenerationRetry,
   isLogicalRetryBudgetError,
@@ -1748,6 +1749,7 @@ export class BaseExecutor {
         return { response, url, headers: finalHeaders, transformedBody: serializedBody };
       } catch (error) {
         if (
+          isUncertainGenerationAcceptance(error) ||
           isRuntimePolicyError(error) ||
           isLogicalRetryBudgetError(error) ||
           classifyUpstreamPolicyRejection(error)

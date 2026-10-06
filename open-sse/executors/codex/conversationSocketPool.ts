@@ -58,6 +58,7 @@ export interface CodexSocketRequest {
   failure: (code: string) => string;
   beforeSend?: (wireBody: string) => Promise<void>;
   onSend?: () => void;
+  onCompleted?: (response: Record<string, unknown>) => void;
   observe?: (event: {
     phase: string;
     elapsedMs: number;
@@ -380,6 +381,7 @@ export class CodexConversationSocketPool {
                 controller.enqueue(bytes);
                 if (event.terminal) {
                   if (data?.type === "response.completed" && response) {
+                    request.onCompleted?.(response);
                     session.baseline = commitCodexContinuation(
                       fullBody,
                       response,

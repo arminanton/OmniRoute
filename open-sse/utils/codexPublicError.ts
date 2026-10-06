@@ -17,6 +17,7 @@ interface CodexPublicErrorInput {
 interface CodexPublicErrorRule {
   type: string;
   allowsStatus: (status: number) => boolean;
+  publicMessage?: string;
 }
 
 const exactStatuses =
@@ -56,6 +57,15 @@ const CODEX_PUBLIC_ERROR_RULES = new Map<string, CodexPublicErrorRule>([
   ["invalid_request_error", { type: "invalid_request_error", allowsStatus: exactStatuses(400) }],
   ["multipart_protocol_violation", { type: "server_error", allowsStatus: exactStatuses(502) }],
   ["origin_rejected", { type: "invalid_request_error", allowsStatus: exactStatuses(403) }],
+  [
+    "previous_response_not_found",
+    {
+      type: "invalid_request_error",
+      allowsStatus: exactStatuses(409),
+      publicMessage:
+        "Previous response state is unavailable. Resend complete input without previous_response_id.",
+    },
+  ],
   ["permission_denied", { type: "permission_error", allowsStatus: exactStatuses(403) }],
   ["prompt_attachment_integrity", { type: "server_error", allowsStatus: exactStatuses(502) }],
   ["rate_limit_exceeded", { type: "rate_limit_error", allowsStatus: exactStatuses(429) }],
@@ -106,5 +116,9 @@ export function projectCodexPublicError(input: CodexPublicErrorInput): CodexPubl
   if (!rule || !rule.allowsStatus(status)) {
     return { message: CODEX_PUBLIC_ERROR_MESSAGE, ...fallback };
   }
-  return { message: CODEX_PUBLIC_ERROR_MESSAGE, type: rule.type, code: input.code as string };
+  return {
+    message: rule.publicMessage ?? CODEX_PUBLIC_ERROR_MESSAGE,
+    type: rule.type,
+    code: input.code as string,
+  };
 }

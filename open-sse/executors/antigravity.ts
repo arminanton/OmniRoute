@@ -2,6 +2,7 @@ import { runCoordinatedGrantRefresh } from "../services/coordination/grantRefres
 import { runSharedRefresh } from "../services/coordination/fencedTask.ts";
 import { getActiveOnPersist } from "../services/tokenRefresh.ts";
 import { isLogicalRetryBudgetError } from "../services/logicalRetryBudget.ts";
+import { isUncertainGenerationAcceptance } from "../services/generationReplay.ts";
 import { randomUUID } from "crypto";
 import {
   BaseExecutor,
@@ -1064,7 +1065,7 @@ export class AntigravityExecutor extends BaseExecutor {
         providerSpecificData: credentials.providerSpecificData,
       };
     } catch (error) {
-      if (isLogicalRetryBudgetError(error)) throw error;
+      if (isLogicalRetryBudgetError(error) || isUncertainGenerationAcceptance(error)) throw error;
       const message = error instanceof Error ? error.message : String(error);
       log?.error?.("TOKEN", `Antigravity refresh error: ${message}`);
       return null;
@@ -1225,7 +1226,7 @@ export class AntigravityExecutor extends BaseExecutor {
       try {
         result = await this.executeOnce(input, candidate);
       } catch (error) {
-        if (isLogicalRetryBudgetError(error)) throw error;
+        if (isLogicalRetryBudgetError(error) || isUncertainGenerationAcceptance(error)) throw error;
         const outcome = handleAntigravityFallbackChainError(
           input,
           error,
@@ -1362,7 +1363,7 @@ export class AntigravityExecutor extends BaseExecutor {
         if (outcome.sameUrl) urlIndex--;
         continue;
       } catch (error) {
-        if (isLogicalRetryBudgetError(error)) throw error;
+        if (isLogicalRetryBudgetError(error) || isUncertainGenerationAcceptance(error)) throw error;
         if (signal?.aborted || isAbortError(error)) {
           throw signal?.reason ?? error;
         }
@@ -1728,7 +1729,7 @@ export class AntigravityExecutor extends BaseExecutor {
           decision.kind === "full_quota_exhausted",
       };
     } catch (error) {
-      if (isLogicalRetryBudgetError(error)) throw error;
+      if (isLogicalRetryBudgetError(error) || isUncertainGenerationAcceptance(error)) throw error;
       if (signal?.aborted || isAbortError(error)) {
         throw signal?.reason ?? error;
       }
