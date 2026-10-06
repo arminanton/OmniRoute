@@ -1,3 +1,4 @@
+import { mergeGoogleQuotaFields } from "./googleQuotaIdentity";
 /**
  * Shared upsert for OAuth provider connections, used by both the authenticated
  * OAuth route (`device-complete`) and the public Codex device-flow completion
@@ -188,6 +189,14 @@ export async function persistOAuthConnection(
     if (matchId) {
       connection = await updateProviderConnection(matchId, {
         ...tokenData,
+        ...(["antigravity", "agy"].includes(provider)
+          ? {
+              providerSpecificData: mergeGoogleQuotaFields(
+                match?.providerSpecificData,
+                tokenData.providerSpecificData
+              ),
+            }
+          : {}),
         expiresAt,
         ...antigravityPersistStatus(degradedProject),
         isActive: true,

@@ -1,3 +1,4 @@
+import { verifiedGoogleQuotaFields, mergeGoogleQuotaFields } from "../googleQuotaIdentity";
 import {
   getProviderConnections,
   createProviderConnection,
@@ -56,6 +57,7 @@ export interface EnrichedAgyAuth extends ParsedAgyAuth {
   email: string | null;
   projectId: string | null;
   tier: string | null;
+  verifiedQuotaIdentity?: Record<string, unknown>;
 }
 
 export interface CreateAgyConnectionOptions {
@@ -124,6 +126,7 @@ export async function enrichWithAntigravityBackend(
   let email: string | null = null;
   let projectId: string | null = null;
   let tier: string | null = null;
+  let userInfo: Record<string, unknown> = {};
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -133,7 +136,8 @@ export async function enrichWithAntigravityBackend(
       signal: controller.signal,
     });
     if (userInfoRes.ok) {
-      email = toNonEmptyString(toRecord(await userInfoRes.json()).email);
+      userInfo = toRecord(await userInfoRes.json());
+      email = toNonEmptyString(userInfo.email);
     }
   } catch {
     // best effort — email stays null
@@ -172,7 +176,13 @@ export async function enrichWithAntigravityBackend(
     clearTimeout(loadTimer);
   }
 
-  return { ...parsed, email, projectId, tier };
+  return {
+    ...parsed,
+    email,
+    projectId,
+    tier,
+    verifiedQuotaIdentity: verifiedGoogleQuotaFields(userInfo, projectId),
+  };
 }
 
 // ──── Find existing connection ────────────────────────────────────────────────
@@ -229,7 +239,7 @@ export async function createConnectionFromAgyToken(
           // mapAntigravityTokens. Placed BEFORE the existing-data spread so a
           // previously persisted operator choice (true or false) wins.
           autoSync: true,
-          ...toRecord(existing.providerSpecificData),
+          ...mergeGoogleQuotaFields(existing.providerSpecificData, enriched.verifiedQuotaIdentity),
           clientProfile: "cli",
           tokenType: enriched.tokenType,
           authMethod: enriched.authMethod,
@@ -274,6 +284,7 @@ export async function createConnectionFromAgyToken(
     providerSpecificData: {
       // Default new imports into model auto-sync — see mapAntigravityTokens.
       autoSync: true,
+      ...enriched.verifiedQuotaIdentity,
       clientProfile: "cli",
       tokenType: enriched.tokenType,
       authMethod: enriched.authMethod,
