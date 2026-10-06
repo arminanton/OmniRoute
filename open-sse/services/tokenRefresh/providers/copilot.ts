@@ -1,5 +1,5 @@
-import { runCoordinatedGrantRefresh } from "../../coordination/grantRefresh.ts";
 // @ts-nocheck
+import { runCoordinatedGrantRefresh } from "../../coordination/grantRefresh.ts";
 // Extracted from open-sse/services/tokenRefresh.ts — see ../shared.ts for
 // provenance notes (ported idea from KooshaPari's PR #7338, redone on tip).
 import { getGitHubCopilotRefreshHeaders } from "../../../config/providerHeaderProfiles.ts";
