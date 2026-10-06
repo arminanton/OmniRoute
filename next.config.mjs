@@ -383,6 +383,8 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   webpack(config, { dev, webpack }) {
+    // Immutable minimal images do not need a multi-gigabyte incremental build cache.
+    if (isMinimalBuild && !dev) config.cache = false;
     config.ignoreWarnings = [
       ...(config.ignoreWarnings || []),
       isNextIntlExtractorDynamicImportWarning,
