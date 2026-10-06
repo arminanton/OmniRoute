@@ -1,3 +1,5 @@
+import { runControlPlaneDispatch } from "./logicalRetryBudget.ts";
+
 const ANTIGRAVITY_IDE_RELEASE_FEED_URL =
   "https://antigravity-auto-updater-974169037036.us-central1.run.app/releases";
 const ANTIGRAVITY_CLI_RELEASE_URL =
@@ -5,6 +7,7 @@ const ANTIGRAVITY_CLI_RELEASE_URL =
 
 export const ANTIGRAVITY_VERSION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 export const ANTIGRAVITY_VERSION_FETCH_TIMEOUT_MS = 5_000;
+export const ANTIGRAVITY_VERSION_FAILURE_CACHE_TTL_MS = 60_000;
 export const ANTIGRAVITY_IDE_FALLBACK_VERSION = "2.5.5";
 export const ANTIGRAVITY_CLI_FALLBACK_VERSION = "1.2.16";
 
@@ -16,13 +19,14 @@ type VersionCache = {
 type ProductVersionState = {
   cache: VersionCache | null;
   inFlight: Promise<string> | null;
+  failedAt: number | null;
 };
 
 type FetchLike = typeof fetch;
 type VersionParser = (payload: unknown) => string | null;
 
-const ideState: ProductVersionState = { cache: null, inFlight: null };
-const cliState: ProductVersionState = { cache: null, inFlight: null };
+const ideState: ProductVersionState = { cache: null, inFlight: null, failedAt: null };
+const cliState: ProductVersionState = { cache: null, inFlight: null, failedAt: null };
 
 function normalizeVersion(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -96,6 +100,9 @@ async function resolveProductVersion(
     return pickNewestVersion(state.cache.version, fallbackVersion) ?? fallbackVersion;
   }
 
+  if (state.failedAt !== null && now - state.failedAt < ANTIGRAVITY_VERSION_FAILURE_CACHE_TTL_MS)
+    return pickNewestVersion(state.cache?.version, fallbackVersion) ?? fallbackVersion;
+
   if (state.inFlight) {
     return state.inFlight;
   }
@@ -103,7 +110,9 @@ async function resolveProductVersion(
   state.inFlight = (async () => {
     let resolved: string | null = null;
     try {
-      resolved = parsePayload(await fetchJsonWithTimeout(fetchImpl, sourceUrl));
+      resolved = parsePayload(
+        await runControlPlaneDispatch(() => fetchJsonWithTimeout(fetchImpl, sourceUrl))
+      );
     } catch {
       resolved = null;
     }
@@ -111,6 +120,7 @@ async function resolveProductVersion(
     const version =
       pickNewestVersion(resolved, state.cache?.version, fallbackVersion) ?? fallbackVersion;
 
+    state.failedAt = resolved ? null : Date.now();
     if (resolved) {
       state.cache = {
         fetchedAt: Date.now(),
@@ -133,25 +143,42 @@ function seedVersionCache(state: ProductVersionState, version: string, fetchedAt
     throw new TypeError(`Invalid Antigravity version: ${version}`);
   }
   state.cache = { fetchedAt, version: normalized };
+  state.failedAt = null;
 }
 
-export function resolveAntigravityIdeVersion(fetchImpl: FetchLike = fetch): Promise<string> {
-  return resolveProductVersion(
+export function resolveAntigravityIdeVersion(fetchImpl?: FetchLike): Promise<string> {
+  const refresh = resolveProductVersion(
     ideState,
     ANTIGRAVITY_IDE_FALLBACK_VERSION,
     ANTIGRAVITY_IDE_RELEASE_FEED_URL,
     parseIdeReleaseFeed,
-    fetchImpl
+    fetchImpl ?? fetch
+  );
+  // Production uses the verified bundled/cached fingerprint immediately. Explicit
+  // injected discovery remains awaitable for compatibility and offline validation.
+  if (fetchImpl) return refresh;
+  void refresh.catch(() => {});
+  return Promise.resolve(
+    pickNewestVersion(ideState.cache?.version, ANTIGRAVITY_IDE_FALLBACK_VERSION) ??
+      ANTIGRAVITY_IDE_FALLBACK_VERSION
   );
 }
 
-export function resolveAntigravityCliVersion(fetchImpl: FetchLike = fetch): Promise<string> {
-  return resolveProductVersion(
+export function resolveAntigravityCliVersion(fetchImpl?: FetchLike): Promise<string> {
+  const refresh = resolveProductVersion(
     cliState,
     ANTIGRAVITY_CLI_FALLBACK_VERSION,
     ANTIGRAVITY_CLI_RELEASE_URL,
     parseCliRelease,
-    fetchImpl
+    fetchImpl ?? fetch
+  );
+  // Production uses the verified bundled/cached fingerprint immediately. Explicit
+  // injected discovery remains awaitable for compatibility and offline validation.
+  if (fetchImpl) return refresh;
+  void refresh.catch(() => {});
+  return Promise.resolve(
+    pickNewestVersion(cliState.cache?.version, ANTIGRAVITY_CLI_FALLBACK_VERSION) ??
+      ANTIGRAVITY_CLI_FALLBACK_VERSION
   );
 }
 
@@ -174,6 +201,8 @@ export function seedAntigravityCliVersionCache(version: string, fetchedAt = Date
 export function clearAntigravityVersionCaches(): void {
   ideState.cache = null;
   ideState.inFlight = null;
+  ideState.failedAt = null;
   cliState.cache = null;
   cliState.inFlight = null;
+  cliState.failedAt = null;
 }

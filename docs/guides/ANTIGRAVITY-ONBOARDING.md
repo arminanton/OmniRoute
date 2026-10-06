@@ -294,3 +294,9 @@ The local concurrency checks cover 1, 30, 70, and 100 independent conversations 
 New OAuth logins and CLI imports retain the Google user ID from the existing authenticated userinfo call and the project returned by successful CodeAssist discovery. When both exist, CLI and IDE records for the same subject and project share an account/project admission key. This conservatively groups request capacity; it does not assert a subscription tier, exact provider quota, or entitlement. Operator `quotaGroup`, `quotaRealm`, and partition overrides remain authoritative.
 
 The implementation does not infer identity from email, unverified JWTs, or a manually entered project. Existing records lacking native proof are not automatically backfilled: use an explicit reviewed `quotaGroup` and `quotaRealm` for cross-provider grouping, or obtain proof during the next authorized login/import. A replacement login without native proof revokes previously automatic identity rather than retaining stale evidence. No additional discovery or token-refresh calls are introduced.
+
+## Version discovery and concurrent agents
+
+Generation requests use the verified bundled or previously cached CLI/IDE fingerprint immediately. Official release metadata refreshes run separately with a five-second timeout. A failed or unrecognized release response is cached for60seconds so a wave of agents does not repeat the same failed lookup. The bundled CLI1.2.16 and IDE2.5.5 versions remain the fallback; this does not claim additional protocol capabilities or subscription capacity.
+
+Metadata lookups do not borrow generation admission permits or retry budgets. They retain the existing egress and authentication policy. Generation retries still release admission during their backoff and reacquire it before sending again. This prevents a single-flight metadata owner from waiting for permits held by agents that are waiting for that owner's result.
