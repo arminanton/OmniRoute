@@ -283,6 +283,25 @@ export class SqliteCoordinator {
   unblock(resource: string): void {
     this.db.prepare("DELETE FROM coordination_blocks WHERE resource=?").run(resource);
   }
+  runtimeCounts(now = Date.now()) {
+    const rows = this.db
+      .prepare(
+        "SELECT l.id,r.resource FROM coordination_leases l JOIN coordination_resources r ON l.id=r.lease_id WHERE l.owner=? AND l.expires>?"
+      )
+      .all(this.owner, now);
+    const activeGeneration = new Set(
+      rows.filter((r) => !String(r.resource).startsWith("task:")).map((r) => String(r.id))
+    ).size;
+    const waits = this.db
+      .prepare("SELECT resources FROM coordination_waiters WHERE owner=? AND expires>?")
+      .all(this.owner, now);
+    const queuedGeneration = waits.filter((row) =>
+      (JSON.parse(String(row.resources)) as CoordinationRequirement[]).some(
+        (r) => !r.key.startsWith("task:")
+      )
+    ).length;
+    return { owner: this.owner, activeGeneration, queuedGeneration, observedAt: now };
+  }
   hasLiveResource(key: string, now = Date.now()): boolean {
     return !!this.db
       .prepare(
