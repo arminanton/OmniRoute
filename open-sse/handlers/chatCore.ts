@@ -1,3 +1,4 @@
+import { withCodexConversationIdentity } from "../services/codexConversationIdentity.ts";
 import { withAntigravityConversationIdentity } from "../services/antigravityIdentity.ts";
 import {
   extractRequestToolIdentityMap,
@@ -1229,6 +1230,12 @@ export async function handleChatCore({
     model: requestedModel,
     body: body && typeof body === "object" ? (body as Record<string, unknown>) : null,
   });
+  credentials = withCodexConversationIdentity(
+    provider,
+    credentials,
+    apiKeyInfo?.id,
+    explicitSessionIdHeader || conversationId
+  );
   credentials = withAntigravityConversationIdentity(
     provider,
     credentials,

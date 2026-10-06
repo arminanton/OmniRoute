@@ -332,6 +332,7 @@ const CODEX_IDENTITY_HEADER_NAMES = [
 ] as const;
 
 type CodexCredentialIdentityInput = {
+  _codexConversationIdentity?: string | null;
   connectionId?: string;
   requestEndpointPath?: string;
   accessToken?: unknown;
@@ -380,7 +381,8 @@ export function resolveCodexFingerprintIdentity(input: {
         input.body && typeof input.body === "object"
           ? (input.body as Record<string, unknown>).prompt_cache_key
           : null
-      ),
+      ) ||
+      normalizeCodexSessionId(credentials._codexConversationIdentity),
     providerSpecificData,
     {
       accountKey: credentials.connectionId ?? null,

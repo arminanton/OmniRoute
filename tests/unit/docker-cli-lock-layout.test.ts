@@ -280,3 +280,17 @@ test("target scope symlinks and overlapping prefixes cannot redirect materializa
     /disjoint/
   );
 });
+
+test("committed CLI lock contains dependencies inside their owning CLI roots", () => {
+  const lock = JSON.parse(
+    fs.readFileSync(new URL("../../docker/cli/package-lock.json", import.meta.url), "utf8")
+  );
+  const roots = CLI_ROOTS.map(({ name }) => `node_modules/${name}`);
+  for (const key of Object.keys(lock.packages)) {
+    if (!key) continue;
+    assert.ok(
+      roots.some((root) => key === root || key.startsWith(root + "/")),
+      `Unexpected external lock root: ${key}`
+    );
+  }
+});

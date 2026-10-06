@@ -6,6 +6,7 @@
 
 - Leave Codex throttling retries to account orchestration instead of multiplying requests with a fixed-delay inner retry loop.
 - Keep native Codex JSON error bodies readable, preserve ChatGPT `detail` messages and `Retry-After`, and retain compact provider diagnostics when call artifacts exceed their size limit.
+- Use a principal-scoped conversation fallback for SDK clients without native thread headers; preserve explicit identities and cache keys.
 - Separate Codex child-thread identities and prompt-cache keys, add GPT-6.1 Sol fallback aliases, and consult account-discovered effort limits before applying legacy clamps.
 - Accept signed internal model discovery at both authorization layers; remove stale entity headers from filtered model catalogs.
 - Preserve Antigravity cache-hit and reasoning usage, Claude Code translated tool history, and weekly Gemini versus Claude/GPT quota buckets.
