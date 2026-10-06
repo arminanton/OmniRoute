@@ -110,7 +110,17 @@ test(
       const text = await result.text();
       assert.ok([200, 429].includes(result.status), text);
       if (result.status === 429) assert.equal(result.headers.get("retry-after"), "7", text);
-      else assert.ok(result.headers.get("content-type")?.includes("text/event-stream"), text);
+      else {
+        assert.ok(result.headers.get("content-type")?.includes("text/event-stream"), text);
+        const events = text
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => JSON.parse(line.slice(5)));
+        const failed = events.find((event) => event.type === "response.failed");
+        assert.ok(failed, "slow throttling must end with a terminal Responses failure");
+        assert.match(failed.response.error.message, /Too many concurrent requests/);
+        assert.equal(failed.retry_after_seconds, 7);
+      }
       assert.match(text, /Too many concurrent requests/);
       assert.equal(bodyTouches, 0);
       assert.equal(

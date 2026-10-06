@@ -4,6 +4,7 @@
 
 ### 🐛 Provider catalogs, native errors and conversation identity
 
+- Emit terminal Responses failures after early keepalive so native Codex preserves late error reasons instead of reporting a disconnected stream.
 - Leave Codex throttling retries to account orchestration instead of multiplying requests with a fixed-delay inner retry loop.
 - Keep native Codex JSON error bodies readable, preserve ChatGPT `detail` messages and `Retry-After`, and retain compact provider diagnostics when call artifacts exceed their size limit.
 - Use a principal-scoped conversation fallback for SDK clients without native thread headers; preserve explicit identities and cache keys.

@@ -31,6 +31,7 @@
  *     to 200, so the HTTP status can no longer change).
  */
 
+import { responsesErrorEvent } from "./responsesErrorEvent.ts";
 import { recordEarlyKeepaliveBytes } from "./earlyKeepaliveByteBuffer.ts";
 
 const ENCODER = new TextEncoder();
@@ -81,12 +82,7 @@ export const OPENAI_CHAT_ERROR_FRAME = ENCODER.encode(
 // event — response.output_text.delta, response.completed, etc.), not an SSE
 // `event:` field.
 export const OPENAI_RESPONSES_ERROR_FRAME = ENCODER.encode(
-  `data: ${JSON.stringify({
-    type: "error",
-    code: null,
-    message: "Upstream stream failed before completion.",
-    param: null,
-  })}\n\n`
+  `data: ${responsesErrorEvent("", null)}\n\n`
 );
 
 export type EarlyStreamKeepaliveOptions = {
@@ -168,6 +164,10 @@ export async function withEarlyStreamKeepalive(
       : null;
   const extraHeaders = options.extraHeaders ?? {};
   const errorFrame = options.errorFrame ?? ERROR_FRAME;
+  const createFallbackErrorFrame = () =>
+    errorFrame === OPENAI_RESPONSES_ERROR_FRAME
+      ? ENCODER.encode(`data: ${responsesErrorEvent("", null)}\n\n`)
+      : errorFrame;
   // Single source of truth for whether THIS route's error framing uses a named SSE
   // `event: error` line (Anthropic) or a plain `data:` line (OpenAI Chat Completions /
   // Responses) — derived from errorFrame itself so the dynamic real-upstream-body case
@@ -283,8 +283,9 @@ export async function withEarlyStreamKeepalive(
 
         if (result.status === "rejected") {
           // Handler rejected — emit a generic error frame (never the raw error/stack).
-          controller.enqueue(errorFrame);
-          recordClientBytes(errorFrame);
+          const failureFrame = createFallbackErrorFrame();
+          controller.enqueue(failureFrame);
+          recordClientBytes(failureFrame);
         } else {
           const response = result.response;
           const contentType = (response.headers.get("content-type") || "").toLowerCase();
@@ -310,8 +311,9 @@ export async function withEarlyStreamKeepalive(
               // the SSE stream. Silently close instead; the client will see
               // the stream end naturally.
               if (bytesForwarded === 0) {
-                controller.enqueue(errorFrame);
-                recordClientBytes(errorFrame);
+                const failureFrame = createFallbackErrorFrame();
+                controller.enqueue(failureFrame);
+                recordClientBytes(failureFrame);
               }
             }
           } else {
@@ -321,8 +323,10 @@ export async function withEarlyStreamKeepalive(
             // instead of forwarding raw JSON, which would be malformed SSE.
             const text = response.body ? await response.text().catch(() => "") : "";
             const dataLine =
-              text.trim() ||
-              JSON.stringify({ error: { message: "stream_error", type: "stream_error" } });
+              errorFrame === OPENAI_RESPONSES_ERROR_FRAME
+                ? responsesErrorEvent(text, response.headers.get("retry-after"), response.status)
+                : text.trim() ||
+                  JSON.stringify({ error: { message: "stream_error", type: "stream_error" } });
             const framed = errorFrameUsesNamedEvent
               ? `event: error\ndata: ${dataLine}\n\n`
               : `data: ${dataLine}\n\n`;
@@ -335,8 +339,9 @@ export async function withEarlyStreamKeepalive(
         // Defensive: never surface a raw error/stack to the client.
         if (!aborted) {
           try {
-            controller.enqueue(errorFrame);
-            recordClientBytes(errorFrame);
+            const failureFrame = createFallbackErrorFrame();
+            controller.enqueue(failureFrame);
+            recordClientBytes(failureFrame);
           } catch {
             /* consumer gone */
           }

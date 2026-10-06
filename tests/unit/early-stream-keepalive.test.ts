@@ -332,14 +332,18 @@ test("OPENAI_CHAT_ERROR_FRAME is a plain data: line with no event: field", () =>
 
 test("OPENAI_RESPONSES_ERROR_FRAME is a plain data: line discriminated by type, not event:", () => {
   const decoded = new TextDecoder().decode(OPENAI_RESPONSES_ERROR_FRAME);
-  assert.doesNotMatch(decoded, /^event:/, "Responses API streams never use the event: field");
+  assert.doesNotMatch(
+    decoded,
+    /^event:/,
+    "Plain data framing remains compatible with line-based consumers"
+  );
   assert.match(decoded, /^data: /);
 
   const payload = JSON.parse(decoded.replace(/^data: /, "").trim());
   assert.equal(
     payload.type,
-    "error",
-    "Responses API events are discriminated by a `type` field inside the JSON payload"
+    "response.failed",
+    "Codex needs a terminal failed response to preserve the reason"
   );
 });
 
@@ -414,4 +418,75 @@ test("aborting the client signal stops the keepalive stream (#2544)", async () =
   })();
   const timed = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 5000));
   assert.equal(await Promise.race([drained, timed]), true, "stream should close after abort");
+});
+
+test("late Responses JSON throttling becomes a typed Responses error event with retry hints", async () => {
+  const pending = new Promise<Response>((resolve) =>
+    setTimeout(
+      () =>
+        resolve(
+          Response.json(
+            {
+              error: {
+                message: "Too many concurrent requests",
+                type: "rate_limit_error",
+                code: "rate_limit_exceeded",
+              },
+            },
+            { status: 429, headers: { "retry-after": "7" } }
+          )
+        ),
+      40
+    )
+  );
+  const response = await withEarlyStreamKeepalive(pending, {
+    thresholdMs: 5,
+    intervalMs: 10,
+    errorFrame: OPENAI_RESPONSES_ERROR_FRAME,
+  });
+  assert.equal(response.status, 200);
+  const event = (await response.text())
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => JSON.parse(line.slice(5)))
+    .at(-1);
+  assert.equal(event.type, "response.failed", "Codex requires a terminal failed response");
+  assert.equal(event.response.status, "failed");
+  assert.equal(event.response.error.message, event.message);
+  assert.equal(event.message, "Too many concurrent requests");
+  assert.equal(event.code, "rate_limit_exceeded");
+  assert.equal(event.retry_after_seconds, 7);
+  assert.equal(
+    event.error.message,
+    event.message,
+    "plain OpenAI SDK parsers retain their error envelope"
+  );
+});
+
+test("Responses failure snapshots carry fresh IDs and HTTP-date retry hints", async (t) => {
+  const { responsesErrorEvent } = await import("../../open-sse/utils/responsesErrorEvent.ts");
+  const now = Date.parse("2026-10-06T12:00:00Z");
+  t.mock.method(Date, "now", () => now);
+  const build = () =>
+    JSON.parse(
+      responsesErrorEvent(
+        '{"error":{"message":"Throttled"}}',
+        new Date(now + 7000).toUTCString(),
+        429
+      )
+    );
+  const first = build(),
+    second = build();
+  assert.equal(first.retry_after_seconds, 7);
+  assert.equal(first.response.error.code, "rate_limit_exceeded");
+  assert.notEqual(first.response.id, second.response.id);
+});
+
+test("Responses framing replaces malformed non-JSON error bodies with a valid terminal failure", async () => {
+  const { responsesErrorEvent } = await import("../../open-sse/utils/responsesErrorEvent.ts");
+  const event = JSON.parse(responsesErrorEvent("<html>proxy failure</html>", "invalid"));
+  assert.equal(event.type, "response.failed");
+  assert.equal(event.response.status, "failed");
+  assert.equal(event.response.error.message, "Upstream stream failed before completion.");
+  assert.equal(event.retry_after_seconds, undefined);
 });
