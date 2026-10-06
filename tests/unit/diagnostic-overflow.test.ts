@@ -429,6 +429,7 @@ test("real descriptor write failure is incomplete and cannot reject inference or
   const directory = root(),
     store = new DiagnosticOverflowStore({ root: directory });
   const trace = store.createTrace({ provider: "antigravity" });
+  const heldReadOnlyDescriptors: number[] = [];
   try {
     const attempt = await trace.beginAttempt({ requestBody: "fixture" });
     const target = path.join(directory, trace.traceId, `${attempt.id}.provider_response.gz`);
@@ -440,7 +441,16 @@ test("real descriptor write failure is incomplete and cannot reject inference or
       }
     });
     assert.ok(descriptor, "only the exact task-owned response descriptor may be closed");
-    fs.closeSync(Number(descriptor));
+    const closedDescriptor = Number(descriptor);
+    fs.closeSync(closedDescriptor);
+    // Keep its number occupied by an owned read-only descriptor. Otherwise SQLite
+    // may reuse the number for a journal, making this fault injection nondeterministic.
+    for (let i = 0; i < 256; i++) {
+      const held = fs.openSync("/dev/null", fs.constants.O_RDONLY);
+      heldReadOnlyDescriptors.push(held);
+      if (held === closedDescriptor) break;
+    }
+    assert.ok(heldReadOnlyDescriptors.includes(closedDescriptor));
     await attempt.writeResponse(Buffer.from("synthetic response after storage failure"));
     await attempt.finish();
     await trace.finish();
@@ -451,6 +461,11 @@ test("real descriptor write failure is incomplete and cannot reject inference or
     assert.equal(store.open(trace.traceId, attempt.id, "response").state, "corrupt");
     assert.equal(getDiagnosticOverflowActiveWork(), 0);
   } finally {
+    for (const fd of heldReadOnlyDescriptors) {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
     await trace.abort();
     store.close();
     fs.rmSync(directory, { recursive: true });
