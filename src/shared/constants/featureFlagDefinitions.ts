@@ -237,7 +237,7 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     warningLevel: "info",
   },
 
-  // ──────────────── Policies (5) ────────────────
+  // ──────────────── Policies (6) ────────────────
   {
     key: "TOOL_POLICY_MODE",
     label: "Tool Policy Mode",
@@ -296,6 +296,20 @@ export const FEATURE_FLAG_DEFINITIONS: FeatureFlagDefinition[] = [
     type: "boolean",
     requiresRestart: false,
     warningLevel: "info",
+  },
+
+  {
+    key: "UNPRICED_USAGE_BUDGET_POLICY",
+    label: "Unpriced Usage Budget Policy",
+    description:
+      "Choose whether usage without a model price blocks API key budget enforcement or counts as zero; pricing lookup failures always block.",
+    descriptionI18nKey: "featureFlagUnpricedUsageBudgetPolicyDescription",
+    category: "policies",
+    defaultValue: "fail_closed",
+    type: "enum",
+    enumValues: ["fail_closed", "count_as_zero"],
+    requiresRestart: false,
+    warningLevel: "caution",
   },
 
   // ──────────────── Runtime (17) ────────────────

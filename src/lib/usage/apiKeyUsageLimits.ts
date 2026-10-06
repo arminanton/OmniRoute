@@ -1,7 +1,16 @@
 import { getDbInstance } from "@/lib/db/core";
 import type { ProviderLimitsCacheEntry } from "@/lib/db/providerLimits";
 import { getProviderQuotaWindowStartIso } from "@/lib/db/quotaResetEvents";
-import { calculateCost } from "./costCalculator";
+import { calculateCostDetailed } from "./costCalculator";
+import {
+  buildUnpricedUsageMessage,
+  isUnpricedUsagePolicyBlocked,
+  type UnpricedUsageModel,
+} from "./unpricedUsage";
+import {
+  getUnpricedUsageBudgetPolicy,
+  type UnpricedUsageBudgetPolicy,
+} from "@/shared/utils/featureFlags";
 import { buildErrorBody, sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 import {
   calendarWeekWindowMs,
@@ -33,6 +42,11 @@ export interface ApiKeyUsageLimitStatus {
   weeklyResetAtIso: string | null;
   dailyExceeded: boolean;
   weeklyExceeded: boolean;
+  dailyUnpricedModels?: UnpricedUsageModel[];
+  weeklyUnpricedModels?: UnpricedUsageModel[];
+  dailyPricingFailure?: boolean;
+  weeklyPricingFailure?: boolean;
+  unpricedUsagePolicy?: UnpricedUsageBudgetPolicy;
 }
 
 export interface ApiKeyUsageLimitDeps {
@@ -424,8 +438,17 @@ export function getApiKeyWeeklyWindowSetting(
   return { mode, timeZone };
 }
 
-async function getApiKeyUsdSpendSince(apiKeyId: string, sinceIso: string): Promise<number> {
-  if (!apiKeyId) return 0;
+interface UsageSpendResult {
+  spentUsd: number;
+  unpricedModels: UnpricedUsageModel[];
+  pricingFailure: boolean;
+}
+
+async function getApiKeyUsdSpendSince(
+  apiKeyId: string,
+  sinceIso: string
+): Promise<UsageSpendResult> {
+  if (!apiKeyId) return { spentUsd: 0, unpricedModels: [], pricingFailure: false };
   const db = getDbInstance();
   const rows = db
     .prepare(
@@ -449,12 +472,14 @@ async function getApiKeyUsdSpendSince(apiKeyId: string, sinceIso: string): Promi
     .all({ apiKeyId, sinceIso }) as UsageCostRow[];
 
   let total = 0;
+  let pricingFailure = false;
+  const unpricedModels = new Map<string, UnpricedUsageModel>();
   for (const row of rows) {
     const provider = typeof row.provider === "string" ? row.provider : "";
     const model = typeof row.model === "string" ? row.model : "";
     if (!provider || !model) continue;
 
-    total += await calculateCost(
+    const result = await calculateCostDetailed(
       provider,
       model,
       {
@@ -470,9 +495,16 @@ async function getApiKeyUsdSpendSince(apiKeyId: string, sinceIso: string): Promi
         serviceTier: row.serviceTier || "standard",
       }
     );
+    total += result.cost;
+    pricingFailure ||= result.failed;
+    if (result.missingPricing) unpricedModels.set(`${provider}:${model}`, { provider, model });
   }
 
-  return roundUsd(total);
+  return {
+    spentUsd: roundUsd(total),
+    unpricedModels: [...unpricedModels.values()],
+    pricingFailure,
+  };
 }
 
 export async function getApiKeyUsageLimitStatus(
@@ -504,7 +536,7 @@ export async function getApiKeyUsageLimitStatus(
   const weeklyLimitUsd = normalizeLimitUsd(metadata.weeklyUsageLimitUsd);
   const enabled = metadata.usageLimitEnabled === true;
 
-  const [dailySpentUsd, weeklySpentUsd] = await Promise.all([
+  const [dailyUsage, weeklyUsage] = await Promise.all([
     getApiKeyUsdSpendSince(metadata.id, dailyWindowStartIso),
     getApiKeyUsdSpendSince(metadata.id, weeklyWindowStartIso),
   ]);
@@ -513,14 +545,19 @@ export async function getApiKeyUsageLimitStatus(
     enabled,
     dailyLimitUsd,
     weeklyLimitUsd,
-    dailySpentUsd,
-    weeklySpentUsd,
+    dailySpentUsd: dailyUsage.spentUsd,
+    weeklySpentUsd: weeklyUsage.spentUsd,
     dailyWindowStartIso,
     dailyResetAtIso,
     weeklyWindowStartIso,
     weeklyResetAtIso,
-    dailyExceeded: enabled && dailyLimitUsd !== null && dailySpentUsd >= dailyLimitUsd,
-    weeklyExceeded: enabled && weeklyLimitUsd !== null && weeklySpentUsd >= weeklyLimitUsd,
+    dailyExceeded: enabled && dailyLimitUsd !== null && dailyUsage.spentUsd >= dailyLimitUsd,
+    weeklyExceeded: enabled && weeklyLimitUsd !== null && weeklyUsage.spentUsd >= weeklyLimitUsd,
+    dailyUnpricedModels: dailyUsage.unpricedModels,
+    weeklyUnpricedModels: weeklyUsage.unpricedModels,
+    dailyPricingFailure: dailyUsage.pricingFailure,
+    weeklyPricingFailure: weeklyUsage.pricingFailure,
+    unpricedUsagePolicy: getUnpricedUsageBudgetPolicy(),
   };
 }
 
@@ -568,7 +605,7 @@ function buildUsageLimitExceededMessage(
   options: { showUsd?: boolean } = {}
 ): string {
   const showUsd = options.showUsd !== false;
-  if (status.dailyExceeded && status.dailyLimitUsd !== null) {
+  if (shouldReportDailyWindow(status) && status.dailyLimitUsd !== null) {
     const percent = formatUsagePercent(getUsagePercent(status.dailySpentUsd, status.dailyLimitUsd));
     if (!showUsd) {
       return `This API key reached its daily usage quota (${percent}). Resets in ${formatResetIn(status.dailyResetAtIso, now)}. Choose another allowed model after reset.`;
@@ -598,6 +635,27 @@ function isAnthropicMessagesRequest(request: Request): boolean {
   }
 }
 
+function isPricedOverLimit(status: ApiKeyUsageLimitStatus): boolean {
+  return status.dailyExceeded || status.weeklyExceeded;
+}
+
+function shouldReportDailyWindow(status: ApiKeyUsageLimitStatus): boolean {
+  if (!status.dailyExceeded) return false;
+  if (!status.weeklyExceeded) return true;
+  const dailyResetMs = Date.parse(status.dailyResetAtIso);
+  const weeklyResetMs = status.weeklyResetAtIso ? Date.parse(status.weeklyResetAtIso) : NaN;
+  return !Number.isFinite(weeklyResetMs) || dailyResetMs >= weeklyResetMs;
+}
+
+function getPricedOverageRetryAfter(status: ApiKeyUsageLimitStatus, now: number): string | null {
+  const resetTimes = [
+    status.dailyExceeded ? Date.parse(status.dailyResetAtIso) : NaN,
+    status.weeklyExceeded && status.weeklyResetAtIso ? Date.parse(status.weeklyResetAtIso) : NaN,
+  ].filter((resetAt) => Number.isFinite(resetAt) && resetAt > now);
+  if (!resetTimes.length) return null;
+  return String(Math.ceil((Math.max(...resetTimes) - now) / 1000));
+}
+
 export function buildApiKeyUsageLimitRejection(
   request: Request,
   status: ApiKeyUsageLimitStatus,
@@ -621,10 +679,61 @@ export function buildApiKeyUsageLimitRejection(
     );
   }
 
-  return new Response(JSON.stringify(buildErrorBody(400, message)), {
-    status: 400,
-    headers: { "Content-Type": "application/json" },
+  const retryAfter = getPricedOverageRetryAfter(status, now);
+  return new Response(JSON.stringify(buildErrorBody(429, message)), {
+    status: 429,
+    headers: {
+      "Content-Type": "application/json",
+      ...(retryAfter ? { "Retry-After": retryAfter } : {}),
+    },
   });
+}
+
+export function buildApiKeyUsageLimitPolicyRejectionForStatus(
+  request: Request,
+  status: ApiKeyUsageLimitStatus,
+  now = Date.now()
+): Response | null {
+  if (!status.enabled) return null;
+  const dailyLimited = status.dailyLimitUsd !== null;
+  const weeklyLimited = status.weeklyLimitUsd !== null;
+  const pricingFailure =
+    (dailyLimited && status.dailyPricingFailure === true) ||
+    (weeklyLimited && status.weeklyPricingFailure === true);
+  if (
+    isUnpricedUsagePolicyBlocked(
+      status.unpricedUsagePolicy ?? "fail_closed",
+      dailyLimited,
+      weeklyLimited,
+      status.dailyUnpricedModels ?? [],
+      status.weeklyUnpricedModels ?? [],
+      status.dailyPricingFailure === true,
+      status.weeklyPricingFailure === true
+    )
+  ) {
+    const message = sanitizeErrorMessage(
+      buildUnpricedUsageMessage(
+        status.dailyUnpricedModels ?? [],
+        status.weeklyUnpricedModels ?? [],
+        pricingFailure
+      )
+    );
+    if (isAnthropicMessagesRequest(request)) {
+      return new Response(
+        JSON.stringify({
+          type: "error",
+          error: { type: "invalid_request_error", message },
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    return new Response(JSON.stringify(buildErrorBody(400, message)), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (!isPricedOverLimit(status)) return null;
+  return buildApiKeyUsageLimitRejection(request, status, now, { showUsd: false });
 }
 
 export async function buildApiKeyUsageLimitPolicyRejection(
@@ -632,8 +741,5 @@ export async function buildApiKeyUsageLimitPolicyRejection(
   metadata: ApiKeyUsageLimitMetadata
 ): Promise<Response | null> {
   const status = await getApiKeyUsageLimitStatus(metadata);
-  if (!status.enabled || (!status.dailyExceeded && !status.weeklyExceeded)) return null;
-  return buildApiKeyUsageLimitRejection(request, status, Date.now(), {
-    showUsd: false,
-  });
+  return buildApiKeyUsageLimitPolicyRejectionForStatus(request, status);
 }

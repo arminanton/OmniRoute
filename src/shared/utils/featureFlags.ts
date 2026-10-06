@@ -19,6 +19,19 @@ export function resolveFeatureFlag(key: string): string {
   return definition?.defaultValue ?? "false";
 }
 
+export type UnpricedUsageBudgetPolicy = "fail_closed" | "count_as_zero";
+
+/** Unknown values and feature-flag store failures must never relax enforcement. */
+export function getUnpricedUsageBudgetPolicy(): UnpricedUsageBudgetPolicy {
+  try {
+    const value = resolveFeatureFlag("UNPRICED_USAGE_BUDGET_POLICY");
+    return value === "count_as_zero" ? "count_as_zero" : "fail_closed";
+  } catch (error) {
+    console.error("Unable to read UNPRICED_USAGE_BUDGET_POLICY; using fail_closed:", error);
+    return "fail_closed";
+  }
+}
+
 /**
  * Check if a boolean feature flag is enabled.
  * Treats "true", "1", "yes" as enabled.

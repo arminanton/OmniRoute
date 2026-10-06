@@ -173,18 +173,28 @@ export function computeCostFromPricing(
   return cost * getCodexFastCostMultiplier(options.provider, options.model, options.serviceTier);
 }
 
-export async function calculateCost(
+export interface DetailedCostCalculation {
+  cost: number;
+  missingPricing: boolean;
+  failed: boolean;
+}
+
+export async function calculateCostDetailed(
   provider: string,
   model: string,
   tokens: Record<string, number | undefined> | null | undefined,
   options: CostCalculationOptions = {}
-): Promise<number> {
-  if (!tokens || !provider || !model) return 0;
+): Promise<DetailedCostCalculation> {
+  if (!tokens || !provider || !model) {
+    return { cost: 0, missingPricing: false, failed: false };
+  }
 
   // Short-circuit before any pricing DB lookup when an exact, provider-reported
   // cost is present (currently xAI's `cost_in_usd_ticks` — see extractExactCostUsd).
   const exactCostUsd = extractExactCostUsd(tokens);
-  if (exactCostUsd !== null) return exactCostUsd;
+  if (exactCostUsd !== null) {
+    return { cost: exactCostUsd, missingPricing: false, failed: false };
+  }
 
   try {
     const { getPricingForModel } = await import("@/lib/db/settings");
@@ -204,21 +214,36 @@ export async function calculateCost(
         }
       }
     }
-    if (!pricing) return 0;
+    if (!pricing) {
+      return { cost: 0, missingPricing: true, failed: false };
+    }
 
     const pricingRecord =
       pricing && typeof pricing === "object" && !Array.isArray(pricing)
         ? (pricing as Record<string, unknown>)
         : {};
-    return computeCostFromPricing(pricingRecord, tokens, {
-      provider,
-      model,
-      ...options,
-    });
+    return {
+      cost: computeCostFromPricing(pricingRecord, tokens, {
+        provider,
+        model,
+        ...options,
+      }),
+      missingPricing: false,
+      failed: false,
+    };
   } catch (error) {
     console.error("Error calculating cost:", error);
-    return 0;
+    return { cost: 0, missingPricing: false, failed: true };
   }
+}
+
+export async function calculateCost(
+  provider: string,
+  model: string,
+  tokens: Record<string, number | undefined> | null | undefined,
+  options: CostCalculationOptions = {}
+): Promise<number> {
+  return (await calculateCostDetailed(provider, model, tokens, options)).cost;
 }
 
 type ModalPricing = Record<string, unknown>;
