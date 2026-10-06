@@ -1225,6 +1225,19 @@ export class CodexExecutor extends BaseExecutor {
       body.service_tier = requestDefaults.serviceTier;
     }
 
+    // Native CLI 0.160 names this speed Fast but sends the priority service tier.
+    // Public API and custom endpoints retain their requested wire value.
+    if (body.service_tier === "fast" && credentials?.accessToken && !credentials.apiKey) {
+      const tierUrl = new URL(this.buildUrl(model, stream, 0, credentials));
+      if (
+        tierUrl.protocol === "https:" &&
+        tierUrl.hostname === "chatgpt.com" &&
+        /^\/backend-api\/codex\/responses(?:\/compact)?$/.test(tierUrl.pathname)
+      ) {
+        body.service_tier = "priority";
+      }
+    }
+
     // Issue #1832 & #1853: Map messages to input for clients like Cursor 5.5 that use responses/compact but send messages instead of input.
     // This MUST run before convertSystemToDeveloperRole.
     if (!body.input && Array.isArray(body.messages)) {
