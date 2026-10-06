@@ -12,6 +12,7 @@ import {
   GPT_5_6_SOL_PRICING,
   GPT_5_6_TERRA_PRICING,
 } from "./shared-tiers";
+import { CODEX_CURRENT_STANDARD_PRICING } from "./codex-current";
 
 const ANTIGRAVITY_GEMINI_3_7_PRICING = {
   "gemini-3.7-flash-low": GEMINI_3_7_FLASH_PROMO_PRICING,
@@ -88,6 +89,7 @@ export const DEFAULT_PRICING_OAUTH = {
     },
   },
   cx: {
+    ...CODEX_CURRENT_STANDARD_PRICING,
     "codex-auto-review": GPT_5_5_PRICING,
     // Codex uses credits per 1M tokens. OmniRoute stores the dollar-equivalent
     // values below at the documented conversion of 25 credits per USD.

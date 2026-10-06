@@ -24,7 +24,7 @@ import {
 } from "@/lib/db/functionalGatewayMirrors";
 import { buildFunctionalGatewayPredicate } from "./functionalGatewayPredicate";
 import { getPassthroughProviders, REGISTRY } from "@omniroute/open-sse/config/providerRegistry";
-import { hasEligibleConnectionForModel } from "@/domain/connectionModelRules";
+import { filterConfiguredCatalogModels } from "./catalogConfiguredProviders";
 import { dedupeExactCatalogIds } from "./catalogDedupe";
 import { sortCatalogModelsProviderGrouped } from "./catalogOrder";
 import {
@@ -41,6 +41,7 @@ import {
 import { extractApiKey } from "@/sse/services/auth";
 import { maybeOmitCatalogModelName } from "./catalogHelpers";
 import { isCodexModelCatalogClient } from "./catalogRequest";
+import { getPricing } from "@/lib/db/settings/pricing";
 
 /**
  * Post-filter chain applied AFTER the API-key filter, so variants and mirrors are
@@ -58,6 +59,7 @@ export async function applyCatalogPostFilters(
     prefixMode: string;
     aliasToProviderId: Record<string, string>;
     hideNoThinkVariants?: boolean;
+    providerNodeIdsByPrefix?: Readonly<Record<string, string>>;
   }
 ): Promise<Array<Record<string, any>>> {
   const yieldTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -65,10 +67,12 @@ export async function applyCatalogPostFilters(
 
   // variants are only generated for surviving models.
   if (new URL(request.url).searchParams.get("configuredOnly") === "true") {
-    finalModels = finalModels.filter((m) => {
-      if (!m.root) return true;
-      return hasEligibleConnectionForModel(ctx.connections, m.root);
-    });
+    finalModels = filterConfiguredCatalogModels(
+      finalModels,
+      ctx.connections,
+      ctx.aliasToProviderId,
+      ctx.providerNodeIdsByPrefix
+    );
   }
 
   // #9147: the variant-append passes each walk the full model list (O(n) per pass),
@@ -240,6 +244,14 @@ export async function finalizeCatalogResponse(
   await yieldTurn();
   const capabilityResolutionSnapshot =
     enrichmentSnapshot?.capabilityResolutionSnapshot ?? createModelCapabilityResolutionSnapshot();
+  let effectivePricing = enrichmentSnapshot?.effectivePricing;
+  if (!effectivePricing) {
+    try {
+      effectivePricing = await getPricing();
+    } catch {
+      // Optional billing metadata must not prevent model discovery.
+    }
+  }
   const enriched: Array<Record<string, unknown>> = [];
   const catYIELD_EVERY = 5;
   let catEnrichCount = 0;
@@ -251,6 +263,7 @@ export async function finalizeCatalogResponse(
       const entry = enrichCatalogModelEntry(model, undefined, {
         ...enrichmentSnapshot,
         capabilityResolutionSnapshot,
+        effectivePricing,
       });
       const fallbackContextLength = getContextFallback(entry);
       listedModel = fallbackContextLength

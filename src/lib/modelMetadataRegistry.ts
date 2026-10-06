@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { getCodexPublishedOutputLimit } from "./codexOutputMetadata";
 import { parseModel } from "@omniroute/open-sse/services/model.ts";
+import { stripNoThinkingAlias } from "@omniroute/open-sse/utils/noThinkingAlias";
 import { getModelInfo } from "@/sse/services/model";
 import { getModelAliases } from "@/lib/db/models";
 import {
@@ -40,6 +42,8 @@ type JsonRecord = Record<string, unknown>;
 
 export interface CatalogEnrichmentSnapshot {
   modelsDevPricing: PricingByProvider | null;
+  /** Effective billing rates: defaults < LiteLLM < models.dev < operator overrides. */
+  effectivePricing?: Record<string, Record<string, Record<string, unknown>>>;
   providerNodeIdsByPrefix?: Readonly<Record<string, string>>;
   /** #9147: build-local bulk load of synced capabilities + token/context overrides
    * so per-entry enrichment never hits SQLite again (see catalogResponse.ts). */
@@ -336,6 +340,22 @@ function resolveCatalogPricing(
 ): Record<string, number> | null {
   if (!provider || !model) return null;
 
+  if (snapshot?.effectivePricing) {
+    const alias = PROVIDER_ID_TO_ALIAS[provider];
+    const providerTable = findInsensitive(snapshot.effectivePricing, provider);
+    const aliasTable = alias ? findInsensitive(snapshot.effectivePricing, alias) : undefined;
+    const lookup = (table: Record<string, Record<string, unknown>> | undefined) =>
+      findInsensitive(table, model) || findInsensitive(table, model.replace(/\./g, "-"));
+    const row = lookup(providerTable) || lookup(aliasTable);
+    if (!row) return null;
+    const rates: Record<string, number> = {};
+    for (const key of ["input", "output", "cached", "cache_creation"]) {
+      const value = row[key];
+      if (typeof value === "number" && Number.isFinite(value) && value >= 0) rates[key] = value;
+    }
+    return Object.keys(rates).length ? rates : null;
+  }
+
   // Prefer models.dev synced pricing when present; fall back to hardcoded defaults.
   try {
     const modelsDev = (
@@ -430,7 +450,7 @@ export function enrichCatalogModelEntry<T extends JsonRecord>(
     (typeof entry.owned_by === "string" && entry.owned_by !== "combo" ? entry.owned_by : null);
   const provider =
     (publicProvider && snapshot?.providerNodeIdsByPrefix?.[publicProvider]) || publicProvider;
-  const model =
+  const rawModel =
     input?.model ||
     asNonEmptyString(entry.root) ||
     (() => {
@@ -440,6 +460,8 @@ export function enrichCatalogModelEntry<T extends JsonRecord>(
       return id;
     })();
 
+  // A gateway mode is not a different underlying model or billing identity.
+  const model = rawModel ? stripNoThinkingAlias(rawModel) : null;
   const metadata = getCanonicalModelMetadata({
     provider,
     model,
@@ -605,6 +627,10 @@ export function enrichCatalogModelEntry<T extends JsonRecord>(
   ) {
     nextEntry.max_output_tokens = metadata.limits.maxOutputTokens;
   }
+  if (typeof nextEntry.max_output_tokens !== "number") {
+    const publishedOutputLimit = getCodexPublishedOutputLimit(provider, model);
+    if (publishedOutputLimit !== null) nextEntry.max_output_tokens = publishedOutputLimit;
+  }
 
   if (
     typeof metadata.limits.maxInputTokens === "number" &&
@@ -626,7 +652,7 @@ export function enrichCatalogModelEntry<T extends JsonRecord>(
     nextEntry.name = metadata.displayName;
   }
 
-  if (nextEntry.pricing == null) {
+  if (nextEntry.pricing == null || snapshot?.effectivePricing) {
     const pricing = resolveCatalogPricing(provider, model, snapshot);
     if (pricing) nextEntry.pricing = pricing;
   }

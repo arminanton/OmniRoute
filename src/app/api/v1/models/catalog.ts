@@ -2013,6 +2013,7 @@ async function buildUnifiedModelsResponseCore(
       prefixMode,
       aliasToProviderId,
       hideNoThinkVariants: settings.hideNoThinkVariants === true,
+      providerNodeIdsByPrefix: providerNodeIdByPrefix,
     });
 
     const getDefaultContextFallback = (model: any): number | undefined => {

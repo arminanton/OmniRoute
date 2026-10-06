@@ -153,3 +153,45 @@ test("catalog /v1/models: combo block appears first", async () => {
     `Combo block not first: last combo at ${lastComboIndex}, first non-combo at ${firstNonComboIndex}`
   );
 });
+
+test("configuredOnly hides unrelated no-auth providers and disabled connections", async () => {
+  await seedConnection("openai");
+  const disabled = await seedConnection("anthropic");
+  await providersDb.updateProviderConnection(disabled.id, { isActive: false });
+  const response = await v1ModelsCatalog.getUnifiedModelsResponse(
+    new Request("http://localhost/v1/models?prefix=alias&configuredOnly=true")
+  );
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  const chat = payload.data.filter((model: { owned_by: string }) => model.owned_by !== "combo");
+  assert.ok(chat.length > 0);
+  assert.deepEqual(
+    [...new Set(chat.map((model: { owned_by: string }) => model.owned_by))],
+    ["openai"]
+  );
+});
+
+test("catalog exports operator prices and published output without shrinking live context", async () => {
+  const conn = await seedConnection("codex");
+  await modelsDb.replaceSyncedAvailableModelsForConnection("codex", conn.id, [
+    {
+      id: "gpt-6-luna",
+      inputTokenLimit: 872000,
+      supportsThinking: true,
+      supportedThinkingEfforts: ["medium", "xhigh"],
+    },
+  ]);
+  const { updatePricing } = await import("../../src/lib/db/settings/pricing.ts");
+  await updatePricing({ cx: { "gpt-6-luna": { input: 0.123, cached: 0.0123, output: 0.456 } } });
+  const response = await v1ModelsCatalog.getUnifiedModelsResponse(
+    new Request("http://localhost/v1/models?prefix=alias&configuredOnly=true")
+  );
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  const model = payload.data.find((entry: { id: string }) => entry.id === "cx/gpt-6-luna");
+  assert.ok(model);
+  assert.equal(model.context_length, 872000);
+  assert.equal(model.max_output_tokens, 128000);
+  assert.equal(model.pricing.input, 0.123);
+  assert.equal(model.pricing.output, 0.456);
+});
