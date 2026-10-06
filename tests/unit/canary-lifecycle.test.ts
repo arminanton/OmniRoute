@@ -86,3 +86,33 @@ test("absence of transport and state instrumentation is unknown, not an idle pro
   assert.equal(data.conversationPins, null);
   assert.equal(data.upstreamLeases, null);
 });
+test("normal API responses stamp their actual process generation rather than a caller marker", async () => {
+  const previous = process.env.OMNIROUTE_APP_GENERATION;
+  process.env.OMNIROUTE_APP_GENERATION = "a".repeat(32);
+  const server = http.createServer(wrapCanaryRequestListener((_req, res) => res.end("{}")));
+  try {
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    assert.ok(address && typeof address === "object");
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/models`, {
+      headers: { "X-Omni-App-Generation": "b".repeat(32) },
+    });
+    await response.text();
+    assert.equal(response.headers.get("X-Omni-App-Generation"), "a".repeat(32));
+    for (const invalid of ["not-a-generation", undefined]) {
+      if (invalid === undefined) delete process.env.OMNIROUTE_APP_GENERATION;
+      else process.env.OMNIROUTE_APP_GENERATION = invalid;
+      const unstamped = await fetch(`http://127.0.0.1:${address.port}/v1/models`, {
+        headers: { "X-Omni-App-Generation": "b".repeat(32) },
+      });
+      await unstamped.text();
+      assert.equal(unstamped.headers.get("X-Omni-App-Generation"), null);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.OMNIROUTE_APP_GENERATION;
+    else process.env.OMNIROUTE_APP_GENERATION = previous;
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

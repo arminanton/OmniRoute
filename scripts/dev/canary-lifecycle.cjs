@@ -85,6 +85,10 @@ function attachCanaryLifecycle(server) {
 }
 function wrapCanaryRequestListener(listener) {
   return function canaryRequest(req, res) {
+    const generation = process.env.OMNIROUTE_APP_GENERATION;
+    if (typeof generation === "string" && /^[a-f0-9]{32}$/.test(generation)) {
+      res.setHeader("X-Omni-App-Generation", generation);
+    }
     if (state().draining && !EXCLUDED.has(path(req))) {
       res.writeHead(503, {
         "Content-Type": "application/json",
