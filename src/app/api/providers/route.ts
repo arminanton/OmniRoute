@@ -414,6 +414,16 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ connection: result }, { status: 201 });
   } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "PROVIDER_CONNECTION_NAME_CONFLICT"
+    ) {
+      return NextResponse.json(
+        { error: "A connection with this name already exists" },
+        { status: 409 }
+      );
+    }
     console.log("Error creating provider:", error);
     return NextResponse.json({ error: "Failed to create provider" }, { status: 500 });
   }

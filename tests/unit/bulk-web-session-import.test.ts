@@ -6,6 +6,14 @@
 
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import { POST } from "../../src/app/api/providers/bulk-web-session/route.ts";
+import {
+  createProviderConnection,
+  getProviderConnectionById,
+  getProviderConnections,
+} from "../../src/lib/db/providers.ts";
+import { deleteProviderConnection } from "../../src/lib/db/providers/deletion.ts";
 import { bulkWebSessionImportSchema } from "../../src/shared/validation/schemas.ts";
 import {
   requiresWebSessionCredential,
@@ -230,5 +238,114 @@ describe("resolveWebSessionImportApiKey (token-kind imports must populate apiKey
   it("trims surrounding whitespace from the stored token", () => {
     const req = getWebSessionCredentialRequirement("copilot-web");
     assert.equal(resolveWebSessionImportApiKey(req, "  tok-123  "), "tok-123");
+  });
+});
+
+describe("bulk web-session route cookie-name conflicts", () => {
+  it("rejects different credentials without overwriting and updates the same session in place", async () => {
+    const provider = "perplexity-web";
+    const name = `cookie-conflict-${randomUUID()}`;
+    const partialName = `${name}-partial`;
+    const credentialA = `__Secure-next-auth.session-token=session-a-${randomUUID()}`;
+    const credentialB = `__Secure-next-auth.session-token=session-b-${randomUUID()}`;
+    const credentialC = `__Secure-next-auth.session-token=session-c-${randomUUID()}`;
+    const createdIds = new Set<string>();
+    const send = (entries: Array<{ name: string; credential: string }>, priority = 1) =>
+      POST(
+        new Request("http://localhost/api/providers/bulk-web-session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ provider, entries, priority }),
+        })
+      );
+
+    try {
+      const initialResponse = await send([{ name, credential: credentialA }]);
+      const initialBody = await initialResponse.json();
+      for (const created of initialBody.created || []) {
+        if (typeof created.id === "string") createdIds.add(created.id);
+      }
+      assert.equal(initialResponse.status, 200);
+      assert.equal(initialBody.success, 1);
+      assert.equal(initialBody.failed, 0);
+      const originalId = initialBody.created[0].id as string;
+
+      const original = await getProviderConnectionById(originalId);
+      assert.ok(original);
+      const originalState = {
+        id: original.id,
+        name: original.name,
+        apiKey: original.apiKey,
+        providerSpecificData: original.providerSpecificData,
+        priority: original.priority,
+      };
+
+      const conflictResponse = await send(
+        [
+          { name, credential: credentialB },
+          { name: partialName, credential: credentialC },
+        ],
+        4
+      );
+      assert.equal(conflictResponse.status, 200);
+      const conflictBody = await conflictResponse.json();
+      for (const created of conflictBody.created || []) {
+        if (typeof created.id === "string") createdIds.add(created.id);
+      }
+      assert.equal(conflictBody.success, 1);
+      assert.equal(conflictBody.failed, 1);
+      assert.equal(conflictBody.total, 2);
+      assert.equal(conflictBody.errors[0].index, 0);
+      assert.equal(conflictBody.errors[0].name, name);
+      assert.equal(conflictBody.errors[0].message, "Provider connection name already in use");
+      assert.equal(JSON.stringify(conflictBody.errors).includes(credentialB), false);
+
+      const unchanged = await getProviderConnectionById(originalId);
+      assert.ok(unchanged);
+      assert.deepEqual(
+        {
+          id: unchanged.id,
+          name: unchanged.name,
+          apiKey: unchanged.apiKey,
+          providerSpecificData: unchanged.providerSpecificData,
+          priority: unchanged.priority,
+        },
+        originalState
+      );
+
+      const updateResponse = await send([{ name, credential: credentialA }], 7);
+      assert.equal(updateResponse.status, 200);
+      const updateBody = await updateResponse.json();
+      assert.equal(updateBody.success, 1);
+      assert.equal(updateBody.failed, 0);
+      assert.equal(updateBody.created[0].id, originalId);
+
+      const updated = await getProviderConnectionById(originalId);
+      assert.ok(updated);
+      assert.equal(updated.priority, 7);
+      assert.deepEqual(updated.providerSpecificData, originalState.providerSpecificData);
+      const sameNameRows = (await getProviderConnections({ provider, authType: "cookie" })).filter(
+        (connection) => connection.name === name
+      );
+      assert.equal(sameNameRows.length, 1);
+
+      const rotated = await createProviderConnection({
+        provider,
+        authType: "cookie",
+        name,
+        apiKey: null,
+        priority: 8,
+        providerSpecificData: { cookie: credentialB },
+        isActive: true,
+      });
+      assert.ok(rotated);
+      assert.equal(rotated.id, originalId);
+      const rotatedConnection = await getProviderConnectionById(originalId);
+      const rotatedData = rotatedConnection?.providerSpecificData as
+        Record<string, unknown> | undefined;
+      assert.equal(rotatedData?.cookie, credentialB);
+    } finally {
+      for (const id of createdIds) await deleteProviderConnection(id);
+    }
   });
 });

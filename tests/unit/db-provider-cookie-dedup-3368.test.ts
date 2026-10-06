@@ -87,6 +87,56 @@ test("#3368 cookie dedup: a different cookie creates a separate connection", asy
   assert.equal(conns.length, 2, "distinct cookies must remain distinct connections");
 });
 
+test("same cookie name with different credential rotates the existing connection by default (#15018)", async () => {
+  const original = await providersDb.createProviderConnection({
+    provider: "qwen-ai",
+    authType: "cookie",
+    name: "work",
+    apiKey: null,
+    providerSpecificData: { cookie: "session=COOKIE_ONE" },
+    isActive: true,
+  });
+
+  const updated = await providersDb.createProviderConnection({
+    provider: "qwen-ai",
+    authType: "cookie",
+    name: "work",
+    apiKey: null,
+    providerSpecificData: { cookie: "session=COOKIE_TWO" },
+    isActive: true,
+  });
+
+  const connections = await providersDb.getProviderConnections({ provider: "qwen-ai" });
+  assert.equal(connections.length, 1);
+  assert.equal(updated.id, original.id);
+  assert.equal(connections[0].id, original.id);
+  assert.equal(connections[0].name, "work");
+  assert.equal(connections[0].providerSpecificData.cookie, "session=COOKIE_TWO");
+});
+
+test("same cookie name and credential updates the existing connection", async () => {
+  const original = await providersDb.createProviderConnection({
+    provider: "qwen-ai",
+    authType: "cookie",
+    name: "work",
+    apiKey: null,
+    providerSpecificData: { cookie: "session=SAME_COOKIE" },
+    isActive: true,
+  });
+  const updated = await providersDb.createProviderConnection({
+    provider: "qwen-ai",
+    authType: "cookie",
+    name: "work",
+    apiKey: null,
+    providerSpecificData: { cookie: "session=SAME_COOKIE" },
+    isActive: true,
+  });
+
+  const connections = await providersDb.getProviderConnections({ provider: "qwen-ai" });
+  assert.equal(connections.length, 1);
+  assert.equal(updated.id, original.id);
+});
+
 test("#3368 cookie dedup: token-kind credential (no `cookie` key) also dedupes by value", async () => {
   await providersDb.createProviderConnection({
     provider: "kilo-code",

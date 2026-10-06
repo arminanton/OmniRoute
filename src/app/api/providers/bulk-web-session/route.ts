@@ -72,22 +72,25 @@ export async function POST(request: Request) {
         );
       }
 
-      const newConnection = await createProviderConnection({
-        provider,
-        authType: "cookie",
-        name: entry.name,
-        // token-kind providers (deepseek-web, copilot-web, …) are read from apiKey
-        // by both the validator and the executor; cookie-kind stays null and is read
-        // from providerSpecificData.cookie. Without this, imported token connections
-        // were never recognized.
-        apiKey: resolveWebSessionImportApiKey(requirement, entry.credential),
-        priority: priority || 1,
-        globalPriority: globalPriority || null,
-        defaultModel: null,
-        providerSpecificData,
-        isActive: true,
-        testStatus: "unknown",
-      });
+      const newConnection = await createProviderConnection(
+        {
+          provider,
+          authType: "cookie",
+          name: entry.name,
+          // token-kind providers (deepseek-web, copilot-web, …) are read from apiKey
+          // by both the validator and the executor; cookie-kind stays null and is read
+          // from providerSpecificData.cookie. Without this, imported token connections
+          // were never recognized.
+          apiKey: resolveWebSessionImportApiKey(requirement, entry.credential),
+          priority: priority || 1,
+          globalPriority: globalPriority || null,
+          defaultModel: null,
+          providerSpecificData,
+          isActive: true,
+          testStatus: "unknown",
+        },
+        { rejectCookieNameConflict: true }
+      );
 
       const safe: Record<string, unknown> = { ...newConnection };
       delete safe.apiKey;
@@ -113,10 +116,17 @@ export async function POST(request: Request) {
         },
       });
     } catch (err) {
+      const isNameConflict =
+        err !== null &&
+        typeof err === "object" &&
+        "code" in err &&
+        err.code === "PROVIDER_CONNECTION_NAME_CONFLICT";
       errors.push({
         index: i,
         name: entry.name,
-        message: sanitizeErrorMessage(err) || "Failed to create connection",
+        message: isNameConflict
+          ? "Provider connection name already in use"
+          : sanitizeErrorMessage(err) || "Failed to create connection",
       });
     }
   }

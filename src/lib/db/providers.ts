@@ -406,22 +406,28 @@ type NousRefreshRow = {
 };
 
 function ensureNousRefreshLeaseTable(db: DbLike): void {
-  db.prepare(`CREATE TABLE IF NOT EXISTS nous_oauth_refresh_leases (
+  db.prepare(
+    `CREATE TABLE IF NOT EXISTS nous_oauth_refresh_leases (
     connection_id TEXT PRIMARY KEY, owner TEXT NOT NULL, lease_until INTEGER NOT NULL
-  )`).run();
+  )`
+  ).run();
 }
 
 export function acquireNousOAuthRefreshLease(
   id: string,
   expectedRefreshToken: string,
   owner: string
-): { status: "acquired"; expectedCipher: string; leaseOwner: string } | { status: "busy" | "stale" | "missing" } {
+):
+  | { status: "acquired"; expectedCipher: string; leaseOwner: string }
+  | { status: "busy" | "stale" | "missing" } {
   const db = getDbInstance() as unknown as DbLike;
   ensureNousRefreshLeaseTable(db);
   return db.transaction(() => {
-    const row = db.prepare<NousRefreshRow>(
-      "SELECT provider, auth_type, refresh_token, provider_specific_data FROM provider_connections WHERE id = ?"
-    ).get(id);
+    const row = db
+      .prepare<NousRefreshRow>(
+        "SELECT provider, auth_type, refresh_token, provider_specific_data FROM provider_connections WHERE id = ?"
+      )
+      .get(id);
     if (!row || row.provider !== "nous-oauth" || row.auth_type !== "oauth" || !row.refresh_token) {
       return { status: "missing" as const };
     }
@@ -436,18 +442,24 @@ export function acquireNousOAuthRefreshLease(
     // observed. Its quarantine NEVER expires for the same one-use token. When
     // an operator re-authenticates (or the tokens were committed before a
     // crash), a different persisted token clears this obsolete quarantine.
-    const existing = db.prepare<{ owner: string; lease_until: number }>(
-      "SELECT owner, lease_until FROM nous_oauth_refresh_leases WHERE connection_id = ?"
-    ).get(id);
-    if (existing?.lease_until === NOUS_UNCERTAIN_GRANT_UNTIL &&
-        existing.owner.split(":").at(-1) !== fingerprint) {
+    const existing = db
+      .prepare<{ owner: string; lease_until: number }>(
+        "SELECT owner, lease_until FROM nous_oauth_refresh_leases WHERE connection_id = ?"
+      )
+      .get(id);
+    if (
+      existing?.lease_until === NOUS_UNCERTAIN_GRANT_UNTIL &&
+      existing.owner.split(":").at(-1) !== fingerprint
+    ) {
       db.prepare("DELETE FROM nous_oauth_refresh_leases WHERE connection_id = ?").run(id);
     }
     db.prepare("DELETE FROM nous_oauth_refresh_leases WHERE lease_until < ?").run(Date.now());
     const leaseOwner = `${owner}:${fingerprint}`; // hash only, never the token
-    const inserted = db.prepare(
-      "INSERT OR IGNORE INTO nous_oauth_refresh_leases (connection_id, owner, lease_until) VALUES (?, ?, ?)"
-    ).run(id, leaseOwner, Date.now() + NOUS_REFRESH_LEASE_MS);
+    const inserted = db
+      .prepare(
+        "INSERT OR IGNORE INTO nous_oauth_refresh_leases (connection_id, owner, lease_until) VALUES (?, ?, ?)"
+      )
+      .run(id, leaseOwner, Date.now() + NOUS_REFRESH_LEASE_MS);
     return (inserted.changes ?? 0) > 0
       ? { status: "acquired" as const, expectedCipher: row.refresh_token, leaseOwner }
       : { status: "busy" as const };
@@ -457,16 +469,20 @@ export function acquireNousOAuthRefreshLease(
 /** Durable uncertain-grant quarantine, written BEFORE a single-use POST. */
 export function quarantineNousOAuthRefreshLease(id: string, leaseOwner: string): boolean {
   const db = getDbInstance() as unknown as DbLike;
-  const result = db.prepare(
-    "UPDATE nous_oauth_refresh_leases SET lease_until = ? WHERE connection_id = ? AND owner = ?"
-  ).run(NOUS_UNCERTAIN_GRANT_UNTIL, id, leaseOwner);
+  const result = db
+    .prepare(
+      "UPDATE nous_oauth_refresh_leases SET lease_until = ? WHERE connection_id = ? AND owner = ?"
+    )
+    .run(NOUS_UNCERTAIN_GRANT_UNTIL, id, leaseOwner);
   return (result.changes ?? 0) === 1;
 }
 
 export function releaseNousOAuthRefreshLease(id: string, owner: string): void {
   const db = getDbInstance() as unknown as DbLike;
-  db.prepare("DELETE FROM nous_oauth_refresh_leases WHERE connection_id = ? AND owner = ?")
-    .run(id, owner);
+  db.prepare("DELETE FROM nous_oauth_refresh_leases WHERE connection_id = ? AND owner = ?").run(
+    id,
+    owner
+  );
 }
 
 /** Metadata-only CAS for the proactive sweep or manual refresh result.
@@ -478,32 +494,55 @@ export function updateNousOAuthHealthIfRefreshUnchanged(
 ): boolean {
   const db = getDbInstance() as unknown as DbLike;
   const changed = db.transaction(() => {
-    const row = db.prepare<{
-      provider: string; auth_type: string; refresh_token: string | null;
-      expires_at: string | null; token_expires_at: string | null;
-    }>(`SELECT provider, auth_type, refresh_token, expires_at, token_expires_at
-        FROM provider_connections WHERE id = ?`).get(id);
+    const row = db
+      .prepare<{
+        provider: string;
+        auth_type: string;
+        refresh_token: string | null;
+        expires_at: string | null;
+        token_expires_at: string | null;
+      }>(
+        `SELECT provider, auth_type, refresh_token, expires_at, token_expires_at
+        FROM provider_connections WHERE id = ?`
+      )
+      .get(id);
     if (!row || row.provider !== "nous-oauth" || row.auth_type !== "oauth") return false;
     const actual = decryptConnectionFields({ refreshToken: row.refresh_token }).refreshToken;
     if (!expectedRefreshToken || actual !== expectedRefreshToken) return false;
     const now = new Date().toISOString();
-    const expired = Math.max(
-      new Date(row.token_expires_at || 0).getTime() || 0,
-      new Date(row.expires_at || 0).getTime() || 0
-    ) <= Date.now();
-    const result = outcome === "success"
-      ? db.prepare(`UPDATE provider_connections SET last_health_check_at = ?,
+    const expired =
+      Math.max(
+        new Date(row.token_expires_at || 0).getTime() || 0,
+        new Date(row.expires_at || 0).getTime() || 0
+      ) <= Date.now();
+    const result =
+      outcome === "success"
+        ? db
+            .prepare(
+              `UPDATE provider_connections SET last_health_check_at = ?,
           test_status = 'active', last_error = NULL, last_error_at = NULL,
           last_error_type = NULL, last_error_source = NULL, error_code = NULL,
-          updated_at = ? WHERE id = ? AND provider = 'nous-oauth' AND refresh_token = ?`)
-          .run(now, now, id, row.refresh_token)
-      : db.prepare(`UPDATE provider_connections SET last_health_check_at = ?,
+          updated_at = ? WHERE id = ? AND provider = 'nous-oauth' AND refresh_token = ?`
+            )
+            .run(now, now, id, row.refresh_token)
+        : db
+            .prepare(
+              `UPDATE provider_connections SET last_health_check_at = ?,
           test_status = ?, last_error = 'Nous OAuth refresh token rejected; re-authenticate.',
           last_error_at = ?, last_error_type = 'invalid_grant',
           last_error_source = 'oauth', error_code = 'invalid_grant',
           is_active = CASE WHEN ? THEN 0 ELSE is_active END,
-          updated_at = ? WHERE id = ? AND provider = 'nous-oauth' AND refresh_token = ?`)
-          .run(now, expired ? "expired" : "active", now, expired ? 1 : 0, now, id, row.refresh_token);
+          updated_at = ? WHERE id = ? AND provider = 'nous-oauth' AND refresh_token = ?`
+            )
+            .run(
+              now,
+              expired ? "expired" : "active",
+              now,
+              expired ? 1 : 0,
+              now,
+              id,
+              row.refresh_token
+            );
     return (result.changes ?? 0) === 1;
   })();
   if (changed) {
@@ -522,32 +561,60 @@ export function commitNousOAuthRefresh(
   id: string,
   owner: string,
   expectedCipher: string,
-  tokens: { accessToken: string; refreshToken: string; expiresIn: number; inferenceBaseUrl?: string }
+  tokens: {
+    accessToken: string;
+    refreshToken: string;
+    expiresIn: number;
+    inferenceBaseUrl?: string;
+  }
 ): boolean {
-  if (!tokens.accessToken || !tokens.refreshToken || !Number.isFinite(tokens.expiresIn) ||
-      tokens.expiresIn <= 0) throw new Error("Invalid Nous refresh response");
+  if (
+    !tokens.accessToken ||
+    !tokens.refreshToken ||
+    !Number.isFinite(tokens.expiresIn) ||
+    tokens.expiresIn <= 0
+  )
+    throw new Error("Invalid Nous refresh response");
   const db = getDbInstance() as unknown as DbLike;
   const applied = db.transaction(() => {
-    const row = db.prepare<NousRefreshRow>(
-      "SELECT provider, auth_type, refresh_token, provider_specific_data FROM provider_connections WHERE id = ?"
-    ).get(id);
-    if (!row || row.provider !== "nous-oauth" || row.auth_type !== "oauth" ||
-        row.refresh_token !== expectedCipher) return false;
+    const row = db
+      .prepare<NousRefreshRow>(
+        "SELECT provider, auth_type, refresh_token, provider_specific_data FROM provider_connections WHERE id = ?"
+      )
+      .get(id);
+    if (
+      !row ||
+      row.provider !== "nous-oauth" ||
+      row.auth_type !== "oauth" ||
+      row.refresh_token !== expectedCipher
+    )
+      return false;
     const psd = row.provider_specific_data ? JSON.parse(row.provider_specific_data) : {};
     const inferenceBaseUrl = validateNousOAuthInferenceBaseUrl(
       tokens.inferenceBaseUrl ?? psd?.[NOUS_OAUTH_INFERENCE_PSD_KEY]
     );
     const expiresAt = new Date(Date.now() + tokens.expiresIn * 1000).toISOString();
-    const result = db.prepare(`UPDATE provider_connections SET
+    const result = db
+      .prepare(
+        `UPDATE provider_connections SET
       access_token = ?, refresh_token = ?, expires_at = ?, token_expires_at = ?,
       expires_in = ?, provider_specific_data = ?, updated_at = ?
       WHERE id = ? AND provider = 'nous-oauth' AND auth_type = 'oauth' AND refresh_token = ?
-      AND EXISTS (SELECT 1 FROM nous_oauth_refresh_leases WHERE connection_id = ? AND owner = ? AND lease_until > ?)`)
+      AND EXISTS (SELECT 1 FROM nous_oauth_refresh_leases WHERE connection_id = ? AND owner = ? AND lease_until > ?)`
+      )
       .run(
-        encrypt(tokens.accessToken), encrypt(tokens.refreshToken), expiresAt, expiresAt,
+        encrypt(tokens.accessToken),
+        encrypt(tokens.refreshToken),
+        expiresAt,
+        expiresAt,
         tokens.expiresIn,
         JSON.stringify({ ...psd, [NOUS_OAUTH_INFERENCE_PSD_KEY]: inferenceBaseUrl }),
-        new Date().toISOString(), id, expectedCipher, id, owner, Date.now()
+        new Date().toISOString(),
+        id,
+        expectedCipher,
+        id,
+        owner,
+        Date.now()
       );
     return (result.changes ?? 0) === 1;
   })();
@@ -613,9 +680,11 @@ function findExistingCookieConnection(
   db: DbLike,
   provider: unknown,
   name: unknown,
-  normalizedProviderSpecificData: unknown
+  normalizedProviderSpecificData: unknown,
+  rejectNameConflict = false
 ): JsonRecord | null {
   // 1) Name-based upsert for parity with the apikey path.
+  const newCredKey = webSessionCredentialKey(normalizedProviderSpecificData);
   if (name) {
     const byName =
       (db
@@ -623,10 +692,17 @@ function findExistingCookieConnection(
           "SELECT * FROM provider_connections WHERE provider = ? AND auth_type = 'cookie' AND name = ?"
         )
         .get(provider, name) as JsonRecord | undefined) || null;
-    if (byName) return byName;
+    if (byName) {
+      const existingPsd = parseProviderSpecificData(byName.provider_specific_data);
+      if (rejectNameConflict && webSessionCredentialKey(existingPsd) !== newCredKey) {
+        throw Object.assign(new Error("Provider connection name already in use"), {
+          code: "PROVIDER_CONNECTION_NAME_CONFLICT",
+        });
+      }
+      return byName;
+    }
   }
   // 2) Credential-value dedup against existing cookie rows.
-  const newCredKey = webSessionCredentialKey(normalizedProviderSpecificData);
   if (!newCredKey) return null;
   const cookieRows = db
     .prepare("SELECT * FROM provider_connections WHERE provider = ? AND auth_type = 'cookie'")
@@ -660,7 +736,10 @@ async function admitProviderConnectionWrite(db: DbLike, candidate: JsonRecord): 
   await assertResolvedProviderConnectionEntrypoint(candidate);
 }
 
-export async function createProviderConnection(data: JsonRecord) {
+export async function createProviderConnection(
+  data: JsonRecord,
+  options: { rejectCookieNameConflict?: boolean } = {}
+) {
   await assertApiKeyIsNotManagementPassword(data.apiKey);
   const db = getDbInstance() as unknown as DbLike;
   const now = new Date().toISOString();
@@ -781,7 +860,8 @@ export async function createProviderConnection(data: JsonRecord) {
       db,
       data.provider,
       data.name,
-      normalizedProviderSpecificData
+      normalizedProviderSpecificData,
+      options.rejectCookieNameConflict
     );
   } else if (data.authType === "access_token") {
     // #1290 — bare access-token imports (e.g. a raw ChatGPT website access
@@ -1175,7 +1255,9 @@ export function persistGeminiWebCookieRotation(
   const db = getDbInstance() as unknown as DbLike;
   let persisted = false;
   db.immediate(() => {
-    const existing = db.prepare("SELECT id, provider, auth_type, api_key FROM provider_connections WHERE id = ?").get(id) as
+    const existing = db
+      .prepare("SELECT id, provider, auth_type, api_key FROM provider_connections WHERE id = ?")
+      .get(id) as
       | { id: string; provider: string; auth_type: string | null; api_key: string | null }
       | undefined;
     if (
@@ -1211,7 +1293,10 @@ export function persistGeminiWebCookieRotation(
     }
     if (changes.size === 0) return;
 
-    const parts = normalizedCurrentCookie.split(";").map((part) => part.trim()).filter(Boolean);
+    const parts = normalizedCurrentCookie
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean);
     const written = new Set<string>();
     const mergedParts = parts.map((part) => {
       const separator = part.indexOf("=");
@@ -1225,9 +1310,18 @@ export function persistGeminiWebCookieRotation(
       if (!written.has(name)) mergedParts.push(`${name}=${value}`);
     }
     const encryptedCookie = encrypt(mergedParts.join("; "));
-    const result = db.prepare(
-      "UPDATE provider_connections SET api_key = ?, updated_at = ? WHERE id = ? AND provider = ? AND auth_type = ? AND api_key = ?"
-    ).run(encryptedCookie, new Date().toISOString(), id, "gemini-web", existing.auth_type, expectedCiphertext);
+    const result = db
+      .prepare(
+        "UPDATE provider_connections SET api_key = ?, updated_at = ? WHERE id = ? AND provider = ? AND auth_type = ? AND api_key = ?"
+      )
+      .run(
+        encryptedCookie,
+        new Date().toISOString(),
+        id,
+        "gemini-web",
+        existing.auth_type,
+        expectedCiphertext
+      );
     if (result.changes !== 1) return;
     persisted = true;
   });
