@@ -74,7 +74,7 @@ function positiveInteger(...values: unknown[]): number | undefined {
   return values.find(
     (value): value is number =>
       typeof value === "number" && Number.isSafeInteger(value) && value > 0
-  );
+  ) as number | undefined;
 }
 
 const ROLE_FIELDS = {
