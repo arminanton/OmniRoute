@@ -932,8 +932,14 @@ async function patchedFetch(
     // When a dispatcher is present, we MUST use the undici library fetch
     // to ensure version compatibility. Node 22 built-in fetch (undici v6)
     // is incompatible with undici v8 dispatchers (missing onRequestStart, etc.)
+    const dispatcherFetch =
+      deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>);
     const _undiciDispatcher = budgetedGenerationFetch(
-      deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>)
+      (dispatchInput: RequestInfo | URL, dispatchOptions: FetchWithDispatcherOptions) =>
+        dispatcherFetch(dispatchInput, {
+          ...dispatchOptions,
+          dispatcher: observeFetchDispatcher(dispatchOptions.dispatcher),
+        })
     );
     return _undiciDispatcher(input, options);
   }

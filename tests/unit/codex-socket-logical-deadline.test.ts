@@ -96,7 +96,7 @@ test("native socket first-event budget exhaustion is terminal and forbids additi
   const budget = new LogicalRetryBudget(12, Date.now() + 30);
   try {
     const response = await runWithLogicalRetryBudget(budget, () => pool.request(f.request));
-    assert.match(await response.text(), /RETRY_BUDGET_EXHAUSTED/);
+    assert.match(await response.text(), /upstream_acceptance_uncertain/);
     assert.throws(() => budget.consumeAttempt(), isLogicalRetryBudgetError);
     assert.equal(f.counts().sends, 1);
   } finally {

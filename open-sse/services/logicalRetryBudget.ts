@@ -1,5 +1,10 @@
 import {
+  markUncertainGenerationAcceptance,
+  noteGenerationDispatchPhase,
+} from "./generationDispatchEvidence.ts";
+import {
   RequestTransportTelemetry,
+  TransportAttempt,
   getRequestTransportTelemetry,
   runWithRequestTransportTelemetry,
   runWithTransportAttempt,
@@ -15,7 +20,10 @@ declare global {
 }
 const budgetFailures = (globalThis.__omniLogicalBudgetFailures ??= new WeakSet<object>());
 export class LogicalRetryBudgetError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly preOutputWait = false
+  ) {
     super(message);
     budgetFailures.add(this);
   }
@@ -125,7 +133,8 @@ export async function withLogicalPreOutputDeadline<T>(
   const controller = new AbortController();
   const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   const timer = setTimeout(
-    () => controller.abort(new LogicalRetryBudgetError("Logical pre-output deadline exhausted")),
+    () =>
+      controller.abort(new LogicalRetryBudgetError("Logical pre-output deadline exhausted", true)),
     remaining
   );
   let abort: () => void = () => {};
@@ -237,7 +246,10 @@ export function budgetedGenerationFetch<Args extends unknown[], Result>(
     const options = args[1] as { method?: string; signal?: AbortSignal | null } | undefined;
     const generation = isGenerationHttpDispatch(args[0], options);
     consumeGenerationAttempt(args[0], options);
-    const attempt = generation ? getRequestTransportTelemetry()?.attempt("http") : undefined;
+    const attempt = generation
+      ? (getRequestTransportTelemetry()?.attempt("http") ??
+        new TransportAttempt(() => performance.now(), "http"))
+      : undefined;
     const finish = generation ? beginGenerationLifetime("http") : () => {};
     return runWithTransportAttempt(attempt, async () => {
       let pending: Promise<Result> | undefined;
@@ -279,6 +291,25 @@ export function budgetedGenerationFetch<Args extends unknown[], Result>(
           close: (reason) => attempt?.close(reason),
         }) as Result;
       } catch (error) {
+        if (generation && isLogicalRetryBudgetError(error) && error.preOutputWait && pending) {
+          const queued =
+            attempt?.record.queuedMs !== null &&
+            attempt?.record.queuedMs !== undefined &&
+            attempt?.record.dispatchedMs === null;
+          noteGenerationDispatchPhase(
+            error,
+            queued
+              ? "transport_queue"
+              : attempt?.record.dispatchedMs != null
+                ? "headers"
+                : "unknown",
+            queued ? false : attempt?.record.dispatchedMs != null ? true : null
+          );
+          if (!queued) {
+            markUncertainGenerationAcceptance(error);
+            getLogicalRetryBudget()?.denyFurtherAttempts(error);
+          }
+        }
         attempt?.close("error");
         // An uncooperative transport may settle after cancellation. Do not report it drained early.
         if (pending && !settled) void pending.then(finish, finish);

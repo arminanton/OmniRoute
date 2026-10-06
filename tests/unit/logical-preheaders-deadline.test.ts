@@ -1,3 +1,4 @@
+import { isUncertainGenerationAcceptance } from "../../open-sse/services/generationReplay.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
@@ -156,7 +157,7 @@ test("logical cancellation retains physical ownership until an uncooperative dis
   );
   const baseline = getPhysicalGenerationCount();
   await assert.rejects(
-    runWithLogicalRetryBudget(new LogicalRetryBudget(12, Date.now() + 20), () =>
+    runWithLogicalRetryBudget(new LogicalRetryBudget(12, Date.now() + 100), () =>
       runGenerationDispatch(() => fetch("https://example.invalid/responses", { method: "POST" }))
     ),
     isLogicalRetryBudgetError
@@ -213,7 +214,7 @@ test(
             })
           )
         ),
-        isLogicalRetryBudgetError
+        (error) => isLogicalRetryBudgetError(error) && !isUncertainGenerationAcceptance(error)
       );
       assert.equal(generationCalls, 0);
     } finally {

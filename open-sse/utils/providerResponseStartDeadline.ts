@@ -22,7 +22,7 @@ export async function withProviderResponseStartDeadline<T>(
       () =>
         controller.abort(
           logicalWins
-            ? new LogicalRetryBudgetError("Logical pre-output deadline exhausted")
+            ? new LogicalRetryBudgetError("Logical pre-output deadline exhausted", true)
             : makeError()
         ),
       Math.max(1, Math.min(duration, remaining ?? duration))

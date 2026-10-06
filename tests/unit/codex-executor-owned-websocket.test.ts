@@ -104,12 +104,69 @@ for (const tier of ["fast", "priority", "default", "ultrafast"]) {
     const executor = new CodexExecutor();
     const credentials = { accessToken: "synthetic-access-only" };
     const body = { model: "gpt-6-luna", input: [], service_tier: tier };
-    assert.equal(executor.transformRequest("gpt-6-luna", body, true, credentials).service_tier,
-      tier === "fast" ? "priority" : tier);
+    assert.equal(
+      executor.transformRequest("gpt-6-luna", body, true, credentials).service_tier,
+      tier === "fast" ? "priority" : tier
+    );
     assert.equal(body.service_tier, tier);
     const external = new CodexExecutor();
     external.config = { ...external.config, baseUrl: "https://api.openai.com/v1" };
-    assert.equal(external.transformRequest("gpt-6-luna", body, true, credentials).service_tier, tier);
-    assert.equal(executor.transformRequest("gpt-6-luna", body, true, { apiKey: "synthetic" }).service_tier, tier);
+    assert.equal(
+      external.transformRequest("gpt-6-luna", body, true, credentials).service_tier,
+      tier
+    );
+    assert.equal(
+      executor.transformRequest("gpt-6-luna", body, true, { apiKey: "synthetic" }).service_tier,
+      tier
+    );
   });
 }
+
+test("actual native WebSocket first-event deadline preserves terminal uncertain marker through public projection", async () => {
+  const { LogicalRetryBudget, runWithLogicalRetryBudget, isLogicalRetryBudgetError } =
+    await import("../../open-sse/services/logicalRetryBudget.ts");
+  const { isUncertainGenerationAcceptance } =
+    await import("../../open-sse/services/generationReplay.ts");
+  const executor = new CodexExecutor();
+  let sends = 0;
+  __setCodexWebSocketTransportForTesting(async () => ({
+    onmessage: null,
+    onerror: null,
+    onclose: null,
+    close() {},
+    send() {
+      sends++;
+    },
+  }));
+  const budget = new LogicalRetryBudget(12, Date.now() + 100);
+  try {
+    const result = await runWithLogicalRetryBudget(budget, () =>
+      executor.execute({
+        model: "gpt-6.1-sol",
+        stream: true,
+        credentials: {
+          connectionId: "synthetic-account",
+          accessToken: "synthetic-access-only",
+          providerSpecificData: { codexTransport: "websocket", codexFingerprintMode: "off" },
+        },
+        body: { model: "gpt-6.1-sol", input: [{ role: "user", content: "synthetic" }] },
+      })
+    );
+    assert.equal(
+      result.response.status,
+      200,
+      "the established stream status is not a native HTTP failure status"
+    );
+    const raw = await result.response.text();
+    assert.match(raw, /"code":"upstream_acceptance_uncertain"/);
+    assert.doesNotMatch(raw, /RETRY_BUDGET_EXHAUSTED|upstream_server_error/);
+    assert.equal(sends, 1);
+    assert.throws(
+      () => budget.consumeAttempt(),
+      (error) => isLogicalRetryBudgetError(error) && isUncertainGenerationAcceptance(error)
+    );
+  } finally {
+    __setCodexWebSocketTransportForTesting(undefined);
+    Reflect.get(executor, "conversationSockets").close();
+  }
+});
