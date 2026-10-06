@@ -234,6 +234,56 @@ test("#3120 fetchGitHubCopilotModels does a live fetch and returns parsed models
   assert.ok(!ids.includes("gemini-3.1-pro-preview"));
 });
 
+test("fetch treats a successful empty Copilot catalog as authoritative", async () => {
+  const fakeFetch = (async () =>
+    new Response(JSON.stringify({ data: [] }), { status: 200 })) as unknown as typeof fetch;
+  const result = await fetchGitHubCopilotModels({
+    token: "copilot-tok-abc",
+    fetchImpl: fakeFetch,
+    fallbackModels: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+  });
+
+  assert.equal(result.source, "api");
+  assert.deepEqual(result.models, []);
+});
+
+test("fetch treats a malformed successful payload with no parsed models as authoritative empty", async () => {
+  const fakeFetch = (async () =>
+    new Response(JSON.stringify({ unexpected: "shape" }), {
+      status: 200,
+    })) as unknown as typeof fetch;
+  const result = await fetchGitHubCopilotModels({
+    token: "copilot-tok-abc",
+    fetchImpl: fakeFetch,
+    fallbackModels: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+  });
+
+  assert.equal(result.source, "api");
+  assert.deepEqual(result.models, []);
+});
+
+test("fetch falls back on malformed JSON or network errors", async () => {
+  const fallbackModels = [{ id: "gpt-5.4", name: "GPT-5.4" }];
+  const malformedJsonFetch = (async () =>
+    new Response("not-json", { status: 200 })) as unknown as typeof fetch;
+  const networkErrorFetch = (async () => {
+    throw new Error("network error");
+  }) as unknown as typeof fetch;
+
+  for (const fetchImpl of [malformedJsonFetch, networkErrorFetch]) {
+    const result = await fetchGitHubCopilotModels({
+      token: "copilot-tok-abc",
+      fetchImpl,
+      fallbackModels,
+    });
+    assert.equal(result.source, "fallback");
+    assert.deepEqual(
+      result.models.map((model) => model.id),
+      ["gpt-5.4"]
+    );
+  }
+});
+
 test("#3120/#3121 fetch falls back to static catalog when the live fetch fails", async () => {
   const fakeFetch = (async () => new Response("nope", { status: 503 })) as unknown as typeof fetch;
   const fallback = [
@@ -325,7 +375,7 @@ test("Copilot endpoint metadata persists through dispatch", async () => {
   const core = await import("../../src/lib/db/core.ts");
   resetDbInstance = core.resetDbInstance;
   const providers = await import("../../src/lib/db/providers.ts");
-  const { getCachedDiscoveredModels, persistDiscoveredModels } =
+  const { normalizeDiscoveredModels, getCachedDiscoveredModels, persistDiscoveredModels } =
     await import("../../src/lib/providerModels/modelDiscovery.ts");
   const { getModelInfo } = await import("../../src/sse/services/model.ts");
   const { resolveChatCoreTargetFormat } =
@@ -349,7 +399,8 @@ test("Copilot endpoint metadata persists through dispatch", async () => {
       },
     ],
   });
-  await persistDiscoveredModels("github", connection.id, discovered);
+  const normalized = normalizeDiscoveredModels(discovered, "github");
+  await persistDiscoveredModels("github", connection.id, normalized);
   const cached = await getCachedDiscoveredModels("github", connection.id);
   assert.deepEqual(cached.find((model) => model.id === "responses-only")?.supportedEndpoints, [
     "responses",

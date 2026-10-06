@@ -257,9 +257,6 @@ export async function fetchGitHubCopilotModels(
 
     const data = await response.json();
     const models = parseGitHubCopilotModels(data);
-    if (models.length === 0) {
-      return toFallbackResult(fallbackModels);
-    }
     return { models, source: "api" };
   } catch {
     // Network/parse failure — never break the import flow.
