@@ -167,6 +167,7 @@ function getDefaultDispatcherOptions(env: Record<string, string | undefined> = p
   return {
     ...options,
     connections: getDefaultDispatcherConnectionLimit(env),
+    allowH2: false,
     pipelining: 1,
   };
 }
@@ -176,6 +177,7 @@ function createRoundRobinDirectDispatcher(connectionLimit: number): Dispatcher {
   const perAgentOptions = {
     ...baseOptions,
     connections: 1,
+    allowH2: false,
     // One active HTTP/1.1 response per socket, with keep-alive between turns.
     // Undici's pipelining:0 disables keep-alive, even with a positive idle TTL.
     pipelining: 1,
@@ -183,6 +185,31 @@ function createRoundRobinDirectDispatcher(connectionLimit: number): Dispatcher {
   const dispatchers = Array.from({ length: connectionLimit }, () => new Agent(perAgentOptions));
   const dispatcher = createRoundRobinDispatcher(dispatchers);
   directDispatchers.add(dispatcher);
+  return dispatcher;
+}
+
+/** Reviewed direct factory: negotiated H2 is opt-in; HTTP/1 fallback remains pooled. */
+export function createVerifiedHttp2Dispatcher(
+  maxConcurrentStreams: number,
+  ca?: string | Buffer
+): Dispatcher {
+  if (
+    !Number.isInteger(maxConcurrentStreams) ||
+    maxConcurrentStreams < 1 ||
+    maxConcurrentStreams > 256
+  )
+    throw new Error("Invalid HTTP/2 stream admission limit");
+  const options = getDispatcherOptions();
+  const dispatcher = new Agent({
+    ...options,
+    connections: 1,
+    pipelining: 1,
+    allowH2: true,
+    h2Options: { maxConcurrentStreams, connectionWindowSize: 1024 * 1024 },
+    connect: ca ? { ...options.connect, ca } : options.connect,
+  });
+  directDispatchers.add(dispatcher);
+  assertRuntimePolicyDispatcher(dispatcher);
   return dispatcher;
 }
 
@@ -214,6 +241,7 @@ export function getRetryDispatcher(): Dispatcher {
   if (!dispatcher) {
     dispatcher = new Agent({
       ...getDispatcherOptions(),
+      allowH2: false,
       keepAliveTimeout: 1,
       keepAliveMaxTimeout: 1,
       pipelining: 0,
