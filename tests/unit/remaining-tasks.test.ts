@@ -38,7 +38,7 @@ test("RequestTelemetry: measure() records errors", async () => {
   const t = new RequestTelemetry("tel-3");
   await assert.rejects(
     () =>
-      t.measure("connect", async () => {
+      t.measure("provider_wait", async () => {
         throw new Error("timeout");
       }),
     (err) => (err as any).message === "timeout"

@@ -1,4 +1,11 @@
 import {
+  RequestTransportTelemetry,
+  getRequestTransportTelemetry,
+  runWithRequestTransportTelemetry,
+  runWithTransportAttempt,
+  tapTelemetryBody,
+} from "../utils/transportTelemetry.ts";
+import {
   beginGenerationLifetime,
   bindGenerationResponse,
   isGenerationFetchResponse,
@@ -146,28 +153,42 @@ export function withLogicalRetryBudget<Args extends unknown[], Result>(
     if (!Number.isSafeInteger(max) || max < 1 || !Number.isSafeInteger(duration) || duration < 1)
       throw new Error("Invalid logical retry policy");
     const budget = new LogicalRetryBudget(max, Date.now() + duration);
-    return runWithLogicalRetryBudget(budget, async () => {
-      const response = await fn(...args);
-      if (!(response instanceof Response) || !response.body) return response;
-      // Capture the request budget: downstream pulls run outside ingress ALS.
-      const body = response.body.pipeThrough(
-        new TransformStream<Uint8Array, Uint8Array>(
-          {
-            transform(chunk, controller) {
+    const telemetry = new RequestTransportTelemetry();
+    return runWithRequestTransportTelemetry(telemetry, () =>
+      runWithLogicalRetryBudget(budget, async () => {
+        try {
+          const response = await fn(...args);
+          if (
+            !isGenerationFetchResponse(response) ||
+            (!response.ok && !(response instanceof Response)) ||
+            !response.body
+          ) {
+            telemetry.finish("no_body");
+            return response;
+          }
+          // Capture the request budget: downstream pulls run outside ingress ALS.
+          const body = tapTelemetryBody(
+            response.body,
+            (chunk) => {
               budget.markOutputOrToolDelivered();
-              controller.enqueue(chunk);
+              telemetry.forward(chunk.byteLength);
             },
-          },
-          new ByteLengthQueuingStrategy({ highWaterMark: 16384 }),
-          new ByteLengthQueuingStrategy({ highWaterMark: 16384 })
-        )
-      );
-      return new Response(body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      }) as Result;
-    });
+            (reason) => telemetry.finish(reason)
+          );
+          const wrapped = new Response(body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+          for (const property of ["url", "redirected", "type"] as const)
+            Object.defineProperty(wrapped, property, { value: response[property] });
+          return wrapped as Result;
+        } catch (error) {
+          telemetry.finish("error");
+          throw error;
+        }
+      })
+    );
   };
 }
 export function budgetedGenerationFetch<Args extends unknown[], Result>(
@@ -177,16 +198,32 @@ export function budgetedGenerationFetch<Args extends unknown[], Result>(
     const options = args[1] as { method?: string } | undefined;
     const generation = isGenerationHttpDispatch(args[0], options);
     consumeGenerationAttempt(args[0], options);
+    const attempt = generation ? getRequestTransportTelemetry()?.attempt("http") : undefined;
     const finish = generation ? beginGenerationLifetime("http") : () => {};
-    try {
-      const response = await fn(...args);
-      return generation && isGenerationFetchResponse(response)
-        ? (bindGenerationResponse(response, finish) as Result)
-        : (finish(), response);
-    } catch (error) {
-      finish();
-      throw error;
-    }
+    return runWithTransportAttempt(attempt, async () => {
+      try {
+        const response = await fn(...args);
+        if (!generation || !isGenerationFetchResponse(response)) {
+          finish();
+          return response;
+        }
+        attempt?.headers(response.status);
+        if (!response.ok) {
+          attempt?.close("no_body");
+          finish();
+          return response;
+        }
+        const sse = response.headers.get("content-type")?.includes("text/event-stream") === true;
+        return bindGenerationResponse(response, finish, {
+          chunk: (bytes) => attempt?.chunk(bytes, sse),
+          close: (reason) => attempt?.close(reason),
+        }) as Result;
+      } catch (error) {
+        attempt?.close("error");
+        finish();
+        throw error;
+      }
+    });
   };
 }
 
@@ -197,21 +234,26 @@ export async function backoffGenerationRetry(
 ): Promise<void> {
   const budget = getLogicalRetryBudget();
   const sleep = async () => {
-    if (budget) return budget.backoff(minimumMs, signal);
-    if (signal?.aborted) throw signal.reason ?? new Error("Request aborted");
-    await new Promise<void>((resolve, reject) => {
-      const abort = () => {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abort);
-        reject(signal?.reason ?? new Error("Request aborted"));
-      };
-      const timer = setTimeout(() => {
-        signal?.removeEventListener("abort", abort);
-        resolve();
-      }, minimumMs);
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) abort();
-    });
+    const endWait = getRequestTransportTelemetry()?.wait("backoff");
+    try {
+      if (budget) return await budget.backoff(minimumMs, signal);
+      if (signal?.aborted) throw signal.reason ?? new Error("Request aborted");
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", abort);
+          reject(signal?.reason ?? new Error("Request aborted"));
+        };
+        const timer = setTimeout(() => {
+          signal?.removeEventListener("abort", abort);
+          resolve();
+        }, minimumMs);
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) abort();
+      });
+    } finally {
+      endWait?.();
+    }
   };
   const hooks = generationContext.getStore();
   if (hooks && typeof hooks === "object" && hooks.withPermitReleased)

@@ -1,3 +1,4 @@
+import { getRequestTransportTelemetry } from "../utils/transportTelemetry.ts";
 import {
   getLogicalRetryBudget,
   consumeCurrentGenerationAttempt,
@@ -988,6 +989,8 @@ export class CodexExecutor extends BaseExecutor {
     }
 
     const requestBudget = getLogicalRetryBudget();
+    const telemetry = getRequestTransportTelemetry()?.attempt("websocket");
+    telemetry?.queued();
     let finishGeneration = () => {};
     let response: Response;
     try {
@@ -1018,16 +1021,25 @@ export class CodexExecutor extends BaseExecutor {
           await prl.captureCurrentProviderBody(url, headers, wire, nextInput.log);
         },
         onSend: () => {
+          telemetry?.dispatched();
           requestBudget?.forbidReplay();
           finishGeneration = beginGenerationLifetime("codex-websocket");
         },
         observe: (event) => {
+          if (event.phase === "connected") telemetry?.connected(event.reused === true);
+          if (event.phase === "first_event") telemetry?.firstEvent();
+          if (event.phase === "frame" && typeof event.bytes === "number")
+            telemetry?.bytes(event.bytes);
+          if (event.phase === "completed") telemetry?.close("eof");
+          if (event.phase === "failed") telemetry?.close("error");
+          if (event.phase === "cancelled") telemetry?.close("cancel");
           if (event.phase === "first_event") requestBudget?.markOutputOrToolDelivered();
           if (event.phase === "completed" || event.phase === "failed") finishGeneration();
           nextInput.log?.debug?.("CODEX_TRANSPORT", JSON.stringify(event));
         },
       });
     } catch (error) {
+      telemetry?.close("error");
       finishGeneration();
       throw error;
     }

@@ -1,3 +1,4 @@
+import { getRequestTransportTelemetry } from "./transportTelemetry.ts";
 import { classifyUpstreamPolicyRejection } from "../services/upstreamPolicyRejection.ts";
 import { getPendingById } from "@/lib/usage/usageHistory";
 import { getChatLogMaxDepth, getChatLogArrayTailItems } from "@/lib/logEnv";
@@ -13,6 +14,7 @@ type HeaderInput =
   | undefined;
 
 export type RequestPipelinePayloads = {
+  transportTelemetry?: JsonRecord;
   routeDecision?: JsonRecord;
   clientRawRequest?: JsonRecord;
   openaiRequest?: JsonRecord;
@@ -375,6 +377,7 @@ export async function createRequestLogger(
   _model?: string,
   options: RequestLoggerOptions = {}
 ): Promise<RequestLogger> {
+  const telemetry = getRequestTransportTelemetry();
   const captureStreamChunks = options.captureStreamChunks !== false;
   // Stream chunk capture is always set up — even when the logger is disabled,
   // so that active requests always have real-time stream data available via
@@ -496,7 +499,10 @@ export async function createRequestLogger(
     },
 
     getPipelinePayloads() {
-      return compactPipelinePayloads(payloads);
+      return compactPipelinePayloads({
+        ...payloads,
+        ...(telemetry ? { transportTelemetry: telemetry.snapshot() } : {}),
+      });
     },
   };
 }

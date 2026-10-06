@@ -48,7 +48,7 @@ test("buildTelemetryPayload exposes totalRequests alias plus quota/session signa
       p95: 320,
       p99: 450,
       phaseBreakdown: {
-        connect: { p50: 80, p95: 200, avg: 110, count: 7 },
+        provider_wait: { p50: 80, p95: 200, avg: 110, count: 7 },
       },
     },
     quotaMonitorSummary: {

@@ -4,7 +4,7 @@
  * Measures 7 phases of a request lifecycle and stores timings
  * for percentile calculations and monitoring.
  *
- * Phases: parse → validate → policy → resolve → connect → stream → finalize
+ * Phases: parse → validate → policy → resolve → provider_wait → stream → finalize
  *
  * @module shared/utils/requestTelemetry
  */
@@ -17,7 +17,16 @@ interface PhaseTiming {
   [key: string]: unknown;
 }
 
-const PHASES = ["parse", "validate", "policy", "resolve", "connect", "stream", "finalize"] as const;
+// provider_wait includes admission/routing/provider-header wait; it is not a TCP/TLS timer.
+const PHASES = [
+  "parse",
+  "validate",
+  "policy",
+  "resolve",
+  "provider_wait",
+  "stream",
+  "finalize",
+] as const;
 
 interface TelemetrySummary {
   requestId: string;

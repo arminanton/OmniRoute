@@ -33,3 +33,15 @@ test("telemetry summary route includes totalRequests alias plus session/quota mo
   assert.equal(payload.sessions.stickyBoundCount, 1);
   assert.equal(payload.quotaMonitor.active, 1);
 });
+
+test("coarse provider wait is explicitly distinct from physical socket connect", async () => {
+  const { PHASES, getTelemetrySummary } =
+    await import("../../src/shared/utils/requestTelemetry.ts");
+  assert.ok(PHASES.includes("provider_wait"));
+  assert.ok(!PHASES.includes("connect" as never));
+  const record = new RequestTelemetry("provider-wait-scope");
+  record.startPhase("provider_wait");
+  record.endPhase();
+  recordTelemetry(record);
+  assert.ok(getTelemetrySummary().phaseBreakdown.provider_wait);
+});

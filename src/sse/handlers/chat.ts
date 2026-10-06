@@ -1960,7 +1960,7 @@ async function handleSingleModelChatImplementation(
       const appliedProxySink: { proxy: unknown } = { proxy: null };
       const proxyStartTime = Date.now();
       // 4. Execute chat via core after breaker gate checks (with optional TLS tracking)
-      if (telemetry) telemetry.startPhase("connect");
+      if (telemetry) telemetry.startPhase("provider_wait");
       let execution: Awaited<ReturnType<typeof dispatchChatWithAffinityEviction>>;
       try {
         execution = await dispatchChatWithAffinityEviction(

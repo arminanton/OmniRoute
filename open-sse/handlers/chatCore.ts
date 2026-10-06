@@ -1,3 +1,4 @@
+import { getRequestTransportTelemetry } from "../utils/transportTelemetry.ts";
 import { withResolvedAntigravityProject } from "../services/antigravityRequestProject.ts";
 import {
   isUncertainGenerationAcceptance,
@@ -3215,29 +3216,35 @@ export async function handleChatCore({
                 stage: "waiting_account_slot",
               });
             }
-            const acquireAttemptPermit = () =>
-              acquireConcurrencyGates(
-                [
+            const acquireAttemptPermit = async () => {
+              const endWait = getRequestTransportTelemetry()?.wait("admission");
+              try {
+                return await acquireConcurrencyGates(
+                  [
+                    {
+                      key: "global",
+                      maxConcurrency: resilienceSettings.requestQueue.globalConcurrentRequests,
+                    },
+                    {
+                      key: `provider:${canonicalProviderKey}`,
+                      maxConcurrency: providerConcurrency,
+                    },
+                    {
+                      key: accountSemaphoreKey || "",
+                      maxConcurrency: accountSemaphoreKey ? accountSemaphoreMaxConcurrency : null,
+                    },
+                  ],
                   {
-                    key: "global",
-                    maxConcurrency: resilienceSettings.requestQueue.globalConcurrentRequests,
-                  },
-                  {
-                    key: `provider:${canonicalProviderKey}`,
-                    maxConcurrency: providerConcurrency,
-                  },
-                  {
-                    key: accountSemaphoreKey || "",
-                    maxConcurrency: accountSemaphoreKey ? accountSemaphoreMaxConcurrency : null,
-                  },
-                ],
-                {
-                  timeoutMs: resilienceSettings.requestQueue.maxWaitMs,
-                  maxQueueSize: resilienceSettings.requestQueue.maxQueueDepth,
-                  signal: streamController.signal,
-                  onLeaseLost: () => streamController.abort(),
-                }
-              );
+                    timeoutMs: resilienceSettings.requestQueue.maxWaitMs,
+                    maxQueueSize: resilienceSettings.requestQueue.maxQueueDepth,
+                    signal: streamController.signal,
+                    onLeaseLost: () => streamController.abort(),
+                  }
+                );
+              } finally {
+                endWait?.();
+              }
+            };
             let currentPermitRelease: (() => void) | null = await acquireAttemptPermit();
             const admittedAt = Date.now();
             let attemptStatus = 0;
