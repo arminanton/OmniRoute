@@ -1668,3 +1668,18 @@ Used by `open-sse/services/combo.ts` and `src/lib/quota/quotaScheduler.ts` for p
 | Variable                          | Default  | Source File                       | Description                                                                                                      |
 | --------------------------------- | -------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `OMNIROUTE_QUOTA_AWARE_ROUTING`   | `0`      | `open-sse/services/combo.ts`      | When `1`, skip connections whose per-window token budget (`rateLimitOverrides.tpm`, table `provider_quota_state`) cannot afford the estimated request cost before dispatch. Fail-open when no budget configured. |
+
+
+### Coordinated generations and logical retry policy
+
+These controls are set by the reviewed deployment controller. Shared admission is opt-in; enabling it requires a common private authority and lease-loss fencing. A declaration alone is not canary readiness evidence.
+
+| Variable | Default | Source file | Description |
+| --- | --- | --- | --- |
+| `OMNI_SHARED_ADMISSION` | `false` | `open-sse/services/coordination/sharedSemaphore.ts` | Exact `true` enables shared admission and coordinated refresh ownership. |
+| `OMNI_COORDINATION_DB` | _(unset)_ | `open-sse/services/coordination/sharedSemaphore.ts` | Private SQLite/WAL authority path required for shared admission. |
+| `OMNI_COORDINATION_PROCESS_ROLE` | _(unset)_ | `src/lib/periodicServices.ts` | `generation` suppresses periodic scheduling; `maintenance` with shared admission requires an actual ownership authority. Unset retains legacy scheduling. |
+| `OMNI_COORDINATION_UNHEALTHY` | `false` | `open-sse/services/coordination/sharedSemaphore.ts` | Exact `true` rejects shared admission; used for explicit unhealthy-state fencing and failure verification. |
+| `OMNIROUTE_APP_GENERATION` | _(unset)_ | `src/lib/canaryReadiness.ts` | Controller-owned generation identity used for readiness and generation-bound reversible drain. |
+| `OMNI_LOGICAL_RETRY_MAX_ATTEMPTS` | `12` | `open-sse/services/logicalRetryBudget.ts` | Positive integer cap shared across physical generation sends for a logical request. |
+| `OMNI_LOGICAL_RETRY_DEADLINE_MS` | `900000` | `open-sse/services/logicalRetryBudget.ts` | Positive retry/admission deadline from logical request start. It limits new sends/backoff, not an already streaming response's lifetime. |

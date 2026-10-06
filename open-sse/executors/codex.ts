@@ -944,10 +944,17 @@ export class CodexExecutor extends BaseExecutor {
     delete transformedBody.stream_options;
 
     const authorization = headers.authorization;
-    const actualCredentials =
+    const authenticatedCredentials =
       typeof authorization === "string" && /^Bearer\s+/i.test(authorization)
         ? { ...nextInput.credentials, accessToken: authorization.replace(/^Bearer\s+/i, "") }
         : nextInput.credentials;
+    const actualCredentials = {
+      ...authenticatedCredentials,
+      providerSpecificData: {
+        ...authenticatedCredentials.providerSpecificData,
+        workspaceId: headers["chatgpt-account-id"] || undefined,
+      },
+    };
     const owner = getCodexConversationOwner(actualCredentials, String(transformedBody.model));
     const previousId = transformedBody.previous_response_id;
     if (
