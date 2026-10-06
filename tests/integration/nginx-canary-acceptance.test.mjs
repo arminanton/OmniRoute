@@ -435,3 +435,231 @@ invalid_directive;
     h2.destroy();
   }
 );
+
+test(
+  "real NGINX retains delayed old chunks after retirement and rejects a false config-marker ACK",
+  { skip: !binary, timeout: 30000 },
+  async (t) => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omni-nginx-assets-"));
+    await fs.chmod(directory, 0o755);
+    const previous = process.cwd();
+    const backends = [];
+    let master;
+    t.after(async () => {
+      for (const server of backends) {
+        server.closeAllConnections();
+        server.close();
+      }
+      if (master && master.exitCode === null) {
+        master.kill("SIGTERM");
+        await Promise.race([once(master, "exit"), wait(1500)]);
+      }
+      async function unsealFixture(entry) {
+        await fs.chmod(entry, 0o700);
+        for (const child of await fs.readdir(entry, { withFileTypes: true })) {
+          if (child.isDirectory()) await unsealFixture(path.join(entry, child.name));
+        }
+      }
+      await unsealFixture(directory);
+      await fs.rm(directory, { recursive: true, force: true });
+    });
+    const oldStatic = path.join(directory, "old", ".next", "static");
+    const newStatic = path.join(directory, "new", ".next", "static");
+    for (const [root, name] of [
+      [oldStatic, "old-abc.js"],
+      [newStatic, "new-def.js"],
+    ]) {
+      await fs.mkdir(path.join(root, "chunks"), { recursive: true });
+      await fs.writeFile(path.join(root, "chunks", name), name);
+    }
+    const prepare = spawnSync(
+      "python3",
+      [
+        "-c",
+        `
+import os,sys,json
+from scripts.deploy.canary import static_assets as a
+# Disposable unprivileged fixture; production OWNER_UID remains0 and is tested separately.
+a.OWNER_UID=os.geteuid()
+r=a.merge_static_assets(sys.argv[1],sys.argv[2],sys.argv[3])
+print(json.dumps({"snapshot":r,"location":a.nginx_location(r["path"])}))
+`,
+        oldStatic,
+        newStatic,
+        path.join(directory, "assets"),
+      ],
+      { cwd: previous, encoding: "utf8" }
+    );
+    assert.equal(prepare.status, 0, prepare.stderr);
+    const prepared = JSON.parse(prepare.stdout);
+    const calls = [];
+    for (const generation of ["a".repeat(32), "b".repeat(32)]) {
+      const server = http.createServer((req, res) => {
+        res.setHeader("X-Omni-App-Generation", generation);
+        res.setHeader("Content-Type", "application/json");
+        calls.push({ generation, method: req.method, path: req.url });
+        if (req.url === "/api/canary-readiness") {
+          if (req.headers.authorization !== "Bearer fixture-read-key") {
+            res.writeHead(401);
+            res.end(JSON.stringify({ error: { code: "UNAUTHORIZED" } }));
+          } else {
+            res.end(
+              JSON.stringify({ schema: "omni-canary-readiness/v1", generation, ready: true })
+            );
+          }
+        } else if (req.url.startsWith("/v1/models")) {
+          // Catalog can intentionally be public; it is not our authentication proof.
+          res.end(JSON.stringify({ object: "list", data: [{ id: "cx/fixture" }] }));
+        } else if (req.url === "/v1/session-leases") {
+          let body = "";
+          req.on("data", (chunk) => {
+            body += chunk;
+          });
+          req.on("end", () => {
+            assert.deepEqual(JSON.parse(body), { action: "status", generation: 1 });
+            const auth = req.headers.authorization;
+            const code = !auth
+              ? "LEASE_AUTHENTICATION_REQUIRED"
+              : auth !== "Bearer fixture-read-key"
+                ? "LEASE_API_KEY_INVALID"
+                : "LEASE_SCOPE_REQUIRED";
+            res.writeHead(auth === "Bearer fixture-read-key" ? 403 : 401);
+            res.end(JSON.stringify({ error: { code } }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end("{}");
+        }
+      });
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      backends.push(server);
+    }
+    const ports = { dashboard: await freePort(), api: await freePort() };
+    const file = path.join(directory, "nginx.conf");
+    async function configure(index, wrongApi = false) {
+      const char = index === 0 ? "a" : "b";
+      const generation = {
+        generation: char.repeat(32),
+        slot: index === 0 ? "blue" : "green",
+        revision: char.repeat(40),
+        image: "sha256:" + char.repeat(64),
+        address: "10.203.250.2",
+        namespace: "omni-app-" + char.repeat(32),
+        stateOwner: "coordinated-live-v1",
+        helperSet: "d".repeat(64),
+      };
+      const rendered = spawnSync(
+        "python3",
+        [
+          "-c",
+          "import json,sys;from scripts.deploy.canary.proxy import nginx_config;print(nginx_config(json.loads(sys.argv[1]),json.loads(sys.argv[2])))",
+          JSON.stringify(generation),
+          JSON.stringify(ports),
+        ],
+        { cwd: previous, encoding: "utf8" }
+      );
+      assert.equal(rendered.status, 0, rendered.stderr);
+      let config = rendered.stdout
+        .replaceAll("/run/omni-local-next/canary", directory)
+        .replace("worker_processes auto;", "worker_processes 1;");
+      config = config
+        .replaceAll(
+          "http://10.203.250.2:20128",
+          `http://127.0.0.1:${backends[index].address().port}`
+        )
+        .replaceAll(
+          "http://10.203.250.2:20129",
+          `http://127.0.0.1:${backends[wrongApi ? 0 : index].address().port}`
+        );
+      config = config.replaceAll("    location / {", prepared.location + "    location / {");
+      await fs.writeFile(file, config);
+      const check = spawnSync(binary, ["-t", "-p", directory + "/", "-c", file], {
+        encoding: "utf8",
+      });
+      assert.equal(check.status, 0, check.stderr);
+    }
+    async function observe(generation) {
+      const targets = {
+        dashboard: `http://127.0.0.1:${ports.dashboard}/api/canary-readiness`,
+        api: `http://127.0.0.1:${ports.api}/v1/models?prefix=alias&configuredOnly=true`,
+      };
+      const child = spawn(
+        "python3",
+        [
+          "-c",
+          "import json,sys;from scripts.deploy.canary.frontdoor import observe_frontdoors;print(json.dumps(observe_frontdoors(json.loads(sys.argv[1]),'fixture-read-key',sys.argv[2])))",
+          JSON.stringify(targets),
+          generation,
+        ],
+        { cwd: previous, stdio: ["ignore", "pipe", "pipe"] }
+      );
+      let output = "",
+        error = "";
+      child.stdout.on("data", (chunk) => {
+        output += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        error += chunk;
+      });
+      const [status] = await once(child, "exit");
+      return { status, output, error };
+    }
+    await configure(0);
+    master = spawn(binary, ["-p", directory + "/", "-c", file, "-g", "daemon off;"], {
+      stdio: "ignore",
+    });
+    await until(async () => {
+      try {
+        return (await request(ports.api, "/_omni_generation")).body === "a".repeat(32);
+      } catch {
+        return false;
+      }
+    });
+    assert.equal((await observe("a".repeat(32))).status, 0);
+    await configure(1, true);
+    master.kill("SIGHUP");
+    await until(
+      async () => (await request(ports.dashboard, "/_omni_generation")).body === "b".repeat(32)
+    );
+    const refused = await observe("b".repeat(32));
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.error, /actual forwarded app generation differs/);
+    await configure(1);
+    master.kill("SIGHUP");
+    await until(
+      async () =>
+        (await request(ports.api, "/v1/models")).headers["x-omni-app-generation"] === "b".repeat(32)
+    );
+    const accepted = await observe("b".repeat(32));
+    assert.equal(accepted.status, 0, accepted.error);
+    backends[0].closeAllConnections();
+    await new Promise((resolve) => backends[0].close(resolve));
+    await fs.rm(path.join(directory, "old"), { recursive: true, force: true });
+    assert.equal(
+      (await request(ports.dashboard, "/_next/static/chunks/old-abc.js")).body,
+      "old-abc.js"
+    );
+    assert.equal(
+      (await request(ports.dashboard, "/_next/static/chunks/new-def.js")).body,
+      "new-def.js"
+    );
+    const head = await request(ports.dashboard, "/_next/static/chunks/old-abc.js", {
+      method: "HEAD",
+    });
+    assert.equal(head.status, 200);
+    assert.equal(head.body, "");
+    const before = calls.length;
+    assert.equal(
+      (
+        await request(ports.dashboard, "/_next/static/chunks/old-abc.js", {
+          method: "POST",
+          body: "must-not-dispatch",
+        })
+      ).status,
+      403
+    );
+    assert.equal(calls.length, before);
+    assert.equal((await request(ports.dashboard, "/_next/static/chunks/missing.js")).status, 404);
+  }
+);
