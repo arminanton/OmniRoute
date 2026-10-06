@@ -118,6 +118,14 @@ test("shouldSwallowUncaught preserves crash semantics for genuine errors", () =>
   assert.equal(shouldSwallowUncaught(realErr2, "uncaughtException"), false);
 });
 
+test("proxy-looking codes cannot forge exhausted-transport provenance", () => {
+  const spoof = Object.assign(new Error("spoofed proxy failure"), {
+    code: "PROXY_REQUEST_FAILED",
+    causeCode: "UND_ERR_SOCKET",
+  });
+  assert.equal(shouldSwallowUncaught(spoof, "uncaughtException"), false);
+});
+
 test("installProcessCrashGuard does not throw on import and is idempotent", () => {
   assert.doesNotThrow(() => installProcessCrashGuard(() => {}));
 });
@@ -181,7 +189,7 @@ test("installProcessCrashGuard() with no logger swallows aborts instead of dying
   assert.match(stdout, /ALIVE/);
 });
 
-test("installProcessCrashGuard survives relay timeouts and exhausted proxy failures", async () => {
+test("installProcessCrashGuard survives relay timeouts", async () => {
   const guardPath = fileURLToPath(
     new URL("../../src/shared/utils/httpClientAbortGuard.mjs", import.meta.url)
   );
@@ -196,22 +204,6 @@ test("installProcessCrashGuard survives relay timeouts and exhausted proxy failu
     process.emit(
       "unhandledRejection",
       Object.assign(new Error("relay timed out"), { errorCode: "relay_timeout" }),
-      Promise.resolve()
-    );
-    process.emit(
-      "uncaughtException",
-      Object.assign(
-        new Error("Proxy request failed: fetch failed (cause UND_ERR_SOCKET)"),
-        { code: "PROXY_REQUEST_FAILED", causeCode: "UND_ERR_SOCKET" }
-      ),
-      "uncaughtException"
-    );
-    process.emit(
-      "unhandledRejection",
-      Object.assign(
-        new Error("Proxy request failed: fetch failed (cause UND_ERR_SOCKET)"),
-        { code: "PROXY_REQUEST_FAILED", causeCode: "UND_ERR_SOCKET" }
-      ),
       Promise.resolve()
     );
     console.log("ALIVE");

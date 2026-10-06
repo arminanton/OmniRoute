@@ -92,9 +92,21 @@ const PROXY_NETWORK_ERROR_CODES = new Set([
   "ERR_HTTP2_STREAM_ERROR",
 ]);
 
-/** proxyFetch marks terminal failures; require their explicit transport cause too. */
+const exhaustedProxyTransportErrors = new WeakSet();
+
+/** Called only by proxyFetch after an exhausted transport failure. */
+export function markProxyFetchExhaustedTransportError(err) {
+  if (err && typeof err === "object") exhaustedProxyTransportErrors.add(err);
+  return err;
+}
+
+export function isProxyFetchExhaustedTransportError(err) {
+  return err !== null && typeof err === "object" && exhaustedProxyTransportErrors.has(err);
+}
+
+/** Require private proxyFetch provenance and the explicit transport cause. */
 function isRecoverableProxyNetworkError(err) {
-  if (!err || typeof err !== "object") return false;
+  if (!isProxyFetchExhaustedTransportError(err)) return false;
   const e =
     /** @type {{ code?: string; errorCode?: string; causeCode?: string; cause?: unknown }} */ (err);
   const markedProxyFailure =

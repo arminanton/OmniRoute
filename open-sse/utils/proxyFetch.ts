@@ -7,6 +7,10 @@ import {
   getRuntimePolicy,
   isRuntimePolicyError,
 } from "@/shared/runtimePolicy";
+import {
+  isProxyFetchExhaustedTransportError,
+  markProxyFetchExhaustedTransportError,
+} from "@/shared/utils/httpClientAbortGuard.mjs";
 import { fetch as undiciFetch, Agent } from "undici";
 import {
   buildVercelRelayHeaders,
@@ -180,22 +184,28 @@ function isProxyUnreachableError(err: unknown): boolean {
 // Object-identity provenance: provider JSON/code/message cannot forge this brand.
 // Add it only at a terminal transport throw, after all eligible retry/fallback
 // paths have failed. The early tagProxyUnreachable classification is NOT proof.
-const exhaustedTransportErrors = new WeakSet<object>();
-
 function markVerifiedExhaustedTransportError<T>(err: T): T {
-  if (
-    err &&
-    typeof err === "object" &&
-    (err as { code?: unknown }).code === "PROXY_UNREACHABLE" &&
-    (err as { errorCode?: unknown }).errorCode === "proxy_unreachable"
-  ) {
-    exhaustedTransportErrors.add(err);
-  }
+  if (!err || typeof err !== "object") return err;
+  const e = err as {
+    code?: unknown;
+    errorCode?: unknown;
+    causeCode?: unknown;
+    cause?: unknown;
+  };
+  const causeCode =
+    e.causeCode ??
+    (e.cause && typeof e.cause === "object" ? (e.cause as { code?: unknown }).code : undefined);
+  const taggedUnreachable = e.code === "PROXY_UNREACHABLE" && e.errorCode === "proxy_unreachable";
+  const exhaustedNetworkFailure =
+    e.code === "PROXY_REQUEST_FAILED" &&
+    typeof causeCode === "string" &&
+    PROXY_UNREACHABLE_ERROR_CODES.has(causeCode);
+  if (taggedUnreachable || exhaustedNetworkFailure) markProxyFetchExhaustedTransportError(err);
   return err;
 }
 
 export function isVerifiedProxyFetchExhaustedError(value: unknown): boolean {
-  return value !== null && typeof value === "object" && exhaustedTransportErrors.has(value);
+  return isProxyFetchExhaustedTransportError(value);
 }
 
 function tagProxyUnreachable<T>(err: T): T {

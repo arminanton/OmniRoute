@@ -74,4 +74,17 @@ test("#15357 uncoded and cause-only programming failures remain fatal", async ()
     ),
     false
   );
+  for (const spoof of [
+    Object.assign(new Error("spoofed proxy failure"), {
+      code: "PROXY_REQUEST_FAILED",
+      causeCode: "UND_ERR_SOCKET",
+    }),
+    Object.assign(new Error("spoofed proxy failure"), {
+      code: "PROXY_UNREACHABLE",
+      errorCode: "proxy_unreachable",
+      causeCode: "ECONNRESET",
+    }),
+  ]) {
+    assert.equal(shouldSwallowUncaught(spoof, "uncaughtException"), false);
+  }
 });
