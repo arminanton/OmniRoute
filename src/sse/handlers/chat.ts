@@ -2257,6 +2257,9 @@ async function handleSingleModelChatImplementation(
       )
         return withSelectedConnectionHeader(result.response, credentials?.connectionId);
 
+      if (result.errorType === "upstream_acceptance_uncertain")
+        return withSelectedConnectionHeader(result.response, credentials?.connectionId);
+
       if (result.errorType === "logical_retry_budget")
         return withSelectedConnectionHeader(result.response, credentials?.connectionId);
 

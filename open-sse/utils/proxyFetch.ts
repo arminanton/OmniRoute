@@ -1,4 +1,8 @@
 // @ts-nocheck
+import {
+  canReplayGenerationDispatch,
+  markUncertainGenerationAcceptance,
+} from "../services/generationReplay.ts";
 import { classifyUpstreamPolicyRejection } from "../services/upstreamPolicyRejection.ts";
 import "./setupPolyfill.ts";
 import { combineAbortSignals } from "./combineAbortSignals.ts";
@@ -980,6 +984,8 @@ async function patchedFetch(
         )
           throw error;
         if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
+        if (!canReplayGenerationDispatch(input, options, error))
+          throw markUncertainGenerationAcceptance(error);
         const sessionHadCookies =
           !!error &&
           typeof error === "object" &&
@@ -1052,6 +1058,8 @@ async function patchedFetch(
         if (isCallerAbort(dispatcherError, getEffectiveSignal(input, options))) {
           throw dispatcherError;
         }
+        if (!canReplayGenerationDispatch(input, options, dispatcherError))
+          throw markUncertainGenerationAcceptance(dispatcherError);
         if (isDirectResponseStartTimeout(dispatcherError)) {
           if (attempt === 0 && maxAttempts > 1) {
             console.warn(
@@ -1246,6 +1254,8 @@ async function patchedFetch(
           classifyUpstreamPolicyRejection(relayError)
         )
           throw relayError;
+        if (!canReplayGenerationDispatch(input, options, relayError))
+          throw markUncertainGenerationAcceptance(relayError);
         // #9158: classify an internal per-attempt timeout FIRST — a relay that
         // hangs past RELAY_FETCH_TIMEOUT_MS must fail fast as RELAY_TIMEOUT (504)
         // and NOT be retried, instead of surviving into the caller's ~30s stall.
@@ -1326,6 +1336,8 @@ async function patchedFetch(
       )
         throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
+      if (!canReplayGenerationDispatch(input, options, error))
+        throw markUncertainGenerationAcceptance(error);
       const sessionHadCookies =
         !!error &&
         typeof error === "object" &&
@@ -1376,6 +1388,8 @@ async function patchedFetch(
       )
         throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
+      if (!canReplayGenerationDispatch(input, options, error))
+        throw markUncertainGenerationAcceptance(error);
       const msg = error instanceof Error ? error.message : String(error);
       const errCode = (error as { code?: unknown })?.code;
       const isTransportFailure =

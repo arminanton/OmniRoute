@@ -1713,6 +1713,16 @@ export function checkFallbackError(
       skipProviderBreaker: true,
     };
   }
+  if (
+    structuredError?.type === "upstream_acceptance_uncertain" ||
+    structuredError?.code === "upstream_acceptance_uncertain"
+  )
+    return {
+      shouldFallback: false,
+      cooldownMs: 0,
+      reason: "upstream_acceptance_uncertain",
+      skipProviderBreaker: true,
+    };
   // #10360: an executor-result contract violation is OUR bug, not the provider's.
   // Retrying reproduces it verbatim, and cooling the connection down (or tripping
   // the provider breaker) punishes a healthy account for an internal defect. Must
