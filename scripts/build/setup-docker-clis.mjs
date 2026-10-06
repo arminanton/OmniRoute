@@ -22,7 +22,7 @@ export const SETUP_TIMEOUT_MS = 30_000;
 export const AUDITED_SETUP = Object.freeze([
   Object.freeze({
     name: "@anthropic-ai/claude-code",
-    version: "2.1.260",
+    version: "2.1.289",
     lifecycle: "postinstall",
     entry: "install.cjs",
     sourceKey: "claudeInstall",

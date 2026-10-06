@@ -11,8 +11,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const CLI_VERSIONS = Object.freeze({
-  "@openai/codex": "0.158.0",
-  "@anthropic-ai/claude-code": "2.1.260",
+  "@openai/codex": "0.160.0",
+  "@anthropic-ai/claude-code": "2.1.289",
   droid: "0.212.0",
   openclaw: "2026.9.1",
 });
@@ -22,7 +22,7 @@ export const COMMAND_TIMEOUT_MS = 20_000;
 export const MAX_OUTPUT_BYTES = 128 * 1024;
 // SHA256 of source members in the exact public npm tarballs, not hashes of local installs.
 export const AUDITED_SOURCE_HASHES = Object.freeze({
-  claudeInstall: "5cbab1670597f492cd4eeb946f3c344ebcb1fbd43c623ba192c9b33744461b85",
+  claudeInstall: "32a7b2429d7447c5aa043e383bcf9a72e0b233dff66336ea4b5b32531da981ad",
   openclawPreinstall: "e4216bfce089c40578d9fde499990960eb98722c2c8c5f7ab7619d340db6680a",
   openclawPostinstall: "91b18605d3c3e7493099172fe8658c363235c2b68bc10642dd85b1f470c4e0fe",
   openclawNodeVersion: "8ca5102f3beaea724f23bab3f92527d772de1470b3af6f3edce18b296342c8da",
@@ -243,12 +243,12 @@ export function inspectInstall({
   }
 
   const codexAlias = `@openai/codex-linux-${arch}`;
-  declared(codex, codexAlias, `npm:@openai/codex@0.158.0-linux-${arch}`, true);
+  declared(codex, codexAlias, `npm:@openai/codex@0.160.0-linux-${arch}`, true);
   const codexNative = dependency(
     globalRoot,
     codex,
     codexAlias,
-    `0.158.0-linux-${arch}`,
+    `0.160.0-linux-${arch}`,
     "@openai/codex"
   );
   const target = `${arch === "x64" ? "x86_64" : "aarch64"}-unknown-linux-musl`;
@@ -258,7 +258,7 @@ export function inspectInstall({
   );
   for (const [key, value] of Object.entries({
     layoutVersion: 1,
-    version: "0.158.0",
+    version: "0.160.0",
     target,
     variant: "codex",
     entrypoint: "bin/codex",
@@ -278,8 +278,8 @@ export function inspectInstall({
   }
 
   const claudeName = `@anthropic-ai/claude-code-linux-${arch}`;
-  declared(claude, claudeName, "2.1.260", true);
-  const claudeNative = dependency(globalRoot, claude, claudeName, "2.1.260");
+  declared(claude, claudeName, "2.1.289", true);
+  const claudeNative = dependency(globalRoot, claude, claudeName, "2.1.289");
   assert.ok(claudeNative.manifest.libc?.includes("glibc"), "Claude GNU binary package required");
   const claudeBinary = existingFile(globalRoot, path.join(claudeNative.dir, "claude"));
   assertElf(claudeBinary, arch, true);

@@ -129,3 +129,16 @@ test("test 7: live-empty GitHub catalog path does not call persist", () => {
   const liveWindow = src.slice(liveIdx, start);
   assert.match(liveWindow, /buildApiDiscoveryResponse\s*\(/);
 });
+
+test("Docker CLI installation, verification and wire versions stay aligned", async () => {
+  const { CLI_ROOTS } = await import("../../scripts/build/install-docker-cli-tree.mjs");
+  const { CLI_VERSIONS } = await import("../../scripts/build/verify-docker-clis.mjs");
+  const { AUDITED_SETUP } = await import("../../scripts/build/setup-docker-clis.mjs");
+  for (const root of CLI_ROOTS) assert.equal(root.version, CLI_VERSIONS[root.name]);
+  assert.equal(CLI_VERSIONS["@anthropic-ai/claude-code"], canonical.CLAUDE_CODE_CLIENT_VERSION);
+  assert.equal(CLI_VERSIONS["@openai/codex"], codexCfg.getCodexClientVersion());
+  assert.equal(
+    AUDITED_SETUP.find((s) => s.name === "@anthropic-ai/claude-code")?.version,
+    canonical.CLAUDE_CODE_CLIENT_VERSION
+  );
+});

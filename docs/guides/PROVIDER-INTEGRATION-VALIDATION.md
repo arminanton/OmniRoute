@@ -12,14 +12,14 @@ The Codex executor inspected the native response body before checking whether fi
 
 Offline captures use synthetic prompts and credentials, isolated local servers, and network-disabled containers. They establish request shapes, not account entitlement or production throughput.
 
-| Client                           | Verified evidence                                                             | Candidate behavior                                                                                                    |
-| -------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Codex 0.160.0                    | Local binary and model cache; custom Responses provider capture               | Bundled version and discovery version aligned; separate child thread IDs/cache keys; account-specific effort metadata |
-| Claude Code 2.1.289              | Native request: SDK 0.128.0, Node 26.3.0, sdk-cli profile, billing suffix ec8 | Shared constants synchronized; no speculative beta flags added                                                        |
-| Copilot 1.0.92-3                 | Native generation UA, editor version and API version 2026-08-01               | Generation profile aligned; existing caller correlation IDs preserved                                                 |
-| Antigravity CLI 1.2.16           | Installed CLI and official release binary                                     | Independent CLI version resolver floor                                                                                |
-| Antigravity standalone IDE 2.5.5 | Official standalone language-server binary                                    | Independent IDE version resolver floor                                                                                |
-| Antigravity Hub 2.19.1           | Separate binary and SDK/runtime investigation                                 | Not substituted for the standalone IDE profile                                                                        |
+| Client                           | Verified evidence                                                             | Candidate behavior                                                                                                             |
+| -------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Codex 0.160.0                    | Local binary and model cache; custom Responses provider capture               | Locked bundle, installer and discovery version aligned; separate child thread IDs/cache keys; account-specific effort metadata |
+| Claude Code 2.1.289              | Native request: SDK 0.128.0, Node 26.3.0, sdk-cli profile, billing suffix ec8 | Shared constants synchronized; no speculative beta flags added                                                                 |
+| Copilot 1.0.92-3                 | Native generation UA, editor version and API version 2026-08-01               | Generation profile aligned; existing caller correlation IDs preserved                                                          |
+| Antigravity CLI 1.2.16           | Installed CLI and official release binary                                     | Independent CLI version resolver floor                                                                                         |
+| Antigravity standalone IDE 2.5.5 | Official standalone language-server binary                                    | Independent IDE version resolver floor                                                                                         |
+| Antigravity Hub 2.19.1           | Separate binary and SDK/runtime investigation                                 | Not substituted for the standalone IDE profile                                                                                 |
 
 The public GPT-6.1 API catalog and ChatGPT-backed Codex catalog have different context and effort metadata. Discovery remains account-specific; a fallback model declaration does not grant access. Native custom-provider capture maps the CLI's ultra setting to a different wire effort, so it is not evidence that raw ultra is accepted by the ChatGPT backend. Existing legacy priority handling and the disabled app-server path remain intact.
 
@@ -51,3 +51,5 @@ An authenticated Responses HTTP regression checks that a native-like 429 remains
 - [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
 - [Gemini 3.8 Flash](https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash)
 - [Gemini context caching](https://ai.google.dev/gemini-api/docs/generate-content/caching)
+
+Docker CLI installer/setup/readiness pins are updated together with the lockfile. The Claude 2.1.289 `install.cjs` entrypoint was reviewed from the exact public npm tarball and pinned to SHA-256 `32a7b2429d7447c5aa043e383bcf9a72e0b233dff66336ea4b5b32531da981ad`; the Codex shim hash is unchanged. All 27 Docker CLI alignment/readiness tests pass. These are candidate source checks, not a claim that the live container's bundled CLIs have changed.

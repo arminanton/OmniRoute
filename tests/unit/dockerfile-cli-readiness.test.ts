@@ -42,8 +42,8 @@ const cliStart = instructions.findIndex((line) => /^FROM runner-base AS runner-c
 const nextStage = instructions.findIndex((line, index) => index > cliStart && /^FROM /.test(line));
 const cli = instructions.slice(cliStart, nextStage < 0 ? undefined : nextStage);
 const expected = {
-  "@openai/codex": "0.158.0",
-  "@anthropic-ai/claude-code": "2.1.260",
+  "@openai/codex": "0.160.0",
+  "@anthropic-ai/claude-code": "2.1.289",
   droid: "0.212.0",
   openclaw: "2026.9.1",
 };
@@ -236,7 +236,7 @@ test("only the three reviewed exact-version lifecycle entrypoints are permitted"
     [
       {
         name: "@anthropic-ai/claude-code",
-        version: "2.1.260",
+        version: "2.1.289",
         lifecycle: "postinstall",
         entry: "install.cjs",
       },
@@ -533,9 +533,9 @@ test("versions, runtime targets and path containment fail closed", () => {
     () => assertPackageVersion({ name: "droid", version: "0.213.0" }, "droid", "0.212.0"),
     /Unaudited/
   );
-  assertVersionOutput("codex-cli 0.158.0\n", "0.158.0", "codex");
-  for (const output of ["0.158.00", "10.158.0", "0.158.0-dev", "missing"]) {
-    assert.throws(() => assertVersionOutput(output, "0.158.0", "codex"));
+  assertVersionOutput("codex-cli 0.160.0\n", "0.160.0", "codex");
+  for (const output of ["0.160.00", "10.160.0", "0.160.0-dev", "missing"]) {
+    assert.throws(() => assertVersionOutput(output, "0.160.0", "codex"));
   }
   assert.equal(assertContained("/fixture/global", "/fixture/global/pkg"), "/fixture/global/pkg");
   assert.throws(() => assertContained("/fixture/global", "/fixture/global-escape/pkg"), /escapes/);
@@ -649,7 +649,11 @@ test("combined browser/CLI target retains locked browser installer and non-root 
   assert.ok(start > cliStart);
   const browser = instructions.slice(start);
   assert.ok(browser.includes("ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright"));
-  assert.ok(browser.some((line) => line.includes("node node_modules/playwright/cli.js install chromium --with-deps")));
+  assert.ok(
+    browser.some((line) =>
+      line.includes("node node_modules/playwright/cli.js install chromium --with-deps")
+    )
+  );
   assert.ok(browser.some((line) => line.includes("xvfb xauth x11vnc novnc websockify")));
   assert.equal(browser.filter((line) => line.startsWith("USER ")).at(-1), "USER node");
   assert.ok(browser.some((line) => line.includes("chown root:root /app")));
