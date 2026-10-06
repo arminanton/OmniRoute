@@ -294,11 +294,11 @@ test("codex OAuth discovery retains ChatGPT-only models but respects picker visi
 test("Codex discovery HTTP identity matches the exact Docker CLI pin", () => {
   const manifest = JSON.parse(fs.readFileSync(path.resolve("docker/cli/package.json"), "utf8"));
   assert.equal(DEFAULT_CODEX_CLIENT_VERSION, manifest.dependencies["@openai/codex"]);
-  assert.equal(DEFAULT_CODEX_CLIENT_VERSION, "0.158.0");
+  assert.equal(DEFAULT_CODEX_CLIENT_VERSION, "0.160.0");
   const previous = process.env.CODEX_CLIENT_VERSION;
   delete process.env.CODEX_CLIENT_VERSION;
   try {
-    assert.equal(new URL(buildCodexModelsUrl()).searchParams.get("client_version"), "0.158.0");
+    assert.equal(new URL(buildCodexModelsUrl()).searchParams.get("client_version"), "0.160.0");
     assert.deepEqual(
       normalizeCodexModelsResponse({
         models: [

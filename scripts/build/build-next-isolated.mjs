@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { verifyResolvedBuild } from "./verify-resolved-build.mjs";
+
 import fs from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import os from "node:os";
@@ -266,6 +268,7 @@ export async function syncStandaloneExtraModules(
 }
 
 export async function main() {
+  verifyResolvedBuild(projectRoot);
   const movedPaths = [];
   const transientBuildPaths = getTransientBuildPaths();
 
