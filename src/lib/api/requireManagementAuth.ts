@@ -75,6 +75,17 @@ export async function requireManagementAuth(
     return null;
   }
 
+  // The scheduler's per-process credential is scoped to model discovery/sync.
+  // Central auth accepts it; the route's second check must preserve that decision.
+  const pathname = new URL(request.url).pathname;
+  const modelSyncPath =
+    (request.method === "GET" && /^\/api\/providers\/[^/]+\/models$/.test(pathname)) ||
+    (request.method === "POST" && /^\/api\/providers\/[^/]+\/sync-models$/.test(pathname));
+  if (modelSyncPath && request.headers.has("x-model-sync-internal-auth")) {
+    const { isModelSyncInternalRequest } = await import("@/shared/services/modelSyncScheduler");
+    if (isModelSyncInternalRequest(request)) return null;
+  }
+
   // The authz pipeline strips the raw machine-token header after it validates it
   // and forwards this trusted subject stamp to route handlers.
   if (

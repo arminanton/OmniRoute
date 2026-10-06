@@ -335,6 +335,12 @@ function applyAntigravityGenerationDefaults(
   const thinkingBudget = Number(thinkingConfig?.thinkingBudget);
   const maxOutputTokens = Number(generationConfig.maxOutputTokens);
   if (
+    thinkingConfig &&
+    thinkingBudget === 0 &&
+    /(?:^|[-_/])flash-lite(?:$|[-_.])/i.test(modelId ?? "")
+  ) {
+    delete thinkingConfig.thinkingBudget;
+  } else if (
     Number.isFinite(thinkingBudget) &&
     thinkingBudget > 0 &&
     (!Number.isFinite(maxOutputTokens) || maxOutputTokens <= thinkingBudget)

@@ -43,7 +43,7 @@ function preserveErrorForSizeLimit(error: unknown): unknown {
   if (error === null || error === undefined) return null;
   let serialized: string;
   try {
-    serialized = typeof error === "string" ? error : JSON.stringify(error) ?? String(error);
+    serialized = typeof error === "string" ? error : (JSON.stringify(error) ?? String(error));
   } catch {
     // A circular or unserializable error must not take the whole artifact down.
     serialized = String(error);
@@ -144,17 +144,74 @@ function truncateArtifactForStorage(artifact: CallLogArtifact): CallLogArtifact 
   };
 }
 
+/** Preserve bounded diagnostics; request bodies do not belong in a size-limit error fallback. */
+function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayloads {
+  const original = artifact.pipeline?.error ?? {};
+  const error: Record<string, unknown> = {
+    _omniroute_truncated: true,
+    reason: SIZE_LIMIT_EXCEEDED_REASON,
+  };
+  for (const key of [
+    "timestamp",
+    "error",
+    "message",
+    "status",
+    "statusCode",
+    "errorCode",
+    "errorType",
+    "retryAfterMs",
+    "stage",
+  ]) {
+    if (original[key] != null) error[key] = preserveErrorForSizeLimit(original[key]);
+  }
+  const provider = artifact.pipeline?.providerResponse;
+  const body = provider?.body;
+  let providerResponse: Record<string, unknown> | undefined;
+  if (provider && Number(provider.status) >= 400) {
+    const parsed =
+      body && typeof body === "object" && !Array.isArray(body)
+        ? (body as Record<string, unknown>)
+        : {};
+    const details: Record<string, unknown> = {};
+    for (const key of ["error", "detail", "message", "code", "type"]) {
+      if (parsed[key] != null) details[key] = preserveErrorForSizeLimit(parsed[key]);
+    }
+    const headerSource =
+      provider.headers && typeof provider.headers === "object"
+        ? (provider.headers as Record<string, unknown>)
+        : {};
+    const headers: Record<string, string> = {};
+    for (const [name, value] of Object.entries(headerSource)) {
+      const lower = name.toLowerCase();
+      if (
+        [
+          "retry-after",
+          "x-request-id",
+          "x-codex-primary-used-percent",
+          "x-codex-secondary-used-percent",
+          "x-codex-primary-reset-after-seconds",
+          "x-codex-secondary-reset-after-seconds",
+        ].includes(lower) &&
+        typeof value === "string"
+      )
+        headers[lower] = truncateUtf8(value, 256);
+    }
+    providerResponse = {
+      status: provider.status,
+      statusText: provider.statusText,
+      ...(Object.keys(headers).length ? { headers } : {}),
+      ...(Object.keys(details).length ? { body: details } : {}),
+    };
+  }
+  return { error, ...(providerResponse ? { providerResponse } : {}) };
+}
+
 function omitOversizedPipeline(artifact: CallLogArtifact): CallLogArtifact {
   if (!artifact.pipeline) return artifact;
 
   return {
     ...artifact,
-    pipeline: {
-      error: {
-        _omniroute_truncated: true,
-        reason: SIZE_LIMIT_EXCEEDED_REASON,
-      },
-    },
+    pipeline: compactErrorPipeline(artifact),
   };
 }
 
@@ -173,12 +230,7 @@ function buildMinimalArtifactForSizeLimit(artifact: CallLogArtifact) {
     // provider outages from a log row that shows only an omission marker is
     // impossible; the error string is tiny next to the request/response bodies.
     error: preserveErrorForSizeLimit(artifact.error),
-    pipeline: {
-      error: {
-        _omniroute_truncated: true,
-        reason: SIZE_LIMIT_EXCEEDED_REASON,
-      },
-    },
+    pipeline: compactErrorPipeline(artifact),
   };
 }
 

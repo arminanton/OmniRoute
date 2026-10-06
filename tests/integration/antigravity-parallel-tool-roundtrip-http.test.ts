@@ -147,7 +147,7 @@ test(
         requireLogin: false,
         sessionAffinityTtlMs: 60000,
         compression: { enabled: false },
-        resilience: {
+        resilienceSettings: {
           quotaPreflight: { enabled: false },
           requestQueue: {
             autoEnableApiKeyProviders: false,

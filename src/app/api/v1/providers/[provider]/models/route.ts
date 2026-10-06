@@ -5,6 +5,8 @@ import { getRegistryEntry } from "@omniroute/open-sse/config/providerRegistry.ts
 import { getProviderById, getProviderByAlias } from "@/shared/constants/providers";
 import { isCompatibleProviderConnectionId } from "@/shared/utils/compatibleProviderId";
 
+export const providerModelsCatalog = { getUnifiedModelsResponse };
+
 /**
  * Handle CORS preflight
  */
@@ -68,7 +70,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
     }
   }
 
-  const response = await getUnifiedModelsResponse(request);
+  const response = await providerModelsCatalog.getUnifiedModelsResponse(request);
   const payload = (await response
     .clone()
     .json()
@@ -103,6 +105,21 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
     });
   }
 
+  const headers = new Headers(response.headers);
+  for (const header of [
+    "content-length",
+    "content-encoding",
+    "content-range",
+    "etag",
+    "last-modified",
+    "content-md5",
+    "digest",
+    "content-digest",
+    "repr-digest",
+  ]) {
+    headers.delete(header);
+  }
+
   return Response.json(
     {
       object: payload.object || "list",
@@ -110,7 +127,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ prov
     },
     {
       status: response.status,
-      headers: response.headers,
+      headers,
     }
   );
 }

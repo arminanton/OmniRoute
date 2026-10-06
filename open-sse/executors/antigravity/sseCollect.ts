@@ -1,3 +1,4 @@
+import { normalizeAntigravityUsageMetadata } from "./usageMetadata.ts";
 import { randomUUID } from "node:crypto";
 // Pure SSE-payload -> collected-stream parsing for the Antigravity executor.
 // Extracted verbatim from antigravity.ts (no host state, no fetch/auth).
@@ -167,12 +168,7 @@ export function processAntigravitySSEPayload(
       );
     }
     if (parsed?.response?.usageMetadata) {
-      const um = parsed.response.usageMetadata;
-      collected.usage = {
-        prompt_tokens: um.promptTokenCount || 0,
-        completion_tokens: um.candidatesTokenCount || 0,
-        total_tokens: um.totalTokenCount || 0,
-      };
+      collected.usage = normalizeAntigravityUsageMetadata(parsed.response.usageMetadata);
     }
     if (Array.isArray(parsed?.remainingCredits)) {
       collected.remainingCredits = parsed.remainingCredits;

@@ -198,5 +198,13 @@ export const codexProvider: RegistryEntry = {
       maxOutputTokens: 128000,
     },
     { id: "gpt-5.3-codex-spark", name: "GPT 5.3 Codex Spark" },
+    ...["gpt-6.1-sol"].flatMap((id) => [
+      { id, name: "GPT 6.1 Sol", ...GPT_5_6_CODEX_CAPABILITIES },
+      ...["low", "medium", "high", "xhigh", "max"].map((effort) => ({
+        id: `${id}-${effort}`,
+        name: `GPT 6.1 Sol (${effort})`,
+        ...GPT_5_6_CODEX_CAPABILITIES,
+      })),
+    ]),
   ],
 };

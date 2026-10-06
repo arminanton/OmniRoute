@@ -1,5 +1,7 @@
 "use client";
 
+import { getCompressionLogStats } from "@/shared/utils/compressionLogStats";
+
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { JsonView } from "@/shared/components/jsonView";
@@ -664,18 +666,17 @@ export default function RequestLoggerDetail({
                   {tokenStats.compressed != null &&
                     tokenStats.compressed > 0 &&
                     (() => {
-                      const fromTokens = tokenStats.compressed + Math.max(0, tokenStats.totalIn);
-                      const saved = Math.min(tokenStats.compressed, fromTokens);
-                      const pct =
-                        fromTokens > 0
-                          ? Math.max(0, Math.min(100, Math.round((saved / fromTokens) * 100)))
-                          : 100;
+                      const stats = getCompressionLogStats(
+                        tokenStats.compressed,
+                        tokenStats.totalIn
+                      );
+                      if (!stats) return null;
                       return (
                         <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-700 dark:text-purple-300 text-xs font-bold">
                           {t("compressed", {
-                            from: fromTokens.toLocaleString(),
-                            to: Math.max(0, tokenStats.totalIn).toLocaleString(),
-                            percent: pct,
+                            from: stats.from.toLocaleString(),
+                            to: stats.to.toLocaleString(),
+                            percent: stats.percent,
                           })}
                         </span>
                       );

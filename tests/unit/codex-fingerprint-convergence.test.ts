@@ -453,3 +453,18 @@ test("ensureCodexFingerprintSeed creates once, preserves, and skips non-converge
     assert.match(result?.codexFingerprintSeed as string, /^[0-9a-f-]{36}$/);
   }
 });
+
+test("children sharing a parent session retain distinct native thread identities", () => {
+  const first = resolveCodexFingerprintIdentity({
+    credentials: oauthCredentials,
+    clientHeaders: { "session-id": "parent-session", "thread-id": "child-a" },
+    body: {},
+  });
+  const second = resolveCodexFingerprintIdentity({
+    credentials: oauthCredentials,
+    clientHeaders: { "session-id": "parent-session", "thread-id": "child-b" },
+    body: {},
+  });
+  assert.ok(first && second);
+  assert.notEqual(first.threadId, second.threadId);
+});

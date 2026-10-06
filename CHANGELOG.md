@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### 🐛 Provider catalogs, native errors and conversation identity
+
+- Leave Codex throttling retries to account orchestration instead of multiplying requests with a fixed-delay inner retry loop.
+- Keep native Codex JSON error bodies readable, preserve ChatGPT `detail` messages and `Retry-After`, and retain compact provider diagnostics when call artifacts exceed their size limit.
+- Separate Codex child-thread identities and prompt-cache keys, add GPT-6.1 Sol fallback aliases, and consult account-discovered effort limits before applying legacy clamps.
+- Accept signed internal model discovery at both authorization layers; remove stale entity headers from filtered model catalogs.
+- Preserve Antigravity cache-hit and reasoning usage, Claude Code translated tool history, and weekly Gemini versus Claude/GPT quota buckets.
+- Align bundled Codex and Claude Code versions and captured Claude/Copilot request profiles; refresh separate Antigravity CLI and standalone IDE version floors.
+- Coalesce Codex usage fetches, retain TLS proxy handling with Next.js metadata, and reject replayed numeric-string Responses sequence numbers.
+- Suppress compression savings when failed requests have no measured input usage.
+
 ### 🐛 Antigravity reliability
 
 - Preserve independent conversation sessions and tool thought signatures across streaming and non-streaming turns; keep valid account affinity ahead of capacity scoring.

@@ -240,6 +240,10 @@ export function getCodexClientSessionId(
   headers: Headers | Record<string, unknown> | null | undefined
 ): string | null {
   return (
+    // A native child thread may share its parent's session-id. Partition on the child.
+    normalizeCodexSessionId(readNamedHeader(headers, "thread-id")) ||
+    normalizeCodexSessionId(readNamedHeader(headers, "thread_id")) ||
+    normalizeCodexSessionId(readNamedHeader(headers, "x-omniroute-session-id")) ||
     normalizeCodexSessionId(readNamedHeader(headers, "session-id")) ||
     normalizeCodexSessionId(readNamedHeader(headers, "session_id")) ||
     null
@@ -371,7 +375,12 @@ export function resolveCodexFingerprintIdentity(input: {
   if (getCodexFingerprintMode(providerSpecificData, isOAuth) === "off") return null;
 
   return createCodexClientIdentity(
-    getCodexClientSessionId(input.clientHeaders),
+    getCodexClientSessionId(input.clientHeaders) ||
+      normalizeCodexSessionId(
+        input.body && typeof input.body === "object"
+          ? (input.body as Record<string, unknown>).prompt_cache_key
+          : null
+      ),
     providerSpecificData,
     {
       accountKey: credentials.connectionId ?? null,

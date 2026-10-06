@@ -279,8 +279,11 @@ test("GithubExecutor.buildHeaders prefers Copilot token and sets GitHub-specific
   assert.equal(headers.Authorization, "Bearer copilot-token");
   assert.equal(headers.Accept, "text/event-stream");
   // Copilot CLI wire identity (matches the `copilot` npm package, not VS Code).
-  assert.equal(headers["editor-version"], "copilot/1.0.81-6");
-  assert.equal(headers["user-agent"], "copilot/1.0.81-6");
+  assert.equal(headers["editor-version"], "copilot/1.0.92-3");
+  assert.equal(
+    headers["user-agent"],
+    "copilot/1.0.92-3 (linux v24.20.0) term/unknown client/github/cli"
+  );
   assert.equal(headers["x-github-api-version"], "2026-08-01");
   assert.equal(headers["openai-intent"], "conversation-agent");
   assert.equal(headers["copilot-integration-id"], "copilot-developer-cli");
@@ -288,7 +291,7 @@ test("GithubExecutor.buildHeaders prefers Copilot token and sets GitHub-specific
   assert.equal(headers["copilot-harness-id"], "copilot-sdk");
   assert.equal(headers["X-Initiator"], "user");
   assert.ok(headers["x-request-id"]);
-  // CLI 1.0.81-6 correlation headers.
+  // CLI 1.0.92-3 correlation headers.
   assert.ok(headers["x-client-machine-id"], "stable per-install machine id present");
   assert.ok(headers["x-interaction-id"], "per-call interaction id present");
   assert.ok(headers["x-client-session-id"], "per-conversation session id present");

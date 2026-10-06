@@ -3325,8 +3325,9 @@ export async function handleChatCore({
               // accounts without holding the failed connection's concurrency gate. Do NOT
               // cancel() the body here — the pipeline clones it (BYOP 422 / toOutcome).
               if (stream) {
-                const originalBody = res.response.body;
                 const okStatus = res.response.status >= 200 && res.response.status < 300;
+                // Native body getters can disturb JSON errors before text() parses them.
+                const originalBody = okStatus ? res.response.body : null;
                 if (!originalBody || !okStatus) {
                   releaseAccountSemaphore();
                   return {

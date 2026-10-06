@@ -792,9 +792,16 @@ export function createSSEStream(options: StreamOptions = {}) {
   // both translate mode (openai-responses → claude/openai) and Responses passthrough.
   let lastSeenResponsesSequenceNumber = -1;
   const isDuplicateResponsesSequence = (value: unknown): boolean => {
-    if (typeof value !== "number" || !Number.isFinite(value)) return false;
-    if (value <= lastSeenResponsesSequenceNumber) return true;
-    lastSeenResponsesSequenceNumber = value;
+    const raw = typeof value === "string" ? value.trim() : value;
+    const normalized =
+      typeof raw === "number"
+        ? raw
+        : typeof raw === "string" && /^-?\d+$/.test(raw)
+          ? Number(raw)
+          : NaN;
+    if (!Number.isSafeInteger(normalized)) return false;
+    if (normalized <= lastSeenResponsesSequenceNumber) return true;
+    lastSeenResponsesSequenceNumber = normalized;
     return false;
   };
   const streamStartedAt = Date.now();

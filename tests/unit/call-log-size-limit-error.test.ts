@@ -10,9 +10,8 @@ useDecollidedMigrationsDir();
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-call-log-size-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 
-const { writeCallArtifact, readCallArtifact } = await import(
-  "../../src/lib/usage/callLogArtifacts.ts"
-);
+const { writeCallArtifact, readCallArtifact } =
+  await import("../../src/lib/usage/callLogArtifacts.ts");
 
 const OMITTED = "[omitted: call log artifact size limit exceeded]";
 const TRUNCATED = "[truncated: call log artifact size limit exceeded]";
@@ -94,4 +93,41 @@ test("a non-string error is preserved as its own value when it fits", () => {
   const stored = roundTrip(artifact({ error: structured }));
 
   assert.deepEqual(stored.error, structured);
+});
+
+test("size-limited pipeline retains compact upstream error diagnostics without the request snapshot", () => {
+  const stored = roundTrip(
+    artifact({
+      pipeline: {
+        error: {
+          error: "Too many concurrent requests",
+          statusCode: 429,
+          retryAfterMs: 3000,
+          requestBody: { input: HUGE_BODY },
+        },
+        providerResponse: {
+          status: 429,
+          statusText: "Too Many Requests",
+          headers: {
+            "Retry-After": "3",
+            "X-Request-ID": "synthetic-upstream-id",
+            authorization: "synthetic-secret",
+          },
+          body: { detail: "Too many concurrent requests" },
+        },
+        providerRequest: { body: { input: HUGE_BODY } },
+      },
+    })
+  );
+  const pipeline = stored.pipeline as {
+    error: Record<string, unknown>;
+    providerResponse: { body: { detail: string }; headers: Record<string, string> };
+  };
+  assert.equal(pipeline.error.error, "Too many concurrent requests");
+  assert.equal(pipeline.error.retryAfterMs, 3000);
+  assert.equal(pipeline.error.requestBody, undefined);
+  assert.equal(pipeline.providerResponse.body.detail, "Too many concurrent requests");
+  assert.equal(pipeline.providerResponse.headers["retry-after"], "3");
+  assert.equal(pipeline.providerResponse.headers["x-request-id"], "synthetic-upstream-id");
+  assert.equal(pipeline.providerResponse.headers.authorization, undefined);
 });

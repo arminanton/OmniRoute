@@ -1,5 +1,5 @@
 /**
- * Wire-version data captured from the signed Claude Code binary.
+ * Wire-version data captured from Claude Code 2.1.289 in an isolated offline HTTP probe.
  *
  * Keep this leaf dependency-free so server executors, compatibility bridges,
  * and client-facing identity presets can share one source of truth.
@@ -8,10 +8,10 @@
  * advertise the version on the wire must go through getClaudeCodeClientVersion()
  * so operators can bump past Anthropic's model gate without a rebuild (#12417).
  */
-export const CLAUDE_CODE_CLIENT_VERSION = "2.1.258";
-export const CLAUDE_CODE_CLIENT_BUILD_REVISION = "1e2";
+export const CLAUDE_CODE_CLIENT_VERSION = "2.1.289";
+export const CLAUDE_CODE_CLIENT_BUILD_REVISION = "ec8";
 export const CLAUDE_CODE_CLIENT_BILLING_VERSION = `${CLAUDE_CODE_CLIENT_VERSION}.${CLAUDE_CODE_CLIENT_BUILD_REVISION}`;
-export const CLAUDE_CODE_SDK_PACKAGE_VERSION = "0.112.1";
+export const CLAUDE_CODE_SDK_PACKAGE_VERSION = "0.128.0";
 export const CLAUDE_CODE_RUNTIME_VERSION = "v26.3.0";
 
 export type ClaudeCodeEntrypoint = "cli" | "sdk-cli";
@@ -30,7 +30,10 @@ function getSafeEnvValue(name: string, pattern: RegExp): string | null {
 }
 
 export function getClaudeCodeClientVersion(): string {
-  return getSafeEnvValue(CLAUDE_VERSION_OVERRIDE_ENV, SAFE_HEADER_TOKEN_PATTERN) || CLAUDE_CODE_CLIENT_VERSION;
+  return (
+    getSafeEnvValue(CLAUDE_VERSION_OVERRIDE_ENV, SAFE_HEADER_TOKEN_PATTERN) ||
+    CLAUDE_CODE_CLIENT_VERSION
+  );
 }
 
 export function getClaudeCodeClientBillingVersion(): string {

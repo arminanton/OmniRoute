@@ -311,6 +311,7 @@ function requestHasNonReplayableBody(
 }
 
 const TLS_ALLOWED_OPTION_KEYS: Record<string, true> = {
+  next: true,
   body: true,
   headers: true,
   method: true,

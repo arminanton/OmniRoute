@@ -710,13 +710,14 @@ export async function parseUpstreamError(response: Response, provider: string | 
         ? clinepassEnvError.message
         : json.error?.message ||
           json.message ||
+          (typeof json.detail === "string" ? json.detail : json.detail?.message) ||
           (typeof json.error === "string" ? json.error : null);
       message =
         typeof extractedMessage === "string"
           ? extractedMessage
           : `Upstream error: ${response.status}`;
-      errorCode = json.error?.code || json.code;
-      errorType = json.error?.type || json.type;
+      errorCode = json.error?.code || json.code || json.detail?.code;
+      errorType = json.error?.type || json.type || json.detail?.type;
     } catch {
       message = text;
     }
@@ -741,7 +742,7 @@ export async function parseUpstreamError(response: Response, provider: string | 
   }
 
   // Parse Antigravity-specific retry time from error message
-  if (provider === "antigravity" && response.status === 429) {
+  if (provider === "antigravity" && response.status === 429 && !retryAfterMs) {
     retryAfterMs = parseAntigravityRetryTime(messageStr);
   }
 
@@ -829,7 +830,12 @@ export function createErrorResult(
     errorCode,
     response: new Response(JSON.stringify(body), {
       status: statusCode,
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(retryAfterMs && Number.isFinite(retryAfterMs) && retryAfterMs > 0
+          ? { "Retry-After": String(Math.ceil(retryAfterMs / 1000)) }
+          : {}),
+      },
     }),
   };
 

@@ -71,6 +71,29 @@ test("buildUrl uses responses endpoint for gpt-5.4-mini and gpt-5.6-sol", () => 
   );
 });
 
+test("buildUrl uses responses endpoint only for reported GHE Copilot GPT-6 ids", () => {
+  const executor = new GheCopilotExecutor({
+    gheUrl: "https://ghe.company.com",
+    clientId: "test-client",
+    clientSecret: "test-secret",
+  });
+  const credentials: ProviderCredentials = {
+    providerSpecificData: { gheUrl: "https://ghe.company.com" },
+  };
+  for (const model of ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol"]) {
+    assert.strictEqual(
+      executor.buildUrl(model, true, 0, credentials),
+      "https://ghe.company.com/responses"
+    );
+  }
+  for (const model of ["gpt-6-unknown", "grok-4.7"]) {
+    assert.strictEqual(
+      executor.buildUrl(model, true, 0, credentials),
+      "https://ghe.company.com/chat/completions"
+    );
+  }
+});
+
 test("buildUrl routes Claude to the native /v1/messages shim (not chat/completions)", () => {
   const executor = new GheCopilotExecutor({
     gheUrl: "https://ghe.company.com",

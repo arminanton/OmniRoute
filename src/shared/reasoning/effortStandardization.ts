@@ -31,6 +31,14 @@ export function extendCodexGpt56EffortValues(
     .toLowerCase()
     .replace(/^(?:codex|cx|kiro|kr)\//, "");
   if (!normalizedModel) return values;
+  const modern =
+    /^gpt-(?:[6-9]\d*|[1-9]\d+)(?:\.\d+)?-(sol|astra|luna|terra)(?:-(?:none|low|medium|high|xhigh|max|ultra))?$/.exec(
+      normalizedModel
+    );
+  if (modern && (normalizedProvider === "codex" || normalizedProvider === "cx")) {
+    const native = ["low", "medium", "high", "xhigh", "max"];
+    return modern[1] === "luna" && !baseValues.includes("ultra") ? native : [...native, "ultra"];
+  }
 
   const match = normalizedModel.match(
     /^gpt-5\.6-(sol|terra|luna)(?:-(?:none|low|medium|high|xhigh|max|ultra))?$/

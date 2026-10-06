@@ -40,11 +40,11 @@ test("Claude CLI version constants are in lockstep across all 4 sources", () => 
   );
 });
 
-test("Claude CLI wire versions match the captured 2.1.258 binary", () => {
-  assert.equal(canonical.CLAUDE_CODE_CLIENT_VERSION, "2.1.258");
-  assert.equal(canonical.CLAUDE_CODE_CLIENT_BUILD_REVISION, "1e2");
-  assert.equal(canonical.CLAUDE_CODE_CLIENT_BILLING_VERSION, "2.1.258.1e2");
-  assert.equal(canonical.CLAUDE_CODE_SDK_PACKAGE_VERSION, "0.112.1");
+test("Claude CLI wire versions match the captured 2.1.289 binary", () => {
+  assert.equal(canonical.CLAUDE_CODE_CLIENT_VERSION, "2.1.289");
+  assert.equal(canonical.CLAUDE_CODE_CLIENT_BUILD_REVISION, "ec8");
+  assert.equal(canonical.CLAUDE_CODE_CLIENT_BILLING_VERSION, "2.1.289.ec8");
+  assert.equal(canonical.CLAUDE_CODE_SDK_PACKAGE_VERSION, "0.128.0");
   assert.equal(canonical.CLAUDE_CODE_RUNTIME_VERSION, "v26.3.0");
   assert.equal(
     compat.CLAUDE_CODE_COMPATIBLE_STAINLESS_PACKAGE_VERSION,
@@ -86,8 +86,12 @@ async function withEnv<T>(
 }
 
 test("Codex client version locksteps the Docker CLI lock", () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(process.cwd(), "docker/cli/package.json"), "utf8"));
-  const lock = JSON.parse(fs.readFileSync(path.join(process.cwd(), "docker/cli/package-lock.json"), "utf8"));
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), "docker/cli/package.json"), "utf8")
+  );
+  const lock = JSON.parse(
+    fs.readFileSync(path.join(process.cwd(), "docker/cli/package-lock.json"), "utf8")
+  );
   const pinned = manifest.dependencies["@openai/codex"];
   assert.match(pinned, /^[0-9]+\.[0-9]+\.[0-9]+$/);
   assert.equal(lock.packages["node_modules/@openai/codex"].version, pinned);
@@ -95,10 +99,7 @@ test("Codex client version locksteps the Docker CLI lock", () => {
   assert.equal(codexCfg.DEFAULT_CODEX_CLIENT_VERSION, pinned);
   assert.equal(codexCfg.getCodexClientVersion(), pinned);
   assert.equal(codexCfg.getCodexDefaultHeaders().Version, pinned);
-  assert.equal(
-    codexCfg.getCodexCliRsHeaders()["User-Agent"],
-    `codex_cli_rs/${pinned}`,
-  );
+  assert.equal(codexCfg.getCodexCliRsHeaders()["User-Agent"], `codex_cli_rs/${pinned}`);
 });
 
 test("Codex client version env override still wins", async () => {
@@ -111,7 +112,7 @@ test("Codex client version env override still wins", async () => {
 test("test 7: live-empty GitHub catalog path does not call persist", () => {
   const src = fs.readFileSync(
     path.join(process.cwd(), "src/app/api/providers/[id]/models/route.ts"),
-    "utf8",
+    "utf8"
   );
   // The githubCatalogModels fallback must use buildResponse, not buildApiDiscoveryResponse.
   const idx = src.indexOf("Codex live catalog unavailable — using GitHub model catalog");

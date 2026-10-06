@@ -1,3 +1,4 @@
+import { getDeclaredCodexMaxEffort } from "./codex/effortCapabilities.ts";
 import { getCodexRequestDefaults } from "@/lib/providers/requestDefaults";
 import {
   getRuntimePolicy,
@@ -336,6 +337,9 @@ function normalizeServiceTierValue(value: unknown): string | undefined {
  */
 const MAX_EFFORT_BY_MODEL: Record<string, EffortLevel> = {
   "gpt-6-astra": "ultra",
+  "gpt-6.1-sol": "ultra",
+  "gpt-6-sol": "ultra",
+  "gpt-6-luna": "max",
   "gpt-5.6-sol": "ultra",
   "gpt-5.6-terra": "ultra",
   "gpt-5.6-luna": "max",
@@ -350,8 +354,12 @@ const MAX_EFFORT_BY_MODEL: Record<string, EffortLevel> = {
  * Clamp reasoning effort to the model's maximum allowed level.
  * Returns the original value if within limits, or the cap if it exceeds it.
  */
-function clampEffort(model: string, requested: string): string {
-  const max: EffortLevel = MAX_EFFORT_BY_MODEL[model] ?? "xhigh";
+function clampEffort(
+  model: string,
+  requested: string,
+  declaredMax: EffortLevel | null = null
+): string {
+  const max: EffortLevel = declaredMax ?? MAX_EFFORT_BY_MODEL[model] ?? "xhigh";
   const reqIdx = EFFORT_ORDER.indexOf(requested as EffortLevel);
   const maxIdx = EFFORT_ORDER.indexOf(max);
   if (reqIdx > maxIdx) {
@@ -561,7 +569,7 @@ const CODEX_SSE_EVENT_LINE_RE = /^event:\s*(.+)$/m;
 const CODEX_SSE_BLOCK_SEP_RE = /\r?\n\r?\n/;
 export function filterNonstandardCodexSse(response: Response): Response {
   const contentType = response.headers.get("content-type") || "";
-  if (!response.body || !contentType.includes("text/event-stream")) {
+  if (!response.ok || !contentType.includes("text/event-stream") || !response.body) {
     return response;
   }
   const decoder = new TextDecoder();
@@ -833,7 +841,23 @@ export class CodexExecutor extends BaseExecutor {
       requestInput.clientHeaders,
       requestInput.body
     );
-    const nextInput = { ...requestInput, credentials };
+    const declaredMaxEffort = await getDeclaredCodexMaxEffort(
+      credentials?.connectionId,
+      splitCodexReasoningSuffix(String(requestInput.model)).baseModel
+    );
+    const nextInput = {
+      ...requestInput,
+      // Account orchestration owns Codex cooldowns. The generic executor's
+      // fixed two-second 429 retry ignores Retry-After and multiplies a burst.
+      skipUpstreamRetry: true,
+      credentials: {
+        ...credentials,
+        providerSpecificData: {
+          ...credentials?.providerSpecificData,
+          _codexDeclaredMaxEffort: declaredMaxEffort,
+        },
+      },
+    };
 
     if (isCodexAppServerRequired(nextInput.credentials)) {
       if (!this.appServer) {
@@ -850,7 +874,8 @@ export class CodexExecutor extends BaseExecutor {
         return httpResult;
       if (codexDropNonstandardEvents()) {
         const resp = (httpResult as { response?: Response }).response;
-        if (resp?.body) {
+        // Native wreq error bodies must remain untouched until the error reader owns them.
+        if (resp?.ok && resp.headers.get("content-type")?.includes("text/event-stream")) {
           (httpResult as { response: Response }).response = filterNonstandardCodexSse(resp);
         }
       }
@@ -1170,7 +1195,10 @@ export class CodexExecutor extends BaseExecutor {
     if (normalizedSessionId) {
       return normalizedSessionId;
     }
-    // Fall back to workspaceId (account-wide) — better than nothing
+    const identity = credentials?.providerSpecificData?.codexClientIdentity as
+      CodexClientIdentity | undefined;
+    if (identity?.mode === "session" && identity.threadId) return identity.threadId;
+    // Explicit full convergence retains its account-wide identity policy.
     return normalizeCodexSessionId(credentials?.providerSpecificData?.workspaceId) || null;
   }
 
@@ -1406,7 +1434,16 @@ export class CodexExecutor extends BaseExecutor {
       modelEffort || explicitReasoning || requestReasoningEffort || fallbackReasoningEffort;
 
     if (rawEffort) {
-      const clampedEffort = clampEffort(cleanModel, rawEffort);
+      const clampedEffort = clampEffort(
+        cleanModel,
+        rawEffort,
+        typeof credentials?.providerSpecificData?._codexDeclaredMaxEffort === "string" &&
+          EFFORT_ORDER.includes(
+            credentials.providerSpecificData._codexDeclaredMaxEffort as EffortLevel
+          )
+          ? (credentials.providerSpecificData._codexDeclaredMaxEffort as EffortLevel)
+          : null
+      );
       body.reasoning = {
         ...(reasoningRecord || {}),
         // Ultra coordinates delegation in Codex clients; the upstream wire effort is Max.
