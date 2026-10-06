@@ -1389,7 +1389,8 @@ export class AntigravityExecutor extends BaseExecutor {
       url,
       finalHeaders,
       transformedBody,
-      log
+      log,
+      signal
     );
     if (embedded) return { action: "return", result: embedded };
 
@@ -1513,7 +1514,7 @@ export class AntigravityExecutor extends BaseExecutor {
       (!retryMs || retryMs === 0) &&
       retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES
     ) {
-      const shouldAutoRetry = await this.shouldAutoRetryTransient(response);
+      const shouldAutoRetry = await this.shouldAutoRetryTransient(response, ctx.signal);
       if (shouldAutoRetry) {
         retryAttemptsByUrl[urlIndex]++;
         // Exponential backoff: 2s, 4s, 8s… capped per-status
@@ -1572,7 +1573,7 @@ export class AntigravityExecutor extends BaseExecutor {
     } = ctx;
 
     try {
-      const errorBody = await readAntigravityErrorBody(response);
+      const errorBody = await readAntigravityErrorBody(response, signal);
       const errorJson = JSON.parse(errorBody);
       const errorMessage = buildAntigravity429ErrorMessage(errorJson);
 
@@ -1655,11 +1656,14 @@ export class AntigravityExecutor extends BaseExecutor {
    * True for 429 always; for transient 5xx (500/502/503/504) only when the body
    * matches a known capacity/traffic/agent-terminated pattern.
    */
-  private async shouldAutoRetryTransient(response: Response): Promise<boolean> {
+  private async shouldAutoRetryTransient(
+    response: Response,
+    signal?: AbortSignal | null
+  ): Promise<boolean> {
     if (response.status === HTTP_STATUS.RATE_LIMITED) return true;
     if (!ANTIGRAVITY_TRANSIENT_STATUSES.has(response.status)) return false;
     try {
-      const errBody = await readAntigravityErrorBody(response);
+      const errBody = await readAntigravityErrorBody(response, signal);
       let errJson: unknown = null;
       try {
         errJson = errBody ? JSON.parse(errBody) : null;
@@ -1668,7 +1672,8 @@ export class AntigravityExecutor extends BaseExecutor {
       }
       const errMsg = this.extractErrorMessage(errJson, errBody);
       return this.isTransientAntigravityError(response.status, errMsg);
-    } catch {
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) throw signal?.reason ?? error;
       // ignore body read errors
       return false;
     }
