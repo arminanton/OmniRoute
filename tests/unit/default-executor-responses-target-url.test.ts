@@ -9,7 +9,7 @@ test("DefaultExecutor routes responses-target models on custom-base connections 
     providerSpecificData: { baseUrl: "https://api.meta.ai/v1" },
   } as Parameters<DefaultExecutor["buildUrl"]>[3];
 
-  const url = executor.buildUrl("muse-spark-1.3-contributor", false, 0, credentials);
+  const url = executor.buildUrl("llama-4-maverick", false, 0, credentials);
   assert.equal(url, "https://api.meta.ai/v1/responses");
 });
 
