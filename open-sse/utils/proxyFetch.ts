@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { waitForFetchRetry } from "./fetchRetryBackoff.ts";
 import {
   canReplayGenerationDispatch,
   markUncertainGenerationAcceptance,
@@ -10,7 +11,6 @@ import { getFencedTaskContext } from "../services/coordination/fencedTask.ts";
 import {
   budgetedGenerationFetch,
   isLogicalRetryBudgetError,
-  backoffGenerationRetry,
 } from "../services/logicalRetryBudget.ts";
 import { observeFetchDispatcher, notifyFetchRequestStart } from "./fetchDispatchObserver.ts";
 import { prepareOwnListenerSelfHop } from "./selfHop.ts";
@@ -1072,7 +1072,7 @@ async function patchedFetch(
               `[ProxyFetch] Direct response-start timeout (${directHeadersTimeoutMs}ms) on pooled dispatcher — retrying on fresh no-keep-alive dispatcher: ${targetHostForLogs}`
             );
             lastDispatcherError = dispatcherError;
-            await backoffGenerationRetry(0, getEffectiveSignal(input, options));
+            await waitForFetchRetry(input, options, 0, getEffectiveSignal(input, options));
             continue;
           }
           throw dispatcherError;
@@ -1105,7 +1105,12 @@ async function patchedFetch(
           if (attempt === 0 && maxAttempts > 1) {
             // Retry after a short fixed backoff on a fresh socket.
             lastDispatcherError = dispatcherError;
-            await backoffGenerationRetry(RETRY_BACKOFF_MS, getEffectiveSignal(input, options));
+            await waitForFetchRetry(
+              input,
+              options,
+              RETRY_BACKOFF_MS,
+              getEffectiveSignal(input, options)
+            );
             continue;
           }
           if (hasNonReplayableBody) {
@@ -1297,7 +1302,12 @@ async function patchedFetch(
           // 1ms) instead of reusing the pooled agent, so a stale pooled socket
           // that the relay half-closed is guaranteed a clean TCP handshake.
           // Jitter is unnecessary: there is no herd on a per-host singleton.
-          await backoffGenerationRetry(RETRY_BACKOFF_MS, getEffectiveSignal(input, options));
+          await waitForFetchRetry(
+            input,
+            options,
+            RETRY_BACKOFF_MS,
+            getEffectiveSignal(input, options)
+          );
           continue;
         }
         throw markVerifiedExhaustedTransportError(tagProxyUnreachable(relayError));
@@ -1413,7 +1423,12 @@ async function patchedFetch(
         // fresh no-keep-alive dispatcher (getProxyRetryDispatcher), so the old
         // random jitter was pure latency on every recovered request with no
         // herd risk (per-host pool).
-        await backoffGenerationRetry(RETRY_BACKOFF_MS, getEffectiveSignal(input, options));
+        await waitForFetchRetry(
+          input,
+          options,
+          RETRY_BACKOFF_MS,
+          getEffectiveSignal(input, options)
+        );
         continue;
       }
       tagProxyUnreachable(error);
