@@ -179,6 +179,9 @@ class RuntimeTest(unittest.TestCase):
             self.assertIn(fragment, argv)
         self.assertNotIn("--network=ns:/run/netns/omni-app", argv)
         self.assertNotIn("--name=omni-local-next-app", argv)
+        self.assertIn("--env=OMNI_SHARED_ADMISSION=true", argv)
+        self.assertIn("--env=OMNI_COORDINATION_DB=/app/data/coordination.sqlite", argv)
+        self.assertIn("--env=OMNI_COORDINATION_PROCESS_ROLE=generation", argv)
         receipt["stableHelperSet"] = "e" * 64
         with self.assertRaises(c.Refused):
             runtime.command(policy, g, receipt)
