@@ -330,6 +330,11 @@ test("retention does not erase unknown files or foreign symlink targets", async 
     fs.writeFileSync(foreign, "foreign", { mode: 0o600 });
     assert.throws(() => store.cleanup(Date.now() + 10));
     assert.equal(fs.readFileSync(foreign, "utf8"), "foreign");
+    assert.equal(
+      store.open(trace.traceId, trace.traceId, "client-request").state,
+      "ready",
+      "failed retention preflight must leave owned payload intact"
+    );
     assert.ok(store.read(trace.traceId));
   } finally {
     store.close();

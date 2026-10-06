@@ -368,6 +368,12 @@ export class DiagnosticOverflowStore {
         const files = this.coordinator.db
           .prepare("SELECT attempt_id,kind FROM files WHERE trace_id=?")
           .all(manifest.traceId) as Array<{ attempt_id: string; kind: DiagnosticOverflowKind }>;
+        const owned = new Set(files.map((file) => fileName(file.attempt_id, file.kind)));
+        if (fs.readdirSync(directory).some((name) => !owned.has(name)))
+          throw new Error("foreign_diagnostic_file");
+        // Validate the whole deletion set before changing any payload or durable manifest.
+        for (const name of owned)
+          if (fs.existsSync(path.join(directory, name))) privateFile(path.join(directory, name));
         for (const file of files) {
           const filename = path.join(directory, fileName(file.attempt_id, file.kind));
           if (fs.existsSync(filename)) {
