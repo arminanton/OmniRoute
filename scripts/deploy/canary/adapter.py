@@ -28,7 +28,7 @@ ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8",
        "HOME": "/var/lib/omni-local-next/podman-home",
        "CONTAINERS_CONF": "/etc/omni-local-next/containers.conf"}
 BINARIES = {"podman": "/usr/bin/podman", "nginx": "/usr/sbin/nginx", "boundary": str(INSTALL / "boundary-check"), "ip": "/usr/sbin/ip"}
-OPERATIONS = frozenset({"verify-overlap", "verify-approval", "observe-admission", "validate-proxy", "select-proxy", "observe-drain", "start-candidate", "fence-old"})
+OPERATIONS = frozenset({"verify-overlap", "verify-approval", "observe-admission", "validate-proxy", "select-proxy", "observe-drain", "start-candidate", "fence-old", "retire-generation", "observe-retirement"})
 
 
 def load(path, *, private=True):
@@ -96,6 +96,21 @@ def mutation_lock():
         yield
     finally:
         os.close(fd)
+
+
+def retirement_observed(rows, cid):
+    if not isinstance(rows, list):
+        raise Refused("invalid retirement observation")
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("Id"), str) or not re.fullmatch(r"[a-f0-9]{64}", row["Id"]):
+            raise Refused("incomplete container observation")
+        if row["Id"] == cid:
+            if row.get("State") in ("exited", "stopped"):
+                return True
+            if row.get("State") in ("created", "initialized", "configured", "running", "paused", "stopping"):
+                return False
+            raise Refused("unknown retired container state")
+    return True
 
 
 class Adapter:
@@ -228,6 +243,39 @@ class Adapter:
             self.runner("boundary", ["--protocol=1", "set-drain"], {"generation": g, "draining": True})
             if self.proof(g)["drain"]["fenced"] is not True:
                 raise Refused("old admission fence lacked app acknowledgment")
+        elif operation == "observe-retirement":
+            exact(request, {"generation"})
+            g = request["generation"]
+            self.record(g)
+            receipt = load(Path("/var/lib/omni-local-next/deployments/canary") / ("retirement-" + g["generation"] + ".json"))
+            exact(receipt, {"generation", "cid", "approvalDigest"})
+            if receipt["generation"] != digest(g) or not re.fullmatch(r"[a-f0-9]{64}", receipt["cid"]):
+                raise Refused("retirement receipt differs")
+            remaining = json.loads(self.runner("podman", ["--remote=false", "ps", "--all", "--no-trunc", "--format=json"]))
+            retired = retirement_observed(remaining, receipt["cid"])
+            return {"protocol": 1, "ok": True, "retired": retired}
+        elif operation == "retire-generation":
+            exact(request, {"generation"})
+            g = request["generation"]
+            proof = self.proof(g)
+            if self.observer()["generation"] == g["generation"] or proof["drain"]["fenced"] is not True or any(proof["drain"][k] != 0 for k in proof["drain"] if k != "fenced"):
+                raise Refused("active or undrained generation cannot retire")
+            authorization = load(CONFIG / "retirement-approval.json")
+            exact(authorization, {"generation", "transactionDigest", "expiresAt"})
+            if authorization["generation"] != digest(g) or authorization["transactionDigest"] != self.layout["approvalDigest"] or not self.clock() < authorization["expiresAt"] <= self.clock() + 3600:
+                raise Refused("retirement lacks exact fresh operator approval")
+            # Stop only this proven, drained app CID. Helpers/state/network stay intact.
+            cidfile = Path("/run/omni-local-next/generations") / g["generation"] / "app.cid"
+            trusted(cidfile)
+            cid = cidfile.read_text().strip()
+            if not re.fullmatch(r"[a-f0-9]{64}", cid):
+                raise Refused("invalid retirement CID")
+            atomic_bytes(Path("/var/lib/omni-local-next/deployments/canary") / ("retirement-" + g["generation"] + ".json"),
+                         json.dumps({"generation": digest(g), "cid": cid, "approvalDigest": self.layout["approvalDigest"]}).encode())
+            self.runner("podman", ["--remote=false", "stop", "--time=20", cid])
+            remaining = json.loads(self.runner("podman", ["--remote=false", "ps", "--all", "--no-trunc", "--format=json"]))
+            if not retirement_observed(remaining, cid):
+                raise Refused("retired generation still running")
         elif operation == "observe-drain":
             exact(request, {"generation"})
             proof = self.proof(request["generation"])
@@ -295,7 +343,7 @@ def main():
     layout = load(CONFIG / "layout.json")
     adapter = Adapter(layout)
     request = json.loads(raw)
-    if sys.argv[2] in ("select-proxy", "start-candidate", "fence-old"):
+    if sys.argv[2] in ("select-proxy", "start-candidate", "fence-old", "retire-generation"):
         with mutation_lock():
             result = adapter.operate(sys.argv[2], request)
     else:

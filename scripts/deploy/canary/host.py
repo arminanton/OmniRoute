@@ -86,6 +86,12 @@ class InstalledHost:
     def select(self, generation, config):
         self.call("select-proxy", {"generation": generation, "configDigest": config})
 
+    def retired(self, generation):
+        return self.call("observe-retirement", {"generation": generation}).get("retired") is True
+
+    def retire(self, generation):
+        self.call("retire-generation", {"generation": generation})
+
     def fence(self, generation):
         self.call("fence-old", {"generation": generation})
 
