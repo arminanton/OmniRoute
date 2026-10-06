@@ -82,6 +82,7 @@ export const createProviderSchema = z
   .object({
     provider: z.string().min(1).max(100),
     apiKey: z.string().max(MAX_PROVIDER_CREDENTIAL_LENGTH).optional(),
+    allowNoCredential: z.boolean().optional(),
     name: z.string().min(1).max(200),
     priority: z.number().int().min(1).max(100).optional(),
     globalPriority: z.number().int().min(1).max(100).nullable().optional(),
@@ -97,6 +98,13 @@ export const createProviderSchema = z
   .superRefine((data, ctx) => {
     const apiKey = typeof data.apiKey === "string" ? data.apiKey.trim() : "";
     const apiKeyOptional = providerAllowsOptionalApiKey(data.provider);
+    if (data.allowNoCredential && !apiKeyOptional) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "allowNoCredential is only supported for providers with optional credentials",
+        path: ["allowNoCredential"],
+      });
+    }
     if (!apiKeyOptional && apiKey.length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -483,7 +491,7 @@ export const providerNodeValidateSchema = z.object({
 // would drop or distort the value instead of rejecting it. Preprocess first so
 // an empty/non-numeric string fails validation (surfaced as a 400), while still
 // coercing legit numeric strings like "60".
-function rateLimitOverrideNumber(max: number) {
+function rateLimitOverrideNumber(max: number, min = 0) {
   return z.preprocess((raw) => {
     if (typeof raw === "string") {
       if (raw.trim() === "") return NaN;
@@ -491,7 +499,7 @@ function rateLimitOverrideNumber(max: number) {
       return Number.isNaN(parsed) ? raw : parsed;
     }
     return raw;
-  }, z.coerce.number().int().min(0).max(max));
+  }, z.coerce.number().int().min(min).max(max));
 }
 
 export const updateProviderConnectionSchema = z
@@ -519,9 +527,7 @@ export const updateProviderConnectionSchema = z
     errorCode: z.union([z.string(), z.null()]).optional(),
     rateLimitedUntil: z.union([z.string(), z.null()]).optional(),
     lastTested: z.union([z.string(), z.null()]).optional(),
-    healthCheckInterval: z
-      .union([z.null(), z.coerce.number().int().min(0).max(1440)])
-      .optional(),
+    healthCheckInterval: z.union([z.null(), z.coerce.number().int().min(0).max(1440)]).optional(),
     group: z.union([z.string().max(100), z.null()]).optional(),
     maxConcurrent: z.union([z.null(), z.coerce.number().int().min(0)]).optional(),
     // Per-window quota cutoffs. Map keys are window names (e.g. "window5h",
@@ -560,6 +566,9 @@ export const updateProviderConnectionSchema = z
         minTime: rateLimitOverrideNumber(60_000).optional(),
         maxConcurrent: rateLimitOverrideNumber(10_000).optional(),
         maxWaitMs: rateLimitOverrideNumber(120_000).optional(),
+        modelConcurrency: z
+          .record(z.string().min(1).max(128), rateLimitOverrideNumber(10_000, 1))
+          .optional(),
       })
       .partial()
       .strict()

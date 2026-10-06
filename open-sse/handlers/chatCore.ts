@@ -393,6 +393,7 @@ import {
   updateFromHeaders,
   updateFromResponseBody,
   initializeRateLimits,
+  getModelConcurrencyLimit,
 } from "../services/rateLimitManager.ts";
 import * as localLimiterErrors from "../services/rateLimitManager/errors.ts";
 import {
@@ -3160,6 +3161,10 @@ export async function handleChatCore({
                 stage: "waiting_account_slot",
               });
             }
+            const modelConcurrencyLimit = getModelConcurrencyLimit(
+              attemptConnectionId,
+              modelToCall
+            );
             const releaseAccountSemaphore = await acquireConcurrencyGates(
               [
                 {
@@ -3173,6 +3178,10 @@ export async function handleChatCore({
                 {
                   key: accountSemaphoreKey || "",
                   maxConcurrency: accountSemaphoreKey ? accountSemaphoreMaxConcurrency : null,
+                },
+                {
+                  key: `model:${JSON.stringify([attemptConnectionId, modelToCall])}`,
+                  maxConcurrency: modelConcurrencyLimit,
                 },
               ],
               {
@@ -3679,7 +3688,10 @@ export async function handleChatCore({
   // mutex/CAS persistence path when it retries a 401/403, rather than silently
   // dropping the provider's refreshed credentials on that extracted leg.
   const splitGeminiCookieRotation = (updated: Record<string, unknown>) => {
-    const hasMetadata = Object.prototype.hasOwnProperty.call(updated, GEMINI_WEB_COOKIE_ROTATION_KEY);
+    const hasMetadata = Object.prototype.hasOwnProperty.call(
+      updated,
+      GEMINI_WEB_COOKIE_ROTATION_KEY
+    );
     const metadata = updated[GEMINI_WEB_COOKIE_ROTATION_KEY];
     const credentialUpdate = { ...updated };
     delete credentialUpdate[GEMINI_WEB_COOKIE_ROTATION_KEY];

@@ -15,6 +15,50 @@
  * @typedef {'apikey'|'oauth'|'bearer'} AuthType
  */
 
+const MODEL_CONCURRENCY_VALIDATION_ERROR =
+  "Model concurrency overrides must map model IDs to integer limits from 1 to 10,000.";
+
+export function formatModelConcurrencyOverrides(value: unknown): string {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (JSON.stringify(value, null, 2) ?? "")
+    : "";
+}
+
+export function withModelConcurrencyOverride<T extends Record<string, unknown>>(
+  overrides: T,
+  raw: string
+): T & { modelConcurrency?: Record<string, number> } {
+  if (!raw.trim()) {
+    return overrides as T & { modelConcurrency?: Record<string, number> };
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error(MODEL_CONCURRENCY_VALIDATION_ERROR);
+  }
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.entries(value).some(
+      ([model, limit]) =>
+        !model.trim() ||
+        typeof limit !== "number" ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 10_000
+    )
+  ) {
+    throw new Error(MODEL_CONCURRENCY_VALIDATION_ERROR);
+  }
+  if (Object.keys(value).length === 0) {
+    return overrides as T & { modelConcurrency?: Record<string, number> };
+  }
+  return { ...overrides, modelConcurrency: value as Record<string, number> };
+}
+
 /**
  * @typedef {Object} ProviderConnection
  * @property {string} id - Unique connection ID
@@ -35,6 +79,7 @@
  * @property {number} [rateLimitOverrides.tpd] - Tokens per day limit
  * @property {number} [rateLimitOverrides.minTime] - Minimum ms between requests
  * @property {number} [rateLimitOverrides.maxConcurrent] - Max concurrent requests
+ * @property {Record<string, number>} [rateLimitOverrides.modelConcurrency] - Per-model concurrent caps keyed by exact upstream model ID; integer values from 1 to 10,000
  * @property {string} createdAt - ISO timestamp
  * @property {string} updatedAt - ISO timestamp
  */

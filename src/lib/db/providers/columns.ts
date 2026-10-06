@@ -5,6 +5,17 @@
 
 export type JsonRecord = Record<string, unknown>;
 
+export interface ConnectionRateLimitOverrides {
+  rpm?: number;
+  rpd?: number;
+  tpm?: number;
+  tpd?: number;
+  minTime?: number;
+  maxConcurrent?: number;
+  maxWaitMs?: number;
+  modelConcurrency?: Record<string, number>;
+}
+
 export function withNullableMaxConcurrent(
   record: JsonRecord,
   source: JsonRecord | null | undefined
@@ -49,7 +60,7 @@ export function withNullableRateLimitOverrides(
 ): JsonRecord {
   return {
     ...record,
-    rateLimitOverrides: (source?.rateLimitOverrides ?? null) as Record<string, number> | null,
+    rateLimitOverrides: (source?.rateLimitOverrides ?? null) as ConnectionRateLimitOverrides | null,
   };
 }
 
@@ -68,8 +79,8 @@ export function normalizeBooleanColumn(value: unknown, fallback: boolean): boole
 // is the cleaned value (or null when it collapses to nothing); `rejected`
 // lists every key that was refused so callers can fail loudly
 // instead of silently dropping the operator's input.
-export type SanitizeResult = {
-  sanitized: Record<string, number> | null;
+export type SanitizeResult<T = Record<string, number>> = {
+  sanitized: T | null;
   rejected: string[];
 };
 
@@ -77,19 +88,51 @@ export type SanitizeResult = {
 // fields with valid non-negative integer values. Called once at each
 // write-path boundary. Unknown keys and invalid values go into `rejected`
 // rather than being dropped in silence.
-export function sanitizeRateLimitOverrides(value: unknown): SanitizeResult {
+export function sanitizeRateLimitOverrides(
+  value: unknown
+): SanitizeResult<ConnectionRateLimitOverrides> {
   if (value === null || value === undefined) return { sanitized: null, rejected: [] };
   if (typeof value !== "object" || Array.isArray(value)) return { sanitized: null, rejected: [] };
-  const allowedKeys = new Set(["rpm", "rpd", "tpm", "tpd", "minTime", "maxConcurrent", "maxWaitMs"]);
+  const allowedKeys = new Set([
+    "rpm",
+    "rpd",
+    "tpm",
+    "tpd",
+    "minTime",
+    "maxConcurrent",
+    "maxWaitMs",
+    "modelConcurrency",
+  ]);
   const rejected: string[] = [];
-  const map: Record<string, number> = {};
+  const map: ConnectionRateLimitOverrides = {};
   for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
     if (!allowedKeys.has(key)) {
       rejected.push(key);
       continue;
     }
-    if (typeof v === "number" && Number.isInteger(v) && v >= 0) {
-      map[key] = v;
+    if (key === "modelConcurrency") {
+      if (!v || typeof v !== "object" || Array.isArray(v)) {
+        rejected.push(key);
+        continue;
+      }
+      const modelConcurrency = Object.create(null) as Record<string, number>;
+      for (const [model, limit] of Object.entries(v as Record<string, unknown>)) {
+        if (
+          !model ||
+          model.length > 128 ||
+          typeof limit !== "number" ||
+          !Number.isInteger(limit) ||
+          limit < 1 ||
+          limit > 10_000
+        ) {
+          rejected.push(`modelConcurrency.${model}`);
+          continue;
+        }
+        modelConcurrency[model] = limit;
+      }
+      map.modelConcurrency = modelConcurrency;
+    } else if (typeof v === "number" && Number.isInteger(v) && v >= 0) {
+      map[key as keyof ConnectionRateLimitOverrides] = v;
     } else {
       rejected.push(key);
     }

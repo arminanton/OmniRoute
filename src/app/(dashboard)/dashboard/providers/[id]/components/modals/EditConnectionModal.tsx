@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import type { ConnectionRateLimitOverrides } from "@/lib/db/providers/columns";
+import { formatModelConcurrencyOverrides, withModelConcurrencyOverride } from "@/domain/types";
 import BrowserLoginPanel from "@/lib/providerBrowserLogin/BrowserLoginPanel";
 import { useTranslations } from "next-intl";
 import { Button, Badge, Input, Modal, Toggle, Select } from "@/shared/components";
@@ -73,7 +75,7 @@ export interface EditConnectionModalConnection {
   email?: string;
   priority?: number;
   maxConcurrent?: number | null;
-  rateLimitOverrides?: Record<string, number> | null;
+  rateLimitOverrides?: ConnectionRateLimitOverrides | null;
   authType?: string;
   provider?: string;
   apiKey?: string;
@@ -119,6 +121,7 @@ export default function EditConnectionModal({
     minTime: "",
     maxWaitMs: "",
     rateLimitMaxConcurrent: "",
+    modelConcurrency: "",
     apiKey: "",
     healthCheckInterval: "" as number | "",
     baseUrl: "",
@@ -344,6 +347,9 @@ export default function EditConnectionModal({
           connection.rateLimitOverrides?.maxConcurrent != null
             ? String(connection.rateLimitOverrides.maxConcurrent)
             : "",
+        modelConcurrency: formatModelConcurrencyOverrides(
+          connection.rateLimitOverrides?.modelConcurrency
+        ),
         apiKey: "",
         // Unset per-connection override means "follow the global default" —
         // surface that as an empty field (0 renders as an explicit opt-out).
@@ -568,15 +574,24 @@ export default function EditConnectionModal({
         healthCheckInterval:
           formData.healthCheckInterval === "" ? undefined : formData.healthCheckInterval,
       };
-      const overrides: Record<string, number> = {};
-      if (formData.rpm.trim()) overrides.rpm = Number(formData.rpm);
-      if (formData.rpd.trim()) overrides.rpd = Number(formData.rpd);
-      if (formData.tpm.trim()) overrides.tpm = Number(formData.tpm);
-      if (formData.tpd.trim()) overrides.tpd = Number(formData.tpd);
-      if (formData.minTime.trim()) overrides.minTime = Number(formData.minTime);
-      if (formData.maxWaitMs.trim()) overrides.maxWaitMs = Number(formData.maxWaitMs);
+      const scalarOverrides: Record<string, unknown> = {};
+      if (formData.rpm.trim()) scalarOverrides.rpm = Number(formData.rpm);
+      if (formData.rpd.trim()) scalarOverrides.rpd = Number(formData.rpd);
+      if (formData.tpm.trim()) scalarOverrides.tpm = Number(formData.tpm);
+      if (formData.tpd.trim()) scalarOverrides.tpd = Number(formData.tpd);
+      if (formData.minTime.trim()) scalarOverrides.minTime = Number(formData.minTime);
+      if (formData.maxWaitMs.trim()) scalarOverrides.maxWaitMs = Number(formData.maxWaitMs);
       if (formData.rateLimitMaxConcurrent.trim())
-        overrides.maxConcurrent = Number(formData.rateLimitMaxConcurrent);
+        scalarOverrides.maxConcurrent = Number(formData.rateLimitMaxConcurrent);
+      let overrides: Record<string, unknown>;
+      try {
+        overrides = withModelConcurrencyOverride(scalarOverrides, formData.modelConcurrency);
+      } catch (error) {
+        setSaveError(
+          error instanceof Error ? error.message : "Invalid model concurrency overrides."
+        );
+        return;
+      }
       updates.rateLimitOverrides = Object.keys(overrides).length > 0 ? overrides : null;
       if (isAntigravityFamily) {
         updates.projectId = trimmedCloudCodeProjectId || null;
@@ -1319,6 +1334,19 @@ export default function EditConnectionModal({
                       hint={t("rateLimitOverridesMaxConcurrentHint")}
                     />
                   </div>
+                  <label className="mt-3 flex flex-col gap-1 text-xs text-text-muted">
+                    <span>Per-model concurrent request caps (JSON; blank clears)</span>
+                    <textarea
+                      aria-label="Per-model concurrent request caps"
+                      rows={3}
+                      value={formData.modelConcurrency}
+                      onChange={(e) =>
+                        setFormData({ ...formData, modelConcurrency: e.target.value })
+                      }
+                      placeholder='{"gpt-4o": 4}'
+                      className="w-full rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-text"
+                    />
+                  </label>
                 </div>
               </div>
             )}

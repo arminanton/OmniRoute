@@ -35,6 +35,7 @@ import {
 import { LimiterWedgeWatchdog, WATCHDOG_INTERVAL_MS } from "./rateLimitManager/wedgeWatchdog";
 import { toNumber } from "@/shared/utils/numeric";
 import { bindProbeContext } from "@/shared/utils/probeOrigin";
+import type { ConnectionRateLimitOverrides } from "@/lib/db/providers/columns";
 
 interface LearnedLimitEntry {
   provider: string;
@@ -83,7 +84,7 @@ const enabledConnections = new Set<string>();
 
 // Store per-connection rate limit overrides (RPM, TPM, TPD, minTime, maxConcurrent)
 // Populated from provider_connections.rateLimitOverrides on startup and refresh.
-const connectionRateLimitOverrides = new Map<string, Record<string, number>>();
+const connectionRateLimitOverrides = new Map<string, ConnectionRateLimitOverrides>();
 
 // Store learned limits for persistence (debounced)
 const learnedLimits: Record<string, LearnedLimitEntry> = {};
@@ -384,7 +385,10 @@ export async function initializeRateLimits() {
     for (const conn of connections as Array<Record<string, unknown>>) {
       const overrides = conn.rateLimitOverrides;
       if (overrides && typeof overrides === "object" && !Array.isArray(overrides)) {
-        connectionRateLimitOverrides.set(String(conn.id), overrides as Record<string, number>);
+        connectionRateLimitOverrides.set(
+          String(conn.id),
+          overrides as ConnectionRateLimitOverrides
+        );
       }
     }
 
@@ -460,13 +464,13 @@ export function isRateLimitEnabled(connectionId) {
  * connection so the next request gets a fresh limiter with the new settings.
  *
  * @param {string} connectionId
- * @param {Record<string, number> | null} overrides - New overrides (null/undefined clears)
+ * @param {ConnectionRateLimitOverrides | null} overrides - New overrides (null/undefined clears)
  */
 export function refreshConnectionRateLimits(connectionId, overrides) {
   if (overrides === null || overrides === undefined) {
     connectionRateLimitOverrides.delete(connectionId);
   } else {
-    connectionRateLimitOverrides.set(connectionId, overrides);
+    connectionRateLimitOverrides.set(connectionId, overrides as ConnectionRateLimitOverrides);
   }
   clearPreservedReplacementSettings(connectionId);
   // Evict limiters referencing this connection so they get recreated on next use
@@ -478,6 +482,21 @@ export function refreshConnectionRateLimits(connectionId, overrides) {
       trackAsyncOperation(limiter.disconnect());
     }
   }
+}
+
+export function getModelConcurrencyLimit(connectionId: string, model: string): number | null {
+  const modelConcurrency = connectionRateLimitOverrides.get(connectionId)?.modelConcurrency;
+  if (
+    !modelConcurrency ||
+    typeof modelConcurrency !== "object" ||
+    Array.isArray(modelConcurrency) ||
+    !Object.hasOwn(modelConcurrency, model)
+  )
+    return null;
+  const limit = modelConcurrency[model];
+  return typeof limit === "number" && Number.isInteger(limit) && limit >= 1 && limit <= 10_000
+    ? limit
+    : null;
 }
 
 /**
