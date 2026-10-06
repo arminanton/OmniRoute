@@ -1,7 +1,12 @@
 import { getRequestTransportTelemetry } from "./transportTelemetry.ts";
 import { classifyUpstreamPolicyRejection } from "../services/upstreamPolicyRejection.ts";
 import { getPendingById } from "@/lib/usage/usageHistory";
-import { getChatLogMaxDepth, getChatLogArrayTailItems } from "@/lib/logEnv";
+import {
+  getChatLogMaxDepth,
+  getChatLogArrayTailItems,
+  getChatLogTextLimit,
+  getChatLogMaxObjectKeys,
+} from "@/lib/logEnv";
 import { sanitizeErrorMessage } from "./error.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -69,7 +74,6 @@ type RequestLoggerOptions = {
 
 const DEFAULT_MAX_STREAM_CHUNK_BYTES = 128 * 1024;
 const DEFAULT_MAX_STREAM_CHUNK_ITEMS = 10_240;
-const MAX_LOG_STRING_LENGTH = 64 * 1024;
 // Was its own separate hardcoded 24, independent of the sibling
 // cloneBoundedChatLogPayload (chatCore/logTruncation.ts) implementation's
 // configurable cap — the two duplicated the same "bound an array for
@@ -78,7 +82,6 @@ const MAX_LOG_STRING_LENGTH = 64 * 1024;
 // artifact data consistent. Read once at module load, matching this file's
 // existing plain-constant shape; CHAT_LOG_ARRAY_TAIL_ITEMS still overrides it.
 export const MAX_LOG_ARRAY_ITEMS = getChatLogArrayTailItems();
-const MAX_LOG_OBJECT_KEYS = 80;
 const MAX_TOOL_LOOP_LEGS = 4;
 
 function maskSensitiveHeaders(headers: HeaderInput): Record<string, unknown> {
@@ -147,12 +150,13 @@ function isTruncatedArrayMarker(value: unknown): boolean {
   );
 }
 
-function truncateLogString(value: string, maxLength = MAX_LOG_STRING_LENGTH): string {
+function truncateLogString(value: string, maxLength = getChatLogTextLimit()): string {
   if (value.length <= maxLength) return value;
   // The marker has to fit INSIDE the budget (#7847): keeping maxLength characters and then
   // adding the marker produced a result longer than maxLength, so re-bounding an already
   // bounded string truncated it a second time and the function was not idempotent.
   const marker = `\n[...truncated ${value.length - maxLength} chars...]\n`;
+  if (marker.length >= maxLength) return marker.slice(0, maxLength);
   const keep = Math.max(0, maxLength - marker.length);
   return `${value.slice(0, Math.floor(keep / 2))}${marker}${value.slice(-Math.ceil(keep / 2))}`;
 }
@@ -216,10 +220,11 @@ export function cloneBoundedForLog(value: unknown, depth = 0, key: string | null
   const entries = Object.entries(value as JsonRecord).filter(
     ([k]) => !(carried > 0 && k === TRUNCATED_KEYS_MARKER)
   );
-  for (const [k, item] of entries.slice(0, MAX_LOG_OBJECT_KEYS)) {
+  const maxKeys = getChatLogMaxObjectKeys();
+  for (const [k, item] of maxKeys > 0 ? entries.slice(0, maxKeys) : entries) {
     result[k] = cloneBoundedForLog(item, depth + 1, k);
   }
-  const dropped = Math.max(0, entries.length - MAX_LOG_OBJECT_KEYS) + carried;
+  const dropped = (maxKeys > 0 ? Math.max(0, entries.length - maxKeys) : 0) + carried;
   if (dropped > 0) {
     result[TRUNCATED_KEYS_MARKER] = dropped;
   }
