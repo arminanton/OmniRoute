@@ -314,6 +314,14 @@ test("getApiKeyWeeklyWindowSetting defaults to provider and falls back from an i
   );
 });
 
+test("getApiKeyWeeklyWindowSetting uses the process timezone when calendar timezone is unset", () => {
+  const processTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  assert.deepEqual(
+    usageLimits.getApiKeyWeeklyWindowSetting({ OMNIROUTE_API_KEY_WEEKLY_WINDOW: "calendar" }),
+    { mode: "calendar", timeZone: processTimeZone }
+  );
+});
+
 test("getApiKeyUsageLimitStatus uses the configured calendar week", async () => {
   const previousMode = process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW;
   const previousTimeZone = process.env.OMNIROUTE_API_KEY_WEEKLY_WINDOW_TIMEZONE;
