@@ -34,11 +34,11 @@ http {
   # Controller records redacted status/category and nginx -t exit instead.
   error_log /dev/null crit;
   map $http_upgrade $upgrade_connection { default upgrade; '' ''; }
-  client_body_temp_path /run/omni-local-next/canary/body;
-  proxy_temp_path /run/omni-local-next/canary/proxy;
-  fastcgi_temp_path /run/omni-local-next/canary/fastcgi;
-  uwsgi_temp_path /run/omni-local-next/canary/uwsgi;
-  scgi_temp_path /run/omni-local-next/canary/scgi;
+  client_body_temp_path /run/omni-canary-worker/body;
+  proxy_temp_path /run/omni-canary-worker/proxy;
+  fastcgi_temp_path /run/omni-canary-worker/fastcgi;
+  uwsgi_temp_path /run/omni-canary-worker/uwsgi;
+  scgi_temp_path /run/omni-canary-worker/scgi;
   client_max_body_size 64m;
   client_body_timeout 3600s;
   send_timeout 3600s;

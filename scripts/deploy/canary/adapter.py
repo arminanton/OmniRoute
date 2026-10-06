@@ -27,7 +27,7 @@ RUN = Path("/run/omni-local-next/canary")
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8",
        "HOME": "/var/lib/omni-local-next/podman-home",
        "CONTAINERS_CONF": "/etc/omni-local-next/containers.conf"}
-BINARIES = {"podman": "/usr/bin/podman", "nginx": "/usr/sbin/nginx", "boundary": str(INSTALL / "boundary-check"), "ip": "/usr/sbin/ip"}
+BINARIES = {"podman": "/usr/bin/podman", "nginx": "/usr/sbin/nginx", "boundary": str(INSTALL / "boundary-check"), "ip": "/usr/bin/ip"}
 OPERATIONS = frozenset({"verify-overlap", "verify-approval", "observe-admission", "validate-proxy", "select-proxy", "observe-drain", "start-candidate", "fence-old", "retire-generation", "observe-retirement", "provision-shared-profile", "observe-shared-profile", "start-maintenance", "produce-schema-proof"})
 
 
@@ -379,6 +379,9 @@ def main():
     if layout.get("schema") == 2:
         from .sharedAppHost import SharedAdapter
         adapter = SharedAdapter(layout)
+        if sys.argv[2] in ("select-proxy","start-candidate","fence-old","retire-generation","provision-shared-profile","start-maintenance","produce-schema-proof"):
+            from .sharedPaths import provision
+            provision(layout)
     else:
         adapter = Adapter(layout)
     request = json.loads(raw)
