@@ -7,6 +7,7 @@ import {
   assertRuntimeExecutorEntrypoint,
 } from "@/shared/runtimePolicyEntrypoints";
 import { assertNotLockedCapability, isRuntimePolicyError } from "@/shared/runtimePolicy";
+import { providerFetch } from "../utils/transport/providerRequestTransport.ts";
 import { HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
 import {
   getRegistryEntry,
@@ -970,6 +971,7 @@ export class BaseExecutor {
       }
 
       try {
+        const requestFetch = providerFetch(this.provider, requestCredentials, stream);
         const fetchWithStartTimeout = async (requestUrl: string, requestOptions: RequestInit) => {
           // GHSA-4f49: guard here (not only next to the first buildUrl) so retries
           // and fallback URLs are validated too, before any bytes leave the host.
@@ -996,7 +998,7 @@ export class BaseExecutor {
             : requestOptions;
 
           try {
-            return await fetch(requestUrl, optionsWithSignal);
+            return await requestFetch(requestUrl, optionsWithSignal);
           } finally {
             if (timeoutId) clearTimeout(timeoutId);
           }
