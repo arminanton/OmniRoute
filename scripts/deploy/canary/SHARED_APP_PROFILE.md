@@ -100,3 +100,28 @@ port grant, denied untrusted UID and node-local/public bypass, and exercised a
 same-namespace authenticated fixture helper. These are honest private proofs,
 not an assertion of production rollout or real provider entitlement. No live
 namespace/firewall/Serve/service changes were made.
+
+## Reviewed clean-install filesystem layout
+
+The schema2 mutation entry provisions only fixed generation/CID/journal directories
+through no-follow directory descriptors. Configuration, journal and CID subtrees
+remain root-owned0700. A separate `/run/omni-canary-worker` root-owned0711 parent
+contains UID/GID65534-owned0700 temporary directories; NGINX workers can write
+there without reading private runtime records. Immutable asset snapshots retain
+root-owned0555 directories/0444 files beneath a root-owned public asset store.
+
+The shared `/var/lib/omni-local-next` ancestor must be root-owned0711 so workers
+can traverse the known immutable asset path. Provisioning refuses an existing
+incompatible mode; it never silently changes permissions. Read-only inspection
+on Maria found this ancestor currently0700. Any transition to0711 is a separate
+explicitly approved installation action, after reviewing existing child access:
+profile/browser/Codex state and deployment/recovery directories remain0700;
+Codex token directory remains0750 root:10001; release records are below0700
+release directories. Their permissions and contents must remain unchanged.
+The approved installer must also provide the exact fingerprinted NGINX binary
+and static loopback-hosts file before runtime launch.
+
+Private real UID65534 acceptance proves temporary-file writes and immutable asset
+reads, while private CID reads fail. Symlink paths, writable ancestors and
+incompatible ownership/modes are refused; repeated provisioning keeps directory
+inodes stable. Evidence: `private-paths-proof.json` in the generation-provision audit.
