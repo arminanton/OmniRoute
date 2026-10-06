@@ -4,11 +4,17 @@ import type { getProviderCredentials } from "@/sse/services/auth.ts";
 import type { updateFromHeaders, updateFromResponseBody } from "../../services/rateLimitManager.ts";
 import type { writeTerminalStatus } from "@/shared/utils/terminalStatus.ts";
 import type { updateProviderConnection } from "@/lib/db/providers.ts";
-import type { lockModel, recordCoreOwnedAntigravityQuotaState } from "../../services/accountFallback.ts";
+import type {
+  lockModel,
+  recordCoreOwnedAntigravityQuotaState,
+} from "../../services/accountFallback.ts";
 import { createErrorResult } from "../../utils/error.ts";
 import { applyStatusRestatement } from "../../config/upstreamStatusRestatement.ts";
 import { recoverAnthropicThinkingSignature } from "./thinkingSignatureRecovery.ts";
-import { isModelUnavailableError, getNextFamilyFallback as defaultGetNextFamilyFallback } from "../../services/modelFamilyFallback.ts";
+import {
+  isModelUnavailableError,
+  getNextFamilyFallback as defaultGetNextFamilyFallback,
+} from "../../services/modelFamilyFallback.ts";
 import { COOLDOWN_MS } from "../../config/errorConfig.ts";
 import { normalizeHeaders } from "../../utils/headers.ts";
 import { projectProviderErrorIdentifier } from "./providerFailureProvenance.ts";
@@ -20,7 +26,7 @@ export interface ChatCoreExecutorResult {
   transformedBody: unknown;
   transport?: string;
   _executionCredentials?: Record<string, unknown>;
-  _accountSemaphoreRelease?: () => void;
+  _accountSemaphoreRelease?: (completed?: boolean) => void;
 }
 
 export interface ProviderExecutionPolicy {
@@ -381,7 +387,12 @@ export async function runProviderExecutionPipeline(
 
     const status = attempt.response.status;
     if (isRuntimePolicyResponse(attempt.response) || (status >= 200 && status < 300)) {
-      return toOutcome(attempt, wire.currentModel, currentConnectionId(connection), target.provider);
+      return toOutcome(
+        attempt,
+        wire.currentModel,
+        currentConnectionId(connection),
+        target.provider
+      );
     }
 
     await recordUpstreamRateLimit(
@@ -535,7 +546,8 @@ export async function runProviderExecutionPipeline(
         lastAttempt = {
           response: signatureRecovery.execution.response,
           url: signatureRecovery.execution.url ?? attempt.url,
-          headers: (signatureRecovery.execution.headers as Record<string, string>) ?? attempt.headers,
+          headers:
+            (signatureRecovery.execution.headers as Record<string, string>) ?? attempt.headers,
           transformedBody: signatureRecovery.execution.transformedBody ?? attempt.transformedBody,
         };
         return toOutcome(
@@ -560,7 +572,11 @@ export async function runProviderExecutionPipeline(
         // keep statusText
       }
       if (isModelUnavailableError(status, fallbackMessage, target.provider)) {
-        const nextModel = resolveFamilyFallback(wire.currentModel, wire.triedModels, target.provider);
+        const nextModel = resolveFamilyFallback(
+          wire.currentModel,
+          wire.triedModels,
+          target.provider
+        );
         if (nextModel) {
           wire.setBodyAndModel({ ...wire.body, model: nextModel }, nextModel);
           modelFallbackPending = true;
@@ -573,7 +589,12 @@ export async function runProviderExecutionPipeline(
   }
 
   if (lastAttempt) {
-    return toOutcome(lastAttempt, wire.currentModel, currentConnectionId(connection), target.provider);
+    return toOutcome(
+      lastAttempt,
+      wire.currentModel,
+      currentConnectionId(connection),
+      target.provider
+    );
   }
   return leaseMismatch(wire.currentModel, currentConnectionId(connection));
 }

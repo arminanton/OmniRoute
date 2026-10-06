@@ -168,7 +168,10 @@ export function normalizeCodeAssistDiscovery(data: unknown): CodeAssistDiscovere
         typeof enabled === "boolean"
     );
     if (mimeEntries.length > 0)
-      model.supportedMimeTypes = Object.fromEntries(mimeEntries.slice(0, 128));
+      model.supportedMimeTypes = Object.fromEntries(mimeEntries.slice(0, 128)) as Record<
+        string,
+        boolean
+      >;
     const roles = modelRoles(payload, id);
     if (roles.length > 0) model.discoveryRoles = roles;
     result.push(model);

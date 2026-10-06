@@ -34,7 +34,7 @@ function randomIdFallback(): string {
  * `expiresIn`, which made a valid override fail with TS2416. Every field is therefore
  * optional here — callers already treat them as such.
  */
-export interface RefreshedCopilotCredentials {
+export interface RefreshedCopilotCredentials extends Record<string, unknown> {
   accessToken?: string;
   refreshToken?: string;
   expiresIn?: number;

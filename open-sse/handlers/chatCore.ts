@@ -469,7 +469,7 @@ import { getProactiveCompressionRatio } from "@/lib/db/compression";
 
 type ChatCoreExecutorResult = ReturnType<typeof normalizeExecutorResult> & {
   _executionCredentials?: Record<string, unknown>;
-  _accountSemaphoreRelease?: () => void;
+  _accountSemaphoreRelease?: (completed?: boolean) => void;
 };
 
 /**

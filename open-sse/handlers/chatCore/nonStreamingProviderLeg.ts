@@ -49,7 +49,7 @@ export interface ChatCoreExecutorResult {
   transformedBody: unknown;
   transport?: string;
   _executionCredentials?: Record<string, unknown>;
-  _accountSemaphoreRelease?: () => void;
+  _accountSemaphoreRelease?: (completed?: boolean) => void;
 }
 
 export interface ProviderLegRotationPolicy {
