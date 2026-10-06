@@ -18,6 +18,13 @@ import { accessScheduleSchema } from "./misc.ts";
 
 // ──── API Key Schemas ────
 
+const preferredConnectionsSchema = z
+  .array(z.string().uuid())
+  .max(100)
+  .refine((ids) => new Set(ids).size === ids.length, {
+    message: "preferredConnections must not contain duplicates",
+  });
+
 const requireExclusiveLeaseConnections = (
   value: {
     scopes?: string[];
@@ -63,6 +70,7 @@ export const createKeySchema = z
     chaosModeEnabled: z.boolean().optional(),
     scopes: z.array(z.string().trim().min(1).max(64)).max(32).optional(),
     allowedConnections: z.array(z.string().uuid()).min(1).max(100).optional(),
+    preferredConnections: preferredConnectionsSchema.optional(),
   })
   .superRefine((value, ctx) => {
     requireConsistentModelAccess(value, ctx);
@@ -127,6 +135,7 @@ export const updateKeyPermissionsSchema = z
     allowedModels: z.array(z.string().trim().min(1)).max(1000).optional(),
     allowedCombos: z.array(z.string().trim().min(1).max(200)).max(500).optional(),
     allowedConnections: z.array(z.string().uuid()).max(100).optional(),
+    preferredConnections: preferredConnectionsSchema.optional(),
     noLog: z.boolean().optional(),
     autoResolve: z.boolean().optional(),
     isActive: z.boolean().optional(),
@@ -193,6 +202,7 @@ export const updateKeyPermissionsSchema = z
       value.allowedModels === undefined &&
       value.allowedCombos === undefined &&
       value.allowedConnections === undefined &&
+      value.preferredConnections === undefined &&
       value.noLog === undefined &&
       value.autoResolve === undefined &&
       value.isActive === undefined &&

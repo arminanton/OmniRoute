@@ -17,6 +17,7 @@ import {
   isValidApiKey,
   extractSessionAffinityKey,
 } from "../services/auth";
+import { selectCredentialWithConnectionPreference } from "../services/connectionPreference";
 import {
   getRuntimeProviderProfile,
   shouldMarkAccountExhaustedFrom429,
@@ -1690,45 +1691,56 @@ async function handleSingleModelChatImplementation(
       const credentials =
         preselectedCredentials && excludedConnectionIds.size === 0
           ? preselectedCredentials
-          : await getProviderCredentialsWithQuotaPreflight(
-              provider,
-              null,
-              effectiveAllowedConnections,
-              model,
-              {
-                sessionKey: occupancySessionKey,
-                reserveOAuthSession: true,
-                excludeConnectionIds: Array.from(excludedConnectionIds),
-                ...(runtimeOptions.allowRateLimitedConnection
-                  ? { allowRateLimitedConnections: true }
-                  : {}),
-                ...(forceLiveComboTest
-                  ? {
-                      allowSuppressedConnections: true,
-                      bypassQuotaPolicy: true,
-                    }
-                  : {}),
-                ...(!forceLiveComboTest && bypassProviderQuotaPolicy
-                  ? { bypassQuotaPolicy: true }
-                  : {}),
-                ...(runtimeOptions.managedLease
-                  ? { lease: credentialLease(runtimeOptions.managedLease) }
-                  : {}),
-                ...(() => {
-                  const effectiveForcedId = resolveForcedConnectionForCredentialPool({
-                    forcedConnectionId: forcedConnectionId || null,
-                    excludedConnectionIds,
-                    connections: [],
-                    allowRateLimitedConnections:
-                      runtimeOptions.allowRateLimitedConnection === true || forceLiveComboTest,
-                    bypassQuotaPolicy: forceLiveComboTest || bypassProviderQuotaPolicy,
-                    isQuotaExhausted: () => false,
-                    isQuotaPolicyBlocked: () => false,
-                  });
-                  return effectiveForcedId ? { forcedConnectionId: effectiveForcedId } : {};
-                })(),
-              }
-            );
+          : await selectCredentialWithConnectionPreference({
+              preferredConnections:
+                !hasForcedConnection &&
+                !runtimeOptions.managedLease &&
+                !forceLiveComboTest &&
+                !isExclusiveLeaseManagedKey(apiKeyInfo)
+                  ? apiKeyInfo?.preferredConnections
+                  : undefined,
+              allowedConnections: effectiveAllowedConnections,
+              select: (candidateConnections) =>
+                getProviderCredentialsWithQuotaPreflight(
+                  provider,
+                  null,
+                  candidateConnections,
+                  model,
+                  {
+                    sessionKey: occupancySessionKey,
+                    reserveOAuthSession: true,
+                    excludeConnectionIds: Array.from(excludedConnectionIds),
+                    ...(runtimeOptions.allowRateLimitedConnection
+                      ? { allowRateLimitedConnections: true }
+                      : {}),
+                    ...(forceLiveComboTest
+                      ? {
+                          allowSuppressedConnections: true,
+                          bypassQuotaPolicy: true,
+                        }
+                      : {}),
+                    ...(!forceLiveComboTest && bypassProviderQuotaPolicy
+                      ? { bypassQuotaPolicy: true }
+                      : {}),
+                    ...(runtimeOptions.managedLease
+                      ? { lease: credentialLease(runtimeOptions.managedLease) }
+                      : {}),
+                    ...(() => {
+                      const effectiveForcedId = resolveForcedConnectionForCredentialPool({
+                        forcedConnectionId: forcedConnectionId || null,
+                        excludedConnectionIds,
+                        connections: [],
+                        allowRateLimitedConnections:
+                          runtimeOptions.allowRateLimitedConnection === true || forceLiveComboTest,
+                        bypassQuotaPolicy: forceLiveComboTest || bypassProviderQuotaPolicy,
+                        isQuotaExhausted: () => false,
+                        isQuotaPolicyBlocked: () => false,
+                      });
+                      return effectiveForcedId ? { forcedConnectionId: effectiveForcedId } : {};
+                    })(),
+                  }
+                ),
+            });
       preselectedCredentials = null;
 
       if (runtimeOptions.managedLease && credentials) {
