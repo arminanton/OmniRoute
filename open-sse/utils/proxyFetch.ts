@@ -1237,13 +1237,16 @@ async function patchedFetch(
       options.signal?.addEventListener("abort", onCallerAbort, { once: true });
       try {
         const relayDispatch = budgetedGenerationFetch(
-          (_upstreamInput: unknown, _upstreamOptions: unknown) =>
+          (_upstreamInput: unknown, _upstreamOptions: { signal?: AbortSignal | null }) =>
             _undiciRelay(relayUrl, {
               ...options,
               headers: mergedHeaders,
               duplex: "half",
               dispatcher: attempt === 0 ? RELAY_POOL_AGENT : RELAY_RETRY_AGENT,
-              signal: relayController.signal,
+              signal: combineAbortSignals([
+                relayController.signal,
+                ...(_upstreamOptions.signal ? [_upstreamOptions.signal] : []),
+              ]),
             })
         );
         return await relayDispatch(input, options);

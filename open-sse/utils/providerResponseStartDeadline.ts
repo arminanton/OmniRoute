@@ -1,3 +1,4 @@
+import { getLogicalRetryBudget, LogicalRetryBudgetError } from "../services/logicalRetryBudget.ts";
 import { withFetchDispatchObserver } from "./fetchDispatchObserver.ts";
 
 /** Preserve an executor's headers budget through inner dispatchers; queue time is a separate phase. */
@@ -15,7 +16,17 @@ export async function withProviderResponseStartDeadline<T>(
   const setTimer = (duration: number, makeError: () => Error) => {
     if (!active) return;
     clearTimeout(timer);
-    timer = setTimeout(() => controller.abort(makeError()), Math.max(1, duration));
+    const remaining = getLogicalRetryBudget()?.remainingTimeMs();
+    const logicalWins = remaining !== undefined && remaining <= duration;
+    timer = setTimeout(
+      () =>
+        controller.abort(
+          logicalWins
+            ? new LogicalRetryBudgetError("Logical pre-output deadline exhausted")
+            : makeError()
+        ),
+      Math.max(1, Math.min(duration, remaining ?? duration))
+    );
   };
   const started = () => setTimer(timeoutMs, timeoutError);
   const queued = () =>
