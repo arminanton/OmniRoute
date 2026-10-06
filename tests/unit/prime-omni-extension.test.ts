@@ -176,3 +176,52 @@ test("explicit warming responses get one retry, never unlimited retry storms", a
   assert.equal(calls, 2);
   assert.equal(h.registrations.length, 1);
 });
+
+test("declared native billing units are distinguished from USD estimates and allowance regimes", async () => {
+  const h = harness();
+  const data = [
+    {
+      ...model("cx/credits"),
+      billing_metadata: {
+        credit_rates: { unit: "credits_per_million_tokens" },
+        dollar_pricing_basis: "token_value_estimate_not_subscription_invoice",
+      },
+    },
+    { ...model("gh/premium"), billing_metadata: { unit: "premium_requests", multiplier: 0 } },
+    { ...model("agy/allowance"), billing_metadata: { regime: "included_allowance" } },
+    {
+      ...model("free/declared"),
+      billing_metadata: { regime: "free" },
+      pricing: { input: 0, output: 0 },
+    },
+  ];
+  await createOmniExtension({
+    readKey: () => "fixture",
+    fetch: (async () => catalog(data)) as typeof fetch,
+  })(h.pi);
+  const models = h.registrations[0].config.models;
+  assert.match(models[0].name, /credits; USD estimate/);
+  assert.match(models[1].name, /premium requests/);
+  assert.doesNotMatch(models[1].name, /free/);
+  assert.match(models[2].name, /included allowance/);
+  assert.match(models[3].name, /declared free/);
+  await h.commands.get("omni-billing").handler("cx/credits", h.ctx);
+  assert.match(h.notices.at(-1)[0], /native_credits/);
+});
+
+test("account-advertised ultra effort is preserved without inventing it for other models", async () => {
+  const h = harness();
+  await createOmniExtension({
+    readKey: () => "fixture",
+    fetch: (async () =>
+      catalog([
+        { ...model(), capabilities: { reasoning: true, effort_tiers: ["medium", "max", "ultra"] } },
+        model("cx/gpt-6-luna"),
+      ])) as typeof fetch,
+  })(h.pi);
+  const models = h.registrations[0].config.models as Array<
+    PrimeModel & { thinkingLevelMap?: Record<string, string> }
+  >;
+  assert.equal(models[0].thinkingLevelMap?.ultra, "ultra");
+  assert.equal(models[1].thinkingLevelMap?.ultra, undefined);
+});

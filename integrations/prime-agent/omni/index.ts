@@ -74,6 +74,29 @@ function price(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
+function billingPresentation(model: DiscoveryModel, knownPrice: boolean) {
+  const object = (value: unknown): Record<string, unknown> =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const metadata = object(model.billing_metadata);
+  if (model.owned_by === "combo") return { regime: "dynamic", label: "dynamic cost" };
+  if (metadata.unit === "premium_requests")
+    return { regime: "native_premium_requests", label: "premium requests" };
+  if (object(metadata.credit_rates).unit === "credits_per_million_tokens")
+    return {
+      regime: "native_credits",
+      label: knownPrice ? "credits; USD estimate" : "credits; USD cost unknown",
+    };
+  if (metadata.regime === "included_allowance")
+    return { regime: "included_allowance", label: "included allowance" };
+  if (metadata.regime === "free") return { regime: "free", label: "declared free" };
+  if (!knownPrice) return { regime: "unknown", label: "cost unknown" };
+  if (model.pricing?.input === 0 && model.pricing?.output === 0)
+    return { regime: "zero_token_rate", label: "" };
+  return { regime: "usd_token_estimate", label: "" };
+}
+
 export function createOmniExtension(
   options: {
     baseUrl?: string;
@@ -160,7 +183,7 @@ export function createOmniExtension(
         const capabilities = m.capabilities ?? {};
         const tiers = Array.isArray(capabilities.effort_tiers) ? capabilities.effort_tiers : [];
         const thinkingLevelMap = Object.fromEntries(
-          ["minimal", "low", "medium", "high", "xhigh", "max"]
+          ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
             .filter((level) => tiers.includes(level))
             .map((level) => [level, level])
         );
@@ -169,12 +192,11 @@ export function createOmniExtension(
           (value) => typeof value === "number" && Number.isFinite(value) && value >= 0
         );
         if (!knownPrice) missingPricing.push(m.id);
+        const billing = billingPresentation(m, knownPrice);
         return {
           id: m.id,
           // Prime requires numeric costs; make placeholder zero visibly distinct from free.
-          name: knownPrice
-            ? m.id
-            : `${m.id} [${m.owned_by === "combo" ? "dynamic cost" : "cost unknown"}]`,
+          name: billing.label ? `${m.id} [${billing.label}]` : m.id,
           api:
             m.api_format === "responses" || m.supported_endpoints?.includes("responses")
               ? ("openai-responses" as const)
@@ -218,6 +240,12 @@ export function createOmniExtension(
             m.id,
             {
               pricing: m.pricing,
+              pricing_regime: billingPresentation(
+                m,
+                [m.pricing?.input, m.pricing?.output].every(
+                  (value) => typeof value === "number" && Number.isFinite(value) && value >= 0
+                )
+              ).regime,
               billing_metadata: m.billing_metadata,
               lifecycle_notice: m.lifecycle_notice,
               dynamic: m.owned_by === "combo",
