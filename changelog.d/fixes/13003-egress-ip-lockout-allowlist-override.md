@@ -1,0 +1,1 @@
+- **fix(ops):** add `OMNIROUTE_EGRESS_IP_LOCK_PROVIDERS` to override the egress-IP lockout provider set (`opencode`/`opencode-go`/`opencode-cli`) — disable it with `none`/`off` or replace it with a comma-separated list of provider IDs or aliases ([#13003](https://github.com/diegosouzapw/OmniRoute/pull/13003)) — thanks @alvinveroy

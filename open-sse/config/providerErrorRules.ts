@@ -343,10 +343,26 @@ export function honorsRuleLockScope(provider: string | null | undefined): boolea
  * HONORS_RULE_LOCK_SCOPE_PROVIDERS (#10334): a provider must opt in, and any
  * widening is an explicit owner decision.
  */
-const EGRESS_BUCKETED_LOCK_PROVIDERS = new Set(["opencode", "opencode-go", "opencode-cli"]);
+const DEFAULT_EGRESS_BUCKETED_LOCK_PROVIDERS = ["opencode", "opencode-go", "opencode-cli"] as const;
+
+export function egressIpLockProvidersFromEnv(raw: string | undefined): Set<string> {
+  const value = raw?.trim();
+  if (!value) return new Set(DEFAULT_EGRESS_BUCKETED_LOCK_PROVIDERS);
+  if (/^(none|off)$/i.test(value)) return new Set();
+  return new Set(
+    value
+      .split(",")
+      .map((provider) => provider.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+const EGRESS_BUCKETED_LOCK_PROVIDERS = egressIpLockProvidersFromEnv(
+  process.env.OMNIROUTE_EGRESS_IP_LOCK_PROVIDERS
+);
 
 export function isEgressBucketedLockScope(provider: string | null | undefined): boolean {
-  return !!provider && EGRESS_BUCKETED_LOCK_PROVIDERS.has(provider.toLowerCase());
+  return !!provider && EGRESS_BUCKETED_LOCK_PROVIDERS.has(provider.trim().toLowerCase());
 }
 
 /**
