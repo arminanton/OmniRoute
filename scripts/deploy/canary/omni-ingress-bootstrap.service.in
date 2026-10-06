@@ -1,0 +1,37 @@
+[Unit]
+Description=OmniRoute persistent legacy ingress bridge (reviewed bootstrap)
+Requires=omni-egress-topology.service
+After=omni-egress-topology.service
+BindsTo=omni-egress-topology.service
+
+[Service]
+# Source template only; install exact binary/config/policy hashes after approval.
+Type=simple
+NetworkNamespacePath=/run/netns/omni-wan
+ExecStart=/usr/sbin/nginx -p /run/omni-local-next/canary/ -c /run/omni-local-next/canary/nginx.conf -g "daemon off;"
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGQUIT
+KillMode=mixed
+# Healthy legacy streams have no forced service-stop timeout.
+TimeoutStopSec=infinity
+Restart=on-failure
+RestartSec=1
+User=root
+Group=root
+# Root master drops HTTP workers to nobody/nogroup, UID65534. No NET_ADMIN.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET
+ReadWritePaths=/run/omni-local-next/canary
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
