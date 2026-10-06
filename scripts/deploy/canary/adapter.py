@@ -28,7 +28,7 @@ ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8",
        "HOME": "/var/lib/omni-local-next/podman-home",
        "CONTAINERS_CONF": "/etc/omni-local-next/containers.conf"}
 BINARIES = {"podman": "/usr/bin/podman", "nginx": "/usr/sbin/nginx", "boundary": str(INSTALL / "boundary-check"), "ip": "/usr/sbin/ip"}
-OPERATIONS = frozenset({"verify-overlap", "verify-approval", "observe-admission", "validate-proxy", "select-proxy", "observe-drain", "start-candidate", "fence-old", "retire-generation", "observe-retirement"})
+OPERATIONS = frozenset({"verify-overlap", "verify-approval", "observe-admission", "validate-proxy", "select-proxy", "observe-drain", "start-candidate", "fence-old", "retire-generation", "observe-retirement", "provision-shared-profile", "observe-shared-profile", "start-maintenance", "produce-schema-proof"})
 
 
 def load(path, *, private=True):
@@ -199,6 +199,12 @@ class Adapter:
                 raise Refused("invalid lifecycle observation")
         return proof
 
+    def proxy_config(self, g):
+        return nginx_config(g, self.layout["listeners"])
+
+    def runtime_command(self, record):
+        return command(record["runtime"], record["generation"], record["boundaryReceipt"])
+
     def verify_proxy_master(self):
         pidfile = RUN / "nginx.pid"
         trusted(pidfile)
@@ -312,7 +318,7 @@ class Adapter:
             exact(request, {"generation"} if operation == "validate-proxy" else {"generation", "configDigest"})
             g = request["generation"]
             self.proof(g)
-            raw = nginx_config(g, self.layout["listeners"]).encode()
+            raw = self.proxy_config(g).encode()
             sha = hashlib.sha256(raw).hexdigest()
             staged = RUN / ("proxy-" + sha + ".conf")
             atomic_bytes(staged, raw)
@@ -351,7 +357,7 @@ class Adapter:
             receipt = json.loads(self.runner("boundary", ["--protocol=1", "verify-before-start"], {"generation": g}))
             if receipt != record["boundaryReceipt"]:
                 raise Refused("pre-start boundary receipt differs")
-            argv = command(record["runtime"], g, receipt)
+            argv = self.runtime_command(record)
             # Fixed compiler is only source of executable arguments, caller cannot add flags.
             argv.insert(argv.index("run") + 1, "--detach")
             result = self.runner("podman", argv[1:]).strip()
@@ -370,9 +376,13 @@ def main():
     if len(raw) > 65536:
         raise Refused("oversized adapter input")
     layout = load(CONFIG / "layout.json")
-    adapter = Adapter(layout)
+    if layout.get("schema") == 2:
+        from .sharedAppHost import SharedAdapter
+        adapter = SharedAdapter(layout)
+    else:
+        adapter = Adapter(layout)
     request = json.loads(raw)
-    if sys.argv[2] in ("select-proxy", "start-candidate", "fence-old", "retire-generation"):
+    if sys.argv[2] in ("select-proxy", "start-candidate", "fence-old", "retire-generation", "provision-shared-profile", "start-maintenance", "produce-schema-proof"):
         with mutation_lock():
             result = adapter.operate(sys.argv[2], request)
     else:
