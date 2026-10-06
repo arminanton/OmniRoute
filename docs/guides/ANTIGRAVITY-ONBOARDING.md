@@ -288,3 +288,9 @@ Antigravity stream queues use byte limits. Caller cancellation releases the upst
 Post-usage quota refreshes coalesce per connection through the network phase. An unset or blank `PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS` keeps the five-second default; an explicit zero requests immediate refresh. Transient credits throttling and transport errors do not establish that credit balance is exhausted.
 
 The local concurrency checks cover 1, 30, 70, and 100 independent conversations with streaming and non-streaming tool round trips. They do not establish Google's available capacity or account quota. Native SDK WebSockets connect to a local runtime; upstream HTTP/2 and AI Code transports require separate validation before adoption.
+
+## Shared CLI and IDE admission identity
+
+New OAuth logins and CLI imports retain the Google user ID from the existing authenticated userinfo call and the project returned by successful CodeAssist discovery. When both exist, CLI and IDE records for the same subject and project share an account/project admission key. This conservatively groups request capacity; it does not assert a subscription tier, exact provider quota, or entitlement. Operator `quotaGroup`, `quotaRealm`, and partition overrides remain authoritative.
+
+The implementation does not infer identity from email, unverified JWTs, or a manually entered project. Existing records lacking native proof are not automatically backfilled: use an explicit reviewed `quotaGroup` and `quotaRealm` for cross-provider grouping, or obtain proof during the next authorized login/import. A replacement login without native proof revokes previously automatic identity rather than retaining stale evidence. No additional discovery or token-refresh calls are introduced.

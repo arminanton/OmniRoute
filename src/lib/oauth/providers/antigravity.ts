@@ -1,3 +1,4 @@
+import { verifiedGoogleQuotaFields } from "../googleQuotaIdentity";
 import { ANTIGRAVITY_CONFIG } from "../constants/oauth";
 import type { AntigravityClientProfile } from "@/shared/constants/antigravityClientProfile";
 import {
@@ -43,7 +44,7 @@ type AntigravityProjectDiscoveryOutcome = "requires_manual_project" | "discovery
 type AntigravityPostExchange = {
   projectId: string;
   tierId: string;
-  userInfo: { email?: string };
+  userInfo: { email?: string; id?: string };
   projectDiscoveryOutcome?: AntigravityProjectDiscoveryOutcome;
   /** Literal issuer of the connection's refresh token: "builtin" or "custom:<clientId>". */
   oauthClient?: GoogleOauthClientMarker;
@@ -171,7 +172,7 @@ async function postExchangeAntigravity(
     signal: AbortSignal.timeout(POSTEXCHANGE_TIMEOUT_MS),
   }).catch(() => null);
   const userInfo = userInfoResponse?.ok
-    ? ((await userInfoResponse.json()) as { email?: string })
+    ? ((await userInfoResponse.json()) as { email?: string; id?: string })
     : {};
 
   let projectId = "";
@@ -260,6 +261,7 @@ function mapAntigravityTokens(
     // Code project instead of persisting a dead "active" row.
     projectDiscoveryOutcome: extra?.projectDiscoveryOutcome,
     providerSpecificData: {
+      ...verifiedGoogleQuotaFields(extra?.userInfo, extra?.projectId),
       clientProfile,
       projectId: extra?.projectId,
       tier: extra?.tierId,
@@ -297,9 +299,7 @@ export function createAntigravityOAuthProvider(
         // env-level custom client later on. Compare by value against the
         // embedded default: `config` may be the very same object as
         // ANTIGRAVITY_CONFIG when no runtime override exists.
-        oauthClient: isCustomAntigravityClient(config)
-          ? `custom:${config.clientId}`
-          : "builtin",
+        oauthClient: isCustomAntigravityClient(config) ? `custom:${config.clientId}` : "builtin",
       })),
     mapTokens: (tokens, extra) => mapAntigravityTokens(clientProfile, tokens, extra),
   };
