@@ -1,3 +1,4 @@
+import type { DiagnosticOverflowTrace } from "@/lib/usage/diagnosticOverflow";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { updatePendingScope, type PendingRequestScope } from "@/lib/usage/pendingRequestScope";
@@ -10,12 +11,14 @@ export type ProviderRequestPrepared = {
 };
 
 export type Capture = {
+  diagnosticTrace?: DiagnosticOverflowTrace | null;
   capture: (request: ProviderRequestPrepared) => Promise<void> | void;
   body: (fallback: unknown) => unknown;
   latest?: () => ProviderRequestPrepared | null;
 };
 
 type RequestLoggerLike = {
+  getDiagnosticOverflowTrace?: () => DiagnosticOverflowTrace | null;
   logTargetRequest: (url: unknown, headers: Record<string, string>, body: unknown) => void;
 };
 
@@ -224,6 +227,7 @@ export function createPreparedRequestLogger(
 ): Capture {
   let latest: ProviderRequestPrepared | null = null;
   return {
+    diagnosticTrace: reqLogger.getDiagnosticOverflowTrace?.(),
     capture(request) {
       latest = request;
       reqLogger.logTargetRequest(request.url, request.headers, request.body);
@@ -269,4 +273,8 @@ export function createPreparedRequestLogger(
       return latest;
     },
   };
+}
+
+export function getCurrentDiagnosticOverflowTrace(): DiagnosticOverflowTrace | null {
+  return captureState.context.getStore()?.diagnosticTrace ?? null;
 }

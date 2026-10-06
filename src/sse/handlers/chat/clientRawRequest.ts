@@ -11,12 +11,21 @@
 import { mergeAbortSignals } from "@omniroute/open-sse/executors/base.ts";
 import { cloneBoundedForLog } from "@omniroute/open-sse/utils/requestLogger.ts";
 
-export function buildClientRawRequest(request: Request, body: unknown) {
+import {
+  recordDiagnosticClientJson,
+  inheritDiagnosticClientJson,
+} from "@omniroute/open-sse/utils/diagnosticCaptureContext.ts";
+
+export function buildClientRawRequest(
+  request: Request,
+  body: unknown,
+  diagnosticOverflowEligible = false
+) {
   const url = new URL(request.url);
   const headers = Object.fromEntries(request.headers.entries());
   delete headers["x-omniroute-lease-owner"];
   delete headers["x-omniroute-lease-generation"];
-  return {
+  const envelope = {
     endpoint: url.pathname,
     // #7847: bounded, not a full deep clone. Every consumer of clientRawRequest.body is
     // observability — reqLogger.logClientRawRequest (which re-bounds it anyway, or drops it
@@ -30,6 +39,8 @@ export function buildClientRawRequest(request: Request, body: unknown) {
     headers,
     signal: request.signal ?? null,
   };
+  recordDiagnosticClientJson(envelope, body, diagnosticOverflowEligible);
+  return envelope;
 }
 
 /**
@@ -51,10 +62,12 @@ export function resolveDispatchClientRawRequest(
   modelAbortSignal: AbortSignal | null | undefined
 ): typeof clientRawRequest {
   if (!modelAbortSignal) return clientRawRequest;
-  return {
+  const copy = {
     ...clientRawRequest,
     signal: clientRawRequest?.signal
       ? mergeAbortSignals(clientRawRequest.signal, modelAbortSignal)
       : modelAbortSignal,
   };
+  if (clientRawRequest) inheritDiagnosticClientJson(clientRawRequest, copy);
+  return copy;
 }

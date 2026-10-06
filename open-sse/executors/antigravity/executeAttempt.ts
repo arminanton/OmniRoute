@@ -1,3 +1,5 @@
+import { isLogicalRetryBudgetError } from "../../services/logicalRetryBudget.ts";
+import { captureAntigravityFetch } from "./diagnosticAttempt.ts";
 import { projectErrorHeaders } from "../../utils/googleErrorDiagnostics.ts";
 import { classify429 } from "../../services/antigravity429Engine.ts";
 // Pure-ish per-attempt request/result helpers for the Antigravity executor (#7408
@@ -113,14 +115,17 @@ export async function fetchAntigravityWithReadinessTimeout(
   url: string,
   init: RequestInit,
   timeoutMs = STREAM_READINESS_TIMEOUT_MS,
-  queueTimeoutMs = 90_000
+  queueTimeoutMs = 90_000,
+  serializedBody?: string
 ): Promise<Response> {
-  return withProviderResponseStartDeadline(
-    Math.max(0, Math.floor(timeoutMs)),
-    init.signal,
-    (signal) => fetch(url, { ...init, signal }),
-    () => new AntigravityPreResponseTimeoutError(timeoutMs, url),
-    queueTimeoutMs
+  return captureAntigravityFetch(url, init, serializedBody, () =>
+    withProviderResponseStartDeadline(
+      Math.max(0, Math.floor(timeoutMs)),
+      init.signal,
+      (signal) => fetch(url, { ...init, signal }),
+      () => new AntigravityPreResponseTimeoutError(timeoutMs, url),
+      queueTimeoutMs
+    )
   );
 }
 
@@ -323,13 +328,19 @@ export async function sendAntigravityRequest(
   }
 
   await prl.captureCurrentProviderBody(url, finalHeaders, serializedRequest.bodyString, log);
-  let response = await fetchAntigravityWithReadinessTimeout(url, {
-    method: "POST",
-    headers: finalHeaders,
-    body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
-    ...(stream ? { duplex: "half" } : {}),
-    signal,
-  });
+  let response = await fetchAntigravityWithReadinessTimeout(
+    url,
+    {
+      method: "POST",
+      headers: finalHeaders,
+      body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
+      ...(stream ? { duplex: "half" } : {}),
+      signal,
+    },
+    undefined,
+    undefined,
+    serializedRequest.bodyString
+  );
 
   if (response.status === HTTP_STATUS.FORBIDDEN && finalHeaders["x-goog-user-project"]) {
     const retryHeaders = { ...finalHeaders };
@@ -337,13 +348,19 @@ export async function sendAntigravityRequest(
     log.debug("RETRY", "403 with x-goog-user-project, retrying once without it");
     await prl.captureCurrentProviderBody(url, retryHeaders, serializedRequest.bodyString, log);
     await disposeAntigravityResponse(response);
-    response = await fetchAntigravityWithReadinessTimeout(url, {
-      method: "POST",
-      headers: retryHeaders,
-      body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
-      ...(stream ? { duplex: "half" } : {}),
-      signal,
-    });
+    response = await fetchAntigravityWithReadinessTimeout(
+      url,
+      {
+        method: "POST",
+        headers: retryHeaders,
+        body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
+        ...(stream ? { duplex: "half" } : {}),
+        signal,
+      },
+      undefined,
+      undefined,
+      serializedRequest.bodyString
+    );
     finalHeaders = retryHeaders;
   }
 
@@ -401,13 +418,19 @@ export async function tryCreditsRetry(
       serializedCreditsRequest.bodyString,
       log
     );
-    const creditsResp = await fetchAntigravityWithReadinessTimeout(url, {
-      method: "POST",
-      headers: finalCreditsHeaders,
-      body: getChunkedOrFixedBody(serializedCreditsRequest.bodyString, stream),
-      ...(stream ? { duplex: "half" } : {}),
-      signal,
-    });
+    const creditsResp = await fetchAntigravityWithReadinessTimeout(
+      url,
+      {
+        method: "POST",
+        headers: finalCreditsHeaders,
+        body: getChunkedOrFixedBody(serializedCreditsRequest.bodyString, stream),
+        ...(stream ? { duplex: "half" } : {}),
+        signal,
+      },
+      undefined,
+      undefined,
+      serializedCreditsRequest.bodyString
+    );
     if (creditsResp.ok || creditsResp.status !== HTTP_STATUS.RATE_LIMITED) {
       return buildFinalAntigravityResult(
         stream,
@@ -503,7 +526,8 @@ async function buildUpstreamErrorResult(
   transformedBody: Record<string, unknown>,
   signal?: AbortSignal | null
 ): Promise<SsePassthroughResult> {
-  const rawBody = await readAntigravityErrorBody(response, signal).catch(() => {
+  const rawBody = await readAntigravityErrorBody(response, signal).catch((error) => {
+    if (isLogicalRetryBudgetError(error)) throw error;
     signal?.throwIfAborted();
     return "";
   });
