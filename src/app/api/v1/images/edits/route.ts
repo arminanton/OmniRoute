@@ -23,6 +23,10 @@ import {
 } from "@omniroute/open-sse/config/imageRegistry.ts";
 import { errorResponse, unavailableResponse } from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
+import {
+  runImageRequestWithAccounting,
+  type ImageRequestAccounting,
+} from "@/lib/usage/imageRequestAccounting";
 import * as log from "@/sse/utils/logger";
 import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
@@ -216,6 +220,17 @@ function buildAdobeFireflyEditDataUrls(
  * Extracted from postHandler to keep cyclomatic/cognitive complexity in check
  * (config/quality/complexity-baseline.json ratchet).
  */
+type EditAccountingBase = Pick<ImageRequestAccounting, "apiKeyInfo" | "startTime">;
+
+function editAccounting(
+  base: EditAccountingBase,
+  provider: string,
+  model: string | null | undefined,
+  credentials: unknown
+): ImageRequestAccounting {
+  return { ...base, endpoint: "/v1/images/edits", provider, model, credentials };
+}
+
 async function handleAdobeFireflyEditRequest(params: {
   parsed: ReturnType<typeof parseImageModel>;
   providerConfig: NonNullable<ReturnType<typeof getImageProvider>>;
@@ -227,6 +242,7 @@ async function handleAdobeFireflyEditRequest(params: {
   images: Array<{ bytes: Buffer; mime: string }>;
   imageBytes: Buffer | null;
   imageMime: string | null;
+  accounting: EditAccountingBase;
 }): Promise<Response> {
   const {
     parsed,
@@ -239,6 +255,7 @@ async function handleAdobeFireflyEditRequest(params: {
     images,
     imageBytes,
     imageMime,
+    accounting,
   } = params;
 
   const credentials = await getProviderCredentialsWithQuotaPreflight(
@@ -268,23 +285,27 @@ async function handleAdobeFireflyEditRequest(params: {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: image");
   }
 
-  const result = await handleAdobeFireflyImageGeneration({
-    provider: parsed.provider,
-    model: parsed.model,
-    providerConfig,
-    body: {
-      prompt,
-      size: size ?? undefined,
-      response_format: responseFormat ?? undefined,
-      n: 1,
-      image_url: dataUrls[0],
-      image: dataUrls.length === 1 ? dataUrls[0] : dataUrls,
-      image_urls: dataUrls,
-      images: dataUrls,
-    },
-    credentials,
-    log,
-  });
+  const result = await runImageRequestWithAccounting(
+    editAccounting(accounting, parsed.provider, parsed.model, credentials),
+    () =>
+      handleAdobeFireflyImageGeneration({
+        provider: parsed.provider,
+        model: parsed.model,
+        providerConfig,
+        body: {
+          prompt,
+          size: size ?? undefined,
+          response_format: responseFormat ?? undefined,
+          n: 1,
+          image_url: dataUrls[0],
+          image: dataUrls.length === 1 ? dataUrls[0] : dataUrls,
+          image_urls: dataUrls,
+          images: dataUrls,
+        },
+        credentials,
+        log,
+      })
+  );
 
   if ((result as { success?: boolean }).success) {
     await clearRecoveredProviderState(credentials);
@@ -297,6 +318,7 @@ async function handleAdobeFireflyEditRequest(params: {
 }
 
 async function postHandler(request: Request, _context?: unknown) {
+  const startTime = Date.now();
   let input: EditInput | null;
   try {
     input = await readEditInput(request);
@@ -465,13 +487,22 @@ async function postHandler(request: Request, _context?: unknown) {
         signal: request.signal,
       });
 
-    const result = await (connectionId
-      ? runWithProxyContext(proxyInfo?.proxy || null, editImage).catch(() => ({
-          success: false as const,
-          status: HTTP_STATUS.SERVICE_UNAVAILABLE,
-          error: "Image edit proxy error",
-        }))
-      : editImage());
+    const result = await runImageRequestWithAccounting(
+      editAccounting(
+        { apiKeyInfo: policy.apiKeyInfo, startTime },
+        parsed.provider,
+        parsed.model,
+        credentials
+      ),
+      () =>
+        connectionId
+          ? runWithProxyContext(proxyInfo?.proxy || null, editImage).catch(() => ({
+              success: false as const,
+              status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+              error: "Image edit proxy error",
+            }))
+          : editImage()
+    );
 
     if (result.success === true) {
       await clearRecoveredProviderState(credentials);
@@ -505,20 +536,29 @@ async function postHandler(request: Request, _context?: unknown) {
       );
     }
 
-    const result = await handleFalAIImageEdit({
-      provider: parsed.provider,
-      model: parsed.model,
-      providerConfig,
-      body: {
-        prompt,
-        size: size ?? undefined,
-        response_format: responseFormat ?? undefined,
-        n: 1,
-      },
-      images,
-      credentials,
-      log,
-    });
+    const result = await runImageRequestWithAccounting(
+      editAccounting(
+        { apiKeyInfo: policy.apiKeyInfo, startTime },
+        parsed.provider,
+        parsed.model,
+        credentials
+      ),
+      () =>
+        handleFalAIImageEdit({
+          provider: parsed.provider,
+          model: parsed.model,
+          providerConfig,
+          body: {
+            prompt,
+            size: size ?? undefined,
+            response_format: responseFormat ?? undefined,
+            n: 1,
+          },
+          images,
+          credentials,
+          log,
+        })
+    );
 
     if (result.success) {
       await clearRecoveredProviderState(credentials);
@@ -543,6 +583,7 @@ async function postHandler(request: Request, _context?: unknown) {
       images,
       imageBytes,
       imageMime,
+      accounting: { apiKeyInfo: policy.apiKeyInfo, startTime },
     });
   }
 
@@ -572,18 +613,27 @@ async function postHandler(request: Request, _context?: unknown) {
       );
     }
 
-    const result = await handleOpenRouterImageEdit({
-      provider: parsed.provider,
-      model: parsed.model,
-      baseUrl: providerConfig.baseUrl,
-      credentials,
-      prompt,
-      imageBytes,
-      imageMime,
-      size: size ?? undefined,
-      n: 1,
-      log,
-    });
+    const result = await runImageRequestWithAccounting(
+      editAccounting(
+        { apiKeyInfo: policy.apiKeyInfo, startTime },
+        parsed.provider,
+        parsed.model,
+        credentials
+      ),
+      () =>
+        handleOpenRouterImageEdit({
+          provider: parsed.provider,
+          model: parsed.model,
+          baseUrl: providerConfig.baseUrl,
+          credentials,
+          prompt,
+          imageBytes,
+          imageMime,
+          size: size ?? undefined,
+          n: 1,
+          log,
+        })
+    );
 
     if (result.success) {
       await clearRecoveredProviderState(credentials);
@@ -632,19 +682,28 @@ async function postHandler(request: Request, _context?: unknown) {
       requestedModel: resolvedModel,
       credentials,
       execute: (creds) =>
-        handleImageGeneration({
-          body: {
-            model: resolvedModel,
-            prompt,
-            size: size ?? undefined,
-            response_format: responseFormat ?? undefined,
-            n: 1,
-            imageBytes,
-            imageMime,
-          },
-          credentials: creds,
-          log,
-        }),
+        runImageRequestWithAccounting(
+          editAccounting(
+            { apiKeyInfo: policy.apiKeyInfo, startTime },
+            parsed.provider,
+            parsed.model,
+            creds
+          ),
+          () =>
+            handleImageGeneration({
+              body: {
+                model: resolvedModel,
+                prompt,
+                size: size ?? undefined,
+                response_format: responseFormat ?? undefined,
+                n: 1,
+                imageBytes,
+                imageMime,
+              },
+              credentials: creds,
+              log,
+            })
+        ),
     });
 
     if (result.success) {
@@ -699,18 +758,27 @@ async function postHandler(request: Request, _context?: unknown) {
     );
   }
 
-  const result = await handleOpenAIImageEdit({
-    provider: customProviderId,
-    model: customModel,
-    credentials,
-    prompt,
-    imageBytes,
-    imageMime,
-    size,
-    responseFormat,
-    n: 1,
-    log,
-  });
+  const result = await runImageRequestWithAccounting(
+    editAccounting(
+      { apiKeyInfo: policy.apiKeyInfo, startTime },
+      customProviderId,
+      customModel,
+      credentials
+    ),
+    () =>
+      handleOpenAIImageEdit({
+        provider: customProviderId,
+        model: customModel,
+        credentials,
+        prompt,
+        imageBytes,
+        imageMime,
+        size,
+        responseFormat,
+        n: 1,
+        log,
+      })
+  );
 
   if (result.success) {
     await clearRecoveredProviderState(credentials);

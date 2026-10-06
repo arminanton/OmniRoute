@@ -21,6 +21,7 @@ import { isRemoteMediaFailureResult } from "@/shared/network/remoteImageFetch";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { calculateModalCost } from "@/lib/usage/costCalculator";
+import { runImageRequestWithAccounting } from "@/lib/usage/imageRequestAccounting";
 import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
@@ -124,12 +125,24 @@ export async function executeImageCombo(
     }
 
     // Execute image generation for this target
-    const result = (await handleImageGeneration({
-      body: { ...body, model: target.modelStr },
-      credentials,
-      log,
-      signal: auth.request?.signal || null,
-    })) as ImageGenerationResult;
+    const result = (await runImageRequestWithAccounting(
+      {
+        endpoint: "/v1/images/generations",
+        provider: targetProvider,
+        model: targetModel,
+        apiKeyInfo: auth.policy?.apiKeyInfo,
+        credentials,
+        startTime,
+        comboStrategy: "priority",
+      },
+      () =>
+        handleImageGeneration({
+          body: { ...body, model: target.modelStr },
+          credentials,
+          log,
+          signal: auth.request?.signal || null,
+        })
+    )) as ImageGenerationResult;
 
     if (result.success) {
       await clearRecoveredProviderState(credentials);

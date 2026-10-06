@@ -18,7 +18,7 @@ import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { v1ImageGenerationSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { enforceClientApiRouteAuth } from "@/shared/utils/clientApiRouteAuth";
-import { runWithCallLogApiKeyContext } from "@/lib/usage/callLogApiKeyContext";
+import { runImageRequestWithAccounting } from "@/lib/usage/imageRequestAccounting";
 import { executeImageWithCredentialFallback } from "@/sse/services/imageCredentialRetry";
 import { rejectRetiredCommonChatGptWebProvider } from "@/lib/providers/chatgptWebRetirementResponse";
 
@@ -68,6 +68,7 @@ async function postHandler(request, { params }) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, validation.error.message);
   }
   const body = validation.data;
+  const startTime = Date.now();
 
   // Ensure model has provider prefix
   if (!body.model.includes("/")) {
@@ -119,10 +120,14 @@ async function postHandler(request, { params }) {
     execute: async (attemptCredentials) => {
       const isMaxai = rawProvider === "maxai" || rawProvider === "mx";
       const generateImage = () =>
-        runWithCallLogApiKeyContext(
+        runImageRequestWithAccounting(
           {
-            apiKeyId: policy.apiKeyInfo?.id ?? null,
-            apiKeyName: policy.apiKeyInfo?.name ?? null,
+            endpoint: "/v1/images/generations",
+            provider: rawProvider,
+            model: requestedModel,
+            apiKeyInfo: policy.apiKeyInfo,
+            credentials: attemptCredentials,
+            startTime,
           },
           () =>
             handleImageGeneration({
