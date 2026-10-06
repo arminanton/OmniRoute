@@ -1,3 +1,5 @@
+import { responsesErrorEvent } from "../utils/responsesErrorEvent.ts";
+import { CodexConversationSocketPool } from "./codex/conversationSocketPool.ts";
 import { getDeclaredCodexMaxEffort } from "./codex/effortCapabilities.ts";
 import { getCodexRequestDefaults } from "@/lib/providers/requestDefaults";
 import {
@@ -824,6 +826,7 @@ function normalizeCodexWsHeaders(headers: Record<string, string>): Record<string
  */
 export class CodexExecutor extends BaseExecutor {
   private appServer: CodexAppServerExecutor | null = null;
+  private readonly conversationSockets = new CodexConversationSocketPool();
 
   constructor() {
     super("codex", PROVIDERS.codex);
@@ -942,168 +945,26 @@ export class CodexExecutor extends BaseExecutor {
       };
     }
 
-    const encoder = new TextEncoder();
-    let closed = false;
-    let ws: WreqWebSocket | null = null;
-    let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
-
-    const closeUpstream = (reason: string) => {
-      try {
-        ws?.close(1000, reason);
-      } catch {
-        console.warn("[codex] closeUpstream: socket close race ignored");
-        // ignore close races
-      }
-    };
-
-    let abortHandler: (() => void) | null = null;
-    const removeAbortListener = () => {
-      if (!abortHandler) return;
-      nextInput.signal?.removeEventListener("abort", abortHandler);
-      abortHandler = null;
-    };
-
-    const finishStream = ({
-      reason,
-      emitDone = true,
-      closeController = true,
-      closeSocket = true,
-    }: {
-      reason: string;
-      emitDone?: boolean;
-      closeController?: boolean;
-      closeSocket?: boolean;
-    }) => {
-      if (closed) return;
-      closed = true;
-      removeAbortListener();
-      if (closeSocket) closeUpstream(reason);
-
-      const controller = streamController;
-      if (!controller || !closeController) return;
-      if (emitDone) {
-        try {
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        } catch {
-          console.warn("[codex] finishStream: failed to enqueue [DONE]");
-          // The downstream may already have gone away.
-        }
-      }
-      try {
-        controller.close();
-      } catch {
-        console.warn("[codex] finishStream: failed to close controller");
-        // The controller may already be closed.
-      }
-    };
-
-    const failController = (code: string, _message: string) => {
-      if (closed) return;
-      const controller = streamController;
-      const payload = JSON.stringify({
-        type: "response.failed",
-        response: {
-          id: null,
-          status: "failed",
-          error: projectCodexPublicError({ status: 502, code, type: "provider_error" }),
-        },
-      });
-      try {
-        controller?.enqueue(encoder.encode(`event: response.failed\ndata: ${payload}\n\n`));
-      } catch {
-        // Downstream closed before the failure could be delivered.
-      }
-      finishStream({ reason: "upstream_failed" });
-    };
-
-    const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        streamController = controller;
-        abortHandler = () => {
-          finishStream({ reason: "client_aborted" });
-        };
-        nextInput.signal?.addEventListener("abort", abortHandler, { once: true });
-
-        try {
-          ws = await websocketFn(toWebSocketUrl(url), {
-            browser: "chrome_142",
-            os: "windows",
-            headers,
-          });
-          if (closed) return;
-          if (nextInput.signal?.aborted) {
-            finishStream({ reason: "client_aborted" });
-            return;
-          }
-          ws.onmessage = (event) => {
-            if (closed) return;
-            const raw =
-              typeof event.data === "string"
-                ? event.data
-                : Buffer.from(event.data as Buffer).toString("utf8");
-            const sseEvent = encodeResponseSseEvent(raw);
-            if (closed) return;
-            // Filtered events (codex.* / empty payload) return an empty `sse` —
-            // skip them so no empty frame reaches the client.
-            if (sseEvent.sse) {
-              try {
-                controller.enqueue(encoder.encode(sseEvent.sse));
-              } catch {
-                finishStream({
-                  reason: "downstream_closed",
-                  emitDone: false,
-                  closeController: false,
-                });
-                return;
-              }
-            }
-            if (sseEvent.terminal) {
-              finishStream({ reason: "terminal_event" });
-            }
-          };
-          ws.onerror = (event) => {
-            failController(
-              "upstream_websocket_error",
-              event.message || "Codex upstream WebSocket error"
-            );
-          };
-          ws.onclose = () => {
-            if (!closed)
-              failController("upstream_websocket_closed", "Codex stream closed before completion");
-          };
-          if (!closed) {
-            await prl.captureCurrentProviderBody(url, headers, bodyString, nextInput.log);
-            ws.send(bodyString);
-          }
-        } catch (error) {
-          if (isRuntimePolicyError(error)) {
-            finishStream({ reason: "policy_denied", emitDone: false, closeController: false });
-            throw error;
-          }
-          failController(
-            "upstream_websocket_connect_failed",
-            error instanceof Error ? error.message : String(error)
-          );
-        }
-      },
-      cancel() {
-        finishStream({ reason: "client_cancelled", emitDone: false, closeController: false });
-      },
-    });
-
-    return {
-      response: new Response(stream, {
-        status: 200,
-        headers: {
-          "Content-Type": "text/event-stream",
-          "Cache-Control": "no-cache",
-          Connection: "keep-alive",
-        },
-      }),
-      url,
+    const response = await this.conversationSockets.request({
+      url: toWebSocketUrl(url),
       headers,
-      transformedBody,
-    };
+      body: transformedBody,
+      connect: websocketFn,
+      signal: nextInput.signal,
+      reuse: nextInput.credentials?.providerSpecificData?.codexWebSocketSessionReuse !== false,
+      encode: encodeResponseSseEvent,
+      failure: (code) =>
+        `event: response.failed\ndata: ${responsesErrorEvent(
+          JSON.stringify({
+            error: projectCodexPublicError({ status: 502, code, type: "provider_error" }),
+          }),
+          null,
+          502
+        )}\n\n`,
+      beforeSend: (wire) => prl.captureCurrentProviderBody(url, headers, wire, nextInput.log),
+      observe: (event) => nextInput.log?.debug?.("CODEX_TRANSPORT", JSON.stringify(event)),
+    });
+    return { response, url, headers, transformedBody };
   }
 
   buildUrl(
