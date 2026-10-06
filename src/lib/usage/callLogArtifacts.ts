@@ -1,3 +1,7 @@
+import {
+  projectGoogleError,
+  projectErrorHeaders,
+} from "@omniroute/open-sse/utils/googleErrorDiagnostics.ts";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/errorSanitization.ts";
 import fs from "node:fs";
 import path from "node:path";
@@ -147,6 +151,8 @@ function truncateArtifactForStorage(artifact: CallLogArtifact): CallLogArtifact 
 
 function projectNativeErrorEnvelope(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const google = projectGoogleError(value);
+  if (google) return google;
   const source = value as Record<string, unknown>,
     result: Record<string, unknown> = {};
   for (const key of [
@@ -280,6 +286,12 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
         ? (body as Record<string, unknown>)
         : {};
     const details: Record<string, unknown> = {};
+    const wrapped =
+      parsed.upstream_details && typeof parsed.upstream_details === "object"
+        ? (parsed.upstream_details as Record<string, unknown>)
+        : {};
+    const google = projectGoogleError(wrapped.error);
+    if (google) details.upstream_details = { error: google };
     const semanticDiagnostic = projectNativeErrorEnvelope(semanticError);
     if (semanticDiagnostic) details.nativeError = semanticDiagnostic;
     for (const key of ["error", "detail", "message", "code", "type"]) {
@@ -295,22 +307,7 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
       provider.headers && typeof provider.headers === "object"
         ? (provider.headers as Record<string, unknown>)
         : {};
-    const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries(headerSource)) {
-      const lower = name.toLowerCase();
-      if (
-        [
-          "retry-after",
-          "x-request-id",
-          "x-codex-primary-used-percent",
-          "x-codex-secondary-used-percent",
-          "x-codex-primary-reset-after-seconds",
-          "x-codex-secondary-reset-after-seconds",
-        ].includes(lower) &&
-        typeof value === "string"
-      )
-        headers[lower] = truncateUtf8(value, 256);
-    }
+    const headers = projectErrorHeaders(headerSource);
     providerResponse = {
       status: provider.status,
       wireStatus: provider.status,
@@ -363,8 +360,13 @@ function serializeFinalSizeLimitFallback(artifact: CallLogArtifact, maxBytes: nu
 
   // The summary alone exceeded the cap (pathological). Keep the error so the
   // row stays diagnosable, drop everything else including the summary body.
-  const transportTelemetry = compactTransportTelemetry(artifact.pipeline?.transportTelemetry);
-  const telemetryPipeline = transportTelemetry ? { pipeline: { transportTelemetry } } : {};
+  const compact = artifact.pipeline ? compactErrorPipeline(artifact) : undefined;
+  const meaningful =
+    compact &&
+    (compact.providerResponse ||
+      compact.transportTelemetry ||
+      Object.keys(compact.error ?? {}).length > 2);
+  const telemetryPipeline = meaningful ? { pipeline: compact } : {};
   const errorOnly = JSON.stringify({
     ...telemetryPipeline,
     schemaVersion: artifact.schemaVersion,
