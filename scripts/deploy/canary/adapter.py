@@ -113,6 +113,13 @@ def retirement_observed(rows, cid):
     return True
 
 
+def validate_proxy_master_snapshot(pid, snapshot, expected_inode, config_path):
+    if type(pid) is not int or pid <= 1 or snapshot.get("uid") != 0 or snapshot.get("exeIdentity") != expected_inode:
+        raise Refused("proxy master identity differs")
+    if not isinstance(snapshot.get("cmdline"), str) or "nginx: master process" not in snapshot["cmdline"] or str(config_path) not in snapshot["cmdline"]:
+        raise Refused("proxy master does not own fixed configuration")
+
+
 class Adapter:
     def __init__(self, layout, runner=None, observer=None, clock=time.time):
         exact(layout, {"schema", "activation", "generations", "listeners", "binaryHashes", "approvalDigest", "coordinationProtocol", "observationUrls", "implementationHashes"})
@@ -191,6 +198,22 @@ class Adapter:
             elif type(value) is not int or value < 0:
                 raise Refused("invalid lifecycle observation")
         return proof
+
+    def verify_proxy_master(self):
+        pidfile = RUN / "nginx.pid"
+        trusted(pidfile)
+        raw = pidfile.read_text().strip()
+        if not re.fullmatch(r"[1-9][0-9]{0,9}", raw):
+            raise Refused("invalid fixed proxy PID")
+        pid = int(raw)
+        proc = Path("/proc") / raw
+        status = dict(line.split(":", 1) for line in (proc / "status").read_text().splitlines() if ":" in line)
+        uid = status.get("Uid", "").split()
+        exe = (proc / "exe").stat()
+        approved = Path(BINARIES["nginx"]).stat()
+        validate_proxy_master_snapshot(pid, {"uid": int(uid[0]) if len(uid) == 4 and len(set(uid)) == 1 else None,
+            "exeIdentity": (exe.st_dev, exe.st_ino), "cmdline": (proc / "cmdline").read_bytes().replace(b"\0", b" ").decode("utf8", "strict")},
+            (approved.st_dev, approved.st_ino), RUN / "nginx.conf")
 
     def _observe(self):
         # URLs are root-configured, local policy-defined ingress targets, not caller URLs.
@@ -303,6 +326,7 @@ class Adapter:
                 self.runner("boundary", ["--protocol=1", "set-drain"], {"generation": g, "draining": False})
                 if self.proof(g)["appReady"] is not True:
                     raise Refused("retained generation did not become admission-ready")
+            self.verify_proxy_master()
             atomic_bytes(RUN / "nginx.conf", raw)
             self.runner("nginx", ["-s", "reload", "-c", str(RUN / "nginx.conf"), "-p", str(RUN)])
             observed = self.observer()

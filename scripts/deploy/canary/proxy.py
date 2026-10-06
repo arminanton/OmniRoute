@@ -20,11 +20,18 @@ events { worker_connections 4096; }
 http {
   # Never log URL/query, Authorization, bodies or caller-provided request identifiers.
   log_format admission '$status $request_time $upstream_status';
-  access_log /dev/stdout admission;
+  # Probe/controller diagnostics provide bounded redacted observations.
+  # No unbounded request access log is created by the proxy.
+  access_log off;
   # Avoid raw NGINX diagnostics containing credential-bearing request URIs.
   # Controller records redacted status/category and nginx -t exit instead.
   error_log /dev/null crit;
   map $http_upgrade $upgrade_connection { default upgrade; '' ''; }
+  client_body_temp_path /run/omni-local-next/canary/body;
+  proxy_temp_path /run/omni-local-next/canary/proxy;
+  fastcgi_temp_path /run/omni-local-next/canary/fastcgi;
+  uwsgi_temp_path /run/omni-local-next/canary/uwsgi;
+  scgi_temp_path /run/omni-local-next/canary/scgi;
   client_max_body_size 64m;
   client_body_timeout 3600s;
   send_timeout 3600s;
