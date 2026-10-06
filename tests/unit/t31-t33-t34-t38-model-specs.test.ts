@@ -159,3 +159,18 @@ test("opencode-go family: capMaxOutputTokens grants full upstream budget", () =>
   assert.equal(capMaxOutputTokens("deepseek-v4-pro", 500000), 384000);
   assert.equal(capMaxOutputTokens("hy3-preview", 300000), 262144);
 });
+
+test("Claude Opus 5.5 registry metadata covers Anthropic API, Bedrock, and Vertex IDs", () => {
+  const spec = getModelSpec("claude-opus-5-5");
+  assert.ok(spec);
+  assert.equal(getModelSpec("anthropic.claude-opus-5-5"), spec);
+  assert.equal(spec.contextWindow, 1000000);
+  assert.equal(spec.maxOutputTokens, 128000);
+  assert.equal(spec.supportsThinking, true);
+  assert.equal(spec.supportsTools, true);
+  assert.equal(spec.supportsVision, true);
+  assert.equal(spec.defaultReasoningEffort, "medium");
+  assert.equal(spec.adaptiveThinkingOnly, true);
+  assert.equal(spec.rejectsThinkingDisabled, true);
+  assert.equal(spec.rejectsForcedToolChoice, true);
+});

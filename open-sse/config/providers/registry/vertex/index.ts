@@ -29,6 +29,13 @@ export const vertexProvider: RegistryEntry = {
     { id: "GLM-5.1-FP8", name: "GLM-5.1 (Vertex Partner)" },
     { id: "claude-fable-5-1", name: "Claude Fable 5.1 (Vertex)", targetFormat: "claude" },
     { id: "claude-fable-5", name: "Claude Fable 5 (Vertex)", targetFormat: "claude" },
+    {
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5 (Vertex)",
+      targetFormat: "claude",
+      contextLength: 1000000,
+      maxOutputTokens: 128000,
+    },
     { id: "claude-opus-5", name: "Claude Opus 5 (Vertex)", targetFormat: "claude" },
     { id: "claude-sonnet-5", name: "Claude Sonnet 5 (Vertex)", targetFormat: "claude" },
     { id: "claude-opus-4-8", name: "Claude Opus 4.8 (Vertex)", targetFormat: "claude" },

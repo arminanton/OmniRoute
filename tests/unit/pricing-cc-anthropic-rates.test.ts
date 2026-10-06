@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getDefaultPricing } from "../../src/shared/constants/pricing.ts";
+import { getDefaultPricing, getPricingForModel } from "../../src/shared/constants/pricing.ts";
 
 // Verifies the Claude Code (`cc`) provider pricing block matches Anthropic's
 // officially published per-MTok rates. Sourced from
@@ -92,4 +92,14 @@ test("cc/claude-fable-5 matches Anthropic Fable 5 pricing", () => {
   assert.equal(p.cached, 1.0);
   assert.equal(p.reasoning, 50.0);
   assert.equal(p.cache_creation, 12.5);
+});
+
+test("Anthropic API Opus 5.5 base pricing is $4/$20 per MTok", () => {
+  const p = getDefaultPricing().anthropic["claude-opus-5-5"];
+  assert.equal(p.input, 4.0);
+  assert.equal(p.output, 20.0);
+});
+
+test("Vertex Opus 5.5 has no flat pricing without a location", () => {
+  assert.equal(getPricingForModel("vertex", "claude-opus-5-5"), null);
 });
