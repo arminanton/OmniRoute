@@ -53,4 +53,37 @@ class SharedHostTests(unittest.TestCase):
   with self.assertRaises(Refused):schemaProof.produce(a)
 
 
+
+class SharedJournalRecoveryTests(unittest.TestCase):
+ def test_atomic_apply_crash_adopts_existing_exact_pair_once_and_partial_refuses(self):
+  from scripts.deploy.canary import sharedAppHost as h
+  from test_shared_app_profile import fixture
+  p,g,r=fixture();a=object.__new__(SharedAdapter);a.records={g['generation']:{'generation':g,'runtime':p,'boundaryReceipt':r}};a.layout={'approvalDigest':'a'*64};a.clock=lambda:100
+  state={'rules':[],'journal':None,'applies':0,'fail':True}
+  def runner(kind,args,payload=None):
+   if args[-1]=='output':return json.dumps({'nftables':[{'rule':{'comment':'output-denied','handle':25}}]+[{'rule':x}for x in state['rules']]})
+   if '-f'in args and '--check'not in args:
+    state['applies']+=1;state['rules']=[{'comment':'omni-shared-app:'+'a'*32},{'comment':'omni-shared-app:'+'a'*32+':maintenance'}]
+   return ''
+  def observed():
+   if state['fail']:raise RuntimeError('crash after kernel apply before journal commit')
+   if len(state['rules'])!=2:raise Refused('partial')
+  a.runner=runner;a.observe_port_rules=observed
+  class FakePath:
+   def __init__(self,value):self.value=value
+   def __truediv__(self,child):return FakePath(self.value+'/'+child)
+   def exists(self):return state['journal']is not None
+  def loaded(path):
+   if str(getattr(path,'value',path)).endswith('shared-profile-approval.json'):return {'transactionDigest':'a'*64,'expiresAt':200}
+   return state['journal']
+  def saved(path,raw):state['journal']=json.loads(raw)
+  with patch.object(h,'Path',FakePath),patch.object(h,'load',loaded),patch.object(h,'atomic_bytes',saved),patch.object(h.SharedBoundary,'inspect_namespace',lambda *_:True):
+   with self.assertRaises(RuntimeError):a.operate('provision-shared-profile',{})
+   self.assertEqual(state['journal']['phase'],'intent');state['fail']=False
+   self.assertTrue(a.operate('provision-shared-profile',{})['adopted']);self.assertEqual(state['applies'],1)
+   self.assertTrue(a.operate('provision-shared-profile',{})['adopted']);self.assertEqual(state['applies'],1)
+   state['rules'].pop()
+   with self.assertRaises(Refused):a.operate('provision-shared-profile',{})
+   self.assertEqual(state['applies'],1)
+
 if __name__=='__main__':unittest.main()
