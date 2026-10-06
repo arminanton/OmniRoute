@@ -15,6 +15,7 @@ globalThis.fetch = async () => {
   throw new Error("Unexpected network in private deadline fixture");
 };
 const harness = await createChatPipelineHarness("logical-deadline-public");
+const { getProviderConnectionById } = await import("../../src/lib/db/providers.ts");
 test.after(async () => {
   const { flushProxyLogsSync } = await import("../../src/lib/proxyLogger.ts");
   flushProxyLogsSync();
@@ -69,7 +70,7 @@ for (const stream of [false, true])
     );
     assert.equal(sends, 1);
     for (const id of [first.id, second.id]) {
-      const connection = await harness.providersDb.getProviderConnectionById(id);
+      const connection = await getProviderConnectionById(id);
       assert.equal(connection?.lastError ?? null, null);
       assert.equal(connection?.rateLimitedUntil ?? null, null);
     }
