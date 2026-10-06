@@ -9,7 +9,7 @@ const INTERNAL_BASE_URL =
   process.env.BASE_URL ||
   process.env.NEXT_PUBLIC_BASE_URL ||
   process.env.NEXT_PUBLIC_APP_URL ||
-  `http://localhost:${dashboardPort}`;
+  `http://127.0.0.1:${dashboardPort}`;
 
 /**
  * Cloud sync scheduler

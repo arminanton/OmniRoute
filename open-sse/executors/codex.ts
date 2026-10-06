@@ -1011,6 +1011,7 @@ export class CodexExecutor extends BaseExecutor {
           await prl.captureCurrentProviderBody(url, headers, wire, nextInput.log);
         },
         onSend: () => {
+          requestBudget?.forbidReplay();
           finishGeneration = beginGenerationLifetime("codex-websocket");
         },
         observe: (event) => {

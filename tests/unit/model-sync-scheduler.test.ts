@@ -234,11 +234,11 @@ test("modelSyncScheduler uses the listener-declared TLS scheme without trusting 
     const scheduler = await loadScheduler("trusted-native-tls");
     assert.equal(
       scheduler.resolveModelSyncInternalBaseUrl("https://attacker.example:7777/steal"),
-      "https://localhost:22128/omniroute"
+      "https://127.0.0.1:22128/omniroute"
     );
     assert.equal(
       scheduler.resolveModelSyncInternalBaseUrl("https://127.0.0.1:7777/nested/path"),
-      "https://localhost:22128/omniroute"
+      "https://127.0.0.1:22128/omniroute"
     );
   } finally {
     for (const [key, value] of Object.entries(previous)) {
@@ -267,6 +267,7 @@ test("modelSyncScheduler pins HTTPS transport to IPv4 while retaining localhost 
   );
 
   assert.equal(forwardedOptions?.hostname, "127.0.0.1");
+  assert.equal(forwardedOptions?.host, "127.0.0.1");
   assert.equal(forwardedOptions?.servername, "localhost");
 });
 
@@ -445,7 +446,7 @@ test("modelSyncScheduler skips empty cycles and tolerates failing sync requests"
 test("test 12: default interval is 6h; env hours override; no-arg uses default", async () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), "src/shared/services/modelSyncScheduler.ts"),
-    "utf8",
+    "utf8"
   );
   assert.match(source, /DEFAULT_INTERVAL_MS\s*=\s*6\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
   assert.doesNotMatch(source, /DEFAULT_INTERVAL_MS\s*=\s*24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
@@ -457,7 +458,7 @@ test("test 12: default interval is 6h; env hours override; no-arg uses default",
 test("test 12: MODEL_SYNC_INTERVAL_HOURS still wins over default", () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), "src/shared/services/modelSyncScheduler.ts"),
-    "utf8",
+    "utf8"
   );
   assert.match(source, /MODEL_SYNC_INTERVAL_HOURS/);
   assert.match(source, /envHours \* 60 \* 60 \* 1000/);

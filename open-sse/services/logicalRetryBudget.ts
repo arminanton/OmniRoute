@@ -32,6 +32,10 @@ export class LogicalRetryBudget {
       throw new Error("Invalid logical retry budget");
   }
   markOutputOrToolDelivered(): void {
+    this.forbidReplay();
+  }
+  /** Sending a non-idempotent request may make replay unsafe before any output arrives. */
+  forbidReplay(): void {
     this.replayForbidden = true;
   }
   denyFurtherAttempts(error: Error): void {
