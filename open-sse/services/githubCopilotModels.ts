@@ -74,6 +74,8 @@ export type GitHubCopilotModel = {
   id: string;
   name: string;
   owned_by: string;
+  supportedEndpoints?: string[];
+  targetFormat?: "openai-responses";
 };
 
 type RawRecord = Record<string, unknown>;
@@ -86,6 +88,43 @@ function toNonEmptyString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function getEndpointMetadata(item: RawRecord, modelId: string): Partial<GitHubCopilotModel> {
+  const capabilities = asRecord(item.capabilities);
+  const endpoints = Array.isArray(item.supported_endpoints)
+    ? item.supported_endpoints
+    : Array.isArray(capabilities.supported_endpoints)
+      ? capabilities.supported_endpoints
+      : [];
+  const supportedEndpoints = Array.from(
+    new Set(
+      endpoints
+        .map(toNonEmptyString)
+        .filter((endpoint): endpoint is string => !!endpoint)
+        .map((endpoint) => endpoint.toLowerCase())
+        .filter((endpoint) =>
+          /^\/?(?:v1\/)?[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*)*\/?$/.test(endpoint)
+        )
+        .map((endpoint) => endpoint.replace(/^\/+/, "").replace(/^v1\//, "").replace(/\/$/, ""))
+        .map((endpoint) =>
+          endpoint === "chat/completions" ||
+          endpoint === "chat-completions" ||
+          endpoint === "messages"
+            ? "chat"
+            : endpoint
+        )
+    )
+  ).sort();
+  if (supportedEndpoints.length === 0) return {};
+  const responsesOnly =
+    supportedEndpoints.includes("responses") &&
+    !supportedEndpoints.includes("chat") &&
+    !/claude|gemini/i.test(modelId);
+  return {
+    supportedEndpoints,
+    ...(responsesOnly ? { targetFormat: "openai-responses" as const } : {}),
+  };
 }
 
 // Decide whether a live /models row is a routable chat model. Capability-driven
@@ -155,7 +194,7 @@ export function parseGitHubCopilotModels(data: unknown): GitHubCopilotModel[] {
     if (!isRoutableChatModel(item)) continue;
     seen.add(id);
     const name = toNonEmptyString(item.name) || toNonEmptyString(item.display_name) || id;
-    models.push({ id, name, owned_by: "github" });
+    models.push({ id, name, owned_by: "github", ...getEndpointMetadata(item, id) });
   }
 
   return models;

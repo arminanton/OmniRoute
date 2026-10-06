@@ -11,11 +11,30 @@
  * the Copilot bearer + Copilot chat headers, parse `data[].id` into managed
  * models, and fall back to the static catalog only when the live fetch fails.
  *
- * These tests target the discovery helper directly (injected fetch) so they need
- * no HTTP server or DB.
+ * Discovery cases use injected fetch; the final routing contract uses an isolated DB.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+const previousDataDir = process.env.DATA_DIR;
+const previousApiKeySecret = process.env.API_KEY_SECRET;
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-copilot-routing-"));
+let resetDbInstance = () => {};
+test.before(() => {
+  process.env.DATA_DIR = testDataDir;
+  process.env.API_KEY_SECRET ||= "copilot-routing-test-secret";
+});
+test.after(() => {
+  resetDbInstance();
+  fs.rmSync(testDataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  if (previousDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = previousDataDir;
+  if (previousApiKeySecret === undefined) delete process.env.API_KEY_SECRET;
+  else process.env.API_KEY_SECRET = previousApiKeySecret;
+});
 
 const {
   GITHUB_COPILOT_MODELS_URL,
@@ -96,6 +115,82 @@ test("#3120 parseGitHubCopilotModels keeps every entitled CHAT model (capability
   assert.ok(!ids.includes("gpt-41-copilot"), "completion utility models are skipped");
   assert.ok(!ids.includes("disabled-by-policy"), "policy.state=disabled is not routable");
   assert.ok(!ids.includes("hidden-from-picker"), "model_picker_enabled=false is not routable");
+});
+
+test("discovery normalizes supported endpoints and selects Responses only when chat is absent", () => {
+  const models = parseGitHubCopilotModels({
+    data: [
+      {
+        id: "new-responses-model",
+        capabilities: {
+          type: "chat",
+          supported_endpoints: [
+            " /v1/responses/ ",
+            "/v1/responses/",
+            null,
+            42,
+            "",
+            "/v1//responses",
+          ],
+        },
+      },
+      {
+        id: "chat-and-responses",
+        capabilities: { type: "chat", supported_endpoints: ["/responses"] },
+        supported_endpoints: ["/v1/chat/completions", "/responses"],
+      },
+      {
+        id: "malformed-endpoints",
+        capabilities: { type: "chat" },
+        supported_endpoints: [null, 42, "", "not a path", "https://example.com/responses"],
+      },
+      {
+        id: "claude-responses-model",
+        capabilities: { type: "chat" },
+        supported_endpoints: ["/responses"],
+      },
+    ],
+  });
+  const byId = new Map(models.map((model) => [model.id, model]));
+
+  assert.deepEqual(byId.get("new-responses-model"), {
+    id: "new-responses-model",
+    name: "new-responses-model",
+    owned_by: "github",
+    supportedEndpoints: ["responses"],
+    targetFormat: "openai-responses",
+  });
+  assert.deepEqual(byId.get("chat-and-responses")?.supportedEndpoints, ["chat", "responses"]);
+  assert.equal(byId.get("chat-and-responses")?.targetFormat, undefined);
+  assert.deepEqual(byId.get("malformed-endpoints"), {
+    id: "malformed-endpoints",
+    name: "malformed-endpoints",
+    owned_by: "github",
+  });
+  assert.deepEqual(byId.get("claude-responses-model")?.supportedEndpoints, ["responses"]);
+  assert.equal(byId.get("claude-responses-model")?.targetFormat, undefined);
+});
+
+test("Copilot endpoint metadata survives synced-model import normalization", async () => {
+  const { normalizeDiscoveredModels } =
+    await import("../../src/lib/providerModels/modelDiscovery.ts");
+  const discovered = parseGitHubCopilotModels({
+    data: [
+      { id: "responses-only", supported_endpoints: ["/v1/responses"] },
+      {
+        id: "chat-and-responses",
+        supported_endpoints: ["/v1/chat/completions", "/v1/responses"],
+      },
+    ],
+  });
+  const imported = new Map(
+    normalizeDiscoveredModels(discovered, "github").map((model) => [model.id, model])
+  );
+
+  assert.deepEqual(imported.get("responses-only")?.supportedEndpoints, ["responses"]);
+  assert.equal(imported.get("responses-only")?.targetFormat, "openai-responses");
+  assert.deepEqual(imported.get("chat-and-responses")?.supportedEndpoints, ["chat", "responses"]);
+  assert.equal(imported.get("chat-and-responses")?.targetFormat, undefined);
 });
 
 test("#3121 a model NOT in the live response is not advertised (entitlement filtering)", () => {
@@ -224,4 +319,77 @@ test("fetch falls back when no token is provided (unauthed refresh stays safe)",
     result.models.map((m) => m.id),
     ["gpt-5.4"]
   );
+});
+
+test("Copilot endpoint metadata persists through dispatch", async () => {
+  const core = await import("../../src/lib/db/core.ts");
+  resetDbInstance = core.resetDbInstance;
+  const providers = await import("../../src/lib/db/providers.ts");
+  const { getCachedDiscoveredModels, persistDiscoveredModels } =
+    await import("../../src/lib/providerModels/modelDiscovery.ts");
+  const { getModelInfo } = await import("../../src/sse/services/model.ts");
+  const { resolveChatCoreTargetFormat } =
+    await import("../../open-sse/handlers/chatCore/targetFormat.ts");
+  const { resolveExecutionCredentials } =
+    await import("../../open-sse/handlers/chatCore/executionCredentials.ts");
+  const { GithubExecutor } = await import("../../open-sse/executors/github.ts");
+  const connection = await providers.createProviderConnection({
+    provider: "github",
+    authType: "oauth",
+    name: "discovered-routing-test",
+    isActive: true,
+    testStatus: "active",
+  });
+  const discovered = parseGitHubCopilotModels({
+    data: [
+      { id: "responses-only", supported_endpoints: ["/v1/responses"] },
+      {
+        id: "chat-and-responses",
+        supported_endpoints: ["/v1/chat/completions", "/v1/responses"],
+      },
+    ],
+  });
+  await persistDiscoveredModels("github", connection.id, discovered);
+  const cached = await getCachedDiscoveredModels("github", connection.id);
+  assert.deepEqual(cached.find((model) => model.id === "responses-only")?.supportedEndpoints, [
+    "responses",
+  ]);
+  assert.deepEqual(cached.find((model) => model.id === "chat-and-responses")?.supportedEndpoints, [
+    "chat",
+    "responses",
+  ]);
+
+  const executor = new GithubExecutor();
+  const route = async (id: string) => {
+    const info = await getModelInfo(`gh/${id}`);
+    const { targetFormat } = resolveChatCoreTargetFormat({
+      provider: info.provider,
+      resolvedModel: info.model,
+      apiFormat: info.apiFormat,
+      sourceFormat: "openai",
+      customModelTargetFormat: info.targetFormat,
+      providerSpecificData: {},
+    });
+    const credentials = resolveExecutionCredentials({
+      credentials: { providerSpecificData: {} },
+      provider: info.provider,
+      targetFormat,
+      nativeCodexPassthrough: false,
+      endpointPath: "/v1/chat/completions",
+      ccSessionId: null,
+    });
+    return {
+      targetFormat,
+      url: executor.buildUrl(info.model, false, 0, credentials),
+    };
+  };
+
+  assert.deepEqual(await route("responses-only"), {
+    targetFormat: "openai-responses",
+    url: "https://api.githubcopilot.com/responses",
+  });
+  assert.deepEqual(await route("chat-and-responses"), {
+    targetFormat: "openai",
+    url: "https://api.githubcopilot.com/chat/completions",
+  });
 });

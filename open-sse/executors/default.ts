@@ -18,7 +18,7 @@ import {
   requireCompatibleBaseUrl,
   guardCompatibleUrl,
 } from "../config/providerRegistry.ts";
-import { getModelTargetFormat } from "../config/providerModels.ts";
+import { getModelTargetFormat, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.ts";
 import {
   mergeClientAnthropicBeta,
   normalizeAnthropicHeaderVariants,
@@ -233,7 +233,6 @@ export class DefaultExecutor extends BaseExecutor {
 
   buildUrl(model, stream, urlIndex = 0, credentials = null) {
     assertRuntimeExecutorEntrypoint(this.provider, credentials);
-    void model;
     void stream;
     void urlIndex;
     if (this.provider?.startsWith?.("openai-compatible-")) {
@@ -472,7 +471,12 @@ export class DefaultExecutor extends BaseExecutor {
             : null;
         const isOpenAIFormat = !this.config.format || this.config.format === "openai";
         if (customBaseUrl && isOpenAIFormat) {
-          return normalizeOpenAIChatUrl(customBaseUrl);
+          const alias = PROVIDER_ID_TO_ALIAS[this.provider] || this.provider;
+          const chatUrl = normalizeOpenAIChatUrl(customBaseUrl);
+          if (getModelTargetFormat(alias, model) === "openai-responses") {
+            return chatUrl.replace(/\/chat\/completions\/?$/, "/responses");
+          }
+          return chatUrl;
         }
         const url = this.config.baseUrl;
         const entry = getRegistryEntry(this.provider);
