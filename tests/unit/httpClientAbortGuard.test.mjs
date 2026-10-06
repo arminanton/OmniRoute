@@ -181,7 +181,7 @@ test("installProcessCrashGuard() with no logger swallows aborts instead of dying
   assert.match(stdout, /ALIVE/);
 });
 
-test("installProcessCrashGuard survives relay timeouts from both process-level guards", async () => {
+test("installProcessCrashGuard survives relay timeouts and exhausted proxy failures", async () => {
   const guardPath = fileURLToPath(
     new URL("../../src/shared/utils/httpClientAbortGuard.mjs", import.meta.url)
   );
@@ -198,6 +198,22 @@ test("installProcessCrashGuard survives relay timeouts from both process-level g
       Object.assign(new Error("relay timed out"), { errorCode: "relay_timeout" }),
       Promise.resolve()
     );
+    process.emit(
+      "uncaughtException",
+      Object.assign(
+        new Error("Proxy request failed: fetch failed (cause UND_ERR_SOCKET)"),
+        { code: "PROXY_REQUEST_FAILED", causeCode: "UND_ERR_SOCKET" }
+      ),
+      "uncaughtException"
+    );
+    process.emit(
+      "unhandledRejection",
+      Object.assign(
+        new Error("Proxy request failed: fetch failed (cause UND_ERR_SOCKET)"),
+        { code: "PROXY_REQUEST_FAILED", causeCode: "UND_ERR_SOCKET" }
+      ),
+      Promise.resolve()
+    );
     console.log("ALIVE");
     process.exit(0);
   `;
@@ -212,7 +228,7 @@ test("installProcessCrashGuard survives relay timeouts from both process-level g
     child.on("close", (status) => resolve({ status, stdout: out, stderr: err }));
     child.on("error", reject);
   });
-  assert.equal(status, 0, `child must survive relay timeouts; stderr: ${stderr}`);
+  assert.equal(status, 0, `child must survive recoverable upstream errors; stderr: ${stderr}`);
   assert.match(stdout, /ALIVE/);
 });
 

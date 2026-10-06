@@ -78,10 +78,41 @@ export function isRecoverableUpstreamTimeoutError(err) {
   return e.code === "RELAY_TIMEOUT" || e.errorCode === "relay_timeout";
 }
 
+const PROXY_NETWORK_ERROR_CODES = new Set([
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EPIPE",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "ERR_HTTP2_STREAM_ERROR",
+]);
+
+/** proxyFetch marks terminal failures; require their explicit transport cause too. */
+function isRecoverableProxyNetworkError(err) {
+  if (!err || typeof err !== "object") return false;
+  const e =
+    /** @type {{ code?: string; errorCode?: string; causeCode?: string; cause?: unknown }} */ (err);
+  const markedProxyFailure =
+    e.code === "PROXY_REQUEST_FAILED" ||
+    (e.code === "PROXY_UNREACHABLE" && e.errorCode === "proxy_unreachable");
+  if (!markedProxyFailure) return false;
+  const causeCode =
+    e.causeCode ??
+    (e.cause && typeof e.cause === "object"
+      ? /** @type {{ code?: string }} */ (e.cause).code
+      : undefined);
+  return typeof causeCode === "string" && PROXY_NETWORK_ERROR_CODES.has(causeCode);
+}
+
 /**
  * Decide whether a process-level uncaughtException/unhandledRejection should be
- * swallowed (benign client-abort or recoverable relay timeout) or allowed to
- * surface (genuine bug).
+ * swallowed (benign client-abort or recognized recoverable upstream failure) or
+ * allowed to surface (genuine bug).
  *
  * Pure + exported so it can be unit-tested without poking process listeners.
  *
@@ -91,7 +122,13 @@ export function isRecoverableUpstreamTimeoutError(err) {
  * @returns {boolean} true => swallow (log only), false => re-throw / let crash.
  */
 export function shouldSwallowUncaught(err, origin) {
-  if (!isClientAbortError(err) && !isRecoverableUpstreamTimeoutError(err)) return false;
+  if (
+    !isClientAbortError(err) &&
+    !isRecoverableUpstreamTimeoutError(err) &&
+    !isRecoverableProxyNetworkError(err)
+  ) {
+    return false;
+  }
   // Only swallow when the origin matches what the guard installed for. If some
   // other subsystem raised it (e.g. a deliberate `throw` in a domain), keep the
   // existing crash semantics.

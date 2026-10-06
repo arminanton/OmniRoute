@@ -152,18 +152,23 @@ const PROXY_UNREACHABLE_ERROR_CODES = new Set([
   "EPIPE",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_SOCKET",
+  "ERR_HTTP2_STREAM_ERROR",
 ]);
 
-function isProxyUnreachableError(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  const code = (err as { code?: unknown }).code;
-  if (typeof code === "string" && PROXY_UNREACHABLE_ERROR_CODES.has(code)) return true;
-  const cause = (err as { cause?: unknown }).cause;
+function getProxyUnreachableErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const e = err as { code?: unknown; causeCode?: unknown; cause?: unknown };
   const causeCode =
-    cause && typeof cause === "object" ? (cause as { code?: unknown }).code : undefined;
-  if (typeof causeCode === "string" && PROXY_UNREACHABLE_ERROR_CODES.has(causeCode)) return true;
-  const msg = (err as Error).message;
-  return typeof msg === "string" && PROXY_UNREACHABLE_ERROR_CODES.has(msg);
+    e.cause && typeof e.cause === "object" ? (e.cause as { code?: unknown }).code : undefined;
+  // Do not trust message text: a thrown programming error can imitate a transport code.
+  for (const code of [e.code, e.causeCode, causeCode]) {
+    if (typeof code === "string" && PROXY_UNREACHABLE_ERROR_CODES.has(code)) return code;
+  }
+  return undefined;
+}
+
+function isProxyUnreachableError(err: unknown): boolean {
+  return getProxyUnreachableErrorCode(err) !== undefined;
 }
 /**
  * #8376: tag a connect-failure error with a stable `.code`/`.errorCode` BEFORE it is
@@ -1297,6 +1302,7 @@ async function patchedFetch(
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
       const msg = error instanceof Error ? error.message : String(error);
       const errCode = (error as { code?: unknown })?.code;
+      const recoverableNetworkCode = getProxyUnreachableErrorCode(error);
       const isTransportFailure =
         msg.includes("fetch failed") ||
         errCode === "ECONNREFUSED" ||
@@ -1319,11 +1325,18 @@ async function patchedFetch(
       const originalMsg = redactProxyDetailsInMessage(
         error instanceof Error ? error.message : String(error)
       );
+      // The `PROXY_REQUEST_FAILED` fallback is recognized by the process-level crash guard.
       const sanitized = sanitizeTransportError(
         error,
         originalMsg ? `Proxy request failed: ${originalMsg}` : "Proxy request failed",
-        "PROXY_REQUEST_FAILED"
+        recoverableNetworkCode ? "PROXY_REQUEST_FAILED" : "PROXY_REQUEST_ERROR"
       );
+      if (recoverableNetworkCode) {
+        sanitized.code = "PROXY_REQUEST_FAILED";
+        (sanitized as Error & { causeCode?: string }).causeCode = recoverableNetworkCode;
+      } else if (sanitized.code === "PROXY_REQUEST_FAILED") {
+        sanitized.code = "PROXY_REQUEST_ERROR";
+      }
       console.error(
         `[ProxyFetch] Proxy request failed (${source}, fail-closed; code=${sanitized.code})`
       );
