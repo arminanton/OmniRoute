@@ -26,7 +26,7 @@ test("actual Next SWC/Webpack web graph imports shared Antigravity versions with
       devtool: false,
       cache: false,
       output: { path: path.join(root, "dist"), filename: "client.js" },
-      optimization: { minimize: false },
+      optimization: { minimize: false, concatenateModules: false },
       resolve: {
         extensions: [".mjs", ".js", ".ts", ".tsx"],
         alias: {
@@ -57,7 +57,14 @@ test("actual Next SWC/Webpack web graph imports shared Antigravity versions with
     const stats = await new Promise((resolve, reject) =>
       compiler.run((error, stats) => (error ? reject(error) : resolve(stats)))
     );
-    const result = stats.toJson({ all: false, errors: true, warnings: true, modules: true });
+    const result = stats.toJson({
+      all: false,
+      errors: true,
+      warnings: true,
+      modules: true,
+      nestedModules: true,
+      orphanModules: true,
+    });
     await new Promise((resolve, reject) =>
       compiler.close((error) => (error ? reject(error) : resolve()))
     );
