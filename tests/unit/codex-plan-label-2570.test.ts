@@ -1,27 +1,30 @@
-// Port of upstream decolua/9router PR #2570 (feat(ui): show Codex plan labels
-// in provider and quota views).
-//
-// Two independent gaps this closes:
-//
-// 1. providerPageHelpers.getCodexPlanLabel — the provider-detail ConnectionRow
-//    never surfaced the Codex subscription plan (persisted at OAuth import
-//    time in providerSpecificData.chatgptPlanType — see
-//    src/lib/oauth/services/codexImport.ts) anywhere in the row UI.
-//
-// 2. ProviderLimits/utils.resolvePlanValue — the quota-view plan badge
-//    machinery already existed (tierByConnection / QuotaCardHeader), but its
-//    persisted-metadata fallback list did not include chatgptPlanType. When
-//    the live Codex usage endpoint does not return a plan_type field (usage
-//    service falls back to the literal string "unknown" — see
-//    open-sse/services/usage/codex.ts), the badge fell through to "Unknown"
-//    instead of the plan captured at login.
+// Codex provider details show persisted plan labels verbatim. Quota-tier
+// classification does not infer entitlements from undocumented Codex labels.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { getCodexPlanLabel } from "@/app/(dashboard)/dashboard/providers/[id]/codexPlanLabel";
-import { resolvePlanValue } from "@/app/(dashboard)/dashboard/usage/components/ProviderLimits/utils";
+import {
+  normalizePlanTier,
+  resolvePlanValue,
+} from "@/app/(dashboard)/dashboard/usage/components/ProviderLimits/utils";
 
-test("getCodexPlanLabel returns the trimmed chatgptPlanType for codex connections", () => {
-  assert.equal(getCodexPlanLabel(true, { chatgptPlanType: "  Pro  " }), "Pro");
+test("getCodexPlanLabel displays provider metadata without inferred tiers", () => {
+  assert.equal(getCodexPlanLabel(true, { chatgptPlanType: "  prolite  " }), "prolite");
+  assert.equal(getCodexPlanLabel(true, { chatgptPlanType: "pro" }), "pro");
+  assert.equal(getCodexPlanLabel(true, { chatgptPlanType: "PROMAX" }), "PROMAX");
+  assert.equal(getCodexPlanLabel(true, { chatgptPlanType: "  Team  " }), "Team");
+});
+
+test("getCodexPlanLabel falls back to workspacePlanType", () => {
+  assert.equal(getCodexPlanLabel(true, { workspacePlanType: "pro" }), "pro");
+  assert.equal(
+    getCodexPlanLabel(true, { chatgptPlanType: " ", workspacePlanType: "prolite" }),
+    "prolite"
+  );
+  assert.equal(
+    getCodexPlanLabel(true, { chatgptPlanType: "Team", workspacePlanType: "pro" }),
+    "Team"
+  );
 });
 
 test("getCodexPlanLabel returns empty string when not a codex connection", () => {
@@ -34,17 +37,32 @@ test("getCodexPlanLabel returns empty string when chatgptPlanType is missing/bla
   assert.equal(getCodexPlanLabel(true, undefined), "");
 });
 
-test("resolvePlanValue falls back to the persisted Codex chatgptPlanType when the live plan is unknown", () => {
-  // Reproduces the exact shape open-sse/services/usage/codex.ts returns when
-  // the upstream Codex usage endpoint omits plan_type/planType.
-  assert.equal(resolvePlanValue("unknown", { chatgptPlanType: "Pro" }), "Pro");
+test("resolvePlanValue does not classify chatgptPlanType as a quota tier", () => {
+  for (const plan of ["prolite", "pro", "promax"]) {
+    assert.equal(resolvePlanValue("unknown", { chatgptPlanType: plan }, "codex"), null);
+  }
 });
 
-test("resolvePlanValue still prefers a real live plan over the persisted Codex fallback", () => {
-  assert.equal(resolvePlanValue("Team", { chatgptPlanType: "Pro" }), "Team");
+test("resolvePlanValue preserves existing workspacePlanType behavior", () => {
+  const tier = normalizePlanTier(
+    resolvePlanValue("unknown", { workspacePlanType: "pro" }, "codex")
+  );
+  assert.equal(tier.label, "Pro");
+  assert.equal(tier.key, "pro");
 });
 
 test("resolvePlanValue returns null when neither live nor persisted Codex plan is available", () => {
   assert.equal(resolvePlanValue("unknown", {}), null);
   assert.equal(resolvePlanValue(null, null), null);
+});
+
+test("Codex quota classification does not infer tiers from undocumented labels", () => {
+  for (const plan of ["prolite", "promax"]) {
+    assert.equal(normalizePlanTier(resolvePlanValue(plan, {}, "codex")).key, "unknown");
+  }
+});
+
+test("other providers keep generic Pro labels and Business classification", () => {
+  assert.equal(normalizePlanTier(resolvePlanValue("pro", {}, "other")).label, "Pro");
+  assert.equal(normalizePlanTier("self_serve_business_prolite").key, "business");
 });
