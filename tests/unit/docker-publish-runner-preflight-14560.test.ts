@@ -49,7 +49,7 @@ test("schedule alerts without building or publishing; publish jobs explicitly sk
   const build = job("build");
   const merge = job("merge");
   const alert = job("runner-alert");
-  assert.match(workflow, /schedule:[\s\S]*?cron:/);
+  assert.match(workflow, /schedule:\n    - cron: "41 4 \* \* \*"/);
   assert.match(
     workflow,
     /concurrency:\n  group: docker-publish-\$\{\{ github\.event_name == 'schedule' && 'runner-alert' \|\| github\.ref \}\}\n  cancel-in-progress: \$\{\{ github\.event_name != 'schedule' \}\}/
