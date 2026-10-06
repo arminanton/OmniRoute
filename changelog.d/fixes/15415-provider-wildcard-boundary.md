@@ -1,0 +1,1 @@
+- **fix(auth):** constrain provider-scoped API-key wildcards after alias expansion so `cline/*` cannot authorize another provider’s same-root models (#15415).

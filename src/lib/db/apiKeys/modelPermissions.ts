@@ -1,6 +1,7 @@
 // API-key model-permission matching: Claude-Code alias/prefix resolution + wildcard/glob pattern
 // matching used to decide whether a model is permitted for a key. Pure logic (no DB) extracted from
 // db/apiKeys.ts (god-file decomposition); behavior is byte-identical to the original inline defs.
+import { getProviderByAlias, resolveProviderId } from "@/shared/constants/providers";
 
 export const CLAUDE_CODE_PROVIDER_PREFIXES = new Set(["cc", "claude"]);
 
@@ -67,8 +68,20 @@ export function modelPatternMatches(pattern: string, candidates: string[]): bool
     if (pattern === candidate) return true;
     if (pattern.endsWith("/*")) {
       const prefix = pattern.slice(0, -2);
-      if (candidate.startsWith(prefix + "/")) return true;
-      continue;
+      if (!candidate.startsWith(prefix + "/")) continue;
+      // `provider/*` covers that provider's own models, including ids whose
+      // model segment contains a slash (`cline/deepseek/deepseek-v4-flash`).
+      // It must not also cover a different provider nested under the same prefix
+      // (`cline/openrouter/deepseek/deepseek-v4-flash`).
+      const rest = candidate.slice(prefix.length + 1);
+      const nested = rest.indexOf("/");
+      if (nested > 0 && rest.slice(nested + 1).includes("/")) {
+        const nextSegment = rest.slice(0, nested);
+        const nestedProvider = getProviderByAlias(nextSegment);
+        const namedProvider = resolveProviderId(prefix.split("/")[0]);
+        if (nestedProvider && nestedProvider.id !== namedProvider) continue;
+      }
+      return true;
     }
     if (pattern.includes("*") && matchesWildcardPattern(pattern, candidate)) {
       return true;
