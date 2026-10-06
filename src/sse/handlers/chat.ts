@@ -1,3 +1,4 @@
+import { withLogicalRetryBudget } from "../../../open-sse/services/logicalRetryBudget.ts";
 import { randomUUID } from "crypto";
 import type { ReasoningCacheContext } from "@omniroute/open-sse/services/reasoningCacheContext.ts";
 import { resolveChatRequestBody } from "./requestBody";
@@ -1374,7 +1375,9 @@ async function handleChatImplementation(
   );
 }
 
-export const handleChat = chatAdmission.withChatAdmission(handleChatImplementation);
+export const handleChat = chatAdmission.withChatAdmission(
+  withLogicalRetryBudget(handleChatImplementation)
+);
 
 /** Preserve local denials before combo timeout/error adapters can reclassify a throw. */
 async function handleSingleModelChat(
@@ -2243,6 +2246,9 @@ async function handleSingleModelChatImplementation(
 
         return withSelectedConnectionHeader(result.response, credentials?.connectionId);
       }
+
+      if (result.errorType === "logical_retry_budget")
+        return withSelectedConnectionHeader(result.response, credentials?.connectionId);
 
       if (result.errorType === "account_semaphore_capacity") {
         // Local concurrency pressure is not an upstream quota failure. Prefer another

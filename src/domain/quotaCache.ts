@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * Quota Cache — Domain Layer
  *
@@ -750,9 +751,12 @@ async function backgroundRefreshTick() {
  * Start the background refresh timer.
  */
 export function startBackgroundRefresh() {
+  if (!periodicServicesAllowed("quota-background")) return;
   const state = getState();
   if (state.refreshTimer) return;
-  state.refreshTimer = setInterval(backgroundRefreshTick, REFRESH_INTERVAL_MS);
+  state.refreshTimer = setInterval(() => {
+    if (periodicServicesAllowed("quota-background")) void backgroundRefreshTick();
+  }, REFRESH_INTERVAL_MS);
   state.refreshTimer?.unref?.();
 }
 

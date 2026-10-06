@@ -1,3 +1,4 @@
+import { backoffGenerationRetry } from "../../services/logicalRetryBudget.ts";
 /** Ownership and cancellation helpers shared by all Antigravity attempts. */
 const errorBodies = new WeakMap<Response, Promise<string>>();
 const MAX_ERROR_BODY_BYTES = 256 * 1024;
@@ -73,25 +74,7 @@ export function waitForAntigravityRetry(
 ): Promise<void> {
   signal?.throwIfAborted();
   const jitter = Math.floor(Math.random() * Math.min(1000, Math.max(0, delayMs) * 0.2));
-  return new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const cleanup = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-    };
-    const abort = () => {
-      cleanup();
-      reject(signal?.reason);
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-    timer = setTimeout(
-      () => {
-        cleanup();
-        resolve();
-      },
-      Math.max(0, delayMs) + jitter
-    );
-  });
+  return backoffGenerationRetry(Math.max(0, delayMs) + jitter, signal);
 }
 
 export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {

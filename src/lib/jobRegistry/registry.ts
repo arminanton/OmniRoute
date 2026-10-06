@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /** JobRegistry - unified scheduler for all periodic background jobs.
  *
  * Two strategies: interval (setInterval) and cron (nextTick via cron-parser, DST-safe).
@@ -52,6 +53,7 @@ export class JobRegistry {
   }
 
   start(jobId: string): void {
+    if (!periodicServicesAllowed("job-registry-periodics")) return;
     if (this.timers.has(jobId)) return;
     const job = getJob(jobId);
     const handler = this.handlers.get(jobId);
@@ -210,7 +212,9 @@ export class JobRegistry {
     intervalMs: number
   ): void {
     void this.safeRun(jobId, handler);
-    const timer = setInterval(() => void this.safeRun(jobId, handler), intervalMs);
+    const timer = setInterval(() => {
+      if (periodicServicesAllowed("job-registry-periodics")) void this.safeRun(jobId, handler);
+    }, intervalMs);
     timer.unref?.();
     this.timers.set(jobId, timer);
   }
@@ -249,6 +253,7 @@ export class JobRegistry {
       delay = 60_000;
     }
     const timer = setTimeout(() => {
+      if (!periodicServicesAllowed("job-registry-periodics")) return;
       let freshCron = cronExpr;
       const getter = this.cronGetters.get(jobId);
       if (getter) {

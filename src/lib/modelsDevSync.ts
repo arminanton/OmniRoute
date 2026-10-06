@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * modelsDevSync.ts — Fetch model specs, pricing, and capabilities from models.dev
  *
@@ -660,6 +661,7 @@ export async function syncModelsDev(opts?: {
  * Start periodic models.dev sync (non-blocking).
  */
 export function startPeriodicSync(intervalMs?: number): void {
+  if (!periodicServicesAllowed("model-metadata-sync")) return;
   if (syncTimer) return; // Already running
 
   const interval = intervalMs ?? SYNC_INTERVAL_MS;

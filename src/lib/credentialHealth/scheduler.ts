@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * Credential Health Check Scheduler
  *
@@ -468,6 +469,7 @@ function scheduleSweep(): void {
  * Locked-v1 disables automatic credential-health probes; forceSweep also denies.
  */
 export function initCredentialHealthCheck(): boolean {
+  if (!periodicServicesAllowed("credential-health")) return false;
   if (getRuntimePolicy().mode === "locked") return false;
   const state = getSchedulerState();
   if (state.terminalPolicyError) return false;

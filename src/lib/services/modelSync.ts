@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * Model sync job for embedded services.
  *
@@ -76,12 +77,14 @@ export function scheduleServiceModelSync(
   apiKey: string,
   intervalMs = SYNC_INTERVAL_MS
 ): void {
+  if (!periodicServicesAllowed("service-model-sync")) return;
   if (activeTimers.has(tool)) return;
 
   // First sync immediately (non-blocking)
   syncServiceModels(tool, baseUrl, apiKey).catch(() => {});
 
   const timer = setInterval(() => {
+    if (!periodicServicesAllowed("service-model-sync")) return;
     syncServiceModels(tool, baseUrl, apiKey).catch(() => {});
   }, intervalMs);
   timer.unref?.();

@@ -1,3 +1,5 @@
+import { assertRefreshOwner } from "@omniroute/open-sse/services/coordination/grantRefresh.ts";
+import { runSharedRefresh } from "@omniroute/open-sse/services/coordination/fencedTask.ts";
 // Re-export from open-sse with local logger
 import * as log from "../utils/logger";
 import { updateProviderConnection, getProviderConnectionById } from "@/lib/db/providers";
@@ -61,14 +63,18 @@ export const refreshAccessToken = async (
 ) => {
   if (provider === "maxai" || provider === "mx") return null;
   const proxy = await resolveProxyForCredentials(provider, credentials);
-  return withRequiredRefreshProxy(proxy, () =>
-    _refreshAccessToken(provider, refreshToken, credentials, log, proxy)
+  return runSharedRefresh(provider, credentials?.connectionId ?? credentials?.id ?? "", () =>
+    withRequiredRefreshProxy(proxy, () =>
+      _refreshAccessToken(provider, refreshToken, credentials, log, proxy)
+    )
   );
 };
 
 export const refreshClaudeOAuthToken = async (refreshToken: string, credentials?: any) => {
   const proxy = await resolveProxyForCredentials("claude", credentials);
-  return withRequiredRefreshProxy(proxy, () => _refreshClaudeOAuthToken(refreshToken, log, proxy));
+  return runSharedRefresh("claude", credentials?.connectionId ?? credentials?.id ?? "", () =>
+    withRequiredRefreshProxy(proxy, () => _refreshClaudeOAuthToken(refreshToken, log, proxy))
+  );
 };
 
 export const refreshGoogleToken = async (
@@ -79,24 +85,32 @@ export const refreshGoogleToken = async (
   credentials?: any
 ) => {
   const proxy = await resolveProxyForCredentials(provider, credentials);
-  return withRequiredRefreshProxy(proxy, () =>
-    _refreshGoogleToken(refreshToken, clientId, clientSecret, log, proxy)
+  return runSharedRefresh(provider, credentials?.connectionId ?? credentials?.id ?? "", () =>
+    withRequiredRefreshProxy(proxy, () =>
+      _refreshGoogleToken(refreshToken, clientId, clientSecret, log, proxy)
+    )
   );
 };
 
 export const refreshCodexToken = async (refreshToken: string, credentials?: any) => {
   const proxy = await resolveProxyForCredentials("codex", credentials);
-  return withRequiredRefreshProxy(proxy, () => _refreshCodexToken(refreshToken, log, proxy));
+  return runSharedRefresh("codex", credentials?.connectionId ?? credentials?.id ?? "", () =>
+    withRequiredRefreshProxy(proxy, () => _refreshCodexToken(refreshToken, log, proxy))
+  );
 };
 
 export const refreshQoderToken = async (refreshToken: string, credentials?: any) => {
   const proxy = await resolveProxyForCredentials("qoder", credentials);
-  return withRequiredRefreshProxy(proxy, () => _refreshQoderToken(refreshToken, log, proxy));
+  return runSharedRefresh("qoder", credentials?.connectionId ?? credentials?.id ?? "", () =>
+    withRequiredRefreshProxy(proxy, () => _refreshQoderToken(refreshToken, log, proxy))
+  );
 };
 
 export const refreshGitHubToken = async (refreshToken: string, credentials?: any) => {
   const proxy = await resolveProxyForCredentials("github", credentials);
-  return withRequiredRefreshProxy(proxy, () => _refreshGitHubToken(refreshToken, log, proxy));
+  return runSharedRefresh("github", credentials?.connectionId ?? credentials?.id ?? "", () =>
+    withRequiredRefreshProxy(proxy, () => _refreshGitHubToken(refreshToken, log, proxy))
+  );
 };
 
 export const refreshCopilotToken = async (
@@ -105,10 +119,12 @@ export const refreshCopilotToken = async (
   baseUrl?: string
 ) => {
   const proxy = await resolveProxyForCredentials("github", credentials);
-  return withRequiredRefreshProxy(proxy, () =>
-    baseUrl
-      ? _refreshCopilotToken(githubAccessToken, log, proxy, baseUrl)
-      : _refreshCopilotToken(githubAccessToken, log, proxy)
+  return runSharedRefresh("github", credentials?.connectionId ?? credentials?.id ?? "", () =>
+    withRequiredRefreshProxy(proxy, () =>
+      baseUrl
+        ? _refreshCopilotToken(githubAccessToken, log, proxy, baseUrl)
+        : _refreshCopilotToken(githubAccessToken, log, proxy)
+    )
   );
 };
 
@@ -169,6 +185,7 @@ export const getAllAccessTokens = async (userInfo: any) => {
 
 // Local-specific: Update credentials in localDb
 export async function updateProviderCredentials(connectionId: string, newCredentials: any) {
+  assertRefreshOwner();
   try {
     const updates: Record<string, any> = {};
 
@@ -237,7 +254,15 @@ export async function updateProviderCredentials(connectionId: string, newCredent
 }
 
 // Local-specific: Check and refresh token proactively
-export async function checkAndRefreshToken(provider: string, credentials: any) {
+export async function checkAndRefreshToken(
+  provider: string,
+  credentials: { connectionId?: string; id?: string; [key: string]: unknown }
+) {
+  return runSharedRefresh(provider, credentials?.connectionId ?? credentials?.id ?? "", () =>
+    checkAndRefreshTokenOwned(provider, credentials)
+  );
+}
+async function checkAndRefreshTokenOwned(provider: string, credentials: any) {
   // MaxAI is refreshed only INSIDE its verified connection transport by the
   // chat/image/discovery caller. Do not spend or persist a rotating grant here.
   // This is a pass-through, not a successful credential-health observation.

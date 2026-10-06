@@ -21,10 +21,11 @@ function asCreditRecord(value: unknown): Record<string, unknown> | null {
 /** Tap complete SSE data lines immediately; bound only incomplete metadata. */
 export function createCreditsExtractionTransform(
   accountId: string,
-  onCreditsUpdate: (accountId: string, balance: number) => void,
+  onCreditsUpdate: (accountId: string, balance: number, observedAt?: number) => void,
   bufferSize = 0,
   validateCompletion = false
 ): TransformStream<Uint8Array, Uint8Array> {
+  const observationEpoch = Date.now();
   let buffer = "";
   let nativeCandidateSeen = false;
   let completed = false;
@@ -66,7 +67,7 @@ export function createCreditsExtractionTransform(
       );
       const balance = Number(credit?.creditAmount);
       if (credit?.creditAmount != null && Number.isFinite(balance) && balance >= 0)
-        onCreditsUpdate(accountId, balance);
+        onCreditsUpdate(accountId, balance, observationEpoch);
     } catch {
       // Metadata is optional; malformed lines must not alter the forwarded bytes.
     }
@@ -83,7 +84,7 @@ export function createCreditsExtractionTransform(
     if (final) {
       if (!discardingLine) extract(buffer);
       buffer = "";
-    } else if (buffer.length > (bufferSize > 0 ? bufferSize : 256 * 1024)) {
+    } else if (buffer.length > (bufferSize > 0 ? bufferSize : 1024 * 1024)) {
       buffer = "";
       discardingLine = true;
     }
@@ -193,7 +194,7 @@ export function buildSsePassthroughResult(
   body: ReadableStream<Uint8Array>,
   upstream: { status: number; statusText: string; headers: Headers },
   accountId: string,
-  onCreditsUpdate: (accountId: string, balance: number) => void,
+  onCreditsUpdate: (accountId: string, balance: number, observedAt?: number) => void,
   url: string,
   outHeaders: Record<string, string>,
   transformedBody: unknown,
@@ -210,7 +211,7 @@ export function buildSsePassthroughResult(
     };
   }
   const tapped = abortableBody(body, signal).pipeThrough(
-    createCreditsExtractionTransform(accountId, onCreditsUpdate, 256 * 1024, true),
+    createCreditsExtractionTransform(accountId, onCreditsUpdate, 1024 * 1024, true),
     signal ? { signal } : undefined
   );
   return {

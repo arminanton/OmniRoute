@@ -1,5 +1,12 @@
 // @ts-nocheck
 import "./setupPolyfill.ts";
+import { getFencedTaskContext } from "../services/coordination/fencedTask.ts";
+import {
+  budgetedGenerationFetch,
+  consumeGenerationAttempt,
+  isLogicalRetryBudgetError,
+  backoffGenerationRetry,
+} from "../services/logicalRetryBudget.ts";
 import { observeFetchDispatcher, notifyFetchRequestStart } from "./fetchDispatchObserver.ts";
 import { prepareOwnListenerSelfHop } from "./selfHop.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -392,7 +399,7 @@ function sanitizeTransportError(
   message: string,
   fallbackCode: string
 ): Error & { code: string; errorCode?: string; statusCode?: number } {
-  if (isRuntimePolicyError(error)) throw error;
+  if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
   const source = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   const sanitized = new Error(message) as Error & {
     code: string;
@@ -457,7 +464,7 @@ function requiredProxyEgressError(): Error & { code: string } {
     code: "PROXY_REQUIRED_EGRESS",
   });
 }
-const originalFetch = patchState.originalFetch;
+const originalFetch = budgetedGenerationFetch(patchState.originalFetch);
 const originalFetchWithDispatcher = originalFetch as FetchWithDispatcher;
 const proxyContext = patchState.proxyContext;
 const tlsFingerprintContext = patchState.tlsFingerprintContext;
@@ -876,6 +883,13 @@ async function patchedFetch(
   // Only a trusted bridge may opt in. URL alone never mints admission proof.
   // Keep the secret on this exact listener: no proxy, redirects or POST replay.
   options = { ...options };
+  const taskFence = getFencedTaskContext();
+  if (taskFence) {
+    taskFence.assertOwner();
+    options.signal = options.signal
+      ? AbortSignal.any([options.signal, taskFence.signal])
+      : taskFence.signal;
+  }
   // Credential-refresh egress is stricter than internal API routing. Validate
   // before any dispatcher, TLS, relay or self-hop path can send credentials.
   if (requiredProxyContext.getStore()) {
@@ -892,7 +906,9 @@ async function patchedFetch(
   }
   if (prepareOwnListenerSelfHop(input, options)) {
     delete options.dispatcher;
-    const nativeSelfHop = deps.nativeFetch ?? originalFetch;
+    const nativeSelfHop = deps.nativeFetch
+      ? budgetedGenerationFetch(deps.nativeFetch)
+      : originalFetch;
     return nativeSelfHop(input, options);
   }
 
@@ -906,8 +922,9 @@ async function patchedFetch(
     // When a dispatcher is present, we MUST use the undici library fetch
     // to ensure version compatibility. Node 22 built-in fetch (undici v6)
     // is incompatible with undici v8 dispatchers (missing onRequestStart, etc.)
-    const _undiciDispatcher =
-      deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>);
+    const _undiciDispatcher = budgetedGenerationFetch(
+      deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>)
+    );
     return _undiciDispatcher(input, options);
   }
 
@@ -934,6 +951,7 @@ async function patchedFetch(
       isTlsRequestEligible(input, options)
     ) {
       try {
+        consumeGenerationAttempt(input, options);
         const response = await activeTlsClient.fetch(targetUrl, {
           method: options.method,
           headers: options.headers,
@@ -947,7 +965,7 @@ async function patchedFetch(
         if (tlsStore) tlsStore.used = true;
         return response;
       } catch (error) {
-        if (isRuntimePolicyError(error)) throw error;
+        if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
         if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
         const sessionHadCookies =
           !!error &&
@@ -974,18 +992,21 @@ async function patchedFetch(
     // itself succeeds. Preserve the dispatcher path for Node and TLS-fingerprint
     // requests, but use Bun's native fetch for ordinary direct egress.
     if (process.versions.bun) {
-      const _nativeFetch =
-        (deps.nativeFetch as FetchWithDispatcher | undefined) ?? originalFetchWithDispatcher;
+      const _nativeFetch = deps.nativeFetch
+        ? budgetedGenerationFetch(deps.nativeFetch as FetchWithDispatcher)
+        : originalFetchWithDispatcher;
       notifyFetchRequestStart();
       return _nativeFetch(input, options);
     }
     // Direct undici path: bound response-start, fresh-socket retry, and body guard.
     const hasNonReplayableBody = requestHasNonReplayableBody(input, options);
     const maxAttempts = hasNonReplayableBody ? 1 : 2;
-    const _undiciDirect =
-      deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>);
-    const _nativeFallback =
-      (deps.nativeFetch as FetchWithDispatcher | undefined) ?? originalFetchWithDispatcher;
+    const _undiciDirect = budgetedGenerationFetch(
+      deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>)
+    );
+    const _nativeFallback = deps.nativeFetch
+      ? budgetedGenerationFetch(deps.nativeFetch as FetchWithDispatcher)
+      : originalFetchWithDispatcher;
     let lastDispatcherError: unknown = null;
     const directHeadersTimeoutMs = resolveDirectHeadersTimeoutMs();
     let targetHostForLogs = "";
@@ -1009,7 +1030,8 @@ async function patchedFetch(
           !deps.undiciFetch
         );
       } catch (dispatcherError) {
-        if (isRuntimePolicyError(dispatcherError)) throw dispatcherError;
+        if (isRuntimePolicyError(dispatcherError) || isLogicalRetryBudgetError(dispatcherError))
+          throw dispatcherError;
         if (isCallerAbort(dispatcherError, getEffectiveSignal(input, options))) {
           throw dispatcherError;
         }
@@ -1019,6 +1041,7 @@ async function patchedFetch(
               `[ProxyFetch] Direct response-start timeout (${directHeadersTimeoutMs}ms) on pooled dispatcher — retrying on fresh no-keep-alive dispatcher: ${targetHostForLogs}`
             );
             lastDispatcherError = dispatcherError;
+            await backoffGenerationRetry(0, getEffectiveSignal(input, options));
             continue;
           }
           throw dispatcherError;
@@ -1051,7 +1074,7 @@ async function patchedFetch(
           if (attempt === 0 && maxAttempts > 1) {
             // Retry after a short fixed backoff on a fresh socket.
             lastDispatcherError = dispatcherError;
-            await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+            await backoffGenerationRetry(RETRY_BACKOFF_MS, getEffectiveSignal(input, options));
             continue;
           }
           if (hasNonReplayableBody) {
@@ -1090,7 +1113,7 @@ async function patchedFetch(
                     dispatcher: observeFetchDispatcher(dispatcher),
                   });
                 } catch (error) {
-                  if (isRuntimePolicyError(error)) throw error;
+                  if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
                   // Proxy also failed — fall through to native fetch
                 }
               }
@@ -1103,7 +1126,8 @@ async function patchedFetch(
           try {
             return await _nativeFallback(input, options);
           } catch (nativeError) {
-            if (isRuntimePolicyError(nativeError)) throw nativeError;
+            if (isRuntimePolicyError(nativeError) || isLogicalRetryBudgetError(nativeError))
+              throw nativeError;
             // Surface both dispatcher and native causes immediately.
             const detail = `dispatcher=[${describeFetchCause(dispatcherError)}] native=[${describeFetchCause(nativeError)}]`;
             console.warn(`[ProxyFetch] native fetch fallback ALSO failed: ${detail}`);
@@ -1178,6 +1202,7 @@ async function patchedFetch(
       const onCallerAbort = () => relayController.abort();
       options.signal?.addEventListener("abort", onCallerAbort, { once: true });
       try {
+        consumeGenerationAttempt(input, options);
         return await _undiciRelay(relayUrl, {
           ...options,
           headers: mergedHeaders,
@@ -1186,7 +1211,8 @@ async function patchedFetch(
           signal: relayController.signal,
         });
       } catch (relayError) {
-        if (isRuntimePolicyError(relayError)) throw relayError;
+        if (isRuntimePolicyError(relayError) || isLogicalRetryBudgetError(relayError))
+          throw relayError;
         // #9158: classify an internal per-attempt timeout FIRST — a relay that
         // hangs past RELAY_FETCH_TIMEOUT_MS must fail fast as RELAY_TIMEOUT (504)
         // and NOT be retried, instead of surviving into the caller's ~30s stall.
@@ -1219,7 +1245,7 @@ async function patchedFetch(
           // 1ms) instead of reusing the pooled agent, so a stale pooled socket
           // that the relay half-closed is guaranteed a clean TCP handshake.
           // Jitter is unnecessary: there is no herd on a per-host singleton.
-          await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+          await backoffGenerationRetry(RETRY_BACKOFF_MS, getEffectiveSignal(input, options));
           continue;
         }
         throw markVerifiedExhaustedTransportError(tagProxyUnreachable(relayError));
@@ -1244,6 +1270,7 @@ async function patchedFetch(
     isWreqProxySupported(proxyUrl)
   ) {
     try {
+      consumeGenerationAttempt(input, options);
       const response = await activeTlsClient.fetch(targetUrl, {
         method: options.method,
         headers: options.headers,
@@ -1257,7 +1284,7 @@ async function patchedFetch(
       if (tlsStore) tlsStore.used = true;
       return response;
     } catch (error) {
-      if (isRuntimePolicyError(error)) throw error;
+      if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
       const sessionHadCookies =
         !!error &&
@@ -1287,8 +1314,9 @@ async function patchedFetch(
   // socket error on a stale pooled socket is retried ONCE on a fresh
   // no-keep-alive dispatcher (mirrors the direct-path #4252 pattern) instead
   // of killing all idle sockets after 1ms or surfacing a bare 502.
-  const _undiciProxy =
-    deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>);
+  const _undiciProxy = budgetedGenerationFetch(
+    deps.undiciFetch ?? (undiciFetch as unknown as (...args: unknown[]) => Promise<Response>)
+  );
   const hasNonReplayableProxyBody = requestHasNonReplayableBody(input, options);
   const maxProxyAttempts = requiredProxyContext.getStore() || hasNonReplayableProxyBody ? 1 : 2;
   let lastProxyError: unknown = null;
@@ -1301,7 +1329,7 @@ async function patchedFetch(
         ),
       });
     } catch (error) {
-      if (isRuntimePolicyError(error)) throw error;
+      if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
       const msg = error instanceof Error ? error.message : String(error);
       const errCode = (error as { code?: unknown })?.code;
@@ -1317,7 +1345,7 @@ async function patchedFetch(
         // fresh no-keep-alive dispatcher (getProxyRetryDispatcher), so the old
         // random jitter was pure latency on every recovered request with no
         // herd risk (per-host pool).
-        await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+        await backoffGenerationRetry(RETRY_BACKOFF_MS, getEffectiveSignal(input, options));
         continue;
       }
       tagProxyUnreachable(error);

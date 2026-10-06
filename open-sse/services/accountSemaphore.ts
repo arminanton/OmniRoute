@@ -14,11 +14,13 @@ export interface AcquireAccountSemaphoreOptions {
   timeoutMs?: number;
   signal?: AbortSignal | null;
   maxQueueSize?: number;
+  onLeaseLost?: (error: Error) => void;
 }
 
 export interface SemaphoreRequirement {
   key: string;
   maxConcurrency?: number | null;
+  adaptive?: boolean;
 }
 
 export type AcquireManyOptions = Omit<AcquireAccountSemaphoreOptions, "maxConcurrency">;
@@ -225,8 +227,14 @@ export function acquireMany(
     timeoutMs = DEFAULT_TIMEOUT_MS,
     signal = null,
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
+    onLeaseLost,
   }: AcquireManyOptions = {}
 ): Promise<() => void> {
+  if (process.env.OMNI_SHARED_ADMISSION === "true") {
+    return import("./coordination/sharedSemaphore.ts").then(({ acquireSharedSemaphore }) =>
+      acquireSharedSemaphore(requirements, { timeoutMs, signal, maxQueueSize, onLeaseLost })
+    );
+  }
   const enabled = new Map<string, number>();
   for (const requirement of requirements) {
     if (isBypassed(requirement.maxConcurrency)) continue;
@@ -307,12 +315,27 @@ export function markBlocked(key: string, until: Date | string | number): void {
         ? Date.now() + Math.max(0, until)
         : new Date(until).getTime();
   if (!Number.isFinite(untilMs) || untilMs <= Date.now()) return;
+  if (process.env.OMNI_SHARED_ADMISSION === "true") {
+    void import("./coordination/sharedSemaphore.ts")
+      .then(({ markSharedBlocked }) => markSharedBlocked(key, untilMs))
+      .catch(() => {
+        // A broken durable cooldown must block subsequent shared admission.
+        process.env.OMNI_COORDINATION_UNHEALTHY = "true";
+      });
+  }
   const gate = ensureGate(key, gates.get(key)?.maxConcurrency ?? 1);
   clearCleanupTimer(gate);
   gate.blockedUntil = untilMs;
 }
 
 export function unblock(key: string): void {
+  if (process.env.OMNI_SHARED_ADMISSION === "true") {
+    void import("./coordination/sharedSemaphore.ts")
+      .then(({ unblockShared }) => unblockShared(key))
+      .catch(() => {
+        process.env.OMNI_COORDINATION_UNHEALTHY = "true";
+      });
+  }
   const gate = gates.get(key);
   if (!gate) return;
   gate.blockedUntil = null;

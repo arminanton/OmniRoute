@@ -21,8 +21,10 @@ test("Fix A: getAccessToken accepts an onPersist parameter", async () => {
 
 test("Fix A: getAccessToken invokes onPersist INSIDE the per-connection mutex closure", async () => {
   const src = await read("open-sse/services/tokenRefresh.ts");
-  const closureMatch = src.match(/entry\.promise\s*=\s*\(async\s*\(\)\s*=>\s*\{([\s\S]+?)\}\)\(\)/);
-  assert.ok(closureMatch, "Per-connection mutex closure must use the (async () => {...})() form");
+  const closureMatch = src.match(
+    /entry\.promise\s*=\s*(?:\(async\s*\(\)\s*=>|runSharedRefresh\(provider,\s*connectionId,\s*async\s*\(\)\s*=>)\s*\{([\s\S]+?)\}\)/
+  );
+  assert.ok(closureMatch, "Per-connection mutex closure must own refresh and persistence");
   const closureBody = closureMatch![1];
   assert.match(
     closureBody,

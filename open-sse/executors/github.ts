@@ -1,3 +1,6 @@
+import { runCoordinatedGrantRefresh } from "../services/coordination/grantRefresh.ts";
+import { runSharedRefresh } from "../services/coordination/fencedTask.ts";
+import { getActiveOnPersist } from "../services/tokenRefresh.ts";
 import { randomBytes } from "node:crypto";
 
 import {
@@ -335,8 +338,7 @@ export class GithubExecutor extends BaseExecutor {
     const headers: Record<string, string> = {
       ...getGitHubCopilotChatHeaders(stream ? "text/event-stream" : "application/json", initiator),
       Authorization: `Bearer ${token}`,
-      "x-request-id":
-        crypto.randomUUID?.() || randomIdFallback(),
+      "x-request-id": crypto.randomUUID?.() || randomIdFallback(),
     };
 
     // Per-call / per-conversation / per-turn correlation ids the @github/copilot
@@ -344,13 +346,12 @@ export class GithubExecutor extends BaseExecutor {
     // id (getGitHubCopilotMachineId) is stable per-install; these three are
     // fresh uuids. A Copilot-aware client may pin the session/task ids across a
     // conversation via its own headers — honor those when present, else mint.
-    const genId = () =>
-      crypto.randomUUID?.() || randomIdFallback();
-    headers["x-interaction-id"] = this.readClientHeader(clientHeaders, "x-interaction-id") || genId();
+    const genId = () => crypto.randomUUID?.() || randomIdFallback();
+    headers["x-interaction-id"] =
+      this.readClientHeader(clientHeaders, "x-interaction-id") || genId();
     headers["x-client-session-id"] =
       this.readClientHeader(clientHeaders, "x-client-session-id") || genId();
-    headers["x-agent-task-id"] =
-      this.readClientHeader(clientHeaders, "x-agent-task-id") || genId();
+    headers["x-agent-task-id"] = this.readClientHeader(clientHeaders, "x-agent-task-id") || genId();
     // Repository correlation sentinels. The CLI sends the working repo's nwo/host
     // or these literals when there is no repository context. OmniRoute is not
     // repo-scoped, so forward a client-supplied value when present, else sentinel.
@@ -376,7 +377,10 @@ export class GithubExecutor extends BaseExecutor {
     // /v1/messages proxy returns an empty content block for image turns unless
     // copilot-vision-request:true is present; a Copilot-aware harness that sends
     // it should have it honored rather than stripped.
-    if ((this.readClientHeader(clientHeaders, "copilot-vision-request") || "").toLowerCase() === "true") {
+    if (
+      (this.readClientHeader(clientHeaders, "copilot-vision-request") || "").toLowerCase() ===
+      "true"
+    ) {
       headers["copilot-vision-request"] = "true";
     }
 
@@ -425,6 +429,13 @@ export class GithubExecutor extends BaseExecutor {
   }
 
   async refreshCopilotToken(githubAccessToken, log) {
+    return runCoordinatedGrantRefresh(
+      "github-copilot:https://api.github.com",
+      githubAccessToken,
+      (currentGrant) => this.refreshCopilotTokenNative(currentGrant, log)
+    );
+  }
+  private async refreshCopilotTokenNative(githubAccessToken, log) {
     try {
       const response = await fetch("https://api.github.com/copilot_internal/v2/token", {
         headers: getGitHubCopilotRefreshHeaders(`token ${githubAccessToken}`),
@@ -440,6 +451,11 @@ export class GithubExecutor extends BaseExecutor {
   }
 
   async refreshGitHubToken(refreshToken, log) {
+    return runCoordinatedGrantRefresh("github-oauth", refreshToken, (currentGrant) =>
+      this.refreshGitHubTokenNative(currentGrant, log)
+    );
+  }
+  private async refreshGitHubTokenNative(refreshToken, log) {
     try {
       // GitHub Copilot is a public device-flow client: send the public client_id, and
       // only attach client_secret when one is actually configured — never the literal
@@ -475,6 +491,17 @@ export class GithubExecutor extends BaseExecutor {
   }
 
   async refreshCredentials(credentials, log): Promise<RefreshedCopilotCredentials | null> {
+    return runSharedRefresh(this.provider, credentials.connectionId ?? "", async () => {
+      const result = await this.refreshCredentialsNative(credentials, log);
+      const persist = getActiveOnPersist();
+      if (result && persist) await persist(result);
+      return result;
+    });
+  }
+  private async refreshCredentialsNative(
+    credentials,
+    log
+  ): Promise<RefreshedCopilotCredentials | null> {
     let copilotResult = await this.refreshCopilotToken(credentials.accessToken, log);
 
     if (!copilotResult && credentials.refreshToken) {

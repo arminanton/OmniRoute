@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * connectionRecovery.ts — Proactive recovery of provider connections whose
  * transient cooldown has elapsed.
@@ -382,6 +383,7 @@ export function resolveConnectionRecoveryIntervalMs(
  * runConnectionRecoveryTick() against the real DB.
  */
 export function initConnectionRecoveryScheduler(): void {
+  if (!periodicServicesAllowed("connection-recovery")) return;
   const state = getRecoveryState();
   if (state.initialized || isRecoverySchedulerDisabled()) return;
   state.initialized = true;

@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * pricingSync.ts — External pricing sync engine.
  *
@@ -454,6 +455,7 @@ export async function syncPricingFromSources(opts?: {
  * Start periodic pricing sync (non-blocking).
  */
 export function startPeriodicSync(intervalMs?: number): void {
+  if (!periodicServicesAllowed("pricing-sync")) return;
   if (syncTimer) return; // Already running
 
   const interval = intervalMs ?? SYNC_INTERVAL_MS;

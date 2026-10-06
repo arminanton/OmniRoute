@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * quotaAutoPing.ts — opt-in Codex quota window warm-up (#6977).
  *
@@ -542,6 +543,7 @@ const schedulerState = createQuotaAutoPingState();
 
 /** Start the in-process scheduler. Idempotent — a second call is a no-op. */
 export function startQuotaAutoPing(): void {
+  if (!periodicServicesAllowed("quota-auto-ping")) return;
   if (schedulerInterval) return;
   log.info("scheduler started");
   runQuotaAutoPingTick(createDefaultQuotaAutoPingDeps(), schedulerState).catch(() => undefined);

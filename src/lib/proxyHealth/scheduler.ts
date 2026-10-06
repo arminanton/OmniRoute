@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * Proxy Health Check Scheduler
  *
@@ -290,6 +291,7 @@ function scheduleSweep(): void {
 }
 
 export function initProxyHealthCheck(): void {
+  if (!periodicServicesAllowed("proxy-health")) return;
   if (getRuntimePolicy().mode === "locked") return;
   if (!isEnabled() || isBuildProcess() || isBackgroundServicesDisabled()) return;
   if (globalThis.__proxyHealthInterval) return;

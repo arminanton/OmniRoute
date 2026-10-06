@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * Free-Proxy Auto-Sync Scheduler (#7079)
  *
@@ -109,6 +110,7 @@ async function computeInitialDelayMs(intervalMs: number): Promise<number> {
 
 /** Guarded entrypoint — auto-called at module bottom, matching `proxyHealth/scheduler.ts`. */
 export function initFreeProxyAutoSync(): void {
+  if (!periodicServicesAllowed("free-proxy-sync")) return;
   if (getRuntimePolicy().mode === "locked") return;
   if (!isFreeProxyAutoSyncEnabled() || isBuildProcess() || isBackgroundServicesDisabled()) return;
   if (globalThis.__freeProxyAutoSyncInterval || globalThis.__freeProxyAutoSyncStartupTimer) return;

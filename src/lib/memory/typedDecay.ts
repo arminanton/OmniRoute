@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * TV6 — Typed memory decay (opt-in, default-off).
  *
@@ -220,6 +221,7 @@ function resolveSweepIntervalMs(env: NodeJS.ProcessEnv = process.env): number {
  * error is swallowed (the next tick retries). Never deletes by default.
  */
 export function startMemoryDecaySweep(intervalMs?: number): void {
+  if (!periodicServicesAllowed("memory-decay")) return;
   if (sweepTimer) return;
   const config = resolveTypedDecayConfig();
   if (!config.enabled) return; // master switch off → never run the destructive sweep

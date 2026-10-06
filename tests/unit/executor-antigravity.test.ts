@@ -443,10 +443,14 @@ test("AntigravityExecutor.parseRetryHeaders falls back to reset-after and reset 
     executor.parseRetryHeaders(new Headers({ "x-ratelimit-reset-after": "45" })),
     45_000
   );
-  assert.ok(
-    executor.parseRetryHeaders(new Headers({ "x-ratelimit-reset": String(futureSeconds) })) >=
-      89_000
+  // Assert against the observed clock interval; busy parallel workers may pause past a second boundary.
+  const before = Date.now();
+  const reset = executor.parseRetryHeaders(
+    new Headers({ "x-ratelimit-reset": String(futureSeconds) })
   );
+  const after = Date.now();
+  assert.ok(reset >= Math.max(0, futureSeconds * 1000 - after));
+  assert.ok(reset <= futureSeconds * 1000 - before);
 });
 
 test("AntigravityExecutor.collectStreamToResponse turns SSE Gemini chunks into a chat completion", async () => {

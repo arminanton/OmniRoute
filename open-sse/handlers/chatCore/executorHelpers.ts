@@ -1,5 +1,5 @@
 import { FORMATS } from "../../translator/formats.ts";
-import { buildAccountSemaphoreKey } from "../../services/accountSemaphore.ts";
+import { resolveQuotaIdentity } from "../../services/quotaIdentity.ts";
 import { getHeaderValueCaseInsensitive } from "./headers.ts";
 
 function toFiniteNumberOrNull(value: unknown): number | null {
@@ -46,7 +46,7 @@ export function resolveAccountSemaphoreMaxConcurrency(
 
 export function resolveAccountSemaphoreKey({
   provider,
-  model,
+  model: _model,
   connectionId,
   credentials,
 }: {
@@ -55,9 +55,7 @@ export function resolveAccountSemaphoreKey({
   connectionId: string | null | undefined;
   credentials: Record<string, unknown> | null | undefined;
 }): string | null {
-  const accountKey = resolveAccountSemaphoreAccountKey(connectionId, credentials);
-  if (!accountKey || !provider) return null;
-  return buildAccountSemaphoreKey({ provider, accountKey });
+  return provider ? resolveQuotaIdentity(provider, connectionId, credentials) : null;
 }
 
 export function buildClaudePromptCacheLogMeta(

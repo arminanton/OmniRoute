@@ -23,7 +23,7 @@ interface KeyValueRow {
   value: string;
 }
 
-interface CreditBalanceEntry {
+export interface CreditBalanceEntry {
   balance: number;
   updatedAt: string;
 }
@@ -77,16 +77,42 @@ export function getAllPersistedCreditBalances(): Map<string, number> {
 /**
  * Persist a credit balance for an accountId.
  */
-export function persistCreditBalance(accountId: string, balance: number): void {
+export function persistCreditBalance(
+  accountId: string,
+  balance: number,
+  observedAt = Date.now()
+): void {
   if (isBuildPhase || isCloud) return;
+  if (!Number.isFinite(balance) || balance < 0 || !Number.isFinite(observedAt)) return;
   const db = getDbInstance() as unknown as DbLike;
   const entry: CreditBalanceEntry = {
     balance,
-    updatedAt: new Date().toISOString(),
+    updatedAt: new Date(observedAt).toISOString(),
   };
-  db.prepare("INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES (?, ?, ?)").run(
-    NAMESPACE,
-    accountId,
-    JSON.stringify(entry)
-  );
+  db.prepare(
+    `INSERT INTO key_value (namespace, key, value) VALUES (?, ?, ?)
+    ON CONFLICT(namespace,key) DO UPDATE SET value=excluded.value
+    WHERE json_extract(key_value.value,'$.updatedAt') IS NULL
+       OR json_extract(key_value.value,'$.updatedAt') <= json_extract(excluded.value,'$.updatedAt')`
+  ).run(NAMESPACE, accountId, JSON.stringify(entry));
+}
+
+/** Preserve upstream observation age when hydrating; restarting must not make stale data fresh. */
+export function getAllPersistedCreditBalanceEntries(): Map<string, CreditBalanceEntry> {
+  const result = new Map<string, CreditBalanceEntry>();
+  if (isBuildPhase || isCloud) return result;
+  const rows = (getDbInstance() as unknown as DbLike)
+    .prepare("SELECT key,value FROM key_value WHERE namespace=?")
+    .all(NAMESPACE) as KeyValueRow[];
+  for (const row of rows) {
+    const value = parseJson(row.value) as CreditBalanceEntry | null;
+    if (
+      value &&
+      Number.isFinite(value.balance) &&
+      value.balance >= 0 &&
+      Number.isFinite(Date.parse(value.updatedAt))
+    )
+      result.set(row.key, value);
+  }
+  return result;
 }

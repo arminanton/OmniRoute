@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 import { DEFAULT_DATABASE_SETTINGS } from "@/types/databaseSettings";
 import { MAX_TIMER_TIMEOUT_MS } from "@/shared/utils/runtimeTimeouts";
 
@@ -288,6 +289,7 @@ export async function runNow(): Promise<{ success: boolean; durationMs: number; 
  * times — the second call is a no-op.
  */
 export function init(): VacuumSchedulerState {
+  if (!periodicServicesAllowed("vacuum")) return getState();
   if (timer) return getState();
 
   const persisted = loadPersistedState();

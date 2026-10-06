@@ -1,3 +1,4 @@
+import { runCoordinatedGrantRefresh } from "../../coordination/grantRefresh.ts";
 // @ts-nocheck
 // Extracted from open-sse/services/tokenRefresh.ts — see ../shared.ts for
 // provenance notes (ported idea from KooshaPari's PR #7338, redone on tip).
@@ -9,6 +10,11 @@ import { buildFormParams, extractOAuthErrorCode } from "../shared.ts";
  * Specialized refresh for GitHub Copilot OAuth tokens
  */
 export async function refreshGitHubToken(refreshToken, log, proxyConfig: unknown = null) {
+  return runCoordinatedGrantRefresh("github-oauth", refreshToken, (currentGrant) =>
+    refreshGitHubTokenNative(currentGrant, log, proxyConfig)
+  );
+}
+async function refreshGitHubTokenNative(refreshToken, log, proxyConfig: unknown = null) {
   const response = await runWithProxyContext(proxyConfig, () =>
     fetch(OAUTH_ENDPOINTS.github.token, {
       method: "POST",

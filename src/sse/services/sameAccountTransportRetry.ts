@@ -27,7 +27,11 @@ const RETRYABLE_TRANSPORT_TEXT = [
   /und_err_socket/i,
 ];
 
-const NON_RETRYABLE_ERROR_TYPES = new Set(["lease_error", "account_semaphore_capacity"]);
+const NON_RETRYABLE_ERROR_TYPES = new Set([
+  "lease_error",
+  "account_semaphore_capacity",
+  "logical_retry_budget",
+]);
 
 export function isRetryableTransportStatus(status: unknown): boolean {
   const numeric = Number(status);

@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 import initializeCloudSync from "@/shared/services/initializeCloudSync";
 import { startModelSyncScheduler } from "@/shared/services/modelSyncScheduler";
 import { isAutomatedTestProcess } from "@/shared/utils/testProcess";
@@ -27,6 +28,7 @@ export function shouldSkipCloudSyncInitialization(
 }
 
 export async function ensureCloudSyncInitialized() {
+  if (!periodicServicesAllowed("cloud-background-sync")) return false;
   if (shouldSkipCloudSyncInitialization()) {
     return false;
   }
