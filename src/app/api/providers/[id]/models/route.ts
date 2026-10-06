@@ -1649,7 +1649,7 @@ export async function GET(
         connection.providerSpecificData,
         provider
       );
-      if (remoteModels.length > 0) {
+      if (remoteModels !== null) {
         return buildApiDiscoveryResponse(remoteModels);
       }
 
