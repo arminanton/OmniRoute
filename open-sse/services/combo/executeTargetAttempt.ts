@@ -1,3 +1,4 @@
+import { classifyUpstreamPolicyRejection } from "../upstreamPolicyRejection.ts";
 /**
  * Retry loop for a combo target that already passed pre-dispatch gates.
  * Lift-as-is from combo.ts:1533–2616. Classify helpers live in
@@ -732,6 +733,8 @@ export async function executeTargetAttempt(opts: {
       }
     }
 
+    if (classifyUpstreamPolicyRejection(errorBody) || classifyUpstreamPolicyRejection(errorText))
+      return { ok: false, response: result };
     const isStreamReadinessFailure =
       (result.status === 502 || result.status === 504) &&
       isStreamReadinessFailureErrorBody(errorBody);

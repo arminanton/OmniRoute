@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { classifyUpstreamPolicyRejection } from "../services/upstreamPolicyRejection.ts";
 import "./setupPolyfill.ts";
 import { combineAbortSignals } from "./combineAbortSignals.ts";
 import { getFencedTaskContext } from "../services/coordination/fencedTask.ts";
@@ -399,7 +400,12 @@ function sanitizeTransportError(
   message: string,
   fallbackCode: string
 ): Error & { code: string; errorCode?: string; statusCode?: number } {
-  if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+  if (
+    isRuntimePolicyError(error) ||
+    isLogicalRetryBudgetError(error) ||
+    classifyUpstreamPolicyRejection(error)
+  )
+    throw error;
   const source = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   const sanitized = new Error(message) as Error & {
     code: string;
@@ -967,7 +973,12 @@ async function patchedFetch(
         if (tlsStore) tlsStore.used = true;
         return response;
       } catch (error) {
-        if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+        if (
+          isRuntimePolicyError(error) ||
+          isLogicalRetryBudgetError(error) ||
+          classifyUpstreamPolicyRejection(error)
+        )
+          throw error;
         if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
         const sessionHadCookies =
           !!error &&
@@ -1032,7 +1043,11 @@ async function patchedFetch(
           !deps.undiciFetch
         );
       } catch (dispatcherError) {
-        if (isRuntimePolicyError(dispatcherError) || isLogicalRetryBudgetError(dispatcherError))
+        if (
+          isRuntimePolicyError(dispatcherError) ||
+          isLogicalRetryBudgetError(dispatcherError) ||
+          classifyUpstreamPolicyRejection(dispatcherError)
+        )
           throw dispatcherError;
         if (isCallerAbort(dispatcherError, getEffectiveSignal(input, options))) {
           throw dispatcherError;
@@ -1115,7 +1130,12 @@ async function patchedFetch(
                     dispatcher: observeFetchDispatcher(dispatcher),
                   });
                 } catch (error) {
-                  if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+                  if (
+                    isRuntimePolicyError(error) ||
+                    isLogicalRetryBudgetError(error) ||
+                    classifyUpstreamPolicyRejection(error)
+                  )
+                    throw error;
                   // Proxy also failed — fall through to native fetch
                 }
               }
@@ -1128,7 +1148,11 @@ async function patchedFetch(
           try {
             return await _nativeFallback(input, options);
           } catch (nativeError) {
-            if (isRuntimePolicyError(nativeError) || isLogicalRetryBudgetError(nativeError))
+            if (
+              isRuntimePolicyError(nativeError) ||
+              isLogicalRetryBudgetError(nativeError) ||
+              classifyUpstreamPolicyRejection(nativeError)
+            )
               throw nativeError;
             // Surface both dispatcher and native causes immediately.
             const detail = `dispatcher=[${describeFetchCause(dispatcherError)}] native=[${describeFetchCause(nativeError)}]`;
@@ -1216,7 +1240,11 @@ async function patchedFetch(
         );
         return await relayDispatch(input, options);
       } catch (relayError) {
-        if (isRuntimePolicyError(relayError) || isLogicalRetryBudgetError(relayError))
+        if (
+          isRuntimePolicyError(relayError) ||
+          isLogicalRetryBudgetError(relayError) ||
+          classifyUpstreamPolicyRejection(relayError)
+        )
           throw relayError;
         // #9158: classify an internal per-attempt timeout FIRST — a relay that
         // hangs past RELAY_FETCH_TIMEOUT_MS must fail fast as RELAY_TIMEOUT (504)
@@ -1291,7 +1319,12 @@ async function patchedFetch(
       if (tlsStore) tlsStore.used = true;
       return response;
     } catch (error) {
-      if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+      if (
+        isRuntimePolicyError(error) ||
+        isLogicalRetryBudgetError(error) ||
+        classifyUpstreamPolicyRejection(error)
+      )
+        throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
       const sessionHadCookies =
         !!error &&
@@ -1336,7 +1369,12 @@ async function patchedFetch(
         ),
       });
     } catch (error) {
-      if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+      if (
+        isRuntimePolicyError(error) ||
+        isLogicalRetryBudgetError(error) ||
+        classifyUpstreamPolicyRejection(error)
+      )
+        throw error;
       if (isCallerAbort(error, getEffectiveSignal(input, options))) throw error;
       const msg = error instanceof Error ? error.message : String(error);
       const errCode = (error as { code?: unknown })?.code;

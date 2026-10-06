@@ -1,3 +1,4 @@
+import { classifyUpstreamPolicyRejection } from "./upstreamPolicyRejection.ts";
 /**
  * Stream-recovery primitives — opt-in transparent retry of truncated upstream streams.
  *
@@ -131,6 +132,7 @@ const RETRYABLE_ERROR_NAMES = new Set(["TimeoutError", "BodyTimeoutError"]);
  * the executor retry/failover loop, not here.
  */
 export function isRetryableStreamError(error: unknown): boolean {
+  if (classifyUpstreamPolicyRejection(error)) return false;
   if (isRuntimePolicyError(error) || isRuntimePolicyResponse(error)) return false;
   if (error instanceof TruncatedStreamError || error instanceof ThroughputWatchdogError) {
     return true;

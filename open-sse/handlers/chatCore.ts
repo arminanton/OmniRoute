@@ -1,8 +1,14 @@
+import {
+  classifyUpstreamPolicyRejection,
+  UPSTREAM_POLICY_REJECTION,
+  UpstreamPolicyRejectionError,
+} from "../services/upstreamPolicyRejection.ts";
 import { classifyAdmissionFeedback } from "../services/coordination/overloadClassification.ts";
 import {
   runGenerationDispatch,
   backoffGenerationRetry,
   isLogicalRetryBudgetError,
+  getLogicalRetryBudget,
 } from "../services/logicalRetryBudget.ts";
 import { withCodexConversationIdentity } from "../services/codexConversationIdentity.ts";
 import { withAntigravityConversationIdentity } from "../services/antigravityIdentity.ts";
@@ -3876,6 +3882,15 @@ export async function handleChatCore({
         observeSharedAdmissionOutcome(key, classifyAdmissionFeedback(statusCode, message), 0);
       }
     }
+    const policy = classifyUpstreamPolicyRejection({
+      message,
+      status: statusCode,
+      error: upstreamErrorBody,
+    });
+    if (policy) {
+      getLogicalRetryBudget()?.denyFurtherAttempts(new UpstreamPolicyRejectionError(policy));
+      return;
+    }
     // T06/T10/T36: classify provider errors and persist terminal account states.
     let errorType = classifyProviderError(statusCode, message, provider);
     if (statusCode === 429 && isModelScope()) {
@@ -4362,6 +4377,28 @@ export async function handleChatCore({
       trackPendingRequest(model, provider, connectionId, false);
       if (isRuntimePolicyError(error)) return runtimePolicyFailureResult(error);
       if (isManagedLeaseFenceError(error)) return managedLeaseFenceErrorResult(error);
+      const policy = classifyUpstreamPolicyRejection(error);
+      if (policy) {
+        getLogicalRetryBudget()?.denyFurtherAttempts(new UpstreamPolicyRejectionError(policy));
+        const status = typeof error.status === "number" ? error.status : 502;
+        persistFailureUsage(status, UPSTREAM_POLICY_REJECTION);
+        const result = stream
+          ? createStreamingErrorResult(
+              status,
+              policy.message,
+              policy.code ?? UPSTREAM_POLICY_REJECTION,
+              UPSTREAM_POLICY_REJECTION
+            )
+          : createErrorResult(
+              status,
+              policy.message,
+              null,
+              policy.code ?? UPSTREAM_POLICY_REJECTION,
+              UPSTREAM_POLICY_REJECTION,
+              policy
+            );
+        return { ...result, errorType: UPSTREAM_POLICY_REJECTION, nativeError: policy };
+      }
       if (isLogicalRetryBudgetError(error)) {
         const failureMessage = "Logical generation retry budget exhausted";
         persistFailureUsage(503, "logical_retry_budget");
@@ -4716,6 +4753,45 @@ export async function handleChatCore({
         upstreamErrorType = projectProviderErrorIdentifier(details.errorType);
       }
 
+      const policy =
+        classifyUpstreamPolicyRejection(upstreamErrorBody) ??
+        classifyUpstreamPolicyRejection({
+          message,
+          code: upstreamErrorCode,
+          type: upstreamErrorType,
+        });
+      if (policy) {
+        const nativeError = {
+          ...policy,
+          wireStatus: providerResponse.status,
+          requestId: policy.requestId ?? providerResponse.headers.get("x-request-id") ?? undefined,
+        };
+        getLogicalRetryBudget()?.denyFurtherAttempts(new UpstreamPolicyRejectionError(nativeError));
+        reqLogger.logError(new UpstreamPolicyRejectionError(nativeError));
+        reqLogger.logProviderResponse(
+          providerResponse.status,
+          providerResponse.statusText,
+          providerResponse.headers,
+          { error: nativeError, wireStatus: providerResponse.status }
+        );
+        persistFailureUsage(statusCode, UPSTREAM_POLICY_REJECTION);
+        const result = stream
+          ? createStreamingErrorResult(
+              statusCode,
+              message,
+              upstreamErrorCode ?? UPSTREAM_POLICY_REJECTION,
+              UPSTREAM_POLICY_REJECTION
+            )
+          : createErrorResult(
+              statusCode,
+              message,
+              null,
+              upstreamErrorCode ?? UPSTREAM_POLICY_REJECTION,
+              UPSTREAM_POLICY_REJECTION,
+              nativeError
+            );
+        return { ...result, errorType: UPSTREAM_POLICY_REJECTION, nativeError };
+      }
       // Gateways like agentrouter misstate temporary quota exhaustion as 403/400,
       // which downstream classification treats as AUTH_ERROR and clients like
       // Claude Code treat as permanent. Restate to 429 (+ synthetic Retry-After)
@@ -5897,6 +5973,28 @@ export async function handleChatCore({
       trackPendingRequest(model, provider, connectionId, false);
       if (isRuntimePolicyError(error)) return runtimePolicyFailureResult(error);
       if (isManagedLeaseFenceError(error)) return managedLeaseFenceErrorResult(error);
+      const policy = classifyUpstreamPolicyRejection(error);
+      if (policy) {
+        getLogicalRetryBudget()?.denyFurtherAttempts(new UpstreamPolicyRejectionError(policy));
+        const status = typeof error.status === "number" ? error.status : 502;
+        persistFailureUsage(status, UPSTREAM_POLICY_REJECTION);
+        const result = stream
+          ? createStreamingErrorResult(
+              status,
+              policy.message,
+              policy.code ?? UPSTREAM_POLICY_REJECTION,
+              UPSTREAM_POLICY_REJECTION
+            )
+          : createErrorResult(
+              status,
+              policy.message,
+              null,
+              policy.code ?? UPSTREAM_POLICY_REJECTION,
+              UPSTREAM_POLICY_REJECTION,
+              policy
+            );
+        return { ...result, errorType: UPSTREAM_POLICY_REJECTION, nativeError: policy };
+      }
       if (isLogicalRetryBudgetError(error)) {
         const failureMessage = "Logical generation retry budget exhausted";
         persistFailureUsage(503, "logical_retry_budget");
@@ -6001,6 +6099,11 @@ export async function handleChatCore({
       cacheSource: "upstream",
     });
     persistFailureUsage(failureResponse.status, streamReadiness.code);
+    const policy = classifyUpstreamPolicyRejection(streamReadiness.upstreamDiagnostic ?? reason);
+    if (policy)
+      getLogicalRetryBudget()?.denyFurtherAttempts(
+        new UpstreamPolicyRejectionError({ ...policy, wireStatus: providerResponse.status })
+      );
     // Do NOT call onStreamFailure — a stream stall is an upstream issue,
     // not an account/quota failure. Marking the account unavailable here
     // would lock out legitimate accounts when the upstream hangs.
@@ -6009,7 +6112,7 @@ export async function handleChatCore({
       status: failureResponse.status,
       error: reason,
       classificationError: classificationReason,
-      errorType: streamReadiness.type,
+      errorType: policy ? UPSTREAM_POLICY_REJECTION : streamReadiness.type,
       errorCode: streamReadiness.code,
       response: failureResponse,
     };

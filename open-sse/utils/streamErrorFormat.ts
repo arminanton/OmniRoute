@@ -1,3 +1,10 @@
+import {
+  classifyUpstreamPolicyRejection,
+  UPSTREAM_POLICY_REJECTION,
+  UpstreamPolicyRejectionError,
+  type NativePolicyError,
+} from "../services/upstreamPolicyRejection.ts";
+import { getLogicalRetryBudget } from "../services/logicalRetryBudget.ts";
 import { FORMATS } from "../translator/formats.ts";
 import { buildErrorBody, sanitizeErrorMessage } from "./error.ts";
 import { projectResponsesFailureOutput } from "./responsesFailureOutput.ts";
@@ -16,6 +23,7 @@ export type StreamFailurePayload = {
   message: string;
   code?: string;
   type?: string;
+  nativeError?: NativePolicyError;
 };
 
 export type ProjectedStreamFailureEvent = {
@@ -197,11 +205,14 @@ export function normalizeStreamFailurePayload(payload: unknown): StreamFailurePa
     toStreamFailureStatus(record.status) ??
     (looksLikeStreamRateLimit(code, type || "", message) ? 429 : 502);
 
+  const policy = classifyUpstreamPolicyRejection(record);
+  if (policy)
+    getLogicalRetryBudget()?.denyFurtherAttempts(new UpstreamPolicyRejectionError(policy));
   return {
     status,
     message,
     code,
-    ...(type ? { type } : {}),
+    ...(policy ? { type: UPSTREAM_POLICY_REJECTION, nativeError: policy } : type ? { type } : {}),
   };
 }
 
@@ -213,7 +224,15 @@ export function prepareTranslatedStreamFailure(
   if (!projected && !record.error) return null;
   return {
     record,
-    providerPayload: projected?.publicPayload ?? record,
+    providerPayload: projected?.internalFailure.nativeError
+      ? {
+          ...projected.publicPayload,
+          nativeError: projected.internalFailure.nativeError,
+          ...(projected.internalFailure.nativeError.wireStatus
+            ? { wireStatus: projected.internalFailure.nativeError.wireStatus }
+            : {}),
+        }
+      : (projected?.publicPayload ?? record),
     internalFailure: projected?.internalFailure ??
       normalizeStreamFailurePayload(record) ?? {
         status: 502,

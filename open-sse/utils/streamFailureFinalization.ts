@@ -1,4 +1,9 @@
 import {
+  classifyUpstreamPolicyRejection,
+  UPSTREAM_POLICY_REJECTION,
+  type NativePolicyError,
+} from "../services/upstreamPolicyRejection.ts";
+import {
   finalizeMostRecentPendingRequest,
   finalizePendingRequestById,
 } from "@/lib/usage/usageHistory.ts";
@@ -23,6 +28,7 @@ export type StreamFailurePayload = {
   message: string;
   code?: string;
   type?: string;
+  nativeError?: NativePolicyError;
 };
 
 export type PipelineStreamErrorHandler = (event: {
@@ -167,7 +173,15 @@ export function createStreamFailureFinalizers({
         status,
         usage: null,
         responseBody: errorBody,
-        providerPayload: errorBody,
+        providerPayload: failure.nativeError
+          ? {
+              ...errorBody,
+              nativeError: failure.nativeError,
+              ...(failure.nativeError.wireStatus
+                ? { wireStatus: failure.nativeError.wireStatus }
+                : {}),
+            }
+          : errorBody,
         clientPayload: errorBody,
         error: message,
         errorCode: projectedCode,
@@ -213,13 +227,19 @@ export function createStreamFailureFinalizers({
       : normalizedMessage.toLowerCase().includes("terminated")
         ? "stream_terminated"
         : "stream_pipeline_error";
-    const type = clientClosed ? "client_disconnected" : "stream_error";
+    const policy = classifyUpstreamPolicyRejection({ message: normalizedMessage });
+    const type = clientClosed
+      ? "client_disconnected"
+      : policy
+        ? UPSTREAM_POLICY_REJECTION
+        : "stream_error";
 
     handleStreamFailure({
       status,
       message: normalizedMessage,
       code,
       type,
+      ...(policy ? { nativeError: policy } : {}),
     });
     return true;
   };

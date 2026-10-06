@@ -37,6 +37,7 @@ const SAFE_PUBLIC_ERROR_IDENTIFIERS = new Set([
   "aborted",
   "account_semaphore_capacity",
   "logical_retry_budget",
+  "upstream_policy_rejection",
   "acp_cancelled",
   "acp_early_exit",
   "acp_error",

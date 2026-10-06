@@ -1,4 +1,8 @@
 import {
+  classifyUpstreamPolicyRejection,
+  UPSTREAM_POLICY_REJECTION,
+} from "./upstreamPolicyRejection.ts";
+import {
   BACKOFF_STEPS_MS,
   EXECUTOR_CONTRACT_VIOLATION_CODE,
   PROVIDER_PROFILES,
@@ -49,7 +53,10 @@ import {
 } from "../../src/shared/constants/providers";
 import { resolveUseUpstream429BreakerHints } from "../../src/shared/utils/providerHints";
 import { getCodexModelScope } from "../config/codexQuotaScopes.ts";
-import { getQuotaScopedModelForProvider, isAntigravityQuotaProvider } from "./antigravityQuotaFamily.ts";
+import {
+  getQuotaScopedModelForProvider,
+  isAntigravityQuotaProvider,
+} from "./antigravityQuotaFamily.ts";
 import { persistAntigravityFamilyCooldownIfQuota } from "./antigravityFamilyCooldown.ts";
 import {
   classifyGeminiQuotaMetricFromText,
@@ -70,7 +77,8 @@ import { isTpdRateLimit, resolveTpdCooldownMs } from "./dailyQuotaReset.ts";
 // Pre-compiled regex constants for hot-path retry parsing (avoid per-call compilation)
 const RETRY_AFTER_RE = /retry\s+after\s+(\d+)\s*s/i;
 const PLEASE_RETRY_RE = /please retry in\s+([\d.]+\s*s)/i;
-const ISO_RETRY_RE = /\b(?:try again at|wait until|reset(?:s)? at|available at|retry after)\s+(\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/i;
+const ISO_RETRY_RE =
+  /\b(?:try again at|wait until|reset(?:s)? at|available at|retry after)\s+(\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/i;
 const RESETS_AFTER_RE = /resets? after (\d+h)?(\d+m)?(\d+s)?/i;
 const WILL_RESET_AFTER_RE = /will reset after (\d+h)?(\d+m)?(\d+s)?/i;
 const RESETS_IN_RE = /resets? in (\d+h)?(\d+m)?(\d+s)?/i;
@@ -654,7 +662,13 @@ export async function recordCoreOwnedAntigravityQuotaState({
     }
   );
   if (lockout.cooldownMs > 0 && isProviderExhaustedReason(fallback)) {
-    persistAntigravityFamilyCooldownIfQuota({ provider, connectionId, model, cooldownMs: lockout.cooldownMs, reason: "quota_exhausted" });
+    persistAntigravityFamilyCooldownIfQuota({
+      provider,
+      connectionId,
+      model,
+      cooldownMs: lockout.cooldownMs,
+      reason: "quota_exhausted",
+    });
   }
   return { cooldownMs: lockout.cooldownMs, failureCount: lockout.failureCount };
 }
@@ -1659,7 +1673,7 @@ export function checkFallbackError(
     timezone?: unknown;
     hour?: unknown;
     nowMs?: number;
-  } | null,
+  } | null
 ): {
   shouldFallback: boolean;
   cooldownMs: number;
@@ -1685,6 +1699,20 @@ export function checkFallbackError(
    * always undefined for every other provider, so existing consumers are unaffected. */
   ruleScope?: "model" | "provider" | "connection";
 } {
+  if (
+    classifyUpstreamPolicyRejection({
+      message: errorText,
+      code: structuredError?.code,
+      type: structuredError?.type,
+    })
+  ) {
+    return {
+      shouldFallback: false,
+      cooldownMs: 0,
+      reason: UPSTREAM_POLICY_REJECTION,
+      skipProviderBreaker: true,
+    };
+  }
   // #10360: an executor-result contract violation is OUR bug, not the provider's.
   // Retrying reproduces it verbatim, and cooling the connection down (or tripping
   // the provider breaker) punishes a healthy account for an internal defect. Must
@@ -1973,7 +2001,7 @@ export function checkFallbackError(
           // no clock, no header — short 429, do not guess midnight
           console.warn(
             "[accountFallback] TPD 429 without node daily-reset clock or Reset header; using short cooldown",
-            { provider },
+            { provider }
           );
         } else {
           return {
@@ -2432,7 +2460,13 @@ export function applyErrorState<T extends AccountState | null | undefined>(
   // (`markConnectionQuotaExhausted`) so a DB failure can never crash the
   // chat path. See issue #1 (per-account 429 cascade not persisting).
   const connId = (account as AccountState | null | undefined)?.id;
-  if (typeof connId === "string" && connId.length > 0 && effectiveCooldownMs > 0 && nextState.rateLimitedUntil && !isAntigravityQuotaProvider(prov)) {
+  if (
+    typeof connId === "string" &&
+    connId.length > 0 &&
+    effectiveCooldownMs > 0 &&
+    nextState.rateLimitedUntil &&
+    !isAntigravityQuotaProvider(prov)
+  ) {
     try {
       const untilMs = cooldownUntilMs(nextState.rateLimitedUntil);
       if (Number.isFinite(untilMs) && untilMs > Date.now()) {
