@@ -188,7 +188,7 @@ async function ensureSecrets(): Promise<void> {
 export async function warmModelCatalogCache(): Promise<void> {
   try {
     const { getUnifiedModelsResponse } = await import("@/app/api/v1/models/catalog");
-    await getUnifiedModelsResponse(new Request("http://127.0.0.1/v1/models"));
+    await getUnifiedModelsResponse(new Request("http://127.0.0.1/v1/models?configuredOnly=true"));
     console.log("[STARTUP] Model catalog cache warmed");
   } catch (err: unknown) {
     if (isRuntimePolicyError(err)) throw err;

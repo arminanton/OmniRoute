@@ -69,6 +69,7 @@ test.after(async () => {
 
 const REAL_FETCH = globalThis.fetch;
 let fetchCallCount = 0;
+let hordeFetchCallCount = 0;
 
 function isOpenRouterCatalogUrl(input: RequestInfo | URL): boolean {
   const url = String(input instanceof Request ? input.url : input);
@@ -77,8 +78,11 @@ function isOpenRouterCatalogUrl(input: RequestInfo | URL): boolean {
 
 function installFakeOpenRouterFetch(): void {
   fetchCallCount = 0;
+  hordeFetchCallCount = 0;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (isOpenRouterCatalogUrl(input)) fetchCallCount++;
+    if (String(input instanceof Request ? input.url : input).includes("aihorde.net"))
+      hordeFetchCallCount++;
     return new Response(JSON.stringify({ data: [{ id: "test/fake-model", architecture: {} }] }), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -88,8 +92,11 @@ function installFakeOpenRouterFetch(): void {
 
 function installFailingOpenRouterFetch(): void {
   fetchCallCount = 0;
+  hordeFetchCallCount = 0;
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     if (isOpenRouterCatalogUrl(input)) fetchCallCount++;
+    if (String(input instanceof Request ? input.url : input).includes("aihorde.net"))
+      hordeFetchCallCount++;
     throw new Error("simulated OpenRouter network failure");
   }) as typeof fetch;
 }
@@ -138,6 +145,11 @@ test("warmModelCatalogCache makes no OpenRouter network call when no OpenRouter 
     // No openrouter connection created — warmup must not make an
     // unconditional third-party network call for deployments that never use it.
     await warmModelCatalogCache();
+    assert.equal(
+      hordeFetchCallCount,
+      0,
+      "configured-only startup must not probe unconfigured Horde"
+    );
     assert.equal(
       fetchCallCount,
       0,

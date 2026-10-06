@@ -1489,7 +1489,14 @@ async function buildUnifiedModelsResponseCore(
 
     // Add image models (filtered by active providers).
     // AI Horde image workers come and go — refresh the live detector first.
-    if (isProviderActive("aihorde")) {
+    // Configured-only catalogs must not probe an anonymous provider that will be filtered out.
+    const configuredOnly = new URL(request.url).searchParams.get("configuredOnly") === "true";
+    const hasConfiguredHorde = connections.some(
+      (connection) =>
+        connection.isActive !== false &&
+        (aliasToProviderId[connection.provider] || connection.provider) === "aihorde"
+    );
+    if (isProviderActive("aihorde") && (!configuredOnly || hasConfiguredHorde)) {
       try {
         await aiHordeImageCatalog.ensureFresh();
       } catch {
