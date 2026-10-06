@@ -54,6 +54,9 @@ export class LogicalRetryBudget {
       throw new LogicalRetryBudgetError("Logical retry budget exhausted");
     this.attempts++;
   }
+  remainingTimeMs(): number {
+    return Math.max(0, this.deadline - this.now());
+  }
   snapshot() {
     return {
       attempts: this.attempts,
@@ -109,6 +112,42 @@ const generationContext = (globalThis.__omniGenerationDispatchContext ??= new As
   boolean | { withPermitReleased: (wait: () => Promise<void>) => Promise<void> }
 >());
 export const getLogicalRetryBudget = () => retryContext.getStore();
+/** Pre-output only: the timer is detached when headers/acceptance resolve, never during body streaming. */
+export async function withLogicalPreOutputDeadline<T>(
+  signal: AbortSignal | null | undefined,
+  invoke: (signal: AbortSignal | null | undefined) => Promise<T>
+): Promise<T> {
+  signal?.throwIfAborted();
+  const budget = getLogicalRetryBudget();
+  if (!budget) return invoke(signal);
+  const remaining = budget.remainingTimeMs();
+  if (remaining <= 0) throw new LogicalRetryBudgetError("Logical pre-output deadline exhausted");
+  const controller = new AbortController();
+  const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  const timer = setTimeout(
+    () => controller.abort(new LogicalRetryBudgetError("Logical pre-output deadline exhausted")),
+    remaining
+  );
+  let abort: () => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal?.aborted ? signal.reason : combined.reason);
+    combined.addEventListener("abort", abort, { once: true });
+  });
+  try {
+    const pending = invoke(combined).then((result) => {
+      if (combined.aborted) {
+        if (isGenerationFetchResponse(result) && result.ok)
+          void result.body?.cancel(combined.reason).catch(() => {});
+        throw combined.reason;
+      }
+      return result;
+    });
+    return await Promise.race([pending, aborted]);
+  } finally {
+    clearTimeout(timer);
+    combined.removeEventListener("abort", abort);
+  }
+}
 export function runWithLogicalRetryBudget<T>(budget: LogicalRetryBudget, fn: () => T): T {
   return retryContext.run(budget, fn);
 }
@@ -195,14 +234,35 @@ export function budgetedGenerationFetch<Args extends unknown[], Result>(
   fn: (...args: Args) => Promise<Result>
 ): (...args: Args) => Promise<Result> {
   return async (...args: Args) => {
-    const options = args[1] as { method?: string } | undefined;
+    const options = args[1] as { method?: string; signal?: AbortSignal | null } | undefined;
     const generation = isGenerationHttpDispatch(args[0], options);
     consumeGenerationAttempt(args[0], options);
     const attempt = generation ? getRequestTransportTelemetry()?.attempt("http") : undefined;
     const finish = generation ? beginGenerationLifetime("http") : () => {};
     return runWithTransportAttempt(attempt, async () => {
+      let pending: Promise<Result> | undefined;
+      let settled = false;
       try {
-        const response = await fn(...args);
+        const response = generation
+          ? await withLogicalPreOutputDeadline(
+              options?.signal ?? (args[0] instanceof Request ? args[0].signal : undefined),
+              (signal) => {
+                const dispatchArgs = [...args] as Args;
+                dispatchArgs[1] = { ...options, signal } as Args[number];
+                pending = fn(...dispatchArgs).then(
+                  (value) => {
+                    settled = true;
+                    return value;
+                  },
+                  (error) => {
+                    settled = true;
+                    throw error;
+                  }
+                );
+                return pending;
+              }
+            )
+          : await fn(...args);
         if (!generation || !isGenerationFetchResponse(response)) {
           finish();
           return response;
@@ -220,7 +280,9 @@ export function budgetedGenerationFetch<Args extends unknown[], Result>(
         }) as Result;
       } catch (error) {
         attempt?.close("error");
-        finish();
+        // An uncooperative transport may settle after cancellation. Do not report it drained early.
+        if (pending && !settled) void pending.then(finish, finish);
+        else finish();
         throw error;
       }
     });

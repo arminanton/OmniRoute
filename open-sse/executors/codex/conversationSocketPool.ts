@@ -1,3 +1,9 @@
+import {
+  getLogicalRetryBudget,
+  LogicalRetryBudgetError,
+  isLogicalRetryBudgetError,
+  type LogicalRetryBudget,
+} from "../../services/logicalRetryBudget.ts";
 import { createHash } from "node:crypto";
 import {
   prepareCodexContinuation,
@@ -83,7 +89,15 @@ function abortReason(signal?: AbortSignal | null): Error {
     ? signal.reason
     : new DOMException("Request cancelled", "AbortError");
 }
-function bounded<T>(promise: Promise<T>, ms: number, signal?: AbortSignal | null): Promise<T> {
+function bounded<T>(
+  promise: Promise<T>,
+  ms: number,
+  signal?: AbortSignal | null,
+  budget?: LogicalRetryBudget
+): Promise<T> {
+  const remaining = budget?.remainingTimeMs();
+  const logicalWins = remaining !== undefined && remaining <= ms;
+  ms = Math.max(1, Math.min(ms, remaining ?? ms));
   return new Promise((resolve, reject) => {
     let done = false;
     const end = (error: unknown, value?: T) => {
@@ -94,7 +108,15 @@ function bounded<T>(promise: Promise<T>, ms: number, signal?: AbortSignal | null
       if (error) reject(error);
       else resolve(value as T);
     };
-    const timer = setTimeout(() => end(new Error("Codex transport phase timed out")), ms);
+    const timer = setTimeout(
+      () =>
+        end(
+          logicalWins
+            ? new LogicalRetryBudgetError("Logical pre-output deadline exhausted")
+            : new Error("Codex transport phase timed out")
+        ),
+      ms
+    );
     const aborted = () => end(abortReason(signal));
     if (signal?.aborted) aborted();
     else signal?.addEventListener("abort", aborted, { once: true });
@@ -162,7 +184,11 @@ export class CodexConversationSocketPool {
       s.baseline = null;
     }
   }
-  private async acquire(key: string, signal?: AbortSignal | null): Promise<Session> {
+  private async acquire(
+    key: string,
+    signal?: AbortSignal | null,
+    budget?: LogicalRetryBudget
+  ): Promise<Session> {
     if (this.closed) throw new Error("Codex socket pool is closed");
     if (signal?.aborted) throw abortReason(signal);
     this.trim();
@@ -199,7 +225,7 @@ export class CodexConversationSocketPool {
         session!.wake.add(wake);
       });
       try {
-        await bounded(pending, Math.max(1, deadline - Date.now()), signal);
+        await bounded(pending, Math.max(1, deadline - Date.now()), signal, budget);
       } finally {
         this.waiters--;
         session.wake.delete(wake);
@@ -219,10 +245,14 @@ export class CodexConversationSocketPool {
   }
   async request(request: CodexSocketRequest): Promise<Response> {
     const started = Date.now();
+    const budget = getLogicalRetryBudget();
+    if (budget && budget.remainingTimeMs() <= 0)
+      throw new LogicalRetryBudgetError("Logical pre-output deadline exhausted");
     const reusable = request.reuse === true && Boolean(request.ownerKey);
     const session = await this.acquire(
       reusable ? keyFor(request) : `${keyFor(request)}:${crypto.randomUUID()}`,
-      request.signal
+      request.signal,
+      budget
     );
     let released = false;
     const release = () => {
@@ -236,6 +266,8 @@ export class CodexConversationSocketPool {
     };
     let socket = session.socket;
     try {
+      if (budget && budget.remainingTimeMs() <= 0)
+        throw new LogicalRetryBudgetError("Logical pre-output deadline exhausted");
       if (!socket) {
         const connecting = request.connect(request.url, {
           browser: "chrome_142",
@@ -252,7 +284,7 @@ export class CodexConversationSocketPool {
           },
           () => {}
         );
-        socket = await bounded(connecting, this.options.connectTimeoutMs, request.signal);
+        socket = await bounded(connecting, this.options.connectTimeoutMs, request.signal, budget);
         accepted = true;
         if (request.signal?.aborted) {
           socket.close(1000, "connection cancelled");
@@ -328,12 +360,21 @@ export class CodexConversationSocketPool {
       };
       const resetTimer = () => {
         if (timer) clearTimeout(timer);
+        const remaining = first ? budget?.remainingTimeMs() : undefined;
+        const phaseMs = first ? this.options.firstEventTimeoutMs : this.options.idleTimeoutMs;
+        const logicalWins = remaining !== undefined && remaining <= phaseMs;
         timer = setTimeout(
-          () =>
-            finish(
-              first ? "upstream_websocket_first_event_timeout" : "upstream_websocket_idle_timeout"
-            ),
-          first ? this.options.firstEventTimeoutMs : this.options.idleTimeoutMs
+          () => {
+            if (logicalWins) {
+              const error = new LogicalRetryBudgetError("Logical pre-output deadline exhausted");
+              budget?.denyFurtherAttempts(error);
+              finish(error.code);
+            } else
+              finish(
+                first ? "upstream_websocket_first_event_timeout" : "upstream_websocket_idle_timeout"
+              );
+          },
+          Math.max(1, Math.min(phaseMs, remaining ?? phaseMs))
         );
       };
       const onAbort = () => finish("client_aborted");
@@ -417,7 +458,12 @@ export class CodexConversationSocketPool {
       try {
         if (request.signal?.aborted) onAbort();
         else {
-          await request.beforeSend?.(wire);
+          await bounded(
+            Promise.resolve(request.beforeSend?.(wire)),
+            this.options.connectTimeoutMs,
+            request.signal,
+            budget
+          );
           if (!finished) {
             if (
               typeof socket.bufferedAmount === "number" &&
@@ -425,18 +471,25 @@ export class CodexConversationSocketPool {
             )
               finish("upstream_websocket_send_buffer_limit");
             else {
+              if (budget && budget.remainingTimeMs() <= 0)
+                throw new LogicalRetryBudgetError("Logical pre-output deadline exhausted");
               resetTimer();
               request.onSend?.();
               await bounded(
                 Promise.resolve(socket.send(wire)),
                 this.options.connectTimeoutMs,
-                request.signal
+                request.signal,
+                budget
               );
             }
           }
         }
-      } catch {
-        finish(request.signal?.aborted ? "client_aborted" : "upstream_websocket_send_failed");
+      } catch (error) {
+        if (isLogicalRetryBudgetError(error)) {
+          budget?.denyFurtherAttempts(error);
+          finish(error.code);
+        } else
+          finish(request.signal?.aborted ? "client_aborted" : "upstream_websocket_send_failed");
       }
       return new Response(stream, {
         headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
