@@ -244,3 +244,18 @@ maintenance-acceptance audit with exact tested image/asset hashes.
 This proves actual Next/server/periodic behavior with real SQLite/global ALS. It
 does not pretend that networkNONE supplies a residential kernel attestation; the
 runtime compiler's existing boundary argv still needs its real installed proof.
+
+### Conservative proxy-hop locality
+
+The initial bridge unconditionally overwrites `X-Forwarded-For` with its actual TCP
+peer, overwrites forwarded host/protocol from the reviewed listener contract, and
+clears caller `X-Real-IP`, `CF-Connecting-IP` and RFC `Forwarded` alternatives.
+Absent or forged client forwarding metadata must never make the API bridge's next
+loopback hop eligible for localhost/LAN management privileges. Existing credentials
+are preserved; private authentication is still required. This is a conservative
+proxy marker, not an asserted original end-client IP or a proven exploit claim.
+
+The real private NGINX regression passes requests through a loopback API hop and
+uses the actual peer-stamp/peer-context code: proxied calls cannot become trusted
+loopback/LAN, direct fixture calls remain genuinely local, and missing/wrong
+credentials still fail. It fails on the original unstamped initial bridge.

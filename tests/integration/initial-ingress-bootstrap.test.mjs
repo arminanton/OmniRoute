@@ -311,3 +311,172 @@ test(
     // does not pretend to execute or prove Linux conntrack/NAT or Tailscale migration.
   }
 );
+
+test(
+  "initial bridge marks absent and forged forwarding headers as proxied after the API loopback hop",
+  { skip: !binary, timeout: 30000 },
+  async (t) => {
+    const { tsImport } = await import("tsx/esm/api");
+    const { isLoopbackRequest, isPrivateLanRequest, isViaProxyRequest } = await tsImport(
+      "../../src/server/authz/peerContext.ts",
+      import.meta.url
+    );
+    const { stampPeerIp } = await import("../../scripts/dev/peer-stamp.mjs");
+    const previousStamp = process.env.OMNIROUTE_PEER_STAMP_TOKEN;
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omni-bootstrap-peer-"));
+    const servers = [];
+    let master;
+    t.after(async () => {
+      if (previousStamp === undefined) delete process.env.OMNIROUTE_PEER_STAMP_TOKEN;
+      else process.env.OMNIROUTE_PEER_STAMP_TOKEN = previousStamp;
+      for (const server of servers) {
+        server.closeAllConnections();
+        server.close();
+      }
+      if (master?.exitCode === null) {
+        master.kill("SIGTERM");
+        await Promise.race([once(master, "exit"), wait(1500)]);
+      }
+      await fs.rm(directory, { recursive: true, force: true });
+    });
+    const backend = http.createServer((req, res) => {
+      stampPeerIp(req);
+      if (req.headers.authorization !== "Bearer private-manager-fixture") {
+        res.writeHead(401);
+        res.end();
+        return;
+      }
+      const context = {
+        request: {
+          method: req.method,
+          headers: new Headers(req.headers),
+          socket: { remoteAddress: req.socket.remoteAddress },
+        },
+      };
+      res.end(
+        JSON.stringify({
+          viaProxy: isViaProxyRequest(context),
+          trustedLoopback: isLoopbackRequest(context),
+          trustedLan: isPrivateLanRequest(context),
+          forwardedFor: req.headers["x-forwarded-for"],
+          realIp: req.headers["x-real-ip"] ?? null,
+          forwardedHost: req.headers["x-forwarded-host"],
+          forwardedProto: req.headers["x-forwarded-proto"],
+        })
+      );
+    });
+    backend.listen(0, "127.0.0.1");
+    await once(backend, "listening");
+    servers.push(backend);
+    const bridge = http.createServer((req, res) => {
+      // Same loopback/header-preserving hop as the existing API bridge; no new management exposure.
+      const upstream = http.request(
+        {
+          host: "127.0.0.1",
+          port: backend.address().port,
+          path: req.url,
+          method: req.method,
+          headers: { ...req.headers, host: `127.0.0.1:${backend.address().port}` },
+        },
+        (response) => {
+          res.writeHead(response.statusCode, response.headers);
+          response.pipe(res);
+        }
+      );
+      upstream.on("error", () => {
+        res.writeHead(502);
+        res.end();
+      });
+      req.pipe(upstream);
+    });
+    bridge.listen(0, "127.0.0.1");
+    await once(bridge, "listening");
+    servers.push(bridge);
+    const dashboard = await freePort(),
+      api = await freePort();
+    const policy = {
+      schema: "omni-initial-bootstrap/v1",
+      transaction: "a".repeat(32),
+      bootId: "01234567-89ab-cdef-0123-456789abcdef",
+      wanNamespaceInode: 123,
+      legacy: {
+        revision: "b".repeat(40),
+        image: "sha256:" + "c".repeat(64),
+        cid: "d".repeat(64),
+        helperSet: "e".repeat(64),
+        stateOwner: "f".repeat(64),
+      },
+      guard: { generation: "a".repeat(32), policySha256: "b".repeat(64), outputDeniedHandle: 71 },
+      proxyBinarySha256: "c".repeat(64),
+    };
+    const generated = spawnSync(
+      "python3",
+      [
+        "-c",
+        "import json,sys;from scripts.deploy.canary.bootstrap import legacy_nginx;print(legacy_nginx(json.loads(sys.argv[1])))",
+        JSON.stringify(policy),
+      ],
+      { encoding: "utf8" }
+    );
+    assert.equal(generated.status, 0, generated.stderr);
+    const config = generated.stdout
+      .replaceAll("/run/omni-local-next/canary", directory)
+      .replace("listen 21028;", `listen 127.0.0.1:${dashboard};`)
+      .replace("listen 21029;", `listen 127.0.0.1:${api};`)
+      .replaceAll("http://10.203.242.2:20128", `http://127.0.0.1:${backend.address().port}`)
+      .replaceAll("http://10.203.242.2:20129", `http://127.0.0.1:${bridge.address().port}`);
+    const file = path.join(directory, "nginx.conf");
+    await fs.writeFile(file, config);
+    assert.equal(
+      spawnSync(binary, ["-t", "-p", directory + "/", "-c", file], { encoding: "utf8" }).status,
+      0
+    );
+    master = spawn(binary, ["-p", directory + "/", "-c", file, "-g", "daemon off;"], {
+      stdio: "ignore",
+    });
+    await until(async () => {
+      try {
+        return (await request("127.0.0.1", api, "/v1/models")).status === 401;
+      } catch {
+        return false;
+      }
+    });
+    const absent = await request("127.0.0.1", api, "/v1/models", {
+      headers: { Authorization: "Bearer private-manager-fixture" },
+    });
+    const clean = JSON.parse(absent.body);
+    assert.equal(clean.viaProxy, true);
+    assert.equal(clean.trustedLoopback, false);
+    assert.equal(clean.trustedLan, false);
+    const forged = await request("127.0.0.1", api, "/v1/models", {
+      headers: {
+        Authorization: "Bearer private-manager-fixture",
+        "X-Forwarded-For": "10.9.8.7",
+        "X-Real-IP": "127.0.0.1",
+        "X-Forwarded-Host": "forged.invalid",
+        "X-Forwarded-Proto": "file",
+        "X-Omniroute-Via-Proxy": "forged|0",
+      },
+    });
+    const result = JSON.parse(forged.body);
+    assert.equal(result.viaProxy, true);
+    assert.equal(result.trustedLoopback, false);
+    assert.equal(result.trustedLan, false);
+    assert.equal(result.forwardedFor, "127.0.0.1");
+    assert.equal(result.realIp, null);
+    assert.equal(result.forwardedHost, `127.0.0.1:${api}`);
+    assert.equal(result.forwardedProto, "https");
+    assert.equal(
+      (
+        await request("127.0.0.1", api, "/v1/models", {
+          headers: { Authorization: "Bearer wrong-fixture-key" },
+        })
+      ).status,
+      401
+    );
+    const direct = await request("127.0.0.1", backend.address().port, "/v1/models", {
+      headers: { Authorization: "Bearer private-manager-fixture" },
+    });
+    assert.equal(JSON.parse(direct.body).trustedLoopback, true);
+  }
+);
