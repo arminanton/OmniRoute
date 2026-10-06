@@ -1,5 +1,11 @@
-import { getCanaryLifecycle } from "./canaryLifecycle";
+import {
+  getRuntimeCoordinationCapabilities,
+  getRuntimeCoordinationCounts,
+} from "@omniroute/open-sse/services/coordination/sharedSemaphore";
+import { getPhysicalGenerationCount } from "@omniroute/open-sse/services/generationLifetime";
+import { getCanaryLifecycle, registerCanaryCounter } from "./canaryLifecycle";
 import { pingDb } from "./db/core";
+import { boundedCanaryProbe } from "./canaryProbe";
 
 export interface CoordinationReadiness {
   protocol: "omni-coordination/v1";
@@ -16,8 +22,13 @@ const unavailable: CoordinationReadiness = {
   conversationState: false,
 };
 /** Components register actual health checks at bootstrap; a client/env declaration is never proof. */
-declare global { var __omnirouteCanaryReadinessProbes: Map<string, () => Promise<boolean>> | undefined; }
-const probes = globalThis.__omnirouteCanaryReadinessProbes ||= new Map<string, () => Promise<boolean>>();
+declare global {
+  var __omnirouteCanaryReadinessProbes: Map<string, () => Promise<boolean>> | undefined;
+}
+const probes = (globalThis.__omnirouteCanaryReadinessProbes ||= new Map<
+  string,
+  () => Promise<boolean>
+>());
 export function registerCanaryReadinessProbe(
   component: Exclude<keyof CoordinationReadiness, "protocol">,
   probe: () => Promise<boolean>
@@ -25,12 +36,21 @@ export function registerCanaryReadinessProbe(
   probes.set(component, probe);
 }
 export async function getCanaryReadiness() {
-  const coordination = { ...unavailable };
-  for (const [component, probe] of probes) {
-    try {
-      coordination[component as Exclude<keyof CoordinationReadiness, "protocol">] = await probe();
-    } catch {}
-  }
+  registerCanaryCounter(
+    "queuedRequests",
+    () => getRuntimeCoordinationCounts()?.queuedGeneration ?? null
+  );
+  registerCanaryCounter("upstreamLeases", getPhysicalGenerationCount);
+  const coordination: CoordinationReadiness = {
+    ...unavailable,
+    ...(await boundedCanaryProbe(getRuntimeCoordinationCapabilities, unavailable)),
+  };
+  await Promise.all(
+    [...probes].map(async ([component, probe]) => {
+      coordination[component as Exclude<keyof CoordinationReadiness, "protocol">] =
+        (await boundedCanaryProbe(probe, false)) === true;
+    })
+  );
   let databaseReady = false;
   try {
     databaseReady = pingDb();

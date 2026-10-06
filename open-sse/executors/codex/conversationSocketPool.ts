@@ -55,6 +55,7 @@ export interface CodexSocketRequest {
   encode: (raw: string) => { sse: string; terminal: boolean };
   failure: (code: string) => string;
   beforeSend?: (wireBody: string) => Promise<void>;
+  onSend?: () => void;
   observe?: (event: {
     phase: string;
     elapsedMs: number;
@@ -415,6 +416,7 @@ export class CodexConversationSocketPool {
               finish("upstream_websocket_send_buffer_limit");
             else {
               resetTimer();
+              request.onSend?.();
               await bounded(
                 Promise.resolve(socket.send(wire)),
                 this.options.connectTimeoutMs,

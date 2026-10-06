@@ -1,3 +1,8 @@
+import {
+  getLogicalRetryBudget,
+  consumeCurrentGenerationAttempt,
+} from "../services/logicalRetryBudget.ts";
+import { beginGenerationLifetime, bindGenerationResponse } from "../services/generationLifetime.ts";
 import { responsesErrorEvent } from "../utils/responsesErrorEvent.ts";
 import { CodexConversationSocketPool } from "./codex/conversationSocketPool.ts";
 import { getDeclaredCodexMaxEffort } from "./codex/effortCapabilities.ts";
@@ -930,11 +935,6 @@ export class CodexExecutor extends BaseExecutor {
     delete transformedBody.stream;
     delete transformedBody.stream_options;
 
-    const bodyString = JSON.stringify({
-      type: "response.create",
-      ...transformedBody,
-    });
-
     const websocketFn = getCodexWebSocketTransport();
     if (!websocketFn) {
       return {
@@ -945,26 +945,51 @@ export class CodexExecutor extends BaseExecutor {
       };
     }
 
-    const response = await this.conversationSockets.request({
-      url: toWebSocketUrl(url),
+    const requestBudget = getLogicalRetryBudget();
+    let finishGeneration = () => {};
+    let response: Response;
+    try {
+      response = await this.conversationSockets.request({
+        url: toWebSocketUrl(url),
+        headers,
+        body: transformedBody,
+        connect: websocketFn,
+        signal: nextInput.signal,
+        reuse:
+          (nextInput.credentials?.providerSpecificData as Record<string, unknown> | undefined)
+            ?.codexWebSocketSessionReuse !== false,
+        encode: encodeResponseSseEvent,
+        failure: (code) =>
+          `event: response.failed\ndata: ${responsesErrorEvent(
+            JSON.stringify({
+              error: projectCodexPublicError({ status: 502, code, type: "provider_error" }),
+            }),
+            null,
+            502
+          )}\n\n`,
+        beforeSend: async (wire) => {
+          consumeCurrentGenerationAttempt();
+          await prl.captureCurrentProviderBody(url, headers, wire, nextInput.log);
+        },
+        onSend: () => {
+          finishGeneration = beginGenerationLifetime("codex-websocket");
+        },
+        observe: (event) => {
+          if (event.phase === "first_event") requestBudget?.markOutputOrToolDelivered();
+          if (event.phase === "completed" || event.phase === "failed") finishGeneration();
+          nextInput.log?.debug?.("CODEX_TRANSPORT", JSON.stringify(event));
+        },
+      });
+    } catch (error) {
+      finishGeneration();
+      throw error;
+    }
+    return {
+      response: bindGenerationResponse(response, finishGeneration),
+      url,
       headers,
-      body: transformedBody,
-      connect: websocketFn,
-      signal: nextInput.signal,
-      reuse: nextInput.credentials?.providerSpecificData?.codexWebSocketSessionReuse !== false,
-      encode: encodeResponseSseEvent,
-      failure: (code) =>
-        `event: response.failed\ndata: ${responsesErrorEvent(
-          JSON.stringify({
-            error: projectCodexPublicError({ status: 502, code, type: "provider_error" }),
-          }),
-          null,
-          502
-        )}\n\n`,
-      beforeSend: (wire) => prl.captureCurrentProviderBody(url, headers, wire, nextInput.log),
-      observe: (event) => nextInput.log?.debug?.("CODEX_TRANSPORT", JSON.stringify(event)),
-    });
-    return { response, url, headers, transformedBody };
+      transformedBody,
+    };
   }
 
   buildUrl(
@@ -995,6 +1020,7 @@ export class CodexExecutor extends BaseExecutor {
    * Includes chatgpt-account-id header for strict workspace binding.
    */
   buildHeaders(credentials: ProviderCredentials, stream = true) {
+    void stream;
     const isCompactRequest = isCompactResponsesEndpoint(credentials?.requestEndpointPath);
     const headers = super.buildHeaders(credentials, isCompactRequest ? false : true);
     headers.Version = getCodexClientVersion();

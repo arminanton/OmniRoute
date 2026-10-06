@@ -1,5 +1,5 @@
 /** Shared with the real Node HTTP server wrapper; all retirement counters are body/socket lifetime. */
-export type CanaryCounter = "conversationPins" | "upstreamLeases";
+export type CanaryCounter = "conversationPins" | "upstreamLeases" | "queuedRequests";
 interface CanaryState {
   version: number;
   draining: boolean;
@@ -56,7 +56,7 @@ export function getCanaryLifecycle() {
     activeResponses: observed ? s.activeResponses : null,
     activeWebSockets: observed ? s.activeWebSockets : null,
     pendingUploads: observed ? s.pendingUploads : null,
-    queuedRequests: observed ? s.queuedRequests : null,
+    queuedRequests: count("queuedRequests"),
     conversationPins: count("conversationPins"),
     upstreamLeases: count("upstreamLeases"),
     draining: s.draining,

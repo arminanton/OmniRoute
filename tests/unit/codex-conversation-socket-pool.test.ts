@@ -78,6 +78,36 @@ function req(
 }
 const user = { role: "user", content: "lookup" };
 
+test("physical send observation excludes turns cancelled during request capture", async () => {
+  const pool = new CodexConversationSocketPool();
+  const f = fixture();
+  const abort = new AbortController();
+  let observed = 0;
+  const response = await pool.request({
+    ...req(f.connect, { input: [user] }),
+    signal: abort.signal,
+    beforeSend: async () => {
+      abort.abort();
+    },
+    onSend: () => {
+      observed++;
+    },
+  });
+  await response.text();
+  assert.equal(observed, 0);
+  assert.equal(f.counts().sends, 0);
+  const successful = await pool.request({
+    ...req(f.connect, { input: [user] }, "successful"),
+    onSend: () => {
+      observed++;
+    },
+  });
+  await successful.text();
+  assert.equal(observed, 1);
+  assert.equal(f.counts().sends, 1);
+  pool.close();
+});
+
 test("same conversation reuses a socket and sends compatible tool continuation as a delta", async () => {
   const pool = new CodexConversationSocketPool();
   const f = fixture();
