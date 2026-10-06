@@ -136,12 +136,7 @@ export class GheCopilotExecutor extends GithubExecutor {
     if ((targetFormat === "claude" || /claude/i.test(bareModel)) && this.config.messagesUrl) {
       return this.getMessagesBase(credentials);
     }
-    if (
-      (targetFormat === "openai-responses" ||
-        /codex/i.test(bareModel) ||
-        ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol"].includes(bareModel)) &&
-      this.supportsResponsesEndpoint(bareModel)
-    ) {
+    if (targetFormat === "openai-responses" && this.supportsResponsesEndpoint(bareModel)) {
       return this.getResponsesBase(credentials);
     }
     return this.getChatCompletionsBase(credentials);

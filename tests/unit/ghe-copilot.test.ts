@@ -39,7 +39,7 @@ test("buildUrl uses gheUrl for chat/completions with credentials", () => {
   assert.strictEqual(url, "https://ghe.company.com/chat/completions");
 });
 
-test("buildUrl uses gheUrl for responses endpoint with codex model", () => {
+test("buildUrl uses the catalog target format for the tagged Codex model", () => {
   const executor = new GheCopilotExecutor({
     gheUrl: "https://ghe.company.com",
     clientId: "test-client",
@@ -48,7 +48,7 @@ test("buildUrl uses gheUrl for responses endpoint with codex model", () => {
   const credentials: ProviderCredentials = {
     providerSpecificData: { gheUrl: "https://ghe.company.com" },
   };
-  const url = executor.buildUrl("gpt-4o-codex", true, 0, credentials);
+  const url = executor.buildUrl("gpt-5.3-codex", true, 0, credentials);
   assert.strictEqual(url, "https://ghe.company.com/responses");
 });
 
@@ -71,7 +71,7 @@ test("buildUrl uses responses endpoint for gpt-5.4-mini and gpt-5.6-sol", () => 
   );
 });
 
-test("buildUrl uses responses endpoint only for reported GHE Copilot GPT-6 ids", () => {
+test("buildUrl keeps untagged GPT-6, Grok, and Codex IDs on chat/completions", () => {
   const executor = new GheCopilotExecutor({
     gheUrl: "https://ghe.company.com",
     clientId: "test-client",
@@ -80,13 +80,15 @@ test("buildUrl uses responses endpoint only for reported GHE Copilot GPT-6 ids",
   const credentials: ProviderCredentials = {
     providerSpecificData: { gheUrl: "https://ghe.company.com" },
   };
-  for (const model of ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol"]) {
-    assert.strictEqual(
-      executor.buildUrl(model, true, 0, credentials),
-      "https://ghe.company.com/responses"
-    );
-  }
-  for (const model of ["gpt-6-unknown", "grok-4.7"]) {
+  for (const model of [
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-6.1-sol",
+    "gpt-6-unknown",
+    "grok-4.7",
+    "gpt-4o-codex",
+  ]) {
     assert.strictEqual(
       executor.buildUrl(model, true, 0, credentials),
       "https://ghe.company.com/chat/completions"
