@@ -520,18 +520,11 @@ async function handleKieAudioTranscription(providerConfig, file, modelId, token)
       typeof err === "object" && err !== null && "status" in err
         ? Number((err as { status?: unknown }).status) || 502
         : 502;
-    return Response.json(
-      {
-        error: {
-          message: err instanceof Error ? err.message : "Kie transcription createTask failed",
-          code: status,
-        },
-      },
-      {
-        status,
-        headers: { ...CORS_HEADERS },
-      }
-    );
+    const response = errorResponse(status, "Kie transcription createTask failed");
+    for (const [name, value] of Object.entries(CORS_HEADERS)) {
+      response.headers.set(name, value);
+    }
+    return response;
   }
   const taskId = data?.data?.taskId || data?.taskId;
 
@@ -792,8 +785,10 @@ export async function handleAudioTranscription({
 
   // MaxAI uses the captured multipart protocol, not a generic Whisper request.
   if (providerConfig.format === "maxai-stt") {
-    if (modelId !== "speech-to-text") return errorResponse(400, "Unsupported MaxAI transcription model");
-    if (!credentials?.connectionId) return errorResponse(400, "MaxAI transcription requires a connection");
+    if (modelId !== "speech-to-text")
+      return errorResponse(400, "Unsupported MaxAI transcription model");
+    if (!credentials?.connectionId)
+      return errorResponse(400, "MaxAI transcription requires a connection");
     const responseFormat = formData.get("response_format");
     if (responseFormat && responseFormat !== "json" && responseFormat !== "text") {
       return errorResponse(400, "MaxAI transcription supports json or text responses");

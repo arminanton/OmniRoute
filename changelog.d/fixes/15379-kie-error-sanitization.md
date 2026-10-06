@@ -1,0 +1,1 @@
+- **fix(transcription):** Kie createTask failures use the sanitized error response instead of returning raw upstream bodies. Preserve upstream status and CORS headers.
