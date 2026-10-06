@@ -94,11 +94,13 @@ test("late acquisition after deadline releases exactly once even if implementati
 });
 test("an acquired permit outlives the pre-output timer until its caller releases it", async () => {
   await sharedFixture(async () => {
+    const warm = await acquireMany(requirement, options);
+    warm();
     const release = await runWithLogicalRetryBudget(
-      new LogicalRetryBudget(12, Date.now() + 35),
+      new LogicalRetryBudget(12, Date.now() + 150),
       () => acquireLogicalConcurrencyGates(requirement, options)
     );
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    await new Promise((resolve) => setTimeout(resolve, 220));
     assert.equal(getRuntimeCoordinationCounts()?.activeGeneration, 1);
     release();
     assert.equal(getRuntimeCoordinationCounts()?.activeGeneration, 0);
