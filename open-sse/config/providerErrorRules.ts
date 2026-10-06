@@ -348,7 +348,7 @@ const DEFAULT_EGRESS_BUCKETED_LOCK_PROVIDERS = ["opencode", "opencode-go", "open
 export function egressIpLockProvidersFromEnv(raw: string | undefined): Set<string> {
   const value = raw?.trim();
   if (!value) return new Set(DEFAULT_EGRESS_BUCKETED_LOCK_PROVIDERS);
-  if (/^(none|off)$/i.test(value)) return new Set();
+  if (/^(none|off|false|0)$/i.test(value)) return new Set();
   return new Set(
     value
       .split(",")

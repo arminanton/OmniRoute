@@ -18,8 +18,8 @@ test("unrelated providers are not egress-IP locked by default", () => {
   assert.equal(providers.has("anthropic"), false);
 });
 
-test("none/off disable egress-IP lockout", () => {
-  for (const value of ["none", "off", " NONE ", "OFF"]) {
+test("none/off/false/0 disable egress-IP lockout", () => {
+  for (const value of ["none", "off", "false", "0", " NONE ", "OFF", " FALSE ", " 0 "]) {
     assert.equal(egressIpLockProvidersFromEnv(value).size, 0, value);
   }
 });
