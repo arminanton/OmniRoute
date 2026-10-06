@@ -242,7 +242,7 @@ test("CodexExecutor.transformRequest injects default instructions, clamps reason
   assert.equal(result.instructions.length > 0, true);
   assert.deepEqual(result.reasoning, { effort: "high", summary: "auto" });
   assert.deepEqual(result.include, ["reasoning.encrypted_content"]);
-  assert.equal(result.service_tier, "priority");
+  assert.equal(result.service_tier, "fast");
   assert.equal(result.messages, undefined);
   assert.equal(result.prompt, undefined);
   assert.equal(result.temperature, undefined);

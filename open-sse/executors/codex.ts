@@ -24,6 +24,7 @@ import {
 } from "../config/codexInstructions.ts";
 import { FETCH_BODY_TIMEOUT_MS, HTTP_STATUS, PROVIDERS } from "../config/constants.ts";
 import { readCodexPeekChunk, buildCodexTimeoutSafePassthroughBody } from "./codex/bodyTimeout.ts";
+import { inspectCodexSsePrefix } from "./codex/ssePrefix.ts";
 import {
   CODEX_CLI_RS_ORIGINATOR,
   getCodexClientVersion,
@@ -142,7 +143,6 @@ function codexWebSocketUnavailableResponse(): Response {
 // Ref: sub2api PR #1129 (feat(openai): split codex spark rate limiting from codex)
 export { getCodexModelScope, getCodexRateLimitKey, type CodexQuotaScope };
 
-const CODEX_FAST_WIRE_VALUE = "priority";
 const CODEX_RESPONSES_WS_URL = "wss://chatgpt.com/backend-api/codex/responses";
 const CODEX_RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite";
 const CODEX_RESPONSES_LITE_WS_METADATA_KEY =
@@ -326,7 +326,6 @@ function normalizeServiceTierValue(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toLowerCase();
   if (!normalized) return undefined;
-  if (normalized === "fast") return CODEX_FAST_WIRE_VALUE;
   return normalized;
 }
 
@@ -692,20 +691,14 @@ export async function peekCodexSseTransientError(
       if (!value) continue;
       chunks.push(value);
       text += decoder.decode(value, { stream: true });
-      const lower = text.toLowerCase();
-      const hit = CODEX_SSE_TRANSIENT_ERROR_PATTERNS.find((pattern) => lower.includes(pattern));
-      if (hit) {
-        matched = hit;
+      const inspected = inspectCodexSsePrefix(text, CODEX_SSE_TRANSIENT_ERROR_PATTERNS);
+      if (inspected.matched) {
+        matched = inspected.matched;
         break;
       }
-      // A real content/completion event this early means the response is
-      // healthy — stop peeking so we do not needlessly buffer a long stream.
-      if (
-        lower.includes('"type":"response.output_text.delta"') ||
-        lower.includes('"type":"response.completed"')
-      ) {
-        break;
-      }
+      // Creation, reasoning and tool events are progress too. Do not wait for
+      // visible text while a healthy reasoning/tool stream is already running.
+      if (inspected.ready) break;
     }
   } catch (err) {
     if (isRuntimePolicyError(err)) throw err;
@@ -751,7 +744,10 @@ export function encodeResponseSseEvent(raw: string): { sse: string; terminal: bo
         payload = JSON.stringify(failed);
         eventType = "response.failed";
       }
-      terminal = eventType === "response.completed" || eventType === "response.failed";
+      terminal =
+        eventType === "response.completed" ||
+        eventType === "response.failed" ||
+        eventType === "response.incomplete";
     }
   } catch {
     console.warn("[codex] SSE payload parse failed, using raw payload");
@@ -1047,7 +1043,8 @@ export class CodexExecutor extends BaseExecutor {
             );
           };
           ws.onclose = () => {
-            finishStream({ reason: "upstream_closed", closeSocket: false });
+            if (!closed)
+              failController("upstream_websocket_closed", "Codex stream closed before completion");
           };
           if (!closed) {
             await prl.captureCurrentProviderBody(url, headers, bodyString, nextInput.log);

@@ -236,7 +236,7 @@ export const updateSettingsSchema = z.object({
   codexServiceTier: z
     .object({
       enabled: z.boolean().optional(),
-      tier: z.enum(["default", "priority", "flex"]).optional(),
+      tier: z.enum(["default", "priority", "fast", "ultrafast", "flex"]).optional(),
       supportedModels: z.array(z.string().max(200)).max(200).optional(),
     })
     .optional(),

@@ -14,7 +14,13 @@ function isHttpUrl(value: string): boolean {
 }
 
 const CODEX_REASONING_EFFORT_VALUES = new Set(["none", "low", "medium", "high", "xhigh", "max"]);
-const REQUEST_DEFAULT_SERVICE_TIER_VALUES = new Set(["default", "priority", "fast", "flex"]);
+const REQUEST_DEFAULT_SERVICE_TIER_VALUES = new Set([
+  "default",
+  "priority",
+  "fast",
+  "ultrafast",
+  "flex",
+]);
 const CODEX_FINGERPRINT_MODE_VALUES = new Set(["off", "device", "session", "full"]);
 const CACHE_PASSTHROUGH_VALUES = new Set(["strip", "openai-format", "claude-format"]);
 const PEAK_HOUR_PROTECTION_MODES = new Set(["block", "avoid"]);
@@ -326,7 +332,7 @@ export function validateProviderSpecificData(
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           message:
-            "providerSpecificData.requestDefaults.serviceTier must be one of default, priority, fast, flex when provided",
+            "providerSpecificData.requestDefaults.serviceTier must be one of default, priority, fast, ultrafast, flex when provided",
           path: ["requestDefaults", "serviceTier"],
         });
       }

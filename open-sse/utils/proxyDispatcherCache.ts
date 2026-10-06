@@ -22,20 +22,55 @@ type GlobalWithDispatcherCache = typeof globalThis & {
  * still been observed queuing every subsequent same-origin request until the
  * previous stream emits trailers. Using several one-connection Agents gives
  * each long SSE stream an independent pool/client and prevents one stream from
- * monopolizing the effective queue while keeping pipelining disabled.
+ * monopolizing the effective queue. Occupancy is tracked per origin, so a
+ * busy stream never receives another request while another slot is idle.
  */
-class RoundRobinDispatcher {
+class CapacityAwareDispatcher {
   private readonly dispatchers: Dispatcher[];
   private nextIndex = 0;
+  private readonly occupancy = new Map<string, number[]>();
 
   constructor(dispatchers: Dispatcher[]) {
     this.dispatchers = dispatchers;
   }
 
   dispatch(options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean {
-    const dispatcher = this.dispatchers[this.nextIndex % this.dispatchers.length];
-    this.nextIndex = (this.nextIndex + 1) % this.dispatchers.length;
-    return dispatcher.dispatch(options, handler);
+    const origin = String(options.origin);
+    const counts = this.occupancy.get(origin) ?? this.dispatchers.map(() => 0);
+    this.occupancy.set(origin, counts);
+    let index = this.nextIndex % this.dispatchers.length;
+    for (let offset = 1; offset < this.dispatchers.length; offset++) {
+      const candidate = (this.nextIndex + offset) % this.dispatchers.length;
+      if (counts[candidate] < counts[index]) index = candidate;
+    }
+    this.nextIndex = (index + 1) % this.dispatchers.length;
+    counts[index]++;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      counts[index]--;
+      if (counts.every((count) => count === 0)) this.occupancy.delete(origin);
+    };
+    // Delegate with the original receiver: fetch handlers may carry private fields.
+    const tracked = new Proxy(handler, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (["onResponseEnd", "onResponseError", "onRequestUpgrade"].includes(String(property))) {
+          return (...args: unknown[]) => {
+            release();
+            if (typeof value === "function") return Reflect.apply(value, target, args);
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    try {
+      return this.dispatchers[index].dispatch(options, tracked);
+    } catch (error) {
+      release();
+      throw error;
+    }
   }
 
   close(callback?: () => void): Promise<void> | void {
@@ -67,7 +102,9 @@ class RoundRobinDispatcher {
 }
 
 export function createRoundRobinDispatcher(dispatchers: Dispatcher[]): Dispatcher {
-  return new RoundRobinDispatcher(dispatchers) as unknown as Dispatcher;
+  // Retain the internal factory name for existing callers; ties rotate in
+  // order, but current transport occupancy always takes precedence.
+  return new CapacityAwareDispatcher(dispatchers) as unknown as Dispatcher;
 }
 
 export function getDispatcherCache(): DispatcherCache {

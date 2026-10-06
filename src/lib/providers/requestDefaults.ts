@@ -56,13 +56,14 @@ export function normalizeCodexReasoningEffort(value: unknown): CodexReasoningEff
   return normalized as CodexReasoningEffort;
 }
 
-export type CodexServiceTier = "default" | "priority" | "flex";
+export type CodexServiceTier = "default" | "priority" | "fast" | "ultrafast" | "flex";
 
 export function normalizeCodexServiceTier(value: unknown): CodexServiceTier | undefined {
   const normalized = normalizeString(value);
   if (!normalized) return undefined;
-  if (normalized === "fast" || normalized === "priority") return "priority";
-  if (normalized === "default" || normalized === "flex") return normalized;
+  if (["default", "priority", "fast", "ultrafast", "flex"].includes(normalized)) {
+    return normalized as CodexServiceTier;
+  }
   return undefined;
 }
 

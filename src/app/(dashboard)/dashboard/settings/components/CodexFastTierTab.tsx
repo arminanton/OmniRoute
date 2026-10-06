@@ -5,20 +5,12 @@ import { Card, Toggle, Select } from "@/shared/components";
 import { useTranslations } from "next-intl";
 import {
   CODEX_FAST_TIER_DEFAULT_SUPPORTED_MODELS,
+  getCodexFastTierCatalog,
   resolveCodexGlobalFastServiceTier,
+  type CodexFastTierValue,
 } from "@/lib/providers/codexFastTier";
 
-type TierValue = "default" | "priority" | "flex";
-
-// Fast-eligible Codex models per OpenAI ~/.codex/models_cache.json (service_tiers: priority).
-// Other future Fast-eligible slugs can be added here without code changes once the user
-// opts them in via the checkbox UI.
-const CODEX_FAST_TIER_CATALOG: readonly string[] = [
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.5",
-];
+type TierValue = CodexFastTierValue;
 
 export default function CodexFastTierTab() {
   const [enabled, setEnabled] = useState(false);
@@ -30,10 +22,20 @@ export default function CodexFastTierTab() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<"" | "saved" | "error">("");
   const [modelsOpen, setModelsOpen] = useState(false);
+  const [catalogModels, setCatalogModels] = useState<unknown[]>([]);
+  const [customModel, setCustomModel] = useState("");
   const t = useTranslations("settings");
 
   useEffect(() => {
     let cancelled = false;
+    fetch("/api/models?all=true")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && Array.isArray(data?.models)) setCatalogModels(data.models);
+      })
+      .catch(() => {
+        /* Saved/custom models remain usable if catalog discovery fails. */
+      });
     fetch("/api/settings")
       .then((res) => res.json())
       .then((data) => {
@@ -55,9 +57,8 @@ export default function CodexFastTierTab() {
   const allCatalogModels = useMemo(() => {
     // Union of the catalog and any custom models the user has stored, so we don't
     // silently drop a slug the user added on a future Codex release.
-    const set = new Set<string>([...CODEX_FAST_TIER_CATALOG, ...supportedModels]);
-    return Array.from(set);
-  }, [supportedModels]);
+    return getCodexFastTierCatalog(catalogModels, supportedModels);
+  }, [catalogModels, supportedModels]);
 
   const save = async (next: {
     enabled?: boolean;
@@ -157,6 +158,8 @@ export default function CodexFastTierTab() {
             onChange={(e) => save({ tier: e.target.value as TierValue })}
             options={[
               { value: "priority", label: t("codexFastTierTierPriority") },
+              { value: "fast", label: t("codexFastTierTierFast") },
+              { value: "ultrafast", label: t("codexFastTierTierUltrafast") },
               { value: "flex", label: t("codexFastTierTierFlex") },
               { value: "default", label: t("codexFastTierTierDefault") },
             ]}
@@ -178,6 +181,34 @@ export default function CodexFastTierTab() {
             {modelsOpen && (
               <div className="mt-3 pl-6 flex flex-col gap-2">
                 <p className="text-xs text-text-muted/80">{t("codexFastTierModelsHint")}</p>
+                <form
+                  className="flex gap-2"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const model = customModel.trim();
+                    if (!model || model.length > 200 || supportedModels.length >= 200) return;
+                    toggleModel(model, true);
+                    setCustomModel("");
+                  }}
+                >
+                  <input
+                    className="rounded border border-border bg-bg-main px-2 py-1 text-sm"
+                    value={customModel}
+                    onChange={(event) => setCustomModel(event.target.value)}
+                    placeholder={t("codexFastTierCustomModel")}
+                    aria-label={t("codexFastTierCustomModel")}
+                    maxLength={200}
+                    disabled={loading || saving}
+                  />
+                  <button
+                    type="submit"
+                    disabled={
+                      loading || saving || !customModel.trim() || supportedModels.length >= 200
+                    }
+                  >
+                    {t("codexFastTierAddModel")}
+                  </button>
+                </form>
                 {allCatalogModels.map((slug) => {
                   const checked = supportedModels.includes(slug);
                   return (
@@ -186,7 +217,7 @@ export default function CodexFastTierTab() {
                         type="checkbox"
                         className="h-4 w-4"
                         checked={checked}
-                        disabled={loading || saving}
+                        disabled={loading || saving || (!checked && supportedModels.length >= 200)}
                         onChange={(e) => toggleModel(slug, e.target.checked)}
                         aria-label={t("codexFastTierModelCheckbox", { model: slug })}
                       />

@@ -163,10 +163,11 @@ function getDefaultDispatcherOptions(env: Record<string, string | undefined> = p
   // connection-limit option here, but getDefaultDispatcher() fans it out across
   // independent one-connection Agents; in production traces, one multi-connection
   // Agent could still queue same-origin Codex streams behind prior trailers.
+  // Pipelining 1 serializes responses per socket while allowing keep-alive.
   return {
     ...options,
     connections: getDefaultDispatcherConnectionLimit(env),
-    pipelining: 0,
+    pipelining: 1,
   };
 }
 
@@ -175,7 +176,9 @@ function createRoundRobinDirectDispatcher(connectionLimit: number): Dispatcher {
   const perAgentOptions = {
     ...baseOptions,
     connections: 1,
-    pipelining: 0,
+    // One active HTTP/1.1 response per socket, with keep-alive between turns.
+    // Undici's pipelining:0 disables keep-alive, even with a positive idle TTL.
+    pipelining: 1,
   };
   const dispatchers = Array.from({ length: connectionLimit }, () => new Agent(perAgentOptions));
   const dispatcher = createRoundRobinDispatcher(dispatchers);

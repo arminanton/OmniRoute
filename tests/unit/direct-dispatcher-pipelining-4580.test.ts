@@ -19,9 +19,9 @@ afterEach(() => clearDispatcherCache());
 // mirrors that fix while KEEPING keep-alive (a proxy-only concern was the 1ms TTL).
 
 describe("#4580 direct dispatcher options", () => {
-  it("disables pipelining so concurrent streams open separate sockets", () => {
+  it("allows one active response per socket while retaining keep-alive", () => {
     const opts = __getDefaultDispatcherOptionsForTest({});
-    assert.equal(opts.pipelining, 0);
+    assert.equal(opts.pipelining, 1);
   });
 
   it("caps connections to a finite number (default 32)", () => {

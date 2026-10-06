@@ -1000,7 +1000,8 @@ async function patchedFetch(
             dispatcher: attempt === 0 ? getDefaultDispatcher() : getRetryDispatcher(),
           },
           _undiciDirect,
-          directHeadersTimeoutMs
+          directHeadersTimeoutMs,
+          !deps.undiciFetch
         );
       } catch (dispatcherError) {
         if (isRuntimePolicyError(dispatcherError)) throw dispatcherError;
