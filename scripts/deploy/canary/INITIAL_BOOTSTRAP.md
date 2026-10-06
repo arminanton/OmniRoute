@@ -158,7 +158,17 @@ maintenance name/CID and dedicated attested namespace are required; it must not
 appear in the two traffic-generation records or be selected by the front door.
 The maintenance role's actual coordinator lease and periodic
 startup barrier must be observed; an env declaration or nonexistent extra launcher
-flag is not evidence. A second93 generation may be used as the initial canary peer:
+flag is not evidence. Maintenance is **nontraffic**: its authenticated
+`omni-canary-readiness/v1` response may correctly be503 with `ready:false`, because
+it has no paired traffic conversation proof and its physical upstream coverage is
+unknown. The maintenance witness requires the exact schema/generation and actual
+app-generation response header, `databaseReady:true`, protocol
+`omni-coordination/v1` and all three `accountAdmission`, `refreshOwnership`,
+`backgroundOwnership` flags true. Bind that witness to the actual running child
+PID/argv, fixed role/coordinator environment, immutable image and reviewed
+entry/loader hashes. An arbitrary503, error envelope, startup-only log or declared
+role is not accepted. Do not override `ready` or substitute unknown lifecycle
+counts with zero. Traffic-generation readiness remains the full paired200 check. A second93 generation may be used as the initial canary peer:
 both immutable builds then speak the same protocol. Run the existing paired
 conversation proof, schema/cache/auth readiness and account/refresh/background
 coordination checks. Only a true ready result allows selection and unpausing.
@@ -209,3 +219,28 @@ loopback, existing conntrack/NAT hooks and no physical egress. It checks both na
 name and inode before running the fixture, and tears down only its owned processes
 and namespace. The negative first-hook and mistaken keepalive-as-fresh runs remain
 in the audit evidence; the final matching-live-hook run passes.
+
+## Actual maintenance acceptance evidence
+
+The immutable accepted93 image was run with UID10001, read-only root, networkNONE,
+private fake app/coordinator data and the reviewed fixed loader/entry mounts. The
+unwrapped maintenance role failed actual Next instrumentation with “Maintenance
+ownership absent.” The wrapped role reached real registration, started actual
+periodic schedulers, returned authenticated settings200 and the expected strict
+nontraffic readiness503 with database/coordination-three true. No real credential
+rotation is claimed from an empty fake provider database.
+
+The same durable lease survived145seconds with expiry advancing150seconds,
+beyond its30second TTL. A competing real entry queued but never reached Next
+startup and exited after the ownership-acquisition timeout. Both SIGTERM and
+forced private coordinator lease loss stopped the actual application; no lease or
+unowned fixture remained. The latest loader removed injected
+NEXT_MANUAL_SIG_HANDLE from the **actual maintenance child**, preserving fixed
+IPv4-first/2048MiB arguments. Parent and child observations were distinguished.
+Original server.env bootstrap secrets remained byte-identical. All five owned
+fake containers were removed. Evidence is recorded under the private
+maintenance-acceptance audit with exact tested image/asset hashes.
+
+This proves actual Next/server/periodic behavior with real SQLite/global ALS. It
+does not pretend that networkNONE supplies a residential kernel attestation; the
+runtime compiler's existing boundary argv still needs its real installed proof.
