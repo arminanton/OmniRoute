@@ -46,12 +46,12 @@ import {
   resolveAntigravityOutputCap,
 } from "./antigravityOutputCap.ts";
 export { MAX_ANTIGRAVITY_OUTPUT_TOKENS } from "./antigravityOutputCap.ts";
-import {
-  ensureAntigravityProjectAssigned,
-  ANTIGRAVITY_REQUIRES_MANUAL_PROJECT,
-} from "../services/antigravityProjectBootstrap.ts";
+import { ensureAntigravityProjectAssigned } from "../services/antigravityProjectBootstrap.ts";
 import { persistDiscoveredAntigravityProjectId } from "../services/antigravityProjectPersist.ts";
-import { markAntigravityMissingCloudCodeProject } from "../services/antigravityProjectPersistence.ts";
+import {
+  withResolvedAntigravityProject,
+  selectAntigravityProjectId,
+} from "../services/antigravityRequestProject.ts";
 import {
   resolveAntigravityModelId,
   getAntigravityModelFallbacks,
@@ -658,125 +658,11 @@ export class AntigravityExecutor extends BaseExecutor {
     modelIdOverride?: string,
     signal?: AbortSignal
   ): Promise<AntigravityRequestEnvelope | Response> {
-    // Project ID resolution: prefer OAuth-stored projectId over incoming body.project
-    // to avoid stale/wrong client-side values causing 404/403 from Cloud Code endpoints.
-    // Opt-in escape hatch: set OMNIROUTER_ALLOW_BODY_PROJECT_OVERRIDE=1.
-    const normalizeProjectId = (value: unknown): string | null => {
-      if (typeof value !== "string") return null;
-      const trimmedValue = value.trim();
-      return trimmedValue ? trimmedValue : null;
-    };
     const bodyRecord = asRecord(body) ?? {};
-    const bodyProjectId = normalizeProjectId(bodyRecord.project);
-    const credentialsProjectId = normalizeProjectId(credentials?.projectId);
-    const providerSpecificProjectId = normalizeProjectId(
-      (credentials?.providerSpecificData as Record<string, unknown> | undefined)?.projectId
-    );
-    const allowBodyProjectOverride = process.env.OMNIROUTE_ALLOW_BODY_PROJECT_OVERRIDE === "1";
-
-    // Default: prefer OAuth-stored projectId over incoming body.project to avoid
-    // stale/wrong client-side values causing 404/403 from Cloud Code endpoints.
-    // Opt-in escape hatch: set OMNIROUTE_ALLOW_BODY_PROJECT_OVERRIDE=1.
-    let projectId =
-      allowBodyProjectOverride && bodyProjectId
-        ? bodyProjectId
-        : credentialsProjectId || providerSpecificProjectId || bodyProjectId;
-
-    // Auto-discover a missing projectId via loadCodeAssist before failing (#2334/#2541).
-    // A freshly re-added Antigravity account can have an empty stored projectId even when
-    // its Google account already owns a Cloud Code project (the OAuth-time loadCodeAssist
-    // returned empty/transiently failed). Mirror the Cloud Code bootstrap to recover it
-    // here — the helper memoizes per access-token, so this is a one-time round-trip.
-    let requiresManualProject = false;
-    if (!projectId && credentials?.accessToken) {
-      const discovered = await ensureAntigravityProjectAssigned(
-        credentials.accessToken,
-        fetch,
-        getAntigravityClientProfile(credentials),
-        signal
-      );
-      if (discovered && discovered !== ANTIGRAVITY_REQUIRES_MANUAL_PROJECT) {
-        projectId = discovered;
-        // #8491: persist the recovered id so it survives the next token refresh
-        // or process restart instead of being silently rediscovered every time.
-        await persistDiscoveredAntigravityProjectId(
-          credentials.connectionId,
-          discovered,
-          credentials.providerSpecificData
-        );
-      }
-      requiresManualProject = discovered === ANTIGRAVITY_REQUIRES_MANUAL_PROJECT;
-    }
-
-    if (!projectId) {
-      markAntigravityMissingCloudCodeProject(credentials?.connectionId);
-      if (requiresManualProject) {
-        // Google no longer auto-creates GCP projects for standard-tier
-        // accounts (tracked in #8491): fail fast with a clear instruction
-        // instead of the generic 422 — a fabricated/omitted id only earns a
-        // delayed 429 RESOURCE_EXHAUSTED from Google's quota check.
-        const errorBody = {
-          error: {
-            message:
-              "GCP_PROJECT_REQUIRED: Google Antigravity now requires a free GCP Project ID. " +
-              "Create one at console.cloud.google.com and enter it in Providers → Antigravity " +
-              "(connection settings → Project ID). Automatic project creation is no longer " +
-              "available for personal accounts.",
-            type: "gcp_project_required",
-            code: "gcp_project_required",
-          },
-        };
-        // 422, not 403: chatCore's generic "401/403 → refresh credentials and
-        // retry" path would otherwise hit Google's OAuth token endpoint on
-        // every request from an affected account — pointless, since refreshing
-        // the token cannot create a GCP project. 422 also matches the sibling
-        // missing_project_id error, which the client already maps to a clear
-        // "action needed" prompt.
-        const resp = new Response(JSON.stringify(errorBody), {
-          status: 422,
-          headers: { "Content-Type": "application/json" },
-        });
-        // Returning a Response object signals the executor to stop and forward it
-        return resp as unknown as never;
-      }
-      // (#489) Return a structured error instead of throwing — gives the client a clear signal
-      // to show a "Reconnect OAuth" prompt rather than an opaque "Internal Server Error".
-      const errorMsg =
-        "Missing Google projectId for Antigravity account. Auto-discovery via loadCodeAssist " +
-        "found no Cloud Code project. Please reconnect OAuth in Providers → Antigravity (and " +
-        "ensure the Google account has completed Gemini Code Assist onboarding).";
-      const errorBody = {
-        error: {
-          message: errorMsg,
-          type: "oauth_missing_project_id",
-          code: "missing_project_id",
-        },
-      };
-      const resp = new Response(JSON.stringify(errorBody), {
-        status: 422,
-        headers: { "Content-Type": "application/json" },
-      });
-      // Returning a Response object signals the executor to stop and forward it
-      return resp as unknown as never;
-    }
-
-    // Validate projectId is non-empty and not just whitespace
-    const trimmedProjectId = typeof projectId === "string" ? projectId.trim() : projectId;
-    if (!trimmedProjectId) {
-      const resp = new Response(
-        JSON.stringify({
-          error: {
-            message:
-              "Invalid (empty) Google projectId for Antigravity account. " +
-              "Please reconnect OAuth in Providers → Antigravity.",
-            type: "oauth_missing_project_id",
-            code: "missing_project_id",
-          },
-        }),
-        { status: 422, headers: { "Content-Type": "application/json" } }
-      );
-      return resp as unknown as never;
-    }
+    const scoped = await withResolvedAntigravityProject(credentials, bodyRecord, signal);
+    if (scoped instanceof Response) return scoped;
+    credentials = scoped;
+    const projectId = selectAntigravityProjectId(credentials, bodyRecord)!;
 
     const requestedClaude = splitAntigravityClaudeEffort(model);
     const thinkingLevel = getAntigravityClaudeThinkingLevel(model, bodyRecord);

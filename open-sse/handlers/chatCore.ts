@@ -1,3 +1,4 @@
+import { withResolvedAntigravityProject } from "../services/antigravityRequestProject.ts";
 import {
   isUncertainGenerationAcceptance,
   getGenerationDispatchPhase,
@@ -1244,6 +1245,26 @@ export async function handleChatCore({
     model: requestedModel,
     body: body && typeof body === "object" ? (body as Record<string, unknown>) : null,
   });
+  if (provider === "antigravity" || provider === "agy") {
+    assertManagedLeaseFence(getCurrentConnectionId());
+    const projectCredentials = await withResolvedAntigravityProject(
+      credentials,
+      body,
+      clientRawRequest?.signal
+    );
+    if (projectCredentials instanceof Response) {
+      const failure = await projectCredentials.json();
+      trackPendingRequest(model, provider, connectionId, false);
+      return createErrorResult(
+        422,
+        failure.error.message,
+        null,
+        failure.error.code,
+        failure.error.type
+      );
+    }
+    credentials = projectCredentials;
+  }
   const codexConversation =
     getCodexClientSessionId(clientRawRequest?.headers) || explicitSessionIdHeader || conversationId;
   credentials = withCodexConversationIdentity(

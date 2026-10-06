@@ -86,3 +86,11 @@ still run. Changing identity or losing data invalidates readiness. Fresh overlap
 approval remains short-lived and is re-exchanged before cutover; retiring the peer
 does not falsely make a healthy survivor depend on a dead process every minute.
 The probe also verifies exact native response-ID ownership metadata.
+
+Antigravity resolves the actual project before signature lookup and translation. Stored account
+projects take precedence unless `OMNIROUTE_ALLOW_BODY_PROJECT_OVERRIDE=1` is enabled; an allowed
+client override updates only cloned request credentials. Missing projects use the existing bounded
+bootstrap and persist only its authenticated discovery. Signature namespaces include that resolved
+project, while the stable conversation session ID is unchanged. The bootstrap manual-project sentinel
+is never sent as a project ID. Parallel requests for different projects cannot retrieve each other's
+cached signatures, and correctly supplied native signatures retain their existing validation behavior.

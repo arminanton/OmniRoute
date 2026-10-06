@@ -31,6 +31,7 @@ Live count: `ls open-sse/services/*.ts | wc -l` (currently 134). More including 
 - **`tokenRefresh.ts`** — OAuth token expiration detection and refresh.
 - **`accountFallback.ts`** — Account switching on quota/rate-limit. Also houses model lockout.
 - **`sessionManager.ts`** — Request session state across retries.
+- **`antigravityRequestProject.ts`** — Shared request-local project resolution before signature translation and executor serialization; only authenticated discoveries are persisted.
 
 ### Request Routing & Intelligence
 
