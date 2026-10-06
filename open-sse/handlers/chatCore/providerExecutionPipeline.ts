@@ -33,6 +33,8 @@ export interface ProviderExecutionPolicy {
   allowAccountRotation: boolean;
   allowModelFallback: boolean;
   expectedConnectionId?: string;
+  pinnedConnectionId?: string | null;
+  allowedConnectionIds?: readonly string[] | null;
 }
 
 export type ProviderExecutionOutcome =
@@ -404,7 +406,11 @@ export async function runProviderExecutionPipeline(
     );
 
     const isolateProbe = await state.isolateProbeFailures();
-    const canRotateAccount = policy.allowAccountRotation && !isolateProbe;
+    const canRotateAccount =
+      policy.allowAccountRotation &&
+      !policy.pinnedConnectionId &&
+      policy.allowedConnectionIds?.length !== 0 &&
+      !isolateProbe;
 
     if (
       canRotateAccount &&
@@ -425,14 +431,26 @@ export async function runProviderExecutionPipeline(
         await state.onClearSessionAffinity?.({ failedConnectionId: failedId });
       }
       const nextCreds = await connection
-        .getProviderCredentials("codex", null, null, wire.currentModel, {
-          excludeConnectionIds: [...excludedIds],
-        })
+        .getProviderCredentials(
+          "codex",
+          null,
+          policy.allowedConnectionIds ? [...policy.allowedConnectionIds] : null,
+          wire.currentModel,
+          {
+            excludeConnectionIds: [...excludedIds],
+          }
+        )
         .catch((error) => {
           if (isRuntimePolicyError(error)) throw error;
           return null;
         });
-      if (nextCreds && !nextCreds.allRateLimited && nextCreds.connectionId) {
+      if (
+        nextCreds &&
+        !nextCreds.allRateLimited &&
+        nextCreds.connectionId &&
+        (!policy.allowedConnectionIds ||
+          policy.allowedConnectionIds.includes(String(nextCreds.connectionId)))
+      ) {
         await state.onAuditAccountRotation?.({
           action: "codex.account_rotation",
           failedConnectionId: failedId,
@@ -466,14 +484,26 @@ export async function runProviderExecutionPipeline(
           );
         }
         const nextCreds = await connection
-          .getProviderCredentials("antigravity", null, null, wire.currentModel, {
-            excludeConnectionIds: [...excludedIds],
-          })
+          .getProviderCredentials(
+            "antigravity",
+            null,
+            policy.allowedConnectionIds ? [...policy.allowedConnectionIds] : null,
+            wire.currentModel,
+            {
+              excludeConnectionIds: [...excludedIds],
+            }
+          )
           .catch((error) => {
             if (isRuntimePolicyError(error)) throw error;
             return null;
           });
-        if (nextCreds && !nextCreds.allRateLimited && nextCreds.connectionId) {
+        if (
+          nextCreds &&
+          !nextCreds.allRateLimited &&
+          nextCreds.connectionId &&
+          (!policy.allowedConnectionIds ||
+            policy.allowedConnectionIds.includes(String(nextCreds.connectionId)))
+        ) {
           connection.replaceCredentials(nextCreds as Record<string, unknown>);
           antigravityByopRotationPending = true;
           continue;

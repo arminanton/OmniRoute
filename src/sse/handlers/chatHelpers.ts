@@ -51,7 +51,10 @@ import { resolveUseUpstream429BreakerHints } from "../../shared/utils/providerHi
 import { logProxyEvent } from "../../lib/proxyLogger";
 import { logTranslationEvent } from "../../lib/translatorEvents";
 import { getRuntimeProviderProfile } from "@omniroute/open-sse/services/accountFallback.ts";
-import { runMaxaiConnectionTransport, wasMaxaiTlsUsed } from "@omniroute/open-sse/services/maxaiTransport.ts";
+import {
+  runMaxaiConnectionTransport,
+  wasMaxaiTlsUsed,
+} from "@omniroute/open-sse/services/maxaiTransport.ts";
 
 // Models that explicitly cannot run on the codex/ChatGPT-Pro OAuth pool — when
 // a caller writes `codex/deepseek-v4-pro` we transparently reroute to the
@@ -421,6 +424,7 @@ export async function executeChatWithBreaker({
   provider,
   model,
   refreshedCredentials,
+  accountSelectionScope = null,
   proxyInfo,
   appliedProxySink,
   log: handlerLog,
@@ -506,11 +510,15 @@ export async function executeChatWithBreaker({
   try {
     const isMaxai = provider === "maxai" || provider === "mx";
     const withInferenceProxyContext = <T>(fn: () => Promise<T>): Promise<T> =>
-      isMaxai ? runMaxaiConnectionTransport(credentials.connectionId, fn) : runWithProxyContext(
-        proxyInfo?.proxy || null,
-        fn,
-        provider === "nous-oauth" || provider === "nso" ? { skipUnreachableProbe: true } : undefined
-      );
+      isMaxai
+        ? runMaxaiConnectionTransport(credentials.connectionId, fn)
+        : runWithProxyContext(
+            proxyInfo?.proxy || null,
+            fn,
+            provider === "nous-oauth" || provider === "nso"
+              ? { skipUnreachableProbe: true }
+              : undefined
+          );
     const chatFn = () =>
       capture(() =>
         withInferenceProxyContext(() =>
@@ -530,6 +538,7 @@ export async function executeChatWithBreaker({
               targetFormat: modelTargetFormat,
             },
             credentials: refreshedCredentials,
+            accountSelectionScope,
             log: handlerLog,
             clientRawRequest,
             connectionId: credentials.connectionId,
@@ -625,12 +634,13 @@ export async function executeChatWithBreaker({
     // after resolving NO_PROXY/local bypasses, so predicting from proxyInfo here
     // would drop the account scope when a configured proxy resolves to direct.
     const tlsFingerprintActive = isMaxai || isTlsFingerprintActive(provider);
-    const trackedChat = () => isMaxai
-      ? runMaxaiConnectionTransport(credentials.connectionId, async () => {
-          const result = await chatFn();
-          return { result, tlsFingerprintUsed: wasMaxaiTlsUsed() };
-        })
-      : runWithTlsTracking(tlsTrackingIdentity, chatFn);
+    const trackedChat = () =>
+      isMaxai
+        ? runMaxaiConnectionTransport(credentials.connectionId, async () => {
+            const result = await chatFn();
+            return { result, tlsFingerprintUsed: wasMaxaiTlsUsed() };
+          })
+        : runWithTlsTracking(tlsTrackingIdentity, chatFn);
 
     if (isShadowTraffic) {
       if (!bypassCircuitBreaker && breaker && !breaker.canExecute()) {
@@ -665,10 +675,9 @@ export async function executeChatWithBreaker({
     }
 
     if (tlsFingerprintActive) {
-      const tracked = await breaker.execute(
-        trackedChat,
-        { classifyResult: chatPathOwnsBreakerAccounting }
-      );
+      const tracked = await breaker.execute(trackedChat, {
+        classifyResult: chatPathOwnsBreakerAccounting,
+      });
       return { result: tracked.result, tlsFingerprintUsed: tracked.tlsFingerprintUsed };
     }
 

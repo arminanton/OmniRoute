@@ -1,3 +1,7 @@
+import {
+  resolveAccountSelectionScope,
+  type AccountSelectionScope,
+} from "./chatCore/accountSelectionScope.ts";
 import { getRequestTransportTelemetry } from "../utils/transportTelemetry.ts";
 import { withResolvedAntigravityProject } from "../services/antigravityRequestProject.ts";
 import {
@@ -515,6 +519,7 @@ export async function handleChatCore({
   clientRawRequest,
   connectionId,
   apiKeyInfo = null,
+  accountSelectionScope = null as AccountSelectionScope | null,
   reasoningCacheContext = null as ReasoningCacheContext | null,
   userAgent,
   comboName,
@@ -4248,12 +4253,21 @@ export async function handleChatCore({
     }
   };
 
+  const selectionScope = resolveAccountSelectionScope(
+    accountSelectionScope,
+    apiKeyInfo?.allowedConnections
+  );
   let pipelineRecovered = false;
   if (stream) {
     try {
       const pipelineOutcome = await runProviderExecutionPipeline({
         policy: {
-          allowAccountRotation: !managedLease && comboStrategy !== "context-relay",
+          allowAccountRotation:
+            !managedLease &&
+            !selectionScope.pinnedConnectionId &&
+            comboStrategy !== "context-relay",
+          pinnedConnectionId: selectionScope.pinnedConnectionId,
+          allowedConnectionIds: selectionScope.allowedConnectionIds,
           allowModelFallback: true,
           expectedConnectionId: managedLease
             ? String(getCurrentConnectionId() || connectionId || "") || undefined
@@ -5335,7 +5349,10 @@ export async function handleChatCore({
         expectedConnectionId: managedLease
           ? String(getCurrentConnectionId() || connectionId || "") || undefined
           : undefined,
-        allowAccountRotation: !managedLease && comboStrategy !== "context-relay",
+        allowAccountRotation:
+          !managedLease && !selectionScope.pinnedConnectionId && comboStrategy !== "context-relay",
+        pinnedConnectionId: selectionScope.pinnedConnectionId,
+        allowedConnectionIds: selectionScope.allowedConnectionIds,
         allowModelFallback: true,
         executeProviderRequest: (modelToCall, allowDedup) =>
           executeProviderRequest(modelToCall, allowDedup),

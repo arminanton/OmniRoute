@@ -1971,6 +1971,10 @@ async function handleSingleModelChatImplementation(
             provider,
             model: effectiveModel,
             refreshedCredentials,
+            accountSelectionScope: {
+              pinnedConnectionId: forcedConnectionId || null,
+              allowedConnectionIds: effectiveAllowedConnections,
+            },
             proxyInfo,
             appliedProxySink,
             log,
