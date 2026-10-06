@@ -1,0 +1,1 @@
+- **fix(dashboard):** Cloudflare tunnel failures now display the actionable message from structured API errors.

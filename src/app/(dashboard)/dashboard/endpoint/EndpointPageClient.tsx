@@ -5,6 +5,7 @@ import { Card, Button, Input, Modal, CardSkeleton, SegmentedControl } from "@/sh
 import Toggle from "@/shared/components/Toggle";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { isPublicDisplayBaseUrl, useDisplayBaseUrl } from "@/shared/hooks";
+import { extractApiErrorMessage } from "@/shared/http/apiErrorMessage";
 import { useTranslations } from "next-intl";
 import A2ADashboardPage from "./components/A2ADashboard";
 import McpDashboardPage from "./components/MCPDashboard";
@@ -706,8 +707,10 @@ export default function APIPageClient({ machineId }: Readonly<APIPageClientProps
 
       if (!res.ok) {
         throw new Error(
-          data?.error ||
+          extractApiErrorMessage(
+            data,
             translateOrFallback("cloudflaredRequestFailed", "Failed to update Cloudflare tunnel")
+          )
         );
       }
 
