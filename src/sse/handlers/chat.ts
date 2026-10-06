@@ -1360,6 +1360,7 @@ async function handleChatImplementation(
     {
       sessionId,
       sessionAffinityKey,
+      cachedSettings: settingsForContinuation,
       forceLiveComboTest: isComboLiveTest,
       forcedConnectionId: requestedConnectionId,
       correlationId: reqId,
