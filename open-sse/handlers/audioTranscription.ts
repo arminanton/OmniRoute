@@ -24,9 +24,16 @@ import { buildAuthHeaders } from "../config/registryUtils.ts";
 import { kieExecutor } from "../executors/kie.ts";
 import { vertexTranscribe } from "../executors/vertexMedia.ts";
 import { errorResponse } from "../utils/error.ts";
+import {
+  normalizeUpstreamErrorStatus,
+  sanitizeUpstreamErrorMessage,
+  sanitizedUpstreamErrorResponse,
+  upstreamErrorResponse,
+} from "../utils/audioResponse.ts";
 import { isJsonObject } from "../utils/kieTask.ts";
 import { handleOpenRouterTranscription } from "./openrouterTranscription.ts";
 import { transcribeMaxaiAudio } from "../executors/maxai/transcription.ts";
+export { upstreamErrorResponse };
 
 type TranscriptionCredentials = {
   apiKey?: string;
@@ -35,36 +42,6 @@ type TranscriptionCredentials = {
   connectionId?: string;
   providerSpecificData?: Record<string, unknown>;
 };
-
-/**
- * Return a CORS error response from an upstream fetch failure
- */
-export function upstreamErrorResponse(res, errText) {
-  // Always return JSON so the client can parse the error reliably
-  let errorMessage: string;
-  try {
-    const parsed = JSON.parse(errText);
-    // Guard against `parsed.error` or `parsed.detail` being objects
-    const raw =
-      parsed?.err_msg ||
-      parsed?.error?.message ||
-      (typeof parsed?.error === "string" ? parsed.error : null) ||
-      parsed?.message ||
-      (typeof parsed?.detail === "string" ? parsed.detail : parsed?.detail?.message) ||
-      null;
-    errorMessage = raw ? String(raw) : errText || `Upstream error (${res.status})`;
-  } catch {
-    errorMessage = errText || `Upstream error (${res.status})`;
-  }
-
-  return Response.json(
-    { error: { message: errorMessage, code: res.status } },
-    {
-      status: res.status,
-      headers: { ...CORS_HEADERS },
-    }
-  );
-}
 
 /**
  * Validate a path segment to prevent path traversal / SSRF.
@@ -279,7 +256,7 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
     await new Promise((r) => setTimeout(r, 2000));
 
     const pollRes = await fetch(pollUrl, { headers: authHeaders });
-    if (!pollRes.ok) continue;
+    if (!pollRes.ok) return upstreamErrorResponse(pollRes, await pollRes.text());
 
     const result = await pollRes.json();
 
@@ -288,7 +265,7 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
     }
 
     if (result.status === "error") {
-      return errorResponse(500, result.error || "AssemblyAI transcription failed");
+      return sanitizedUpstreamErrorResponse(500, result.error, "AssemblyAI transcription failed");
     }
   }
 
@@ -339,7 +316,7 @@ async function handleGladiaTranscription(providerConfig, file, modelId, token) {
     await new Promise((r) => setTimeout(r, 2000));
 
     const pollRes = await fetch(resultUrl, { headers: authHeaders });
-    if (!pollRes.ok) continue;
+    if (!pollRes.ok) return upstreamErrorResponse(pollRes, await pollRes.text());
 
     const result = await pollRes.json();
 
@@ -349,7 +326,11 @@ async function handleGladiaTranscription(providerConfig, file, modelId, token) {
     }
 
     if (result.status === "error") {
-      return errorResponse(500, result.error_code || result.error || "Gladia transcription failed");
+      return sanitizedUpstreamErrorResponse(
+        500,
+        result.error_code || result.error,
+        "Gladia transcription failed"
+      );
     }
   }
 
@@ -395,7 +376,7 @@ async function handleSonioxTranscription(providerConfig, file, modelId, token) {
     await new Promise((r) => setTimeout(r, 2000));
     const pollRes = await fetch(statusUrl, { headers: authHeaders });
     if (!pollRes.ok) {
-      continue;
+      return upstreamErrorResponse(pollRes, await pollRes.text());
     }
     const result = await pollRes.json();
     if (result.status === "completed") {
@@ -403,9 +384,10 @@ async function handleSonioxTranscription(providerConfig, file, modelId, token) {
       break;
     }
     if (result.status === "error") {
-      return errorResponse(
+      return sanitizedUpstreamErrorResponse(
         500,
-        result.error_message || result.error || "Soniox transcription failed"
+        result.error_message || result.error,
+        "Soniox transcription failed"
       );
     }
   }
@@ -498,6 +480,28 @@ function normalizeKieTranscriptionText(recordData: unknown): string {
   return "";
 }
 
+function getKieErrorMessage(err: unknown, fallback: string): string {
+  if (!(err instanceof Error)) return fallback;
+
+  let message: unknown = err.message;
+  try {
+    const parsed: unknown = JSON.parse(err.message);
+    if (isJsonObject(parsed)) {
+      const error = isJsonObject(parsed.error) ? parsed.error.message : parsed.error;
+      const detail = isJsonObject(parsed.detail) ? parsed.detail.message : parsed.detail;
+      message = [parsed.err_msg, error, parsed.message, detail].find(
+        (value): value is string => typeof value === "string" && Boolean(value.trim())
+      );
+    } else {
+      return fallback;
+    }
+  } catch {
+    // A plain Error message can still contain safe upstream prose.
+  }
+
+  return sanitizeUpstreamErrorMessage(message) || fallback;
+}
+
 async function handleKieAudioTranscription(providerConfig, file, modelId, token) {
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
   const fileBuffer = await file.arrayBuffer();
@@ -516,15 +520,17 @@ async function handleKieAudioTranscription(providerConfig, file, modelId, token)
       },
     });
   } catch (err: unknown) {
-    const status =
+    const rawStatus =
       typeof err === "object" && err !== null && "status" in err
-        ? Number((err as { status?: unknown }).status) || 502
-        : 502;
-    const response = errorResponse(status, "Kie transcription createTask failed");
-    for (const [name, value] of Object.entries(CORS_HEADERS)) {
-      response.headers.set(name, value);
-    }
-    return response;
+        ? (err as { status?: unknown }).status
+        : undefined;
+    const statusValue =
+      typeof rawStatus === "number" || typeof rawStatus === "string" ? Number(rawStatus) : NaN;
+    return sanitizedUpstreamErrorResponse(
+      normalizeUpstreamErrorStatus(statusValue),
+      getKieErrorMessage(err, "Kie transcription createTask failed"),
+      "Kie transcription createTask failed"
+    );
   }
   const taskId = data?.data?.taskId || data?.taskId;
 
@@ -558,13 +564,14 @@ async function pollKieTranscriptionResult(baseUrl, modelId, taskId, token) {
       return Response.json({ text }, { headers: { ...CORS_HEADERS } });
     }
   } catch (err: unknown) {
-    const status =
+    const rawStatus =
       typeof err === "object" && err !== null && "status" in err
-        ? Number((err as { status?: unknown }).status) || 504
-        : 504;
-    return errorResponse(
-      status,
-      err instanceof Error ? err.message : "Kie transcription generation timed out or failed"
+        ? (err as { status?: unknown }).status
+        : undefined;
+    return sanitizedUpstreamErrorResponse(
+      normalizeUpstreamErrorStatus(rawStatus),
+      getKieErrorMessage(err, "Kie transcription generation timed out or failed"),
+      "Kie transcription generation timed out or failed"
     );
   }
 
@@ -607,7 +614,7 @@ async function handleRevAiTranscription(providerConfig, file, modelId, token) {
     await new Promise((r) => setTimeout(r, 2000));
 
     const pollRes = await fetch(jobUrl, { headers: authHeaders });
-    if (!pollRes.ok) continue;
+    if (!pollRes.ok) return upstreamErrorResponse(pollRes, await pollRes.text());
 
     const result = await pollRes.json();
 
@@ -623,7 +630,11 @@ async function handleRevAiTranscription(providerConfig, file, modelId, token) {
     }
 
     if (result.status === "failed") {
-      return errorResponse(500, result.failure_detail || "Rev AI transcription failed");
+      return sanitizedUpstreamErrorResponse(
+        500,
+        result.failure_detail,
+        "Rev AI transcription failed"
+      );
     }
   }
 
@@ -658,7 +669,7 @@ async function fetchSpeechmaticsTranscript(jobUrl, authHeaders) {
 function speechmaticsJobErrorMessage(result): string {
   const errors = result?.job?.errors;
   const first = Array.isArray(errors) ? errors[0] : null;
-  return first?.message || "Speechmatics transcription failed";
+  return sanitizeUpstreamErrorMessage(first?.message) || "Speechmatics transcription failed";
 }
 
 /**
@@ -673,7 +684,7 @@ async function pollSpeechmaticsJob(jobUrl, authHeaders) {
     await new Promise((r) => setTimeout(r, 2000));
 
     const pollRes = await fetch(jobUrl, { headers: authHeaders });
-    if (!pollRes.ok) continue;
+    if (!pollRes.ok) return upstreamErrorResponse(pollRes, await pollRes.text());
 
     const result = await pollRes.json();
     const status = result?.job?.status;
@@ -683,7 +694,11 @@ async function pollSpeechmaticsJob(jobUrl, authHeaders) {
     }
 
     if (status === "rejected") {
-      return errorResponse(500, speechmaticsJobErrorMessage(result));
+      return sanitizedUpstreamErrorResponse(
+        500,
+        speechmaticsJobErrorMessage(result),
+        "Speechmatics transcription failed"
+      );
     }
   }
 
@@ -801,7 +816,13 @@ export async function handleAudioTranscription({
       refreshToken: credentials.refreshToken,
       signal,
     });
-    if (!result.ok) return errorResponse(result.status, result.error);
+    if (!result.ok) {
+      return sanitizedUpstreamErrorResponse(
+        result.status,
+        result.error,
+        "MaxAI transcription failed"
+      );
+    }
     return formData.get("response_format") === "text"
       ? new Response(result.text, { headers: { ...CORS_HEADERS, "Content-Type": "text/plain" } })
       : Response.json({ text: result.text }, { headers: { ...CORS_HEADERS } });
@@ -826,10 +847,12 @@ export async function handleAudioTranscription({
       });
       return Response.json({ text }, { headers: { ...CORS_HEADERS } });
     } catch (err) {
-      const error = err as { message?: string; status?: number };
-      return errorResponse(
-        typeof error?.status === "number" ? error.status : 500,
-        `Vertex transcription failed: ${error?.message || "unknown error"}`
+      const error = err as { message?: unknown; status?: unknown };
+      const message = sanitizeUpstreamErrorMessage(error?.message);
+      return sanitizedUpstreamErrorResponse(
+        error?.status,
+        message ? `Vertex transcription failed: ${message}` : "Vertex transcription failed",
+        "Vertex transcription failed"
       );
     }
   }

@@ -24,6 +24,7 @@ import { calculateModalCost } from "@/lib/usage/costCalculator";
 import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
+import { sanitizeUpstreamErrorMessage } from "../utils/audioResponse.ts";
 import * as logger from "@/sse/utils/logger";
 
 /**
@@ -143,16 +144,25 @@ export async function executeImageCombo(
     }
 
     // Classify the failure
-    const status = result.status || 500;
-    const error = typeof result.error === "string" ? result.error : "Image generation failed";
+    const rawStatus = result.status;
+    const status =
+      typeof rawStatus === "number" &&
+      Number.isInteger(rawStatus) &&
+      rawStatus >= 400 &&
+      rawStatus <= 599
+        ? rawStatus
+        : 502;
+    const error = sanitizeUpstreamErrorMessage(result.error) || "Image generation failed";
+    const safeError =
+      sanitizeUpstreamErrorMessage(`[${targetProvider}] ${error}`) || "Image generation failed";
 
     // Terminal failures (400 bad model, 403 banned, etc.) — stop iterating
     // Non-terminal failures (429, 5xx) — try next target
     if (isRemoteMediaFailureResult(result) || status === 400 || status === 403 || status === 401) {
-      return errorResponse(status, `[${targetProvider}] ${error}`);
+      return errorResponse(status, safeError);
     }
 
-    lastError = { status, error: `[${targetProvider}] ${error}` };
+    lastError = { status, error: safeError };
     fallbackCount += 1;
   }
 

@@ -1,1 +1,1 @@
-- **fix(transcription):** Kie createTask failures use the sanitized error response instead of returning raw upstream bodies. Preserve upstream status and CORS headers.
+- **fix(transcription):** Kie createTask and polling failures use sanitized error responses. Clamp invalid upstream statuses to 502; preserve safe messages, status, and CORS headers.

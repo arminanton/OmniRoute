@@ -8,10 +8,36 @@
  * itself — which would create a circular import.
  */
 import { CORS_HEADERS } from "./cors.ts";
+import { sanitizeErrorMessage } from "./error.ts";
 
 /**
- * Pull a human-readable error message out of a parsed upstream JSON error body.
+ * Return safe human-readable text from a parsed upstream JSON error body.
  */
+export function sanitizeUpstreamErrorMessage(message: unknown): string | null {
+  if (typeof message !== "string") return null;
+  const sanitized = sanitizeErrorMessage(message).trim();
+  if (!sanitized || /[\r\n]|<\s*[!?/a-z][^>]*>/i.test(sanitized)) return null;
+  return sanitized.slice(0, 500) || null;
+}
+
+export function normalizeUpstreamErrorStatus(status: unknown): number {
+  const value =
+    typeof status === "number" ? status : typeof status === "string" ? Number(status) : NaN;
+  return Number.isInteger(value) && value >= 400 && value <= 599 ? value : 502;
+}
+
+export function sanitizedUpstreamErrorResponse(
+  statusValue: unknown,
+  message: unknown,
+  fallback: string
+): Response {
+  const status = normalizeUpstreamErrorStatus(statusValue);
+  return Response.json(
+    { error: { message: sanitizeUpstreamErrorMessage(message) || fallback, code: status } },
+    { status, headers: { ...CORS_HEADERS } }
+  );
+}
+
 function extractUpstreamErrorMessage(parsed) {
   const detail = parsed?.detail;
   const candidates = [
@@ -22,31 +48,23 @@ function extractUpstreamErrorMessage(parsed) {
     typeof detail === "string" ? detail : detail?.message,
   ];
 
-  const raw = candidates.find(Boolean);
-  return raw ? String(raw) : null;
+  const message = candidates.find((candidate) => typeof candidate === "string" && candidate.trim());
+  return sanitizeUpstreamErrorMessage(message);
 }
 
 /**
  * Return a CORS error response from an upstream fetch failure.
  */
 export function upstreamErrorResponse(res: Response, errText: string): Response {
-  // Always return JSON so the client can detect 401/credential errors reliably
-  let errorMessage: string;
+  const status = normalizeUpstreamErrorStatus(res.status);
+  let errorMessage: string | null = null;
   try {
-    const parsed = JSON.parse(errText);
-    errorMessage =
-      extractUpstreamErrorMessage(parsed) || errText || `Upstream error (${res.status})`;
+    errorMessage = extractUpstreamErrorMessage(JSON.parse(errText));
   } catch {
-    errorMessage = errText || `Upstream error (${res.status})`;
+    // Never echo unstructured upstream bodies.
   }
 
-  return Response.json(
-    { error: { message: errorMessage, code: res.status } },
-    {
-      status: res.status,
-      headers: { ...CORS_HEADERS },
-    }
-  );
+  return sanitizedUpstreamErrorResponse(status, errorMessage, `Upstream error (${status})`);
 }
 
 /**

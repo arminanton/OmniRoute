@@ -1,0 +1,1 @@
+- **security:** Sanitize audio transcription create, poll, and terminal provider failures across AssemblyAI, Gladia, Soniox, Rev AI, Speechmatics, Vertex, and MaxAI. Clamp invalid statuses to 502; preserve safe structured messages and response schema without exposing upstream bodies, secrets, or stack traces (#15388).
