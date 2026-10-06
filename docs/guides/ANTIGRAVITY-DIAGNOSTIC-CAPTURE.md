@@ -11,7 +11,7 @@ This is a proposed temporary diagnostic profile, not authorization to change a r
 
 Three independent controls must agree: the database setting `call_log_pipeline_enabled` must be true, the selected inference API key must have `noLog=false`, and `CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS=true` must be present to retain stream excerpts. The authenticated dashboard action `POST /api/logs/detail` with `{"enabled":true}` sets the database flag. `GET /api/logs/detail?limit=1` reports the flag without changing it. `ENABLE_REQUEST_LOGS` affects the legacy detailed-log getter; it does not replace the chatCore database gate.
 
-For a controlled cohort of at most two concurrent requests, at most 100 new requests, and at most ten minutes, propose:
+For a controlled cohort of at most two concurrent requests, at most 100 newly written artifacts (including retry/account legs), and at most ten minutes, propose:
 
 ```dotenv
 CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS=true
@@ -25,7 +25,7 @@ CHAT_DEBUG_FILE=false
 APP_LOG_LEVEL=info
 ```
 
-Apply these process environment values only through an approved candidate deployment. Preserve the prior values and database flag for restoration. Check available memory and reserve at least 800 MiB for 100 additional artifacts at the 8 MiB artifact cap, plus database, application logs and filesystem overhead. Stop capture when the cohort, time or storage budget is reached. Existing retention is unchanged: changing global entry-count or retention settings can delete unrelated historical logs and is a separate operator decision.
+Apply these process environment values only through an approved candidate deployment. Preserve the prior values and database flag for restoration. Check available memory and reserve at least 800 MiB for 100 additional artifacts at the 8 MiB artifact cap, plus database, application logs and filesystem overhead. Stop capture when the cohort, time or storage budget is reached. Count artifacts and retry/account legs rather than only logical client requests; one client request can produce several records. Existing retention is unchanged: changing global entry-count or retention settings can delete unrelated historical logs and is a separate operator decision.
 
 The database logging flag and environment controls are global. There is no existing provider-, correlation-ID-, or errors-only capture filter. A diagnostic key does not exclude traffic from other keys that also have `noLog=false`. Use isolation or an agreed quiet window; do not enable enlarged capture for 70–100 simultaneous agents and claim it is selectively scoped.
 
