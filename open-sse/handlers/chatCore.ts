@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   getDiagnosticClientJson,
   runWithDiagnosticCaptureLifecycle,
@@ -10,6 +11,7 @@ import { getRequestTransportTelemetry } from "../utils/transportTelemetry.ts";
 import { withResolvedAntigravityProject } from "../services/antigravityRequestProject.ts";
 import {
   isUncertainGenerationAcceptance,
+  markUncertainGenerationAcceptance,
   getGenerationDispatchPhase,
 } from "../services/generationReplay.ts";
 import {
@@ -31,6 +33,7 @@ import {
   backoffGenerationRetry,
   isLogicalRetryBudgetError,
   getLogicalRetryBudget,
+  withLogicalPreOutputDeadline,
 } from "../services/logicalRetryBudget.ts";
 import { withCodexConversationIdentity } from "../services/codexConversationIdentity.ts";
 import { withAntigravityConversationIdentity } from "../services/antigravityIdentity.ts";
@@ -3235,15 +3238,7 @@ async function handleChatCoreOwned({
               resilienceSettings.providerQuotaOverrides[canonicalProviderKey]
                 ?.providerConcurrency ?? 0;
 
-            trace("pre_semaphore", {
-              semaphoreKey: accountSemaphoreKey,
-              max: accountAdmissionRequirement.maxConcurrency,
-            });
-            if (accountSemaphoreKey && Number(accountAdmissionRequirement.maxConcurrency) > 0) {
-              updatePendingScope(pendingScope, {
-                stage: "waiting_account_slot",
-              });
-            }
+            let attemptSignal: AbortSignal | null | undefined = streamController.signal;
             const acquireAttemptPermit = async () => {
               const endWait = getRequestTransportTelemetry()?.wait("admission");
               try {
@@ -3262,7 +3257,7 @@ async function handleChatCoreOwned({
                   {
                     timeoutMs: resilienceSettings.requestQueue.maxWaitMs,
                     maxQueueSize: resilienceSettings.requestQueue.maxQueueDepth,
-                    signal: streamController.signal,
+                    signal: attemptSignal,
                     onLeaseLost: () => streamController.abort(),
                   }
                 );
@@ -3270,8 +3265,8 @@ async function handleChatCoreOwned({
                 endWait?.();
               }
             };
-            let currentPermitRelease: (() => void) | null = await acquireAttemptPermit();
-            const admittedAt = Date.now();
+            let currentPermitRelease: (() => void) | null = null;
+            let admittedAt = Date.now();
             let attemptStatus = 0;
             const releaseAccountSemaphore = (completed = false) => {
               if (
@@ -3295,60 +3290,76 @@ async function handleChatCoreOwned({
                 currentPermitRelease = await acquireAttemptPermit();
               },
             };
-            trace("post_semaphore");
             updatePendingScope(pendingScope, {
               stage: "waiting_rate_limit",
             });
 
+            const runInSubmittingContext = AsyncLocalStorage.snapshot();
+            const attemptBudget = getLogicalRetryBudget();
+            const attemptsBeforeQueue = attemptBudget?.snapshot().attempts ?? 0;
+            const transportTelemetry = getRequestTransportTelemetry();
+            const transportAttemptsBeforeQueue =
+              transportTelemetry?.snapshot().attempts.length ?? 0;
             try {
               trace("pre_rate_limit", { connectionId: attemptConnectionId });
-              const rawExecutorResult = await withRateLimit(
-                provider,
-                attemptConnectionId,
-                modelToCall,
-                async () => {
-                  trace("inside_rate_limit", { connectionId: attemptConnectionId });
-                  updatePendingScope(pendingScope, {
-                    stage: "rate_limit_slot_acquired",
-                  });
-                  assertManagedLeaseFence(attemptConnectionId);
-                  return executeWithUpstreamStartTimeout({
-                    executor,
+              const rawExecutorResult = await withLogicalPreOutputDeadline(
+                streamController.signal,
+                (signal) => {
+                  attemptSignal = signal;
+                  return withRateLimit(
                     provider,
-                    model: modelToCall,
-                    connectionTimeoutMs: resolveConnectionTimeoutMs(
-                      execCreds?.providerSpecificData
-                    ),
-                    signal: streamController.signal,
-                    log,
-                    execute: (signal) =>
-                      runWithCapture(providerRequestCapture, () =>
-                        runGenerationDispatch(
-                          () =>
-                            executor.execute({
-                              model: modelToCall,
-                              body: bodyToSend,
-                              stream: upstreamStream,
-                              credentials: execCreds,
-                              signal,
-                              log,
-                              extendedContext,
-                              upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
-                              clientHeaders: buildExecutorClientHeaders(
-                                clientRawRequest?.headers,
-                                userAgent
-                              ),
-                              clientResponseFormat,
-                              onCredentialsRefreshed,
-                              skipUpstreamRetry,
-                              contextEditing: { enabled: contextEditingEnabled },
-                            }),
-                          generationAdmissionHooks
-                        )
-                      ),
-                  });
-                },
-                streamController.signal
+                    attemptConnectionId,
+                    modelToCall,
+                    () =>
+                      runInSubmittingContext(async () => {
+                        attemptSignal?.throwIfAborted();
+                        trace("inside_rate_limit", { connectionId: attemptConnectionId });
+                        updatePendingScope(pendingScope, { stage: "waiting_account_slot" });
+                        currentPermitRelease = await acquireAttemptPermit();
+                        admittedAt = Date.now();
+                        trace("post_semaphore");
+                        updatePendingScope(pendingScope, { stage: "rate_limit_slot_acquired" });
+                        assertManagedLeaseFence(attemptConnectionId);
+                        return executeWithUpstreamStartTimeout({
+                          executor,
+                          provider,
+                          model: modelToCall,
+                          connectionTimeoutMs: resolveConnectionTimeoutMs(
+                            execCreds?.providerSpecificData
+                          ),
+                          signal: attemptSignal,
+                          log,
+                          execute: (signal) =>
+                            runWithCapture(providerRequestCapture, () =>
+                              runGenerationDispatch(
+                                () =>
+                                  executor.execute({
+                                    model: modelToCall,
+                                    body: bodyToSend,
+                                    stream: upstreamStream,
+                                    credentials: execCreds,
+                                    signal,
+                                    log,
+                                    extendedContext,
+                                    upstreamExtraHeaders:
+                                      buildUpstreamHeadersForExecute(modelToCall),
+                                    clientHeaders: buildExecutorClientHeaders(
+                                      clientRawRequest?.headers,
+                                      userAgent
+                                    ),
+                                    clientResponseFormat,
+                                    onCredentialsRefreshed,
+                                    skipUpstreamRetry,
+                                    contextEditing: { enabled: contextEditingEnabled },
+                                  }),
+                                generationAdmissionHooks
+                              )
+                            ),
+                        });
+                      }),
+                    attemptSignal
+                  );
+                }
               );
               const res = normalizeExecutorResult(rawExecutorResult);
               attemptStatus = res.response.status;
@@ -3634,6 +3645,27 @@ async function handleChatCoreOwned({
                 _accountSemaphoreRelease: releaseAccountSemaphore,
               };
             } catch (error) {
+              // The raw caller owns cancellation; a stream-controller projection
+              // must not turn its queued abort into a provider failure.
+              if (clientRawRequest?.signal?.aborted) {
+                releaseAccountSemaphore();
+                throw clientRawRequest.signal.reason;
+              }
+              if (
+                isLogicalRetryBudgetError(error) &&
+                error.preOutputWait &&
+                (attemptBudget?.snapshot().attempts ?? 0) > attemptsBeforeQueue
+              ) {
+                const last = transportTelemetry
+                  ?.snapshot()
+                  .attempts.slice(transportAttemptsBeforeQueue)
+                  .at(-1);
+                const knownQueued = last?.queuedMs != null && last.dispatchedMs === null;
+                if (!knownQueued) {
+                  markUncertainGenerationAcceptance(error);
+                  attemptBudget?.denyFurtherAttempts(error);
+                }
+              }
               releaseAccountSemaphore();
               throw error;
             }
