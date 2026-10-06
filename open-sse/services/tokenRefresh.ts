@@ -1,5 +1,5 @@
-import { assertRefreshOwner } from "./coordination/grantRefresh.ts";
 // @ts-nocheck
+import { assertRefreshOwner } from "./coordination/grantRefresh.ts";
 //
 // Per-provider refresh implementations live in ./tokenRefresh/providers/ (one
 // file per provider) with shared helpers in ./tokenRefresh/shared.ts. This

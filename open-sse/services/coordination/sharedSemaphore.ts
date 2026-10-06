@@ -138,7 +138,7 @@ export async function getRuntimeCoordinationCapabilities() {
       (await isCoordinatedRotationStoreReady()) &&
       connections
         .filter((c) => c.isActive !== false && c.authType === "oauth" && !!c.refreshToken)
-        .every((c) => guarded.has(c.provider));
+        .every((c) => typeof c.provider === "string" && guarded.has(c.provider));
     return {
       ...disabled,
       accountAdmission: !!getSharedCoordinationReadiness(),
