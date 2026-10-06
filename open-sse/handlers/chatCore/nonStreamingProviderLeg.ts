@@ -60,6 +60,8 @@ export interface ProviderLegInput {
   phase: "initial" | "follow-up";
   sourceBody: Record<string, unknown>;
   expectedConnectionId?: string;
+  pinnedConnectionId?: string | null;
+  allowedConnectionIds?: readonly string[] | null;
   allowAccountRotation: boolean;
   allowModelFallback: boolean;
   executeProviderRequest: (
@@ -398,6 +400,8 @@ export async function runNonStreamingProviderLeg(
   });
 
   const policy: Readonly<ProviderExecutionPolicy> = {
+    pinnedConnectionId: input.pinnedConnectionId,
+    allowedConnectionIds: input.allowedConnectionIds,
     allowAccountRotation,
     allowModelFallback,
     expectedConnectionId: input.expectedConnectionId,

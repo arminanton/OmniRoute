@@ -94,3 +94,8 @@ bootstrap and persist only its authenticated discovery. Signature namespaces inc
 project, while the stable conversation session ID is unchanged. The bootstrap manual-project sentinel
 is never sent as a project ID. Parallel requests for different projects cannot retrieve each other's
 cached signatures, and correctly supplied native signatures retain their existing validation behavior.
+
+Authenticated routing constraints also apply inside Core account recovery. An explicit request
+connection or operator combo pin stops inner Codex/Antigravity account rotation. Unpinned recovery
+keeps the effective API-key/combo/quota allowlist and rejects an out-of-scope candidate. These are
+internal dispatch inputs; request-body metadata cannot supply or broaden them.
