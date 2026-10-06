@@ -25,6 +25,7 @@ import { QWEN_CLOUD_TEXT_MODELS } from "@omniroute/open-sse/config/providers/reg
 import { filterAlibabaFreeEligibleModels } from "@omniroute/open-sse/services/alibabaFreeTierDiscovery.ts";
 import { shouldUseLiveAlibabaFreeModelDiscovery } from "@omniroute/open-sse/services/alibabaFreeTier.ts";
 import { isDashscopeTextModelId } from "@omniroute/open-sse/services/dashscopeTextModels.ts";
+import { buildOpencodeBackgroundHeaders } from "@omniroute/open-sse/utils/opencodeHeaders.ts";
 import { extractZaiToken } from "@omniroute/open-sse/services/zaiWebCredentials.ts";
 import { normalizeOpenAiLikeModelsResponse } from "./normalizers";
 
@@ -105,6 +106,7 @@ export function parsePerplexitySonarModels(data: any): any[] {
   );
 }
 export type ProviderModelsHeaderContext = {
+  id?: string;
   authType?: string;
   providerSpecificData?: unknown;
   email?: string | null;
@@ -413,6 +415,26 @@ const KIMI_CODING_MODELS_CONFIG: ProviderModelsConfigEntry = {
   },
   parseResponse: parseKimiCodingModels,
 };
+
+function readOpencodeBackgroundSeed(connection?: ProviderModelsHeaderContext): string | null {
+  return typeof connection?.id === "string" && connection.id.trim() ? connection.id.trim() : null;
+}
+
+function createOpencodeDiscoveryConfig(url: string): ProviderModelsConfigEntry {
+  return {
+    url,
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    buildHeaders: (token, connection) => ({
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...buildOpencodeBackgroundHeaders({ seed: readOpencodeBackgroundSeed(connection) }),
+    }),
+    parseResponse: (data) => data.data || data.models || [],
+  };
+}
 
 // Provider models endpoints configuration
 export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> = {
@@ -801,22 +823,9 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     authPrefix: "Bearer ",
     parseResponse: (data) => data.data || data.models || [],
   },
-  "opencode-zen": {
-    url: "https://opencode.ai/zen/v1/models",
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    authHeader: "Authorization",
-    authPrefix: "Bearer ",
-    parseResponse: (data) => data.data || data.models || [],
-  },
-  "opencode-go": {
-    url: "https://opencode.ai/zen/go/v1/models",
-    method: "GET",
-    headers: { "Content-Type": "application/json" },
-    authHeader: "Authorization",
-    authPrefix: "Bearer ",
-    parseResponse: (data) => data.data || data.models || [],
-  },
+  opencode: createOpencodeDiscoveryConfig("https://opencode.ai/zen/v1/models"),
+  "opencode-zen": createOpencodeDiscoveryConfig("https://opencode.ai/zen/v1/models"),
+  "opencode-go": createOpencodeDiscoveryConfig("https://opencode.ai/zen/go/v1/models"),
   "glm-cn": {
     url: "https://open.bigmodel.cn/api/coding/paas/v4/models",
     method: "GET",

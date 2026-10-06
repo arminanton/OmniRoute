@@ -141,6 +141,29 @@ function applyCliDefaults(
   headers["x-opencode-client"] ||= cliDefaults.client;
   headers["x-opencode-project"] ||= cliDefaults.project;
   headers["x-opencode-request"] ||= randomUUID();
-  headers["x-opencode-session"] ||=
-    generateSessionId(sessionBody ?? null) || randomUUID();
+  headers["x-opencode-session"] ||= generateSessionId(sessionBody ?? null) || randomUUID();
+}
+
+/**
+ * Build CLI identity headers for background OpenCode calls (discovery/quota).
+ * Hash the caller seed into a stable session id; never forward workspace or
+ * connection identifiers as header values.
+ */
+export function buildOpencodeBackgroundHeaders(options?: {
+  seed?: string | null;
+  userAgent?: string;
+}): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const seed = options?.seed?.trim();
+  if (seed) {
+    headers["x-opencode-session"] =
+      generateSessionId({ model: `background:${seed}` }) || randomUUID();
+  }
+
+  applyCliDefaults(headers, {
+    userAgent: options?.userAgent?.trim() || process.env.OPENCODE_USER_AGENT?.trim() || "opencode",
+    client: process.env.OPENCODE_CLIENT?.trim() || "desktop",
+    project: process.env.OPENCODE_PROJECT?.trim() || "global",
+  });
+  return headers;
 }
