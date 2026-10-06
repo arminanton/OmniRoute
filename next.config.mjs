@@ -472,10 +472,20 @@ const nextConfig = {
         ],
       ];
       for (const [pattern, stubPath] of replacements) {
+        const absoluteStub = resolve(projectRoot, stubPath);
         config.plugins.push(
           new webpack.NormalModuleReplacementPlugin(pattern, (resource) => {
-            resource.request = resolve(projectRoot, stubPath);
+            resource.request = absoluteStub;
           })
+        );
+        // Also intercept resolved paths: relative/dynamic imports must not bypass the profile.
+        const realPath = absoluteStub.replace(/\.stub\.ts$/, ".ts");
+        const escaped = realPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        config.plugins.push(
+          new webpack.NormalModuleReplacementPlugin(
+            new RegExp(`^${escaped}(?:\\?.*)?$`),
+            absoluteStub
+          )
         );
       }
     }

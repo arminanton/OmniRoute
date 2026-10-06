@@ -21,3 +21,13 @@ export async function installCert(_sudoPassword: string, _certPath: string): Pro
 export async function uninstallCert(_sudoPassword: string, _certPath: string): Promise<void> {
   throw featureDisabledError(FEATURE);
 }
+
+export type { CertInstallResult, CertInstallReason, CertManualGuide } from "./install";
+
+export async function installCertResult(_sudoPassword: string, _certPath: string): Promise<never> {
+  throw featureDisabledError(FEATURE);
+}
+
+export async function installCaCert(_sudoPassword: string, _certPath: string): Promise<never> {
+  throw featureDisabledError(FEATURE);
+}

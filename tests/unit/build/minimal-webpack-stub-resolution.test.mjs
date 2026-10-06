@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
 
 test("minimal webpack replacements resolve all privileged stubs from project root, regardless of importer", () => {
   const projectRoot = process.cwd();
@@ -31,7 +33,7 @@ test("minimal webpack replacements resolve all privileged stubs from project roo
     ["@/lib/cloudSync", "src/lib/cloudSync.stub.ts"],
     ["@/lib/services/installers/ninerouter", "src/lib/services/installers/ninerouter.stub.ts"],
   ]);
-  assert.equal(plugins.length, expected.size);
+  assert.equal(plugins.length, expected.size * 2);
   for (const [request, stub] of expected) {
     const plugin = plugins.find((p) => p.pattern.test(request));
     assert.ok(plugin, request);
@@ -47,5 +49,40 @@ test("minimal webpack replacements resolve all privileged stubs from project roo
       assert.equal(fs.existsSync(resource.request), true);
       assert.ok(!resource.request.includes("better-sqlite3.stub"));
     }
+    const realPath = path.join(projectRoot, stub.replace(/\.stub\.ts$/, ".ts"));
+    const resolvedPlugin = plugins.find((p) => p.pattern.test(realPath));
+    assert.ok(resolvedPlugin, `relative/dynamic import of ${realPath}`);
+    assert.equal(resolvedPlugin.callback, path.join(projectRoot, stub));
+    // Exercise the real webpack afterResolve interception used by relative imports.
+    const hooks = {};
+    const factory = {
+      hooks: {
+        beforeResolve: {
+          tap(_name, callback) {
+            hooks.before = callback;
+          },
+        },
+        afterResolve: {
+          tap(_name, callback) {
+            hooks.after = callback;
+          },
+        },
+      },
+    };
+    const Plugin = require("next/dist/compiled/webpack/webpack").webpack
+      .NormalModuleReplacementPlugin;
+    new Plugin(resolvedPlugin.pattern, resolvedPlugin.callback).apply({
+      inputFileSystem: fs,
+      hooks: {
+        normalModuleFactory: {
+          tap(_name, callback) {
+            callback(factory);
+          },
+        },
+      },
+    });
+    const resolved = { createData: { resource: realPath } };
+    hooks.after(resolved);
+    assert.equal(resolved.createData.resource, path.join(projectRoot, stub));
   }
 });

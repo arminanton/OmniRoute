@@ -15,3 +15,21 @@ export async function installNinerouter(): Promise<never> {
 export function resolveSpawnArgs(_apiKey: string, _port: number): never {
   throw featureDisabledError(FEATURE);
 }
+
+export type { InstallResult, SpawnArgs } from "./ninerouter";
+
+export async function getInstalledVersion(): Promise<null> {
+  return null;
+}
+export async function getLatestVersion(): Promise<null> {
+  return null;
+}
+export async function install(_version = "latest"): Promise<never> {
+  throw featureDisabledError(FEATURE);
+}
+export async function update(): Promise<never> {
+  throw featureDisabledError(FEATURE);
+}
+export async function uninstall(): Promise<never> {
+  throw featureDisabledError(FEATURE);
+}
