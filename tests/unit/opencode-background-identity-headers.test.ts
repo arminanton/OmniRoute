@@ -24,12 +24,51 @@ function discoveryHeaders(
   return buildHeaders(token, context);
 }
 
+function withUserAgentEnv(value: string | undefined, callback: () => void): void {
+  const previous = process.env.OPENCODE_USER_AGENT;
+  if (value === undefined) delete process.env.OPENCODE_USER_AGENT;
+  else process.env.OPENCODE_USER_AGENT = value;
+  try {
+    callback();
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_USER_AGENT;
+    else process.env.OPENCODE_USER_AGENT = previous;
+  }
+}
+
 test("background headers use the OpenCode CLI identity", () => {
-  const headers = buildOpencodeBackgroundHeaders({ seed: "connection-a" });
-  assert.equal(headers["User-Agent"], "opencode");
-  assert.equal(headers["x-opencode-client"], "desktop");
-  assert.equal(headers["x-opencode-project"], "global");
-  assert.match(headers["x-opencode-request"], REQUEST_PATTERN);
+  withUserAgentEnv(undefined, () => {
+    const headers = buildOpencodeBackgroundHeaders({ seed: "connection-a" });
+    assert.equal(headers["User-Agent"], "opencode");
+    assert.equal(headers["x-opencode-client"], "desktop");
+    assert.equal(headers["x-opencode-project"], "global");
+    assert.match(headers["x-opencode-request"], REQUEST_PATTERN);
+  });
+});
+
+test("background User-Agent option overrides OPENCODE_USER_AGENT", () => {
+  withUserAgentEnv("env-agent", () => {
+    const headers = buildOpencodeBackgroundHeaders({ userAgent: "option-agent" });
+    assert.equal(headers["User-Agent"], "option-agent");
+  });
+});
+
+test("background User-Agent uses OPENCODE_USER_AGENT before the default", () => {
+  withUserAgentEnv("env-agent", () => {
+    const headers = buildOpencodeBackgroundHeaders();
+    assert.equal(headers["User-Agent"], "env-agent");
+  });
+});
+
+test("blank background User-Agent option falls back to the env var or default", () => {
+  withUserAgentEnv("env-agent", () => {
+    const headers = buildOpencodeBackgroundHeaders({ userAgent: "  " });
+    assert.equal(headers["User-Agent"], "env-agent");
+  });
+  withUserAgentEnv(undefined, () => {
+    const headers = buildOpencodeBackgroundHeaders({ userAgent: "  " });
+    assert.equal(headers["User-Agent"], "opencode");
+  });
 });
 
 test("background session is stable and opaque for a seed", () => {
