@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { SqliteCoordinator } from "./sqliteCoordinator.ts";
 import type { AcquireManyOptions, SemaphoreRequirement } from "../accountSemaphore.ts";
 
-let coordinator: SqliteCoordinator | null = null;
+declare global {
+  var __omniSharedCoordinator: SqliteCoordinator | null | undefined;
+}
+const runtime = globalThis;
+
 /** Opt-in and fail-closed: caller must be able to terminate upstream work on lease loss. */
 export async function acquireSharedSemaphore(
   requirements: SemaphoreRequirement[],
@@ -13,8 +17,11 @@ export async function acquireSharedSemaphore(
   const filename = process.env.OMNI_COORDINATION_DB;
   if (!filename || !options.onLeaseLost)
     throw new Error("Shared admission requires coordination DB and lease-loss fence");
-  coordinator ??= new SqliteCoordinator(filename, `${process.pid}:${randomUUID()}`);
-  const backend = coordinator;
+  runtime.__omniSharedCoordinator ??= new SqliteCoordinator(
+    filename,
+    `${process.pid}:${randomUUID()}`
+  );
+  const backend = runtime.__omniSharedCoordinator;
   const enabled = requirements
     .filter((r) => Number.isFinite(r.maxConcurrency) && Number(r.maxConcurrency) >= 1)
     .map((r) => ({
@@ -76,15 +83,15 @@ export async function acquireSharedSemaphore(
 }
 
 export function markSharedBlocked(key: string, untilMs: number): void {
-  if (!coordinator) throw new Error("Shared coordination is not initialized");
-  coordinator.block(key, untilMs);
+  if (!runtime.__omniSharedCoordinator) throw new Error("Shared coordination is not initialized");
+  runtime.__omniSharedCoordinator!.block(key, untilMs);
 }
 export function unblockShared(key: string): void {
-  if (!coordinator) throw new Error("Shared coordination is not initialized");
-  coordinator.unblock(key);
+  if (!runtime.__omniSharedCoordinator) throw new Error("Shared coordination is not initialized");
+  runtime.__omniSharedCoordinator!.unblock(key);
 }
 export function getSharedCoordinationReadiness() {
-  return coordinator?.readiness() ?? null;
+  return runtime.__omniSharedCoordinator?.readiness() ?? null;
 }
 
 /** Active durable admission probe; unsupported ownership surfaces remain false. */
@@ -109,7 +116,8 @@ export async function getRuntimeCoordinationCapabilities() {
     const { getPeriodicBarrierEvidence, periodicServicesAllowed } =
       await import("@/lib/periodicServices");
     const barrier = getPeriodicBarrierEvidence();
-    const maintenanceHealthy = coordinator?.hasLiveResource("task:maintenance") === true;
+    const maintenanceHealthy =
+      runtime.__omniSharedCoordinator?.hasLiveResource("task:maintenance") === true;
     const backgroundOwnership =
       maintenanceHealthy &&
       ((barrier.confirmed && barrier.role === "generation") ||
@@ -148,5 +156,10 @@ export function observeSharedAdmissionOutcome(
   outcome: "success" | "concurrency_overload" | "ignored",
   latencyMs: number
 ): void {
-  coordinator?.observe(key, outcome, latencyMs);
+  runtime.__omniSharedCoordinator?.observe(key, outcome, latencyMs);
+}
+
+/** Readonly actual owned reservations; null means shared admission is not initialized. */
+export function getRuntimeCoordinationCounts() {
+  return runtime.__omniSharedCoordinator?.runtimeCounts() ?? null;
 }

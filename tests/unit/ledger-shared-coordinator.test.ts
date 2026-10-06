@@ -113,3 +113,28 @@ test("only explicit concurrency overload yields adaptive capacity reduction", as
     "concurrency_overload"
   );
 });
+
+test("generation counters exclude maintenance and report queued reservations for the actual owner", () => {
+  const dir = mkdtempSync(join(tmpdir(), "omni-counter-"));
+  const a = new SqliteCoordinator(join(dir, "c.sqlite"), "generation-a");
+  try {
+    const maintenance = a.enqueue([{ key: "task:maintenance", limit: 1 }], 9000, 20, 1000);
+    a.tryAcquire(maintenance, 1000, 1000);
+    const generation = a.enqueue([{ key: "account:a", limit: 1 }], 9000, 20, 1000);
+    const lease = a.tryAcquire(generation, 1000, 1000)!;
+    const queued = a.enqueue([{ key: "account:a", limit: 1 }], 9000, 20, 1000);
+    assert.equal(a.tryAcquire(queued, 1000, 1000), null);
+    assert.deepEqual(a.runtimeCounts(1000), {
+      owner: "generation-a",
+      activeGeneration: 1,
+      queuedGeneration: 1,
+      observedAt: 1000,
+    });
+    a.cancel(queued);
+    a.release(lease);
+    assert.equal(a.runtimeCounts(1000).activeGeneration, 0);
+  } finally {
+    a.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

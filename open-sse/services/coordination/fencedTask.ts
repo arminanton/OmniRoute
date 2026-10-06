@@ -2,7 +2,11 @@ import { combineAbortSignals } from "../../utils/combineAbortSignals.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { acquireSharedSemaphore } from "./sharedSemaphore.ts";
 
-const taskContext = new AsyncLocalStorage<FencedTaskContext>();
+declare global {
+  var __omniFencedTaskContext: AsyncLocalStorage<FencedTaskContext> | undefined;
+}
+const taskContext = (globalThis.__omniFencedTaskContext ??=
+  new AsyncLocalStorage<FencedTaskContext>());
 export const getFencedTaskContext = () => taskContext.getStore();
 
 export interface FencedTaskContext {

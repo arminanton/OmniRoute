@@ -1,9 +1,17 @@
+declare global {
+  var __omniLogicalBudgetFailures: WeakSet<object> | undefined;
+}
+const budgetFailures = (globalThis.__omniLogicalBudgetFailures ??= new WeakSet<object>());
 export class LogicalRetryBudgetError extends Error {
+  constructor(message: string) {
+    super(message);
+    budgetFailures.add(this);
+  }
   readonly code = "RETRY_BUDGET_EXHAUSTED";
   readonly status = 503;
 }
 export const isLogicalRetryBudgetError = (error: unknown): error is LogicalRetryBudgetError =>
-  error instanceof LogicalRetryBudgetError;
+  !!error && typeof error === "object" && budgetFailures.has(error);
 
 /** Request-owned object: share this instance across host/model/account/transport retries. */
 export class LogicalRetryBudget {
@@ -65,10 +73,19 @@ export class LogicalRetryBudget {
 }
 
 import { AsyncLocalStorage } from "node:async_hooks";
-const retryContext = new AsyncLocalStorage<LogicalRetryBudget>();
-const generationContext = new AsyncLocalStorage<
+declare global {
+  var __omniLogicalRetryContext: AsyncLocalStorage<LogicalRetryBudget> | undefined;
+  var __omniGenerationDispatchContext:
+    | AsyncLocalStorage<
+        boolean | { withPermitReleased: (wait: () => Promise<void>) => Promise<void> }
+      >
+    | undefined;
+}
+const retryContext = (globalThis.__omniLogicalRetryContext ??=
+  new AsyncLocalStorage<LogicalRetryBudget>());
+const generationContext = (globalThis.__omniGenerationDispatchContext ??= new AsyncLocalStorage<
   boolean | { withPermitReleased: (wait: () => Promise<void>) => Promise<void> }
->();
+>());
 export const getLogicalRetryBudget = () => retryContext.getStore();
 export function runWithLogicalRetryBudget<T>(budget: LogicalRetryBudget, fn: () => T): T {
   return retryContext.run(budget, fn);
