@@ -17,6 +17,11 @@ import { withProviderSignatureScope } from "../services/conversationState/signat
 import { commitCodexStateDelivery } from "../services/conversationState/commitCodexState.ts";
 import { classifyAdmissionFeedback } from "../services/coordination/overloadClassification.ts";
 import { resolveSharedAccountAdmissionRequirement } from "./chatCore/sharedAccountAdmission.ts";
+import { acquireLogicalConcurrencyGates as acquireConcurrencyGates } from "./chatCore/logicalAccountAdmission.ts";
+import {
+  observeAdmissionStream,
+  isHealthyAdmissionPayload,
+} from "./chatCore/admissionResponseOutcome.ts";
 import {
   runGenerationDispatch,
   backoffGenerationRetry,
@@ -410,10 +415,7 @@ import {
   initializeRateLimits,
 } from "../services/rateLimitManager.ts";
 import * as localLimiterErrors from "../services/rateLimitManager/errors.ts";
-import {
-  acquireMany as acquireConcurrencyGates,
-  markBlocked as markAccountSemaphoreBlocked,
-} from "../services/accountSemaphore.ts";
+import { markBlocked as markAccountSemaphoreBlocked } from "../services/accountSemaphore.ts";
 import {
   lockModel,
   lockModelIfPerModelQuota,
@@ -3433,7 +3435,22 @@ export async function handleChatCore({
               if (stream) {
                 const okStatus = res.response.status >= 200 && res.response.status < 300;
                 // Native body getters can disturb JSON errors before text() parses them.
-                const originalBody = okStatus ? res.response.body : null;
+                let originalBody = okStatus ? res.response.body : null;
+                const admissionOutcome =
+                  originalBody && accountAdmissionRequirement.adaptive
+                    ? observeAdmissionStream(
+                        originalBody as ReadableStream<Uint8Array>,
+                        (failure) => {
+                          if (failure.status === 429 && accountSemaphoreKey)
+                            observeAccountOutcome?.(
+                              accountSemaphoreKey,
+                              classifyAdmissionFeedback(failure.status, failure.message),
+                              0
+                            );
+                        }
+                      )
+                    : null;
+                if (admissionOutcome) originalBody = admissionOutcome.body;
                 if (!originalBody || !okStatus) {
                   releaseAccountSemaphore();
                   return {
@@ -3584,9 +3601,8 @@ export async function handleChatCore({
                     }
                   );
                 } else {
-                  clientBody = wrapReadableStreamWithFinalize(
-                    originalBody,
-                    releaseAccountSemaphore
+                  clientBody = wrapReadableStreamWithFinalize(originalBody, (completed) =>
+                    releaseAccountSemaphore(completed && (admissionOutcome?.healthy() ?? true))
                   );
                 }
 
@@ -3649,7 +3665,8 @@ export async function handleChatCore({
             status >= 400 ? payload : ""
           );
         }
-        if (status >= 200 && status < 300) rawResult._accountSemaphoreRelease?.(true);
+        if (status >= 200 && status < 300)
+          rawResult._accountSemaphoreRelease?.(isHealthyAdmissionPayload(payload, contentType));
         else releaseRawResultAccountSemaphore();
         releaseRawResultAccountSemaphore = () => {};
 
