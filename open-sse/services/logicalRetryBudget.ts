@@ -171,3 +171,8 @@ export async function backoffGenerationRetry(
     return hooks.withPermitReleased(sleep);
   return sleep();
 }
+
+/** Explicit non-HTTP generation send (for response.create on native WebSocket lanes). */
+export function consumeCurrentGenerationAttempt(): void {
+  getLogicalRetryBudget()?.consumeAttempt();
+}
