@@ -13,7 +13,7 @@ test("nested attempts share one bound and output permanently forbids replay", ()
   assert.throws(() => delivered.consumeAttempt(), /exhausted/);
 });
 test("retry hints are minima and deadlines/cancellation bound backoff", async () => {
-  const b = new LogicalRetryBudget(3, Date.now() + 1000);
+  const b = new LogicalRetryBudget(3, 1000, () => 0);
   b.consumeAttempt();
   const start = Date.now();
   await b.backoff(30, undefined, () => 0);

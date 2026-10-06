@@ -1,3 +1,4 @@
+import { getTransportAttempt } from "./transportTelemetry.ts";
 import { getObservedResponseStartTimeoutMs } from "./fetchDispatchObserver.ts";
 import { getLogicalRetryBudget, LogicalRetryBudgetError } from "../services/logicalRetryBudget.ts";
 import { noteGenerationDispatchPhase } from "../services/generationReplay.ts";
@@ -65,6 +66,7 @@ export async function directFetchWithBoundedResponseStart(
   queueTimeoutMs = 90_000
 ): Promise<Response> {
   const budget = getLogicalRetryBudget();
+
   const remaining = budget ? Math.max(0, budget.snapshot().deadline - Date.now()) : Infinity;
   if (remaining <= 0)
     throw new LogicalRetryBudgetError("Logical request deadline expired before dispatch");
@@ -99,6 +101,8 @@ export async function directFetchWithBoundedResponseStart(
             dispatchOptions: Dispatcher.DispatchOptions,
             handler: Dispatcher.DispatchHandler
           ) => {
+            const telemetry = getTransportAttempt();
+            telemetry?.queued();
             clearTimeout(timer);
             phase = "transport_queue";
             requestStarted = false;
@@ -119,6 +123,7 @@ export async function directFetchWithBoundedResponseStart(
                 const value = Reflect.get(receiver, name, receiver);
                 if (name === "onRequestStart") {
                   return (...args: unknown[]) => {
+                    telemetry?.dispatched();
                     phase = "headers";
                     requestStarted = true;
                     startHeadersTimer();

@@ -1,3 +1,5 @@
+import { getRequestTransportTelemetry } from "../transportTelemetry.ts";
+import { observeFetchDispatcher } from "../fetchDispatchObserver.ts";
 import type { Dispatcher } from "undici";
 import { createVerifiedHttp2Dispatcher } from "../proxyDispatcher.ts";
 import { nonReplayableUpload } from "./nonReplayableUpload.ts";
@@ -59,13 +61,19 @@ export class ProviderHttp2Pool {
       };
       this.pools.set(key, pool);
     }
-    const release = await pool.admission.acquire(init.signal);
+    const endWait = getRequestTransportTelemetry()?.wait("transportAdmission");
+    let release: () => void;
+    try {
+      release = await pool.admission.acquire(init.signal);
+    } finally {
+      endWait?.();
+    }
     try {
       init.signal?.throwIfAborted();
       // Keep the existing URL/proxy/runtime guards and physical-attempt owner in the fetcher.
       const response = await fallback(url, {
         ...nonReplayableUpload(init),
-        dispatcher: pool.dispatcher,
+        dispatcher: observeFetchDispatcher(pool.dispatcher),
       } as RequestInit);
       if (!response.body) {
         release();

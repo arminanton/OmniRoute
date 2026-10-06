@@ -1,3 +1,7 @@
+import {
+  RequestTransportTelemetry,
+  runWithRequestTransportTelemetry,
+} from "../../open-sse/utils/transportTelemetry.ts";
 import "../_setup/isolateDataDir.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -61,8 +65,19 @@ test("executor receipts permit the same owner and reject foreign/untracked previ
       clientHeaders: { "thread-id": "identical-native-thread" },
     });
   try {
-    await (await invoke("principal-a")).response.text();
-    await (await invoke("principal-a", "resp_owned_fixture_1")).response.text();
+    const telemetry = new RequestTransportTelemetry(undefined, () => {});
+    await runWithRequestTransportTelemetry(telemetry, async () => {
+      await (await invoke("principal-a")).response.text();
+      await (await invoke("principal-a", "resp_owned_fixture_1")).response.text();
+    });
+    const attempts = telemetry.snapshot().attempts;
+    assert.equal(attempts.length, 2);
+    assert.equal(attempts[0].reused, false);
+    assert.equal(attempts[1].reused, true);
+    assert.equal(attempts[1].connectedMs, null);
+    assert.notEqual(attempts[0].firstEventMs, null);
+    assert.ok(attempts[0].bytes > 0);
+    assert.equal(attempts[0].closure, "eof");
     assert.equal(sends, 2);
     assert.equal(connections, 1);
     for (const [principal, id] of [

@@ -787,3 +787,19 @@ test("logToolLoopReceipt is a no-op when logger is disabled", async () => {
   logger.logToolLoopReceipt(syntheticReceipt(0));
   assert.equal(logger.getPipelinePayloads(), null);
 });
+
+test("requestLogger persists request-owned bounded transport snapshot outside ingress ALS", async () => {
+  const { RequestTransportTelemetry, runWithRequestTransportTelemetry } =
+    await import("../../open-sse/utils/transportTelemetry.ts");
+  const { createRequestLogger } = await import("../../open-sse/utils/requestLogger.ts");
+  const telemetry = new RequestTransportTelemetry(undefined, () => {});
+  const logger = await runWithRequestTransportTelemetry(telemetry, () =>
+    createRequestLogger(undefined, undefined, undefined, { enabled: true })
+  );
+  const attempt = telemetry.attempt("http");
+  attempt.headers(504);
+  attempt.close("error");
+  const pipeline = logger.getPipelinePayloads();
+  assert.equal(pipeline?.transportTelemetry?.id, telemetry.id);
+  assert.equal((pipeline?.transportTelemetry?.attempts as { status: number }[])[0].status, 504);
+});

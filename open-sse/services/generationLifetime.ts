@@ -34,8 +34,16 @@ export function getGenerationLifetimeCoverage() {
 }
 
 /** Do not touch a native error body's getter. Successful bodies are owned until EOF/error/cancel. */
-export function bindGenerationResponse(response: Response, finish: () => void): Response {
+export function bindGenerationResponse(
+  response: Response,
+  finish: () => void,
+  observation?: {
+    chunk: (bytes: Uint8Array) => void;
+    close: (reason: "eof" | "cancel" | "error" | "no_body") => void;
+  }
+): Response {
   if (!response.ok) {
+    observation?.close("no_body");
     finish();
     return response;
   }
@@ -43,10 +51,12 @@ export function bindGenerationResponse(response: Response, finish: () => void): 
   try {
     body = response.body;
   } catch (error) {
+    observation?.close("error");
     finish();
     throw error;
   }
   if (!body) {
+    observation?.close("no_body");
     finish();
     return response;
   }
@@ -54,6 +64,7 @@ export function bindGenerationResponse(response: Response, finish: () => void): 
   try {
     reader = body.getReader();
   } catch (error) {
+    observation?.close("error");
     finish();
     throw error;
   }
@@ -75,11 +86,16 @@ export function bindGenerationResponse(response: Response, finish: () => void): 
           const next = await reader.read();
           if (ended) return;
           if (next.done) {
+            observation?.close("eof");
             close();
             controller.close();
-          } else controller.enqueue(next.value);
+          } else {
+            observation?.chunk(next.value);
+            controller.enqueue(next.value);
+          }
         } catch (error) {
           if (!ended) {
+            observation?.close("error");
             close();
             controller.error(error);
           }
@@ -90,6 +106,7 @@ export function bindGenerationResponse(response: Response, finish: () => void): 
         try {
           await reader.cancel(reason);
         } finally {
+          observation?.close("cancel");
           close();
         }
       },

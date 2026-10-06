@@ -1,3 +1,4 @@
+import { getTransportAttempt, getRequestTransportTelemetry } from "./transportTelemetry.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dispatcher } from "undici";
 
@@ -29,18 +30,29 @@ export function notifyFetchRequestStart(): void {
 /** Preserve receiver/private-field semantics of Undici dispatchers and handlers. */
 export function observeFetchDispatcher(dispatcher: Dispatcher): Dispatcher {
   const observer = dispatchObserver.getStore();
-  if (!observer) return dispatcher;
+  if (!observer && !getRequestTransportTelemetry() && !getTransportAttempt()) return dispatcher;
+
   return new Proxy(dispatcher, {
     get(target, property) {
       if (property === "dispatch") {
         return (options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler) => {
-          observer.queued();
+          const attempt = getTransportAttempt();
+          observer?.queued();
+          attempt?.queued();
           const tracked = new Proxy(handler, {
             get(receiver, name) {
               const value = Reflect.get(receiver, name, receiver);
               if (name === "onRequestStart") {
                 return (...args: unknown[]) => {
-                  observer.started();
+                  observer?.started();
+                  attempt?.dispatched();
+                  if (typeof value === "function") return Reflect.apply(value, receiver, args);
+                };
+              }
+              if (name === "onBodySent" || name === "onRequestSent") {
+                return (...args: unknown[]) => {
+                  if (name === "onRequestSent") attempt?.requestSent();
+                  else if (ArrayBuffer.isView(args[0])) attempt?.bodySent(args[0].byteLength);
                   if (typeof value === "function") return Reflect.apply(value, receiver, args);
                 };
               }

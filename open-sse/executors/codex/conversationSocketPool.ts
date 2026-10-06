@@ -345,6 +345,11 @@ export class CodexConversationSocketPool {
               fail: (code) => finish(code),
               frame: (raw) => {
                 if (finished) return;
+                request.observe?.({
+                  phase: "frame",
+                  elapsedMs: Date.now() - started,
+                  bytes: Buffer.byteLength(raw),
+                });
                 let data: Record<string, unknown> | null = null;
                 try {
                   data = JSON.parse(raw) as Record<string, unknown>;
@@ -401,6 +406,7 @@ export class CodexConversationSocketPool {
               if (timer) clearTimeout(timer);
               request.signal?.removeEventListener("abort", onAbort);
               this.discard(session);
+              request.observe?.({ phase: "cancelled", elapsedMs: Date.now() - started });
               release();
             }
           },

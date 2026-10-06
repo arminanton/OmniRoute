@@ -1,3 +1,11 @@
+import {
+  RequestTransportTelemetry,
+  runWithRequestTransportTelemetry,
+} from "../../open-sse/utils/transportTelemetry.ts";
+import {
+  budgetedGenerationFetch,
+  runGenerationDispatch,
+} from "../../open-sse/services/logicalRetryBudget.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import http2 from "node:http2";
@@ -406,5 +414,45 @@ test(
     );
     assert.equal(await recovered.text(), "data: [DONE]\n\n");
     assert.equal(calls, 2);
+  }
+);
+
+test(
+  "real TLS/H2 owned telemetry observes dispatch, headers, bytes and EOF without invented TCP timing",
+  { timeout: 15000 },
+  async (t) => {
+    const { url, pool } = await fixture(t, (stream) => {
+      stream.resume();
+      setTimeout(() => {
+        stream.respond({ ":status": 200, "content-type": "text/event-stream" });
+        stream.write(": keepalive\n\nda");
+        setTimeout(() => stream.end("ta: [DONE]\n\n"), 10);
+      }, 10);
+    });
+    const telemetry = new RequestTransportTelemetry(undefined, () => {});
+    const body = await runWithRequestTransportTelemetry(telemetry, () =>
+      runGenerationDispatch(async () => {
+        const response = await pool.fetch(
+          `${url}/responses`,
+          { method: "POST", body: "fixture" },
+          context,
+          budgetedGenerationFetch(fetcher)
+        );
+        return response.text();
+      })
+    );
+    assert.equal(body, ": keepalive\n\ndata: [DONE]\n\n");
+    const snapshot = telemetry.snapshot();
+    const attempt = snapshot.attempts[0];
+    assert.equal(snapshot.transportAdmissionCount, 1);
+    assert.notEqual(attempt.queuedMs, null);
+    assert.notEqual(attempt.dispatchedMs, null);
+    assert.notEqual(attempt.headersMs, null);
+    assert.notEqual(attempt.firstEventMs, null);
+    assert.equal(attempt.bytes, Buffer.byteLength(body));
+    assert.equal(attempt.closure, "eof");
+    assert.equal(attempt.tcpMs, null);
+    assert.equal(attempt.tlsMs, null);
+    assert.equal(attempt.uploadMs, null);
   }
 );
