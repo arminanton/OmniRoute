@@ -1,3 +1,8 @@
+---
+title: Provider integration validation
+description: Evidence and validation limits for the isolated provider reliability candidate.
+---
+
 # Provider integration validation
 
 This candidate is based on live revision `1327bd91554adde097f8b4d515a3af6ed1a308f0` in the independent green repository. Changes here do not change the active blue deployment. Prime's local-next repository remains independent and its uncommitted work is not imported.
