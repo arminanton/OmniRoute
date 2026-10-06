@@ -503,9 +503,15 @@ test("credits retry has its own exact serialized body and complete captured resp
 test("an aborted pre-response attempt is retained as incomplete without adding a request", async () => {
   const originalFetch = globalThis.fetch;
   let sends = 0;
+  let fetchEntered!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    fetchEntered = resolve;
+  });
   try {
     globalThis.fetch = async (_url, init) => {
+      init?.signal?.throwIfAborted();
       sends++;
+      fetchEntered();
       return new Promise((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
       });
@@ -527,6 +533,7 @@ test("an aborted pre-response attempt is retained as incomplete without adding a
           '{"request":{}}'
         )
     );
+    await entered;
     setTimeout(() => signal.abort(new Error("synthetic caller")), 30);
     await assert.rejects(pending);
     await log.getDiagnosticOverflowTrace()!.finish();
@@ -538,6 +545,48 @@ test("an aborted pre-response attempt is retained as incomplete without adding a
     assert.equal(manifest.state, "incomplete");
     assert.equal(manifest.attempts.length, 1);
     assert.equal(manifest.attempts[0].response.complete, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("already-aborted fake fetch matches native contract and records no provider send", async () => {
+  const originalFetch = globalThis.fetch;
+  let sends = 0;
+  try {
+    globalThis.fetch = async (_url, init) => {
+      init?.signal?.throwIfAborted();
+      sends++;
+      return new Response("unexpected");
+    };
+    const { log } = await logger({ messages: [] });
+    const signal = new AbortController();
+    const reason = new Error("already cancelled");
+    signal.abort(reason);
+    await assert.rejects(
+      runWithCapture(
+        createPreparedRequestLogger(log, {
+          id: "preabort",
+          model: "synthetic",
+          provider: "antigravity",
+        }),
+        () =>
+          fetchAntigravityWithReadinessTimeout(
+            "https://synthetic.invalid",
+            { method: "POST", body: "{}", signal: signal.signal },
+            1000,
+            1000,
+            "{}"
+          )
+      ),
+      (error) => error === reason
+    );
+    await log.getDiagnosticOverflowTrace()!.finish();
+    assert.equal(sends, 0);
+    const manifest = await readDiagnosticOverflowManifest(
+      log.getDiagnosticOverflowTrace()!.traceId
+    );
+    assert.equal(manifest?.state, "incomplete");
   } finally {
     globalThis.fetch = originalFetch;
   }
