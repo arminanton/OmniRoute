@@ -69,6 +69,28 @@ class Boundary:
             raise Refused("helper forwarding not freshly independently verified")
         return True
 
+    def verify_compatibility(self, g):
+        compatibility = load(CONFIG / ("compatibility-" + g["generation"] + ".json"))
+        exact(compatibility, {"generation", "pair", "schemaProof", "reviewedOverlap", "expiresAt"})
+        if (compatibility["generation"] != digest(g) or compatibility["pair"] != sorted(digest(r["generation"]) for r in self.adapter.records.values()) or compatibility["reviewedOverlap"] is not True
+                or not isinstance(compatibility["schemaProof"], str) or not re.fullmatch(r"[a-f0-9]{64}", compatibility["schemaProof"])
+                or not time.time() < compatibility["expiresAt"] <= time.time() + 3600):
+            raise Refused("schema overlap lacks fresh independently reviewed proof")
+
+    def verify_maintenance(self, g):
+        maintenance = load(CONFIG / "maintenance-owner.json")
+        exact(maintenance, {"pair", "helperSet", "owner", "bootId", "healthy", "fencedOwnership", "expiresAt"})
+        if (maintenance["pair"] != sorted(digest(r["generation"]) for r in self.adapter.records.values())
+                or maintenance["helperSet"] != g["helperSet"] or not isinstance(maintenance["owner"], str)
+                or not re.fullmatch(r"[a-f0-9]{64}", maintenance["owner"])
+                or maintenance["bootId"] != Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+                or maintenance["healthy"] is not True or maintenance["fencedOwnership"] is not True
+                or not time.time() < maintenance["expiresAt"] <= time.time() + 60):
+            raise Refused("stable maintenance owner lacks fresh independently verified evidence")
+
+    def readiness_script(self, g):
+        return READINESS_SCRIPT
+
     def verify(self, g, *, before_start=False, conversation_phase=None):
         record = self.adapter.record(g)
         static_hosts = Path("/opt/omni-local-next/runtime/static-loopback-hosts")
@@ -107,7 +129,7 @@ class Boundary:
             raise Refused("actual container privilege/rootfs facts differ")
         key_record = load(CONFIG / "readiness-key.json")
         exact(key_record, {"key"})
-        script = READINESS_SCRIPT
+        script = self.readiness_script(g)
         payload = {"key": key_record["key"], "generation": g["generation"]}
         if conversation_phase is not None:
             script = script.replace('response.status!==200', '![200,503].includes(response.status)')
@@ -141,21 +163,8 @@ class Boundary:
         exact(lifecycle, {"activeResponses", "activeWebSockets", "queuedRequests", "draining", "pendingUploads", "conversationPins", "upstreamLeases"})
         if any(type(lifecycle[k]) is not int or lifecycle[k] < 0 for k in lifecycle if k != "draining") or type(lifecycle["draining"]) is not bool:
             raise Refused("invalid app lifecycle counters")
-        compatibility = load(CONFIG / ("compatibility-" + g["generation"] + ".json"))
-        exact(compatibility, {"generation", "pair", "schemaProof", "reviewedOverlap", "expiresAt"})
-        if (compatibility["generation"] != digest(g) or compatibility["pair"] != sorted(digest(r["generation"]) for r in self.adapter.records.values()) or compatibility["reviewedOverlap"] is not True
-                or not isinstance(compatibility["schemaProof"], str) or not re.fullmatch(r"[a-f0-9]{64}", compatibility["schemaProof"])
-                or not time.time() < compatibility["expiresAt"] <= time.time() + 3600):
-            raise Refused("schema overlap lacks fresh independently reviewed proof")
-        maintenance = load(CONFIG / "maintenance-owner.json")
-        exact(maintenance, {"pair", "helperSet", "owner", "bootId", "healthy", "fencedOwnership", "expiresAt"})
-        if (maintenance["pair"] != sorted(digest(r["generation"]) for r in self.adapter.records.values())
-                or maintenance["helperSet"] != g["helperSet"] or not isinstance(maintenance["owner"], str)
-                or not re.fullmatch(r"[a-f0-9]{64}", maintenance["owner"])
-                or maintenance["bootId"] != Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-                or maintenance["healthy"] is not True or maintenance["fencedOwnership"] is not True
-                or not time.time() < maintenance["expiresAt"] <= time.time() + 60):
-            raise Refused("stable maintenance owner lacks fresh independently verified evidence")
+        self.verify_compatibility(g)
+        self.verify_maintenance(g)
         return {"protocol": 1, "generation": digest(g), "namespace": g["namespace"], "address": g["address"], "image": g["image"],
                 "revision": g["revision"], "expiresAt": time.time() + 10, "residentialEgress": True, "helperSet": g["helperSet"],
                 "helperForwarding": True, "appGeneration": state["generation"], "appReady": state["ready"], "sharedCapacity": state["coordination"]["accountAdmission"],
@@ -175,8 +184,17 @@ def main():
         raise Refused("invalid boundary operation")
     request = json.loads(sys.stdin.buffer.read(65537))
     exact(request, {"old", "candidate"} if sys.argv[2] == "conversation-exchange" else ({"generation", "draining"} if sys.argv[2] == "set-drain" else {"generation"}))
-    adapter = Adapter(load(CONFIG / "layout.json"))
-    boundary = Boundary(adapter)
+    layout = load(CONFIG / "layout.json")
+    if layout.get("schema") == 2:
+        from .sharedAppHost import SharedAdapter
+        adapter = SharedAdapter(layout)
+    else:
+        adapter = Adapter(layout)
+    if adapter.layout.get("schema") == 2:
+        from .sharedAppHost import SharedBoundary
+        boundary = SharedBoundary(adapter)
+    else:
+        boundary = Boundary(adapter)
     if sys.argv[2] == "conversation-exchange":
         from .conversation import exchange
         old, candidate = request["old"], request["candidate"]
@@ -198,6 +216,6 @@ def main():
         boundary.verify(g)
         cid = (Path("/run/omni-local-next/generations") / g["generation"] / "app.cid").read_text().strip()
         key = load(CONFIG / "readiness-key.json")["key"]
-        script = READINESS_SCRIPT.replace('/api/canary-readiness', '/api/canary-drain').replace('headers:{Authorization:"Bearer "+key}', 'method:"POST",body:JSON.stringify({generation:input.generation,draining:input.draining}),headers:{Authorization:"Bearer "+key,"Content-Type":"application/json"}')
+        script = boundary.readiness_script(g).replace('/api/canary-readiness', '/api/canary-drain').replace('headers:{Authorization:"Bearer "+key}', 'method:"POST",body:JSON.stringify({generation:input.generation,draining:input.draining}),headers:{Authorization:"Bearer "+key,"Content-Type":"application/json"}')
         adapter.runner("podman", ["--remote=false", "exec", "--user=10001:10001", "-i", cid, "node", "-e", script], {"key": key, "generation": g["generation"], "draining": request["draining"]})
     print(json.dumps(boundary.verify(request["generation"], before_start=sys.argv[2] == "verify-before-start")))

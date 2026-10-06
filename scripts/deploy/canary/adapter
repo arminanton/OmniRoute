@@ -34,6 +34,9 @@ try:
     safe(policy, True)
     layout = json.loads(policy.read_bytes())
     files = {name: root / name for name in ("__init__.py", "adapter.py", "controller.py", "host.py", "proxy.py", "readiness.py", "runtime.py", "boundary.py")}
+    if layout.get("schema") == 2:
+        for name in ("sharedApp.py", "sharedAppHost.py", "schemaProof.py", "wanRequester.py", "frontdoor.py", "static_assets.py"):
+            files[name] = root / name
     files["runtime_launcher.py"] = Path("/opt/omni-local-next/runtime/runtime_launcher.py")
     if set(layout["implementationHashes"]) != set(files):
         refused()

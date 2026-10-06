@@ -4,6 +4,12 @@ from .controller import Refused, validate_generation
 
 def nginx_config(generation, listeners, *, trusted_proto="https"):
     validate_generation(generation)
+    return render_nginx(generation, listeners, trusted_proto=trusted_proto)
+
+
+def render_nginx(generation, listeners, *, trusted_proto="https", backend_ports=None):
+    # Internal renderer; public profile entrypoints validate their own exact schema.
+    backend_ports = backend_ports or {"dashboard": 20128, "api": 20129}
     if trusted_proto not in ("http", "https"):
         raise Refused("invalid trusted ingress protocol")
     if not isinstance(listeners, dict) or set(listeners) != {"dashboard", "api"}:
@@ -15,6 +21,7 @@ def nginx_config(generation, listeners, *, trusted_proto="https"):
     config = """# Generated candidate; validate with reviewed nginx -t before reload.
 # No worker_shutdown_timeout: old healthy SSE/WS must not be killed on a deadline.
 pid /run/omni-local-next/canary/nginx.pid;
+user nobody nogroup;
 worker_processes auto;
 events { worker_connections 4096; }
 http {
@@ -36,7 +43,7 @@ http {
   client_body_timeout 3600s;
   send_timeout 3600s;
 """
-    for name, upstream_port in (("dashboard", 20128), ("api", 20129)):
+    for name, upstream_port in (("dashboard", backend_ports["dashboard"]), ("api", backend_ports["api"])):
         config += f"""  server {{
     listen {listeners[name]};
     # Admission proof is read privately by host adapter, never a public backend selector.
