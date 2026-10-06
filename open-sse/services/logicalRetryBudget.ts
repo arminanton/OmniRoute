@@ -166,6 +166,10 @@ export function runGenerationDispatch<T>(
 ): T {
   return generationContext.run(hooks ?? true, fn);
 }
+/** Bounded control-plane work keeps egress/auth scopes, but cannot borrow generation retry/permit ownership. */
+export function runControlPlaneDispatch<T>(fn: () => T): T {
+  return generationContext.exit(() => retryContext.exit(fn));
+}
 export function isGenerationHttpDispatch(input?: unknown, options?: { method?: string }): boolean {
   if (!generationContext.getStore()) return false;
   const target =
