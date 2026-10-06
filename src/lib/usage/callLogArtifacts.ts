@@ -1,3 +1,4 @@
+import { projectDiagnosticOverflowReference } from "./diagnosticOverflowTypes";
 import {
   projectGoogleError,
   projectErrorHeaders,
@@ -317,8 +318,12 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
     };
   }
   const transportTelemetry = compactTransportTelemetry(artifact.pipeline?.transportTelemetry);
+  const diagnosticOverflow = projectDiagnosticOverflowReference(
+    artifact.pipeline?.diagnosticOverflow
+  );
   return {
     error,
+    ...(diagnosticOverflow ? { diagnosticOverflow } : {}),
     ...(providerResponse ? { providerResponse } : {}),
     ...(transportTelemetry ? { transportTelemetry } : {}),
   };
@@ -364,6 +369,7 @@ function serializeFinalSizeLimitFallback(artifact: CallLogArtifact, maxBytes: nu
   const meaningful =
     compact &&
     (compact.providerResponse ||
+      compact.diagnosticOverflow ||
       compact.transportTelemetry ||
       Object.keys(compact.error ?? {}).length > 2);
   const telemetryPipeline = meaningful ? { pipeline: compact } : {};

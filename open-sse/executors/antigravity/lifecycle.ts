@@ -1,3 +1,12 @@
+import {
+  diagnosticDrainEnabled,
+  diagnosticErrorSignal,
+  getAntigravityDiagnosticCapture,
+} from "./diagnosticAttempt.ts";
+import {
+  isLogicalRetryBudgetError,
+  LogicalRetryBudgetError,
+} from "../../services/logicalRetryBudget.ts";
 import { backoffGenerationRetry } from "../../services/logicalRetryBudget.ts";
 /** Ownership and cancellation helpers shared by all Antigravity attempts. */
 const errorBodies = new WeakMap<Response, Promise<string>>();
@@ -24,13 +33,27 @@ export async function readWithCancellation<T>(
 }
 
 export async function disposeAntigravityResponse(response: Response): Promise<void> {
+  if (diagnosticDrainEnabled(response) && !response.bodyUsed) {
+    try {
+      await readAntigravityErrorBody(response, getAntigravityDiagnosticCapture(response)?.signal);
+    } catch (error) {
+      if (
+        isLogicalRetryBudgetError(error) ||
+        getAntigravityDiagnosticCapture(response)?.signal?.aborted
+      )
+        throw error;
+    }
+  }
   if (response.body && !response.bodyUsed) await response.body.cancel().catch(() => {});
 }
 
 async function consumeErrorBody(response: Response, signal?: AbortSignal | null): Promise<string> {
   if (!response.body) return "";
   const reader = response.body.getReader();
-  const bounded = AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]);
+  const diagnostic = diagnosticDrainEnabled(response);
+  const bounded = diagnostic
+    ? diagnosticErrorSignal(response, signal)
+    : AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]);
   const decoder = new TextDecoder();
   let text = "",
     bytes = 0;
@@ -38,16 +61,21 @@ async function consumeErrorBody(response: Response, signal?: AbortSignal | null)
     while (true) {
       const { done, value } = await readWithCancellation(reader, bounded);
       if (done) return text + decoder.decode();
-      const remaining = MAX_ERROR_BODY_BYTES - bytes;
+      const remaining = Math.max(0, MAX_ERROR_BODY_BYTES - bytes);
       text += decoder.decode(value.subarray(0, remaining), { stream: true });
       bytes += value.byteLength;
-      if (bytes >= MAX_ERROR_BODY_BYTES) {
+      if (bytes >= MAX_ERROR_BODY_BYTES && !diagnosticDrainEnabled(response)) {
         await reader.cancel().catch(() => {});
         return text + decoder.decode();
       }
     }
   } catch (error) {
     await reader.cancel(error).catch(() => {});
+    const capture = getAntigravityDiagnosticCapture(response);
+    if (diagnostic && capture?.budget && capture.budget.remainingTimeMs() <= 0 && !signal?.aborted)
+      throw new LogicalRetryBudgetError(
+        "Logical diagnostic error-body deadline exhausted after upstream rejection"
+      );
     throw error;
   } finally {
     reader.releaseLock();

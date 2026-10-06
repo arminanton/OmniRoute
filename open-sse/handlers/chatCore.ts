@@ -1,4 +1,8 @@
 import {
+  getDiagnosticClientJson,
+  runWithDiagnosticCaptureLifecycle,
+} from "../utils/diagnosticCaptureContext.ts";
+import {
   resolveAccountSelectionScope,
   type AccountSelectionScope,
 } from "./chatCore/accountSelectionScope.ts";
@@ -510,7 +514,11 @@ type VideoBridgeLogParam = { observed: boolean; redaction: VideoBridgeLogRedacti
  */
 // extractSystemRoleMessages extracted to chatCore/claudeSystemRole.ts (#3501); re-exported above so
 // existing importers (e.g. tests/unit/system-role-extraction.test.ts) keep resolving it from here.
-export async function handleChatCore({
+export async function handleChatCore(options: Parameters<typeof handleChatCoreOwned>[0]) {
+  return runWithDiagnosticCaptureLifecycle(() => handleChatCoreOwned(options));
+}
+
+async function handleChatCoreOwned({
   body,
   modelInfo,
   credentials,
@@ -1308,6 +1316,9 @@ export async function handleChatCore({
 
   const reqLogger = await createRequestLogger(sourceFormat, targetFormat, model, {
     enabled: detailedLoggingEnabled,
+    diagnosticOverflowEligible: detailedLoggingEnabled && !videoBridgeObserved,
+    diagnosticClientJson: () => getDiagnosticClientJson(clientRawRequest),
+    diagnosticSignal: clientRawRequest?.signal,
     captureStreamChunks: capturePipelineStreamChunks,
     maxStreamChunkBytes: getCallLogPipelineMaxSizeBytes(),
     requestId: pendingRequestId,

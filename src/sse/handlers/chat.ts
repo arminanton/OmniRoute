@@ -766,7 +766,16 @@ async function handleChatImplementation(
   const admissionRejection = await admissionContext.acquire(reasoningCacheContext, request, body);
   if (admissionRejection) return admissionRejection;
   clientRawRequest = chatAdmission.resolveClientRawAfterAdmission(clientRawRequest, () =>
-    deferredClientRawBody.withClientBody((clientBody) => buildClientRawRequest(request, clientBody))
+    deferredClientRawBody.withClientBody((clientBody) =>
+      buildClientRawRequest(
+        request,
+        clientBody,
+        apiKeyInfo?.noLog !== true &&
+          (settingsForContinuation.call_log_pipeline_enabled === true ||
+            settingsForContinuation.call_log_pipeline_enabled === "true" ||
+            settingsForContinuation.call_log_pipeline_enabled === "1")
+      )
+    )
   );
   // Sibling of clientRawRequest.body, not a replacement: .body stays the raw
   // pre-reconstruction client bytes (see captureDeferredClientRawBody), while

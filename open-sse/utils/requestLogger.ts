@@ -1,3 +1,10 @@
+import {
+  createDiagnosticOverflowTrace,
+  type DiagnosticOverflowTrace,
+  type DiagnosticOverflowReference,
+  projectDiagnosticOverflowReference,
+} from "@/lib/usage/diagnosticOverflow";
+import { registerDiagnosticTrace } from "./diagnosticCaptureContext.ts";
 import { getRequestTransportTelemetry } from "./transportTelemetry.ts";
 import { classifyUpstreamPolicyRejection } from "../services/upstreamPolicyRejection.ts";
 import { getPendingById } from "@/lib/usage/usageHistory";
@@ -19,6 +26,7 @@ type HeaderInput =
   | undefined;
 
 export type RequestPipelinePayloads = {
+  diagnosticOverflow?: DiagnosticOverflowReference;
   transportTelemetry?: JsonRecord;
   routeDecision?: JsonRecord;
   clientRawRequest?: JsonRecord;
@@ -36,6 +44,7 @@ export type RequestPipelinePayloads = {
 };
 
 type RequestLogger = {
+  getDiagnosticOverflowTrace: () => DiagnosticOverflowTrace | null;
   sessionPath: null;
   logClientRawRequest: (
     endpoint: unknown,
@@ -62,6 +71,9 @@ type RequestLogger = {
 };
 
 type RequestLoggerOptions = {
+  diagnosticOverflowEligible?: boolean;
+  diagnosticClientJson?: () => string | undefined;
+  diagnosticSignal?: AbortSignal | null;
   enabled?: boolean;
   captureStreamChunks?: boolean;
   maxStreamChunkBytes?: number;
@@ -301,7 +313,15 @@ function compactPipelinePayloads(
       continue;
     }
 
-    const payloadKey = key as Exclude<keyof RequestPipelinePayloads, "streamChunks" | "toolLoop">;
+    if (key === "diagnosticOverflow") {
+      const reference = projectDiagnosticOverflowReference(value);
+      if (reference) result.diagnosticOverflow = reference;
+      continue;
+    }
+    const payloadKey = key as Exclude<
+      keyof RequestPipelinePayloads,
+      "streamChunks" | "toolLoop" | "diagnosticOverflow"
+    >;
     result[payloadKey] = value as JsonRecord;
   }
 
@@ -382,6 +402,27 @@ export async function createRequestLogger(
   _model?: string,
   options: RequestLoggerOptions = {}
 ): Promise<RequestLogger> {
+  const diagnosticTrace = await createDiagnosticOverflowTrace({
+    eligible:
+      options.enabled !== false &&
+      options.diagnosticOverflowEligible === true &&
+      ["antigravity", "agy"].includes(options.provider || ""),
+    provider: options.provider || "unknown",
+    requestId: options.requestId || undefined,
+  });
+  registerDiagnosticTrace(diagnosticTrace);
+  if (diagnosticTrace) {
+    const json = options.diagnosticClientJson?.();
+    if (json !== undefined) await diagnosticTrace.writeClientRequest(json);
+    else diagnosticTrace.markIncomplete("client_unavailable");
+    if (options.diagnosticSignal) {
+      const abort = () => {
+        void diagnosticTrace.abort("abort");
+      };
+      options.diagnosticSignal.addEventListener("abort", abort, { once: true });
+      if (options.diagnosticSignal.aborted) abort();
+    }
+  }
   const telemetry = getRequestTransportTelemetry();
   const captureStreamChunks = options.captureStreamChunks !== false;
   // Stream chunk capture is always set up — even when the logger is disabled,
@@ -392,6 +433,7 @@ export async function createRequestLogger(
   if (options.enabled === false) {
     let routeDecision: JsonRecord | null = null;
     return {
+      getDiagnosticOverflowTrace: () => null,
       sessionPath: null,
       logClientRawRequest() {},
       logRouteDecision(decision) {
@@ -417,6 +459,7 @@ export async function createRequestLogger(
   };
 
   return {
+    getDiagnosticOverflowTrace: () => diagnosticTrace,
     sessionPath: null,
 
     logClientRawRequest(endpoint, body, headers = {}, effectiveInput) {
@@ -506,6 +549,7 @@ export async function createRequestLogger(
     getPipelinePayloads() {
       return compactPipelinePayloads({
         ...payloads,
+        ...(diagnosticTrace ? { diagnosticOverflow: diagnosticTrace.snapshot() } : {}),
         ...(telemetry ? { transportTelemetry: telemetry.snapshot() } : {}),
       });
     },
