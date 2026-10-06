@@ -103,7 +103,10 @@ test("shouldSwallowUncaught absorbs the real 'aborted' uncaughtException signatu
   assert.equal(shouldSwallowUncaught(abortErr, "uncaughtException"), true);
   assert.equal(shouldSwallowUncaught(abortErr, undefined), true);
   assert.equal(
-    shouldSwallowUncaught(Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" }), "uncaughtException"),
+    shouldSwallowUncaught(
+      Object.assign(new Error("ECONNRESET"), { code: "ECONNRESET" }),
+      "uncaughtException"
+    ),
     true
   );
 });
@@ -178,6 +181,41 @@ test("installProcessCrashGuard() with no logger swallows aborts instead of dying
   assert.match(stdout, /ALIVE/);
 });
 
+test("installProcessCrashGuard survives relay timeouts from both process-level guards", async () => {
+  const guardPath = fileURLToPath(
+    new URL("../../src/shared/utils/httpClientAbortGuard.mjs", import.meta.url)
+  );
+  const script = `
+    const { installProcessCrashGuard } = await import(process.argv[1]);
+    installProcessCrashGuard();
+    process.emit(
+      "uncaughtException",
+      Object.assign(new Error("relay timed out"), { code: "RELAY_TIMEOUT" }),
+      "uncaughtException"
+    );
+    process.emit(
+      "unhandledRejection",
+      Object.assign(new Error("relay timed out"), { errorCode: "relay_timeout" }),
+      Promise.resolve()
+    );
+    console.log("ALIVE");
+    process.exit(0);
+  `;
+  const { status, stdout, stderr } = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script, guardPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("close", (status) => resolve({ status, stdout: out, stderr: err }));
+    child.on("error", reject);
+  });
+  assert.equal(status, 0, `child must survive relay timeouts; stderr: ${stderr}`);
+  assert.match(stdout, /ALIVE/);
+});
+
 test("installProcessCrashGuard still crashes on genuine errors (no over-swallowing)", async () => {
   const guardPath = fileURLToPath(
     new URL("../../src/shared/utils/httpClientAbortGuard.mjs", import.meta.url)
@@ -188,7 +226,11 @@ test("installProcessCrashGuard still crashes on genuine errors (no over-swallowi
     process.emit("uncaughtException", new Error("genuine failure"), "uncaughtException");
     console.log("SHOULD_NOT_REACH");
   `;
-  const { status, stdout, stderr: _stderr } = await new Promise((resolve, reject) => {
+  const {
+    status,
+    stdout,
+    stderr: _stderr,
+  } = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ["--input-type=module", "-e", script, guardPath], {
       stdio: ["ignore", "pipe", "pipe"],
     });

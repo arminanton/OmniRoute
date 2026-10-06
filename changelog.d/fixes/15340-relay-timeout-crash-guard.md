@@ -1,0 +1,1 @@
+- **fix(resilience):** pooled relay timeouts (`RELAY_TIMEOUT`/`relay_timeout`) no longer kill the server when an escaped rejection reaches the process crash guard; genuine errors still surface ([#15340](https://github.com/diegosouzapw/OmniRoute/pull/15340))

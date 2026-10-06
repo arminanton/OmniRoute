@@ -64,8 +64,24 @@ export function isClientAbortError(err) {
 }
 
 /**
+ * RELAY_TIMEOUT is already handled by the request layer; only a stray copy
+ * reaching the process-level crash guard should be treated as recoverable.
+ * Keep these literals in sync with open-sse/utils/proxyFetch.ts.
+ *
+ * @param {unknown} err
+ * @returns {boolean}
+ */
+export function isRecoverableUpstreamTimeoutError(err) {
+  if (err === "RELAY_TIMEOUT" || err === "relay_timeout") return true;
+  if (!err || typeof err !== "object") return false;
+  const e = /** @type {NodeJS.ErrnoException & { errorCode?: string }} */ (err);
+  return e.code === "RELAY_TIMEOUT" || e.errorCode === "relay_timeout";
+}
+
+/**
  * Decide whether a process-level uncaughtException/unhandledRejection should be
- * swallowed (benign client-abort) or allowed to surface (genuine bug).
+ * swallowed (benign client-abort or recoverable relay timeout) or allowed to
+ * surface (genuine bug).
  *
  * Pure + exported so it can be unit-tested without poking process listeners.
  *
@@ -75,7 +91,7 @@ export function isClientAbortError(err) {
  * @returns {boolean} true => swallow (log only), false => re-throw / let crash.
  */
 export function shouldSwallowUncaught(err, origin) {
-  if (!isClientAbortError(err)) return false;
+  if (!isClientAbortError(err) && !isRecoverableUpstreamTimeoutError(err)) return false;
   // Only swallow when the origin matches what the guard installed for. If some
   // other subsystem raised it (e.g. a deliberate `throw` in a domain), keep the
   // existing crash semantics.
