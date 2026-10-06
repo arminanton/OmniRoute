@@ -1,6 +1,6 @@
 import createNextIntlPlugin from "next-intl/plugin";
 import { createMDX } from "fumadocs-mdx/next";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { betterSqlite3AliasFor } from "./scripts/build/better-sqlite3-stub-flag.mjs";
 import { mitmManagerAliasFor } from "./scripts/build/mitm-stub-flag.mjs";
@@ -474,7 +474,7 @@ const nextConfig = {
       for (const [pattern, stubPath] of replacements) {
         config.plugins.push(
           new webpack.NormalModuleReplacementPlugin(pattern, (resource) => {
-            resource.request = stubPath;
+            resource.request = resolve(projectRoot, stubPath);
           })
         );
       }
