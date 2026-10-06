@@ -24,6 +24,7 @@ class Host:
         self.ack_ok = True
         self.approved = True
         self.live_bodies = 1
+        self.removed = False
 
     def verify_resources(self, old, candidate):
         pass
@@ -44,6 +45,14 @@ class Host:
         self.switches += 1
         if self.ack_ok:
             self.route = generation["generation"]
+
+    def retired(self, generation):
+        return self.removed
+
+    def retire(self, generation):
+        if self.route == generation["generation"] or self.live_bodies:
+            raise c.Refused("cannot retire active/undrained generation")
+        self.removed = True
 
     def fence(self, generation):
         if self.route == generation["generation"]:
@@ -81,6 +90,35 @@ class CanaryTest(unittest.TestCase):
         self.controller.switch_back()
         self.assertEqual(self.host.route, self.old["generation"])
         self.assertEqual(self.journal.read()["phase"], "draining-candidate")
+
+    def test_retirement_requires_complete_drain_and_approval(self):
+        self.prepare()
+        self.controller.promote()
+        with self.assertRaises(c.Refused):
+            self.controller.retire()
+        self.host.live_bodies = 0
+        self.controller.retain()
+        self.host.approved = False
+        with self.assertRaises(c.Refused):
+            self.controller.retire()
+        self.host.approved = True
+        self.controller.retire()
+        self.assertEqual(self.journal.read()["phase"], "retired")
+
+    def test_crash_after_retirement_recovers_from_receipt_observation(self):
+        self.prepare()
+        self.controller.promote()
+        self.host.live_bodies = 0
+        self.controller.retain()
+        original = self.host.retire
+        def crash(generation):
+            original(generation)
+            raise RuntimeError("supervisor disappeared after stop")
+        self.host.retire = crash
+        with self.assertRaises(RuntimeError):
+            self.controller.retire()
+        self.assertEqual(self.journal.read()["phase"], "retirement-intent")
+        self.assertEqual(self.controller.recover(), "retired")
 
     def test_no_approval_no_switch(self):
         self.prepare()
@@ -233,3 +271,17 @@ class BoundaryTest(unittest.TestCase):
             b.validate_attestation(claim, g, boot="boot", inode=123, boot_ms=12000)
         with self.assertRaises(c.Refused):
             b.validate_attestation(claim, g, boot="other", inode=123, boot_ms=5000)
+
+
+class RetirementObservationTest(unittest.TestCase):
+    def test_missing_unknown_fields_are_not_success(self):
+        a = importlib.import_module("scripts.deploy.canary.adapter")
+        cid = "c" * 64
+        self.assertTrue(a.retirement_observed([], cid))
+        self.assertTrue(a.retirement_observed([{"Id": cid, "State": "exited"}], cid))
+        self.assertFalse(a.retirement_observed([{"Id": cid, "State": "running"}], cid))
+        self.assertFalse(a.retirement_observed([{"Id": cid, "State": "paused"}], cid))
+        with self.assertRaises(c.Refused):
+            a.retirement_observed([{"Id": cid}], cid)
+        with self.assertRaises(c.Refused):
+            a.retirement_observed([{"ID": cid, "State": "running"}], cid)

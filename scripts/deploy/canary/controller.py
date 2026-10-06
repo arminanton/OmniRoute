@@ -203,6 +203,9 @@ class Controller:
             else:
                 raise Refused("unknown frontdoor authority; manual reconciliation required")
         phase = self.journal.read()["phase"]
+        if phase == "retirement-intent" and self.host.retired(r["retiring"]):
+            self.save(r, "retired")
+            phase = "retired"
         if phase in ("draining-old", "draining-candidate"):
             self.host.fence(r["old"] if phase == "draining-old" else r["candidate"])
         return phase
@@ -217,3 +220,17 @@ class Controller:
             return False
         self.save(r, "old-retained" if drained == r["old"] else "candidate-retained")
         return True
+
+    def retire(self):
+        r = self.journal.read()
+        if not r or r["phase"] not in ("old-retained", "candidate-retained"):
+            raise Refused("generation not safely retained")
+        old = r["old"] if r["phase"] == "old-retained" else r["candidate"]
+        active = r["candidate"] if old == r["old"] else r["old"]
+        if self.host.selected() != active["generation"] or not self.host.drained(old):
+            raise Refused("retirement requires observed active generation and fully drained old")
+        self.host.verify_approval(digest(r))
+        r["retiring"] = old
+        self.save(r, "retirement-intent")
+        self.host.retire(old)
+        self.save(r, "retired")
