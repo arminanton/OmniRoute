@@ -69,7 +69,7 @@ class Boundary:
             raise Refused("helper forwarding not freshly independently verified")
         return True
 
-    def verify(self, g, *, before_start=False):
+    def verify(self, g, *, before_start=False, conversation_phase=None):
         record = self.adapter.record(g)
         static_hosts = Path("/opt/omni-local-next/runtime/static-loopback-hosts")
         trusted(static_hosts)
@@ -107,9 +107,32 @@ class Boundary:
             raise Refused("actual container privilege/rootfs facts differ")
         key_record = load(CONFIG / "readiness-key.json")
         exact(key_record, {"key"})
-        state = json.loads(self.adapter.runner("podman", ["--remote=false", "exec", "--user=10001:10001", "-i", cid, "node", "-e", READINESS_SCRIPT], {"key": key_record["key"], "generation": g["generation"]}))
-        fields = {"schema", "generation", "ready", "databaseReady", "coordination", "lifecycle"}
+        script = READINESS_SCRIPT
+        payload = {"key": key_record["key"], "generation": g["generation"]}
+        if conversation_phase is not None:
+            script = script.replace('response.status!==200', '![200,503].includes(response.status)')
+            if conversation_phase != "challenge":
+                payload["peerChallengeId"] = conversation_phase
+                script = script.replace('headers:{Authorization:"Bearer "+key}', 'method:"POST",body:JSON.stringify({generation:input.generation,peerChallengeId:input.peerChallengeId}),headers:{Authorization:"Bearer "+key,"Content-Type":"application/json"}')
+        state = json.loads(self.adapter.runner("podman", ["--remote=false", "exec", "--user=10001:10001", "-i", cid, "node", "-e", script], payload))
+        if conversation_phase is not None:
+            if conversation_phase != "challenge":
+                exact(state, {"protocol", "generation", "peerGeneration", "peerChallengeId", "completed"})
+                if state["generation"] != g["generation"] or state["protocol"] != "omni-conversation-state/v1":
+                    raise Refused("conversation acknowledgment generation differs")
+                return state
+            conversation = state.get("conversationState")
+            if state.get("generation") != g["generation"] or state.get("schema") != "omni-canary-readiness/v1" or not isinstance(conversation, dict):
+                raise Refused("generation lacks conversation handoff protocol; approved bootstrap required")
+            exact(conversation, {"protocol", "ready", "challengeId", "expiresAt", "peerGeneration", "handoffFresh", "reason"})
+            return {"protocol": conversation["protocol"], "generation": g["generation"], "namespace": g["namespace"],
+                    "challengeId": conversation["challengeId"], "expiresAt": conversation["expiresAt"]}
+        fields = {"schema", "generation", "ready", "databaseReady", "coordination", "lifecycle", "conversationState"}
         exact(state, fields)
+        conversation = state["conversationState"]
+        exact(conversation, {"protocol", "ready", "challengeId", "expiresAt", "peerGeneration", "handoffFresh", "reason"})
+        if conversation["protocol"] != "omni-conversation-state/v1" or type(conversation["ready"]) is not bool or conversation["ready"] != state["coordination"].get("conversationState"):
+            raise Refused("conversation capability lacks actual protocol witness")
         exact(state["coordination"], {"protocol", "accountAdmission", "refreshOwnership", "backgroundOwnership", "conversationState"})
         if (state["schema"] != "omni-canary-readiness/v1" or state["generation"] != g["generation"]
                 or state["coordination"]["protocol"] != "omni-coordination/v1" or state["databaseReady"] is not True):
@@ -148,12 +171,19 @@ class Boundary:
 def main():
     if Path(__file__).resolve() != INSTALL / "boundary.py" or os.geteuid() != 0:
         raise Refused("only root-installed collector can execute")
-    if len(sys.argv) != 3 or sys.argv[1] != "--protocol=1" or sys.argv[2] not in ("verify", "verify-before-start", "set-drain"):
+    if len(sys.argv) != 3 or sys.argv[1] != "--protocol=1" or sys.argv[2] not in ("verify", "verify-before-start", "set-drain", "conversation-exchange"):
         raise Refused("invalid boundary operation")
     request = json.loads(sys.stdin.buffer.read(65537))
-    exact(request, {"generation", "draining"} if sys.argv[2] == "set-drain" else {"generation"})
+    exact(request, {"old", "candidate"} if sys.argv[2] == "conversation-exchange" else ({"generation", "draining"} if sys.argv[2] == "set-drain" else {"generation"}))
     adapter = Adapter(load(CONFIG / "layout.json"))
     boundary = Boundary(adapter)
+    if sys.argv[2] == "conversation-exchange":
+        from .conversation import exchange
+        old, candidate = request["old"], request["candidate"]
+        adapter.record(old); adapter.record(candidate)
+        exchange(old, candidate, lambda g, challenge: boundary.verify(g, conversation_phase=challenge or "challenge"))
+        print(json.dumps({"protocol": 1, "ok": True, "pair": sorted([old["generation"], candidate["generation"]])}))
+        return
     if sys.argv[2] == "set-drain":
         if type(request["draining"]) is not bool:
             raise Refused("invalid admission fence")

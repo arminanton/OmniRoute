@@ -11,3 +11,11 @@ export async function GET(request: Request) {
     headers: { "Cache-Control": "no-store", "X-Omni-App-Generation": data.generation },
   });
 }
+
+export async function POST(request: Request) {
+  const auth = await requireManagementAuth(request, { alwaysRequireAuth: true });
+  if (auth) return auth;
+  const { acknowledgeCanaryConversationHandoff } =
+    await import("@/lib/canaryConversationHandshake");
+  return acknowledgeCanaryConversationHandoff(request);
+}

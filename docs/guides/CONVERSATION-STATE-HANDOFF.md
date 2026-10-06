@@ -71,3 +71,18 @@ boundaries, concurrent exact tokens, signature invalidation, response-ID receipt
 pin fencing, current noLog, opaque/truncated rejection and actual published-artifact
 tool-turn reconstruction. Production readiness/counter/API and socket-pool wiring
 are coordinated separately; this candidate does not deploy or change live state.
+
+The paired readiness endpoint now accepts management-authenticated POST with
+exactly `generation` and `peerChallengeId`. It completes real peer reads rather
+than accepting supplied booleans or URLs. GET exposes nonsecret challenge/protocol,
+expiry, peer generation and handoff freshness. The installed controller performs
+both directions inside policy-bound immutable container namespaces before collecting
+normal old/candidate proofs. Older generations without this API require approved
+bootstrap; failure does not switch or fence traffic.
+
+A successful witness can seal operational capability only for the current process,
+shared-file identity, schema, encryption key and generation. Live functional reads
+still run. Changing identity or losing data invalidates readiness. Fresh overlap
+approval remains short-lived and is re-exchanged before cutover; retiring the peer
+does not falsely make a healthy survivor depend on a dead process every minute.
+The probe also verifies exact native response-ID ownership metadata.

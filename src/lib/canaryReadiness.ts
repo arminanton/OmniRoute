@@ -1,4 +1,9 @@
 import {
+  getConversationStateReadiness,
+  getConversationStatePins,
+  getConversationStateChallengeBinding,
+} from "@omniroute/open-sse/services/conversationState/readiness";
+import {
   getRuntimeCoordinationCapabilities,
   getRuntimeCoordinationCounts,
 } from "@omniroute/open-sse/services/coordination/sharedSemaphore";
@@ -36,6 +41,7 @@ export function registerCanaryReadinessProbe(
   probes.set(component, probe);
 }
 export async function getCanaryReadiness() {
+  registerCanaryCounter("conversationPins", getConversationStatePins);
   registerCanaryCounter(
     "queuedRequests",
     () => getRuntimeCoordinationCounts()?.queuedGeneration ?? null
@@ -51,6 +57,15 @@ export async function getCanaryReadiness() {
         (await boundedCanaryProbe(probe, false)) === true;
     })
   );
+  const conversation = await boundedCanaryProbe(async () => getConversationStateReadiness(), {
+    ready: false,
+    challengeId: null,
+    reason: "conversation_probe_timeout",
+  });
+  coordination.conversationState = conversation.ready;
+  const binding = conversation.challengeId
+    ? getConversationStateChallengeBinding(conversation.challengeId)
+    : null;
   let databaseReady = false;
   try {
     databaseReady = pingDb();
@@ -70,6 +85,15 @@ export async function getCanaryReadiness() {
     ready,
     databaseReady,
     coordination,
+    conversationState: {
+      protocol: "omni-conversation-state/v1",
+      ready: conversation.ready,
+      challengeId: conversation.challengeId,
+      expiresAt: binding?.expiresAt ?? null,
+      peerGeneration: conversation.peerGeneration ?? null,
+      handoffFresh: conversation.handoffFresh === true,
+      reason: conversation.reason ?? null,
+    },
     lifecycle,
   };
 }

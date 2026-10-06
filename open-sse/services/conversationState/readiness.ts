@@ -1,3 +1,6 @@
+import { statSync } from "node:fs";
+import { SQLITE_FILE, getDbInstance } from "../../../src/lib/db/core.ts";
+import { rememberCodexResponseId, getCodexResponseIdOwnership } from "./codexResponseOwnership.ts";
 import {
   upsertSessionAccountAffinity,
   getSessionAccountAffinity,
@@ -28,12 +31,28 @@ import {
 } from "../../../src/lib/db/sharedAffinity.ts";
 interface Challenge {
   producer: string;
+  producerGeneration: string;
   scope: ConversationScope;
   token: string;
   signature: string;
   signatureKey: string;
   responseId: string;
   nonce: string;
+  expiresAt: number;
+}
+let sealed: { identity: string; peerGeneration: string } | null = null;
+function storeIdentity() {
+  const shared = getSharedConversationState();
+  if (!shared || !SQLITE_FILE) return null;
+  const st = statSync(SQLITE_FILE, { bigint: true });
+  return opaqueStateKey(
+    JSON.stringify([
+      shared.readinessIdentity(),
+      String(st.dev),
+      String(st.ino),
+      getDbInstance().prepare("PRAGMA schema_version").get(),
+    ])
+  );
 }
 let issued: { id: string; expires: number } | null = null;
 
@@ -53,12 +72,14 @@ export function createConversationStateHandoffChallenge(): string | null {
   };
   const data: Challenge = {
     producer: shared.instance,
+    producerGeneration: process.env.OMNIROUTE_APP_GENERATION || "",
     scope,
     token: randomUUID(),
     signature: `synthetic-not-vendor-signature:${randomUUID()}`,
     signatureKey: `gs2:${conversationScopeKey({ ...scope, provider: "antigravity" })}:tool-proof`,
     responseId: `resp_probe_${id}`,
     nonce: randomUUID(),
+    expiresAt: Date.now() + 60000,
   };
   storeGeminiThoughtSignature(data.signatureKey, data.signature);
   upsertSessionAccountAffinity(
@@ -69,6 +90,7 @@ export function createConversationStateHandoffChallenge(): string | null {
     60000
   );
   if (
+    !rememberCodexResponseId(scope, data.responseId) ||
     !rememberCodexStateToken(scope, data.token) ||
     !rememberSharedConversationAffinity(scope, scope.account)
   )
@@ -116,6 +138,7 @@ export function completeConversationStateHandoffChallenge(id: string): boolean {
   if (
     getGeminiThoughtSignature(data.signatureKey) !== data.signature ||
     !canEchoCodexStateToken(data.scope, data.token) ||
+    getCodexResponseIdOwnership(data.scope, data.responseId) !== "owned" ||
     resolveSharedConversationAffinity(data.scope) !== data.scope.account ||
     continuation?.output[0] === undefined
   )
@@ -134,6 +157,8 @@ export function completeConversationStateHandoffChallenge(id: string): boolean {
     {
       producer: data.producer,
       consumer: shared.instance,
+      producerGeneration: data.producerGeneration,
+      consumerGeneration: process.env.OMNIROUTE_APP_GENERATION || "",
       nonce: data.nonce,
       signatures: true,
       exactTokens: true,
@@ -147,6 +172,8 @@ export function getConversationStateReadiness(): {
   ready: boolean;
   challengeId: string | null;
   reason?: string;
+  peerGeneration?: string;
+  handoffFresh?: boolean;
 } {
   try {
     const shared = getSharedConversationState();
@@ -157,17 +184,22 @@ export function getConversationStateReadiness(): {
     const proof = shared.get<{
       producer: string;
       consumer: string;
+      producerGeneration: string;
+      consumerGeneration: string;
       nonce: string;
       signatures: boolean;
       exactTokens: boolean;
       retainedContinuations: boolean;
       scopedAffinity: boolean;
     }>("handoff_witness", id, opaqueStateKey(id));
-    const ready =
+    const handoffFresh =
       !!original &&
       !!proof &&
       proof.producer === shared.instance &&
       proof.consumer !== shared.instance &&
+      proof.producerGeneration === (process.env.OMNIROUTE_APP_GENERATION || "") &&
+      !!proof.consumerGeneration &&
+      proof.consumerGeneration !== proof.producerGeneration &&
       proof.nonce === original.nonce &&
       proof.signatures &&
       proof.exactTokens &&
@@ -176,9 +208,29 @@ export function getConversationStateReadiness(): {
       getSessionAccountAffinity("canary:" + id, "codex", 60000)?.connectionId ===
         "consumer:" + proof.consumer &&
       getUnsharedCodexStatePinCount() === 0;
+    const identity = storeIdentity();
+    if (handoffFresh && identity) sealed = { identity, peerGeneration: proof!.consumerGeneration };
+    const functional =
+      !!original &&
+      getGeminiThoughtSignature(original.signatureKey) === original.signature &&
+      canEchoCodexStateToken(original.scope, original.token) &&
+      getCodexResponseIdOwnership(original.scope, original.responseId) === "owned" &&
+      resolveSharedResponseContinuation(
+        original.responseId,
+        original.scope.principal,
+        original.scope.model
+      )?.output.length === 1 &&
+      resolveSharedConversationAffinity(original.scope) === original.scope.account;
+    const ready =
+      !!sealed &&
+      sealed.identity === identity &&
+      functional &&
+      getUnsharedCodexStatePinCount() === 0;
     return {
       ready,
       challengeId: id,
+      handoffFresh,
+      ...(ready ? { peerGeneration: sealed!.peerGeneration } : {}),
       ...(ready ? {} : { reason: "distinct_process_handoff_witness_required" }),
     };
   } catch {
@@ -204,4 +256,18 @@ export function releaseConversationStatePin(scopeKey: string) {
 }
 export function getConversationStatePinOwner(scopeKey: string): string | null {
   return getSharedConversationState()?.pinOwner(scopeKey) ?? null;
+}
+
+/** Nonsecret binding for the authenticated immutable-generation controller. */
+export function getConversationStateChallengeBinding(
+  id: string
+): { producerGeneration: string; expiresAt: number } | null {
+  if (!/^[a-f0-9-]{36}$/.test(id)) return null;
+  const data = getSharedConversationState()?.get<Challenge>(
+    "handoff_challenge",
+    id,
+    opaqueStateKey(id)
+  );
+  if (!data || !data.producerGeneration || data.expiresAt <= Date.now()) return null;
+  return { producerGeneration: data.producerGeneration, expiresAt: data.expiresAt };
 }

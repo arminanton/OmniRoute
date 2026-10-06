@@ -249,6 +249,11 @@ class Adapter:
             old, candidate = request["old"], request["candidate"]
             if old["helperSet"] != candidate["helperSet"]:
                 raise Refused("overlapping helper upgrade unsupported")
+            self.record(old); self.record(candidate)
+            exchanged = json.loads(self.runner("boundary", ["--protocol=1", "conversation-exchange"], {"old": old, "candidate": candidate}))
+            exact(exchanged, {"protocol", "ok", "pair"})
+            if exchanged["protocol"] != 1 or exchanged["ok"] is not True or exchanged["pair"] != sorted([old["generation"], candidate["generation"]]):
+                raise Refused("conversation exchange did not bind the approved pair")
             self.proof(old)
             self.proof(candidate)
         elif operation == "observe-admission":

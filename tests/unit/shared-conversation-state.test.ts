@@ -316,3 +316,26 @@ test("response-ID receipts persist only ownership metadata and reject foreign ow
     "foreign"
   );
 });
+
+test("proven operational capability survives overlap TTL expiry with live functional checks", () => {
+  const realNow = Date.now;
+  const now = realNow();
+  try {
+    Date.now = () => now + 61000;
+    const status = readiness.getConversationStateReadiness();
+    assert.equal(status.ready, true);
+    assert.equal(status.handoffFresh, false);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("sealed capability invalidates on current generation identity changes", () => {
+  const generation = process.env.OMNIROUTE_APP_GENERATION;
+  try {
+    process.env.OMNIROUTE_APP_GENERATION = "different-generation";
+    assert.equal(readiness.getConversationStateReadiness().ready, false);
+  } finally {
+    process.env.OMNIROUTE_APP_GENERATION = generation;
+  }
+});

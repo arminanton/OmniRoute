@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { encrypt, decrypt, isEncryptionEnabled, looksEncrypted } from "./encryption.ts";
@@ -30,7 +31,7 @@ export const opaqueStateKey = (value: string) => createHash("sha256").update(val
 export class SharedConversationState {
   private db: DatabaseSync;
   readonly instance = `${process.env.OMNIROUTE_APP_GENERATION || "local"}:${process.pid}:${randomUUID()}`;
-  constructor(filename: string) {
+  constructor(private readonly filename: string) {
     if (!isEncryptionEnabled())
       throw new Error("Shared conversation state requires field encryption");
     this.db = new DatabaseSync(filename);
@@ -166,6 +167,21 @@ export class SharedConversationState {
       .prepare("SELECT COUNT(*) AS n FROM conversation_state_pins WHERE owner=? AND expires>?")
       .get(this.instance, Date.now());
     return Number(row?.n ?? 0);
+  }
+  readinessIdentity(): string {
+    const st = statSync(this.filename, { bigint: true });
+    const schema = this.db.prepare("PRAGMA schema_version").get()?.schema_version;
+    return opaqueStateKey(
+      JSON.stringify([
+        this.instance,
+        this.filename,
+        String(st.dev),
+        String(st.ino),
+        String(schema),
+        process.env.STORAGE_ENCRYPTION_KEY || "",
+        process.env.OMNIROUTE_APP_GENERATION || "",
+      ])
+    );
   }
   close() {
     this.db.close();
