@@ -76,7 +76,7 @@ binary/file list and emits no credentials, user prompts or authenticated headers
   enabled automatically or exposed as a public endpoint.
 - `codeAssistCacheOwnership.ts` and the executor call site retain an explicit cache
   only with a private credential-side receipt binding verified CCPA capability,
-  connection/account, cryptographic principal/conversation namespace, upstream model
+  connection/account/project, cryptographic principal/conversation namespace, upstream model
   and expiry. Caller body fields cannot mint ownership. Missing/stale/mismatched
   references fail clearly; they are not silently discarded from a partial prompt.
   Native implicit caching/usage accounting is untouched. No cache CRUD or receipt

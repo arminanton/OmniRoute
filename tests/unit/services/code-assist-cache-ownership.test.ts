@@ -12,12 +12,14 @@ const receipt: CodeAssistCacheOwnershipReceipt = {
   serviceCapabilityVerified: true,
   reference: "projects/native-project/locations/global/cachedContents/private-cache",
   connectionId: "connection-A",
+  projectId: "native-project",
   namespace,
   model: "gemini-3.8-flash",
   expiresAt: 2000,
 };
 const credentials = {
   connectionId: "connection-A",
+  projectId: "native-project",
   _signatureNamespace: namespace,
   _codeAssistCacheOwnershipReceipt: receipt,
 };
@@ -45,6 +47,7 @@ test("missing, stale, wrong principal/conversation/account/model receipts fail c
     {},
     { ...credentials, _signatureNamespace: "ag:" + "b".repeat(64) },
     { ...credentials, connectionId: "connection-B" },
+    { ...credentials, projectId: "different-project" },
     { ...credentials, _codeAssistCacheOwnershipReceipt: { ...receipt, expiresAt: 999 } },
     { ...credentials, _codeAssistCacheOwnershipReceipt: { ...receipt, model: "different-model" } },
     {
