@@ -46,7 +46,12 @@ async function nativeFixture<T>(
   }
 }
 const key = (provider: string, data: unknown) =>
-  resolveQuotaIdentity(provider, "different-row-" + provider, { providerSpecificData: data });
+  resolveQuotaIdentity(provider, "different-row-" + provider, {
+    providerSpecificData: {
+      projectId: (data as Record<string, unknown>).quotaProjectId,
+      ...(data as Record<string, unknown>),
+    },
+  });
 
 test("actualIDE andCLI OAuth200 flows retain same verified account/project admission identity", async () => {
   const credentials = [];

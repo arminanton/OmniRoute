@@ -14,7 +14,17 @@ export function resolveQuotaIdentity(
   const realm = value(data.quotaRealm) ?? provider;
   const partition = value(data.quotaPartition) ?? "account";
   // accountId by itself does not establish whether API, subscription or project quotas coincide.
-  const verified = data.quotaIdentityVerified === true;
+  const provenance = data.quotaIdentityProvenance as { schema?: unknown } | null | undefined;
+  const automaticGoogle = provenance?.schema === "omni-google-codeassist-identity/v1";
+  const nativeProject = value(data.quotaProjectId);
+  const configuredProject = value(data.projectId);
+  const effectiveProject = value(credentials?.projectId) ?? configuredProject;
+  // A manual project edit is not fresh authenticated native project evidence.
+  // Explicit operator groups remain authoritative even when automatic proof is stale.
+  const projectStillBound =
+    !automaticGoogle ||
+    (!!nativeProject && configuredProject === nativeProject && effectiveProject === nativeProject);
+  const verified = data.quotaIdentityVerified === true && projectStillBound;
   const account = verified ? value(data.quotaAccountId) : null;
   const fallback =
     value(connectionId) ?? value(credentials?.connectionId) ?? value(credentials?.id);
