@@ -9,6 +9,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 
 const core = await import("../../src/lib/db/core.ts");
 const usageHistory = await import("../../src/lib/usage/usageHistory.ts");
+const usageModelGroups = await import("../../src/lib/db/usageModelGroups.ts");
 
 const clearPendingRequests = usageHistory.clearPendingRequests;
 
@@ -49,6 +50,22 @@ async function seedUsageEntries(
 
 test.beforeEach(async () => {
   await resetStorage();
+});
+
+test("unpriced usage groups exclude future-dated rows", async () => {
+  const now = new Date();
+  await usageHistory.saveRequestUsage({
+    provider: "openai",
+    model: "unpriced-usage-future-window-regression",
+    apiKeyId: "future-key",
+    tokens: { input: 1, output: 1 },
+    success: true,
+    timestamp: new Date(now.getTime() + 1000).toISOString(),
+  });
+
+  const sinceIso = new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000).toISOString();
+  const groups = await usageModelGroups.getUnpricedUsageModelGroups(sinceIso, now.toISOString());
+  assert.deepEqual(groups, []);
 });
 
 test.after(() => {

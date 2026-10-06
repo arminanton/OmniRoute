@@ -17,7 +17,7 @@ export async function GET(request: Request) {
       windowStartIso: windowStart.toISOString(),
       windowEndIso: windowEnd.toISOString(),
       policy: getUnpricedUsageBudgetPolicy(),
-      items: await getUnpricedUsageModelGroups(windowStart.toISOString()),
+      items: await getUnpricedUsageModelGroups(windowStart.toISOString(), windowEnd.toISOString()),
     });
   } catch (error) {
     console.error("Error fetching unpriced usage:", error);

@@ -18,10 +18,12 @@ export interface UnpricedUsageModelGroup {
   pricingFailure: boolean;
 }
 
-/** Aggregates models with missing prices or failed pricing lookups since `sinceIso`. */
+/** Aggregates unpriced models since `sinceIso`, optionally through `untilIso` inclusive. */
 export async function getUnpricedUsageModelGroups(
-  sinceIso: string
+  sinceIso: string,
+  untilIso?: string
 ): Promise<UnpricedUsageModelGroup[]> {
+  const untilFilter = untilIso === undefined ? "" : "AND timestamp <= ?";
   const rows = getDbInstance()
     .prepare(
       `
@@ -33,13 +35,14 @@ export async function getUnpricedUsageModelGroups(
         GROUP_CONCAT(DISTINCT NULLIF(TRIM(api_key_id), '')) as affectedKeyIds
       FROM usage_history
       WHERE timestamp >= ?
+        ${untilFilter}
         AND success = 1
         AND NULLIF(TRIM(provider), '') IS NOT NULL
         AND NULLIF(TRIM(model), '') IS NOT NULL
       GROUP BY LOWER(provider), LOWER(model), COALESCE(NULLIF(service_tier, ''), 'standard')
     `
     )
-    .all(sinceIso) as UsageModelRow[];
+    .all(sinceIso, ...(untilIso === undefined ? [] : [untilIso])) as UsageModelRow[];
   const groups = new Map<string, UnpricedUsageModelGroup>();
 
   for (const row of rows) {
