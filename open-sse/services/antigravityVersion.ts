@@ -1,4 +1,4 @@
-import { runControlPlaneDispatch } from "./logicalRetryBudget.ts";
+import { dispatchControlPlane } from "./controlPlaneRuntime.ts";
 
 const ANTIGRAVITY_IDE_RELEASE_FEED_URL =
   "https://antigravity-auto-updater-974169037036.us-central1.run.app/releases";
@@ -111,7 +111,7 @@ async function resolveProductVersion(
     let resolved: string | null = null;
     try {
       resolved = parsePayload(
-        await runControlPlaneDispatch(() => fetchJsonWithTimeout(fetchImpl, sourceUrl))
+        await dispatchControlPlane(() => fetchJsonWithTimeout(fetchImpl, sourceUrl))
       );
     } catch {
       resolved = null;
