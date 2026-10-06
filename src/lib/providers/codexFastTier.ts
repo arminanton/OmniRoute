@@ -20,6 +20,20 @@ export const CODEX_FAST_TIER_DEFAULT_SUPPORTED_MODELS: readonly string[] = [
   "gpt-5.5",
 ];
 
+/** Catalog membership is not an entitlement check; custom model IDs remain selectable. */
+export function getCodexFastTierCatalog(models: unknown, selected: readonly string[]): string[] {
+  const catalog = new Set([...CODEX_FAST_TIER_DEFAULT_SUPPORTED_MODELS, ...selected]);
+  if (Array.isArray(models)) {
+    for (const value of models) {
+      if (!value || typeof value !== "object") continue;
+      const row = value as JsonRecord;
+      if (row.provider !== "codex" && row.provider !== "cx") continue;
+      if (typeof row.model === "string" && row.model.trim()) catalog.add(row.model.trim());
+    }
+  }
+  return [...catalog].sort();
+}
+
 export interface CodexGlobalFastServiceTierResolved {
   enabled: boolean;
   tier: CodexFastTierValue;
@@ -56,9 +70,7 @@ export function resolveCodexGlobalFastServiceTier(
 
     if (typeof obj.tier === "string") {
       const t = obj.tier.trim().toLowerCase();
-      if (t === "default" || t === "priority" || t === "flex") {
-        tier = t;
-      }
+      tier = normalizeCodexServiceTier(t) ?? tier;
     }
 
     if (Array.isArray(obj.supportedModels)) {
@@ -66,7 +78,7 @@ export function resolveCodexGlobalFastServiceTier(
         .filter((m): m is string => typeof m === "string")
         .map((m) => m.trim())
         .filter((m) => m.length > 0);
-      if (list.length > 0) supportedModels = list;
+      supportedModels = [...new Set(list)];
     }
   } else if (record.codexFastServiceTier === true) {
     enabled = true;
@@ -119,9 +131,12 @@ function modelMatchesSupportedList(
   const normalizedModel = model.trim().toLowerCase().split("/").pop() || "";
   if (!normalizedModel) return false;
   for (const supported of supportedModels) {
-    const candidate = supported.trim().toLowerCase();
+    const candidate = supported
+      .trim()
+      .toLowerCase()
+      .replace(/^(?:codex|cx)\//, "");
     if (!candidate) continue;
-    if (normalizedModel === candidate || normalizedModel.startsWith(candidate)) {
+    if (normalizedModel === candidate || normalizedModel.startsWith(`${candidate}-`)) {
       return true;
     }
   }

@@ -1,4 +1,4 @@
-export type ServiceTierId = "standard" | "priority" | "flex";
+export type ServiceTierId = "standard" | "priority" | "ultrafast" | "flex";
 
 export type TranslationFn = ((key: string, values?: Record<string, unknown>) => string) & {
   has?: (key: string) => boolean;
@@ -6,12 +6,14 @@ export type TranslationFn = ((key: string, values?: Record<string, unknown>) => 
 
 const SERVICE_TIER_LABEL_KEYS: Record<ServiceTierId, string> = {
   priority: "serviceTierFast",
+  ultrafast: "serviceTierUltrafast",
   flex: "serviceTierFlex",
   standard: "serviceTierStandard",
 };
 
 const SERVICE_TIER_FALLBACK_LABELS: Record<ServiceTierId, string> = {
   priority: "Fast",
+  ultrafast: "Ultrafast",
   flex: "Flex",
   standard: "Standard",
 };
@@ -19,6 +21,7 @@ const SERVICE_TIER_FALLBACK_LABELS: Record<ServiceTierId, string> = {
 export function normalizeServiceTierId(value: unknown): ServiceTierId {
   const tier = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (tier === "priority" || tier === "fast") return "priority";
+  if (tier === "ultrafast") return "ultrafast";
   if (tier === "flex") return "flex";
   return "standard";
 }

@@ -1,8 +1,7 @@
+import type { Dispatcher } from "undici";
+
 type DirectFetchOptions = RequestInit & { dispatcher?: unknown };
-type DirectFetch = (
-  input: RequestInfo | URL,
-  options: DirectFetchOptions
-) => Promise<Response>;
+type DirectFetch = (input: RequestInfo | URL, options: DirectFetchOptions) => Promise<Response>;
 
 const DEFAULT_DIRECT_HEADERS_TIMEOUT_MS = 30_000;
 const DIRECT_RESPONSE_START_TIMEOUT_CODE = "DIRECT_RESPONSE_START_TIMEOUT";
@@ -57,18 +56,74 @@ export async function directFetchWithBoundedResponseStart(
   input: RequestInfo | URL,
   options: DirectFetchOptions,
   fetchImpl: DirectFetch,
-  timeoutMs: number
+  timeoutMs: number,
+  trackDispatchStart = false,
+  queueTimeoutMs = 90_000
 ): Promise<Response> {
   if (!timeoutMs || timeoutMs <= 0) return fetchImpl(input, options);
   const attemptController = new AbortController();
-  const timer = setTimeout(
-    () => attemptController.abort(createDirectResponseStartTimeout(timeoutMs)),
-    timeoutMs
-  );
-  timer.unref?.();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const startHeadersTimer = () => {
+    clearTimeout(timer);
+    timer = setTimeout(
+      () => attemptController.abort(createDirectResponseStartTimeout(timeoutMs)),
+      timeoutMs
+    );
+    timer.unref?.();
+  };
+  startHeadersTimer();
+  let dispatcher = options.dispatcher;
+  if (
+    trackDispatchStart &&
+    dispatcher &&
+    typeof dispatcher === "object" &&
+    "dispatch" in dispatcher
+  ) {
+    const original = dispatcher as Dispatcher;
+    dispatcher = new Proxy(original, {
+      get(target, property) {
+        if (property === "dispatch") {
+          return (
+            dispatchOptions: Dispatcher.DispatchOptions,
+            handler: Dispatcher.DispatchHandler
+          ) => {
+            clearTimeout(timer);
+            // Bound local queue/connect wait independently. The caller's signal
+            // remains authoritative when its remaining deadline is shorter.
+            timer = setTimeout(() => {
+              const error = new Error(
+                "Direct request waited too long for a transport slot"
+              ) as Error & { code: string };
+              // Reuse local admission classification: queue exhaustion must not
+              // penalize an upstream account as an upstream 504 outage.
+              error.code = "SEMAPHORE_TIMEOUT";
+              attemptController.abort(error);
+            }, queueTimeoutMs);
+            timer.unref?.();
+            const tracked = new Proxy(handler, {
+              get(receiver, name) {
+                const value = Reflect.get(receiver, name, receiver);
+                if (name === "onRequestStart") {
+                  return (...args: unknown[]) => {
+                    startHeadersTimer();
+                    if (typeof value === "function") return Reflect.apply(value, receiver, args);
+                  };
+                }
+                return typeof value === "function" ? value.bind(receiver) : value;
+              },
+            });
+            return target.dispatch(dispatchOptions, tracked);
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }
   try {
     return await fetchImpl(input, {
       ...options,
+      dispatcher,
       signal: mergeAbortSignals(options.signal, attemptController.signal),
     });
   } finally {
