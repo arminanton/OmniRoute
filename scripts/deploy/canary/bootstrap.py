@@ -103,6 +103,14 @@ http {
    proxy_set_header Upgrade $http_upgrade;
    proxy_set_header Connection $upgrade_connection;
    proxy_set_header Host $http_host;
+   # Always mark the actual proxy hop; never let missing/forged client forwarding
+   # headers turn the API bridge's later loopback connection into local trust.
+   proxy_set_header X-Forwarded-For $remote_addr;
+   proxy_set_header X-Forwarded-Host $http_host;
+   proxy_set_header X-Forwarded-Proto https;
+   proxy_set_header X-Real-IP '';
+   proxy_set_header CF-Connecting-IP '';
+   proxy_set_header Forwarded '';
    # Preserve existing validated end-to-end credentials. Never synthesize locality trust.
    proxy_set_header X-Omni-Generation '';
    proxy_set_header X-Omni-Canary '';

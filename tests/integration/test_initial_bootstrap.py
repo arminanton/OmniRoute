@@ -47,6 +47,10 @@ class InitialBootstrapTests(unittest.TestCase):
         self.assertIn("user nobody nogroup", config)
         self.assertNotIn("worker_shutdown_timeout", config)
         self.assertIn("X-Omniroute-Self-Hop ''", config)
+        self.assertEqual(config.count("proxy_set_header X-Forwarded-For $remote_addr;"), 2)
+        self.assertIn("proxy_set_header X-Forwarded-Proto https;", config)
+        self.assertIn("proxy_set_header X-Real-IP '';", config)
+        self.assertIn("proxy_set_header Forwarded '';", config)
 
     def test_pause_is_explicit_pre_dispatch_and_does_not_claim_legacy_drained(self):
         config = legacy_nginx(policy(), paused=True)
