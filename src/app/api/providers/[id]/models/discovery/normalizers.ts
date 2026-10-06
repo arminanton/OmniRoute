@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { SAFE_OUTBOUND_FETCH_PRESETS, safeOutboundFetch } from "@/shared/network/safeOutboundFetch";
 import { getProviderOutboundGuard } from "@/shared/network/outboundUrlGuardPolicy";
 import {
@@ -16,105 +17,27 @@ import {
   isDiscoverableAgyModelId,
 } from "@omniroute/open-sse/config/agyModels.ts";
 import { normalizeAntigravityClientProfile } from "@/shared/constants/antigravityClientProfile";
-import { ensureAntigravityProjectAssigned } from "@omniroute/open-sse/services/antigravityProjectBootstrap.ts";
+import {
+  ensureAntigravityProjectAssigned,
+  ANTIGRAVITY_REQUIRES_MANUAL_PROJECT,
+} from "@omniroute/open-sse/services/antigravityProjectBootstrap.ts";
 import { persistDiscoveredAntigravityProjectId } from "@omniroute/open-sse/services/antigravityProjectPersist.ts";
 import { asRecord, toNonEmptyString } from "./helpers";
+import {
+  normalizeCodeAssistDiscovery,
+  normalizeCodeAssistCatalogReply,
+  type CodeAssistDiscoveredModel,
+} from "@omniroute/open-sse/services/codeAssistDiscovery.ts";
 import { expandAntigravityClaudeEffortModels } from "@omniroute/open-sse/config/antigravityClaudeEffort.ts";
 
 const antigravityDiscoveryInflight = new Map<
   string,
-  Promise<Array<{ id: string; name: string }>>
+  Promise<Array<{ id: string; name: string }> | null>
 >();
 
-type AntigravityDiscoveryModel = {
-  id: string;
-  name: string;
-  isInternal?: boolean;
-  supportsAdaptiveThinking?: boolean;
-  /** Token window advertised by the upstream discovery payload, when present. */
-  inputTokenLimit?: number;
-  outputTokenLimit?: number;
-};
+type AntigravityDiscoveryModel = CodeAssistDiscoveredModel;
 
-/**
- * Forward discovery-advertised token windows when the upstream payload carries
- * them. Field names are probed defensively (payload shape is not contractual);
- * absent/non-numeric fields yield no entry, so nothing downstream changes.
- */
-function extractDiscoveryTokenLimits(item: Record<string, unknown>): {
-  inputTokenLimit?: number;
-  outputTokenLimit?: number;
-} {
-  const limits: { inputTokenLimit?: number; outputTokenLimit?: number } = {};
-  const input = item.inputTokenLimit ?? item.contextWindow;
-  if (typeof input === "number" && Number.isFinite(input) && input > 0) {
-    limits.inputTokenLimit = input;
-  }
-  const output = item.outputTokenLimit ?? item.maxOutputTokens;
-  if (typeof output === "number" && Number.isFinite(output) && output > 0) {
-    limits.outputTokenLimit = output;
-  }
-  return limits;
-}
-
-export function normalizeAntigravityModelsResponse(data: unknown): AntigravityDiscoveryModel[] {
-  const payload = asRecord(data).models;
-
-  if (Array.isArray(payload)) {
-    return payload
-      .map((value) => {
-        const item = asRecord(value);
-        const id =
-          typeof item.id === "string"
-            ? item.id
-            : typeof item.name === "string"
-              ? item.name
-              : typeof item.model === "string"
-                ? item.model
-                : "";
-        const name =
-          typeof item.displayName === "string"
-            ? item.displayName
-            : typeof item.name === "string"
-              ? item.name
-              : id;
-        return id
-          ? {
-              id,
-              name,
-              ...extractDiscoveryTokenLimits(item),
-              ...((item.supportsAdaptiveThinking === true || item.supports_adaptive_thinking === true)
-                ? { supportsAdaptiveThinking: true } : {}),
-              ...(item.isInternal === true ? { isInternal: true } : {}),
-            }
-          : null;
-      })
-      .filter((value): value is AntigravityDiscoveryModel => Boolean(value));
-  }
-
-  const modelsById = asRecord(payload);
-  return Object.entries(modelsById)
-    .map(([id, value]) => {
-      const item = asRecord(value);
-      const name =
-        typeof item.displayName === "string"
-          ? item.displayName
-          : typeof item.name === "string"
-            ? item.name
-            : id;
-      return id
-        ? {
-            id,
-            name,
-            ...extractDiscoveryTokenLimits(item),
-            ...((item.supportsAdaptiveThinking === true || item.supports_adaptive_thinking === true)
-              ? { supportsAdaptiveThinking: true } : {}),
-            ...(item.isInternal === true ? { isInternal: true } : {}),
-          }
-        : null;
-    })
-    .filter((value): value is AntigravityDiscoveryModel => Boolean(value));
-}
+export const normalizeAntigravityModelsResponse = normalizeCodeAssistDiscovery;
 
 export function filterUserCallableAntigravityModels(
   models: AntigravityDiscoveryModel[],
@@ -123,6 +46,7 @@ export function filterUserCallableAntigravityModels(
   return models.filter(
     (model) =>
       model.isInternal !== true &&
+      model.disabled !== true &&
       (provider === "agy"
         ? isDiscoverableAgyModelId(model.id)
         : isDiscoverableAntigravityModelId(model.id))
@@ -138,10 +62,27 @@ export function mapAntigravityModelForClient(
   inputTokenLimit?: number;
   outputTokenLimit?: number;
   supportsAdaptiveThinking?: boolean;
+  supportsImages?: boolean;
+  supportsVision?: boolean;
+  supportsThinking?: boolean;
+  supportsVideo?: boolean;
+  supportsPdf?: boolean;
+  supportedMimeTypes?: Record<string, boolean>;
+  discoveryRoles?: string[];
 } {
   const clientId = toClientAntigravityModelId(model.id);
   return {
     id: clientId,
+    ...(typeof model.supportsImages === "boolean"
+      ? { supportsImages: model.supportsImages, supportsVision: model.supportsImages }
+      : {}),
+    ...(typeof model.supportsThinking === "boolean"
+      ? { supportsThinking: model.supportsThinking }
+      : {}),
+    ...(typeof model.supportsVideo === "boolean" ? { supportsVideo: model.supportsVideo } : {}),
+    ...(typeof model.supportsPdf === "boolean" ? { supportsPdf: model.supportsPdf } : {}),
+    ...(model.supportedMimeTypes ? { supportedMimeTypes: model.supportedMimeTypes } : {}),
+    ...(model.discoveryRoles ? { discoveryRoles: model.discoveryRoles } : {}),
     ...(model.supportsAdaptiveThinking === true ? { supportsAdaptiveThinking: true } : {}),
     name:
       provider === "agy"
@@ -162,18 +103,41 @@ export async function fetchAntigravityDiscoveryModelsCached(
   proxy: unknown,
   providerSpecificData?: unknown,
   provider: "antigravity" | "agy" = "antigravity"
-): Promise<
-  Array<{ id: string; name: string; inputTokenLimit?: number; outputTokenLimit?: number }>
-> {
+): Promise<Array<{
+  id: string;
+  name: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+}> | null> {
   const profile = normalizeAntigravityClientProfile(asRecord(providerSpecificData).clientProfile);
-  const cacheKey = `${provider}:${connectionId}:${accessToken.substring(0, 16)}:${profile}`;
+  const cacheKey = `${provider}:${connectionId}:${createHash("sha256")
+    .update(JSON.stringify([accessToken, asRecord(providerSpecificData).projectId ?? null]))
+    .digest("hex")}:${profile}`;
   const inflight = antigravityDiscoveryInflight.get(cacheKey);
   if (inflight) return inflight;
 
   const promise = (async () => {
     await resolveAntigravityClientVersion(profile);
-    const discovered = await ensureAntigravityProjectAssigned(accessToken, fetch, profile);
-    if (discovered) {
+    const bootstrapFetch: typeof fetch = (url, init) =>
+      safeOutboundFetch(String(url), {
+        ...SAFE_OUTBOUND_FETCH_PRESETS.modelsDiscovery,
+        ...(init as Record<string, unknown>),
+        guard: getProviderOutboundGuard(),
+        proxyConfig: proxy,
+      });
+    const configured = asRecord(providerSpecificData).projectId;
+    const configuredProject =
+      typeof configured === "string" &&
+      configured.trim() &&
+      configured !== ANTIGRAVITY_REQUIRES_MANUAL_PROJECT
+        ? configured.trim()
+        : undefined;
+    const bootstrapProject =
+      configuredProject ??
+      (await ensureAntigravityProjectAssigned(accessToken, bootstrapFetch, profile));
+    const discovered =
+      bootstrapProject === ANTIGRAVITY_REQUIRES_MANUAL_PROJECT ? undefined : bootstrapProject;
+    if (discovered && !configuredProject) {
       // #8491: persist the recovered id so it survives the next token refresh
       // or process restart instead of being silently rediscovered every time.
       await persistDiscoveredAntigravityProjectId(
@@ -194,31 +158,33 @@ export async function fetchAntigravityDiscoveryModelsCached(
           proxyConfig: proxy,
           method: "POST",
           headers: getAntigravityContentHeaders(profile, accessToken),
-          body: JSON.stringify({}),
+          body: JSON.stringify(discovered ? { project: discovered } : {}),
         });
 
         if (!response.ok) {
-          const errorText = await response.text();
-          console.warn(
-            `[models] ${provider} discovery failed at ${discoveryUrl} (${response.status}): ${errorText}`
-          );
+          await response.body?.cancel().catch(() => undefined);
+          console.warn(`[models] ${provider} discovery failed (${response.status})`);
           continue;
         }
 
-        const models = filterUserCallableAntigravityModels(
-          normalizeAntigravityModelsResponse(await response.json()),
-          provider
-        ).map((model) => mapAntigravityModelForClient(model, provider));
-        if (models.length > 0) {
-          return expandAntigravityClaudeEffortModels(models);
-        }
+        const payload = (await response.json()) as unknown;
+        const normalized = normalizeCodeAssistCatalogReply(payload);
+        if (normalized === null) continue;
+        const models = filterUserCallableAntigravityModels(normalized, provider).map((model) =>
+          mapAntigravityModelForClient(model, provider)
+        );
+        // A signed valid empty/disabled catalog is authoritative, not API failure.
+        return expandAntigravityClaudeEffortModels(models);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.warn(`[models] ${provider} discovery threw for ${discoveryUrl}: ${message}`);
+        const category =
+          error instanceof Error && error.name === "TimeoutError"
+            ? "timeout"
+            : "transport-or-payload";
+        console.warn(`[models] ${provider} discovery failed (${category})`);
       }
     }
 
-    return [];
+    return null;
   })().finally(() => {
     antigravityDiscoveryInflight.delete(cacheKey);
   });

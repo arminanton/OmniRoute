@@ -60,6 +60,10 @@ import {
   stripCloudCodeThinkingConfig,
 } from "../services/cloudCodeThinking.ts";
 import { buildGeminiTools } from "../translator/helpers/geminiToolsSanitizer.ts";
+import {
+  guardCodeAssistCacheReference,
+  CodeAssistCacheReferenceError,
+} from "../services/codeAssistCacheOwnership.ts";
 import { collectAntigravityResponse } from "./antigravity/collectResponse.ts";
 // processAntigravitySSEPayload re-exported for external importers (tests).
 export { processAntigravitySSEPayload } from "./antigravity/sseCollect.ts";
@@ -150,6 +154,7 @@ interface AntigravityContent {
 export type AntigravityCredentials = ProviderCredentials & {
   _signatureNamespace?: string | null;
   _antigravitySessionId?: string | null;
+  _codeAssistCacheOwnershipReceipt?: unknown;
   projectId?: string | null;
   expiresIn?: number;
 };
@@ -886,14 +891,28 @@ export class AntigravityExecutor extends BaseExecutor {
     // Note: sanitizeAntigravityGeminiRequest() applies a Claude-only field whitelist
     // (dropping fields native Gemini requests may legitimately carry), so the Gemini
     // branch only runs the trailing-turn strip — never the sanitize/whitelist step.
+    let scopedRequest: Record<string, unknown>;
+    try {
+      scopedRequest = guardCodeAssistCacheReference(
+        rawTransformedRequest,
+        credentials,
+        upstreamModel
+      );
+    } catch (error) {
+      if (!(error instanceof CodeAssistCacheReferenceError)) throw error;
+      return new Response(JSON.stringify(buildErrorBody(400, error.message)), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     const transformedRequest = isClaude
-      ? stripTrailingAntigravityAssistantTurn(
-          sanitizeAntigravityGeminiRequest(rawTransformedRequest)
-        )
+      ? stripTrailingAntigravityAssistantTurn(sanitizeAntigravityGeminiRequest(scopedRequest))
       : isGemini
-        ? stripTrailingAntigravityAssistantTurn(rawTransformedRequest)
-        : rawTransformedRequest;
+        ? stripTrailingAntigravityAssistantTurn(scopedRequest)
+        : scopedRequest;
 
+    if (scopedRequest.cachedContent !== undefined)
+      transformedRequest.cachedContent = scopedRequest.cachedContent;
     applyAntigravityGenerationDefaults(transformedRequest, upstreamModel);
 
     const {
