@@ -32,6 +32,8 @@ RUN = Path("/run/omni-local-next")
 PUBLIC = Path("/run/omni-egress/public")
 NETNS = Path("/run/netns/omni-app")
 RESOLVER = Path("/etc/netns/omni-app/resolv.conf")
+STATIC_HOSTS = INSTALL / "static-loopback-hosts"
+STATIC_HOSTS_SHA256 = "b69b2c741be48691edabe3771c644c70473ccd6aa8effd9f17cc07fa129917f9"
 ROLES = ("app", "browser", "codex")
 ALL_ROLES = ROLES + ("browser-login",)
 UID = GID = 10001
@@ -168,7 +170,8 @@ def command(policy: dict, role: str, *, boundary_only: bool = False) -> list[str
             "--tmpfs=/var/tmp:rw,nosuid,nodev,noexec,mode=1777,size=64m",
             "--mount=" + mount(INSTALL, "/opt/omni-runtime"),
             "--mount=" + mount(PUBLIC, "/run/omni-egress-attestation"),
-            "--mount=" + mount(RESOLVER, "/etc/resolv.conf")]
+            "--mount=" + mount(RESOLVER, "/etc/resolv.conf"),
+            "--mount=" + mount(STATIC_HOSTS, "/etc/hosts")]
     if policy.get("profile") != "kernel-residential-v1":
         args += ["--mount=" + mount(RUNTIME_AUTHORITY, RUNTIME_AUTHORITY_TARGET)]
     if role == "app":
@@ -286,6 +289,18 @@ def check_runtime_authority() -> None:
         raise PolicyError("canonical runtime authority module differs from frozen review")
 
 
+def validate_static_hosts(raw: bytes) -> None:
+    if hashlib.sha256(raw).hexdigest() != STATIC_HOSTS_SHA256:
+        raise PolicyError("static loopback hosts differs from reviewed bytes")
+
+
+def check_static_hosts() -> None:
+    info = protected(STATIC_HOSTS)
+    if info.st_gid != 0 or stat.S_IMODE(info.st_mode) != 0o444:
+        raise PolicyError("static loopback hosts must be root:root mode0444")
+    validate_static_hosts(read_protected(STATIC_HOSTS, limit=256))
+
+
 def check_auth(raw: bytes) -> None:
     # Do not print secret values, even on error. No proxy/loader/arbitrary envs.
     keys = set()
@@ -354,6 +369,7 @@ def preflight(role: str) -> tuple[dict, bool]:
         raise PolicyError("public attestation directory contains unexpected files")
     protected(PUBLIC / "residential-v1.json")
     protected(RESOLVER)
+    check_static_hosts()
     protected(RUN, directory=True, private=True)
     # Do not hand the namespace handle to the workload. Only root Podman gets it.
     info = protected(NETNS)
@@ -415,7 +431,8 @@ def kernel_preflight(policy: dict, raw: bytes, role: str) -> tuple[dict, bool]:
         raise PolicyError("kernel profile requires explicit deployment approval")
     receipt = load_json(read_protected(CONFIG / "activation.json", private=True))
     if receipt != {"schema": 1, "profile": "kernel-residential-v1",
-                   "policySha256": hashlib.sha256(raw).hexdigest()}:
+                   "policySha256": hashlib.sha256(raw).hexdigest(),
+                   "staticHostsSha256": STATIC_HOSTS_SHA256}:
         raise PolicyError("deployment approval does not bind exact launch policy")
     protected(INSTALL, directory=True)
     for name in ("runtime_launcher.py", "workload-entrypoint.mjs", "boundary-check.mjs",
@@ -440,6 +457,7 @@ def kernel_preflight(policy: dict, raw: bytes, role: str) -> tuple[dict, bool]:
     protected(RUN, directory=True, private=True)
     protected(PUBLIC, directory=True)
     protected(RESOLVER)
+    check_static_hosts()
     info = protected(NETNS)
     claim = load_json(read_protected(PUBLIC / "residential-v1.json"))
     validate_kernel_claim(claim, inode=info.st_ino,

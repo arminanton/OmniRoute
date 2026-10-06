@@ -18,6 +18,11 @@ let text=""; process.stdin.setEncoding("utf8");
 process.stdin.on("data",s=>{text+=s;if(text.length>16384)process.exit(1)});
 process.stdin.on("end",async()=>{try{
 const input=JSON.parse(text);const key=input.key;
+const fs=require("fs"),crypto=require("crypto"),dns=require("dns").promises;
+const hosts=fs.readFileSync("/etc/hosts");
+if(crypto.createHash("sha256").update(hosts).digest("hex")!=="b69b2c741be48691edabe3771c644c70473ccd6aa8effd9f17cc07fa129917f9")process.exit(1);
+const addresses=await dns.lookup("localhost",{all:true});
+if(!addresses.some(x=>x.address==="127.0.0.1")||addresses.some(x=>x.address!=="127.0.0.1"&&x.address!=="::1"))process.exit(1);
 const response=await fetch("http://127.0.0.1:20128/api/canary-readiness",{
  headers:{Authorization:"Bearer "+key}, signal:AbortSignal.timeout(3000)});
 if(response.status!==200||response.headers.get("x-omni-app-generation")!==input.generation)process.exit(1);
@@ -66,6 +71,12 @@ class Boundary:
 
     def verify(self, g, *, before_start=False):
         record = self.adapter.record(g)
+        static_hosts = Path("/opt/omni-local-next/runtime/static-loopback-hosts")
+        trusted(static_hosts)
+        import hashlib, stat
+        info = static_hosts.stat()
+        if info.st_gid != 0 or stat.S_IMODE(info.st_mode) != 0o444 or hashlib.sha256(static_hosts.read_bytes()).hexdigest() != "b69b2c741be48691edabe3771c644c70473ccd6aa8effd9f17cc07fa129917f9":
+            raise Refused("static loopback mount provenance differs")
         self.inspect_namespace(g)
         raw = self.adapter.runner("podman", ["--remote=false", "image", "inspect", g["image"]])
         images = json.loads(raw)

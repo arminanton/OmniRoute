@@ -62,7 +62,8 @@ root-owned `/etc/omni-local-next/activation.json` with exactly:
 {
   "schema": 1,
   "profile": "kernel-residential-v1",
-  "policySha256": "<SHA256 of exact policy.json bytes>"
+  "policySha256": "<SHA256 of exact policy.json bytes>",
+  "staticHostsSha256": "b69b2c741be48691edabe3771c644c70473ccd6aa8effd9f17cc07fa129917f9"
 }
 ```
 
@@ -149,3 +150,30 @@ It does not publish a LAN socket, alter routes, bypass API authentication, or
 provide TLS on localhost. Private HTTPS remains at the configured Tailscale
 Service hostname. Install/enable only after reviewing these fixed addresses
 against the existing topology. No provider key belongs in either unit.
+
+## Fixed loopback name resolution
+
+`--no-hosts` remains enabled. Install the reviewed `static-loopback-hosts` source
+asset as `/opt/omni-local-next/runtime/static-loopback-hosts`, root:root mode0444,
+without symlinks. Each app/helper receives this exact file as a read-only
+`/etc/hosts` bind. It contains only `127.0.0.1 localhost` and `::1 localhost`;
+no host gateway, container name/CID, external provider alias or host metadata is
+injected. Preflight verifies owner/mode/exact-byte SHA, and the kernel activation
+receipt explicitly binds that SHA. Old three-field receipts are intentionally
+insufficient for this revised runtime; installation/receipt changes require
+separate operator approval, not an image-only swap pretending runtime is unchanged.
+
+Read-only live inspection found `/etc/hosts` absent, NSS `files dns`, public
+resolvers and native `dns.lookup("localhost")` returning ENOTFOUND. A disposable
+network-none, non-root, read-only container using the current immutable image plus
+this single RO asset resolved localhost to ::1 and 127.0.0.1. It loaded no app data,
+credentials or helpers and sent no provider traffic. This proves the targeted name
+resolution fix with the existing libc/Node image; it is not production deployment.
+Canary readiness checks both the exact hosts bytes and actual native localhost
+lookup before accepting HTTP readiness. System-created local self URLs should use
+127.0.0.1 to avoid DNS/family ambiguity; operator-configured URLs are not rewritten.
+
+The asset is additive and independent of app state or image revision. Retained-old
+image recovery must retain the same approved asset/mount/receipt; restoring an image
+does not authorize removal/replacement of runtime proofs. Runtime/code/receipt
+fingerprints must remain part of the reviewed installation and cutover contract.
