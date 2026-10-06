@@ -419,3 +419,35 @@ test("independent module copies share initialized state and active gzip/fsync ow
     fs.rmSync(copyRoot, { recursive: true });
   }
 });
+
+test("real descriptor write failure is incomplete and cannot reject inference or claim a full response", async () => {
+  const directory = root(),
+    store = new DiagnosticOverflowStore({ root: directory });
+  const trace = store.createTrace({ provider: "antigravity" });
+  try {
+    const attempt = await trace.beginAttempt({ requestBody: "fixture" });
+    const target = path.join(directory, trace.traceId, `${attempt.id}.provider_response.gz`);
+    const descriptor = fs.readdirSync("/proc/self/fd").find((entry) => {
+      try {
+        return fs.readlinkSync(`/proc/self/fd/${entry}`) === target;
+      } catch {
+        return false;
+      }
+    });
+    assert.ok(descriptor, "only the exact task-owned response descriptor may be closed");
+    fs.closeSync(Number(descriptor));
+    await attempt.writeResponse(Buffer.from("synthetic response after storage failure"));
+    await attempt.finish();
+    await trace.finish();
+    const manifest = store.read(trace.traceId)!;
+    assert.equal(manifest.state, "incomplete");
+    assert.equal(manifest.attempts[0].response.complete, false);
+    assert.equal(manifest.attempts[0].response.reason, "write_error");
+    assert.equal(store.open(trace.traceId, attempt.id, "response").state, "corrupt");
+    assert.equal(getDiagnosticOverflowActiveWork(), 0);
+  } finally {
+    await trace.abort();
+    store.close();
+    fs.rmSync(directory, { recursive: true });
+  }
+});
