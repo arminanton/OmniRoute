@@ -1,3 +1,9 @@
+import { getSharedConversationState } from "./sharedConversationState.ts";
+import {
+  resolveSharedRetainedResponse,
+  canRetainContinuationForPrincipal,
+  normalizeContinuationModel,
+} from "./continuationHandoffBridge.ts";
 /**
  * responsesContinuationStore.ts — OmniRoute-native `previous_response_id`
  * virtualization for the OpenAI Responses API.
@@ -59,22 +65,46 @@ function containsTruncatedArrayMarker(items: readonly unknown[]): boolean {
  */
 export function resolvePreviousResponseState(
   responseId: string,
-  apiKeyId: string | null | undefined
+  apiKeyId: string | null | undefined,
+  logicalModel?: string
 ): ResponsesContinuationState | null {
   if (!responseId) return null;
+  if (logicalModel && apiKeyId) {
+    try {
+      if (getSharedConversationState()) {
+        if (!canRetainContinuationForPrincipal(apiKeyId)) return null;
+        const shared = resolveSharedRetainedResponse(responseId, apiKeyId, logicalModel);
+        if (shared) return shared;
+      }
+    } catch {
+      return null;
+    }
+  }
 
   const db = getDbInstance();
   const row = db
     .prepare(
-      `SELECT artifact_relpath, api_key_id, video_content_removed FROM call_logs
-       WHERE response_id = ? AND detail_state = 'ready'
+      `SELECT artifact_relpath, api_key_id, video_content_removed, provider, model, requested_model FROM call_logs
+       WHERE response_id = ? AND api_key_id = ? AND detail_state = 'ready'
        ORDER BY timestamp DESC LIMIT 1`
     )
-    .get(responseId) as
-    | { artifact_relpath: string | null; api_key_id: string | null; video_content_removed: number }
+    .get(responseId, apiKeyId ?? "") as
+    | {
+        artifact_relpath: string | null;
+        api_key_id: string | null;
+        video_content_removed: number;
+        provider: string;
+        model: string;
+        requested_model: string | null;
+      }
     | undefined;
 
   if (!row || !row.artifact_relpath) return null;
+  if (logicalModel) {
+    const originalModel = row.requested_model || `${row.provider}/${row.model}`;
+    if (normalizeContinuationModel(originalModel) !== normalizeContinuationModel(logicalModel))
+      return null;
+  }
   // Tenant isolation: a response id is only ever handed back to the API key
   // that created it. A stored row with no api_key_id at all (no-log/legacy)
   // can never be resolved by any key -- fail closed rather than guess.

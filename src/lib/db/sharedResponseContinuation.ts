@@ -9,6 +9,7 @@ export interface ContinuationRetentionPermission {
   videoRedacted: boolean;
   sourceReady: boolean;
   sourceTruncated: boolean;
+  sourceExpiresAt?: number;
 }
 const scope = (principal: string, model: string) =>
   opaqueStateKey(JSON.stringify(["retained-plain-history", principal, model]));
@@ -60,12 +61,17 @@ export function retainSharedResponseContinuation(
     return false;
   const shared = getSharedConversationState();
   if (!shared) return false;
+  const ttl =
+    permission.sourceExpiresAt === undefined
+      ? 3600000
+      : Math.min(3600000, permission.sourceExpiresAt - Date.now());
+  if (!Number.isFinite(ttl) || ttl <= 0) return false;
   return shared.put(
     "retained_continuation",
     responseId,
     scope(principal, logicalModel),
     state,
-    3600000
+    ttl
   );
 }
 export function resolveSharedResponseContinuation(

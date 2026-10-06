@@ -738,7 +738,7 @@ async function handleChatImplementation(
     const previousResponseId = (body as { previous_response_id: string }).previous_response_id;
     const detailedLoggingEnabled = await isDetailedLoggingEnabled();
     const stored = detailedLoggingEnabled
-      ? resolvePreviousResponseState(previousResponseId, apiKeyInfo?.id ?? null)
+      ? resolvePreviousResponseState(previousResponseId, apiKeyInfo?.id ?? null, modelStr)
       : null;
     if (!stored) {
       // Matches OpenAI's own `previous_response_not_found` contract (missing

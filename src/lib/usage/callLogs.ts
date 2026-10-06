@@ -1,3 +1,5 @@
+import { resolvePreviousResponseState } from "../db/responsesContinuationStore.ts";
+import { publishSharedContinuation } from "../db/continuationHandoffBridge.ts";
 /**
  * Structured call log management.
  *
@@ -617,6 +619,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         })
     );
     published = true;
+    publishSharedContinuation(logEntry, detailState, noLogEnabled, resolvePreviousResponseState);
 
     scheduleCallLogRotation();
   } catch (error) {
