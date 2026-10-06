@@ -1,3 +1,9 @@
+import { canEchoCodexStateToken } from "../services/conversationState/codexTokenProvenance.ts";
+import {
+  createConversationScope,
+  isTrustedConversationScope,
+} from "../services/conversationState/scope.ts";
+import type { ConversationScope } from "../../src/lib/db/sharedConversationState.ts";
 import { createHash, randomUUID } from "node:crypto";
 
 import { normalizeCodexSessionId } from "./codexClient.ts";
@@ -332,6 +338,8 @@ const CODEX_IDENTITY_HEADER_NAMES = [
 ] as const;
 
 type CodexCredentialIdentityInput = {
+  _codexTurnStateScope?: ConversationScope | null;
+  apiKey?: unknown;
   _codexConversationIdentity?: string | null;
   connectionId?: string;
   requestEndpointPath?: string;
@@ -400,17 +408,27 @@ export function withCodexFingerprintCredentials<T extends CodexCredentialIdentit
   const original = resolveCodexOriginalIdentityHeaders({ credentials, clientHeaders });
   // The turn-state echo guard runs for every Codex request (including compact
   // and explicit-off), unlike the convergence identity above.
-  const turnStateEcho = credentials
-    ? resolveCodexTurnStateEcho(clientHeaders, credentials.connectionId ?? null)
+  const token = readCodexTurnStateHeader(clientHeaders);
+  const priorScope = credentials._codexTurnStateScope;
+  const rebound = isTrustedConversationScope(priorScope)
+    ? createConversationScope(
+        "codex",
+        credentials,
+        priorScope.principal,
+        priorScope.conversation,
+        priorScope.model
+      )
     : null;
-  if (!identity && !original && !turnStateEcho) return credentials;
+  const turnStateEcho = token && canEchoCodexStateToken(rebound, token) ? token : null;
+  const hadStaleEcho = credentials.providerSpecificData?.codexTurnStateEcho !== undefined;
+  if (!identity && !original && !turnStateEcho && !hadStaleEcho) return credentials;
   return {
     ...credentials,
     providerSpecificData: {
       ...(credentials.providerSpecificData || {}),
       ...(identity ? { codexClientIdentity: identity } : {}),
       ...(original ? { codexOriginalIdentityHeaders: original } : {}),
-      ...(turnStateEcho ? { codexTurnStateEcho: turnStateEcho } : {}),
+      codexTurnStateEcho: turnStateEcho,
     },
   };
 }

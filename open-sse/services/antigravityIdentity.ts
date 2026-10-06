@@ -1,3 +1,5 @@
+import { createConversationScope } from "./conversationState/scope.ts";
+import { conversationScopeKey } from "../../src/lib/db/sharedConversationState.ts";
 import crypto from "node:crypto";
 
 export type AntigravityCredentialsLike = {
@@ -88,7 +90,8 @@ export function withAntigravityConversationIdentity<T extends AntigravityCredent
   provider: string | null | undefined,
   credentials: T,
   principal: unknown,
-  conversation: unknown
+  conversation: unknown,
+  model?: unknown
 ): T {
   if (provider !== "antigravity" && provider !== "agy") return credentials;
   const conversationKey = toNonEmptyString(conversation);
@@ -96,7 +99,8 @@ export function withAntigravityConversationIdentity<T extends AntigravityCredent
   const account =
     toNonEmptyString(credentials.connectionId) ?? getAntigravityAccountKey(credentials);
   if (!account) return credentials;
-  const namespace =
+  const scope = createConversationScope("antigravity", credentials, principal, conversation, model);
+  const sessionNamespace =
     "ag:" +
     crypto
       .createHash("sha256")
@@ -106,7 +110,7 @@ export function withAntigravityConversationIdentity<T extends AntigravityCredent
       .digest("hex");
   return {
     ...credentials,
-    _signatureNamespace: namespace,
-    _antigravitySessionId: deriveAntigravitySessionId(namespace),
+    _signatureNamespace: scope ? "gs2:" + conversationScopeKey(scope) : sessionNamespace,
+    _antigravitySessionId: deriveAntigravitySessionId(sessionNamespace),
   };
 }

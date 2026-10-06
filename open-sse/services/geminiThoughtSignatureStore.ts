@@ -1,10 +1,13 @@
-import { getDbInstance } from "../../src/lib/db/core.ts";
+import {
+  writeGeminiSignature,
+  readGeminiSignature,
+  clearPersistedGeminiSignatures,
+  requiresSharedSignatureReadthrough,
+} from "../../src/lib/db/geminiSignaturePersistence.ts";
 
 const MAX_SIGNATURES = 1000;
-const MAX_PERSISTED_SIGNATURES = 2_000;
 const MEMORY_TTL_MS = 1000 * 60 * 60;
 const PERSISTED_TTL_MS = 1000 * 60 * 60 * 24 * 30;
-const NAMESPACE = "gemini_thought_signatures";
 
 export type SignatureCacheMode = "enabled" | "bypass" | "bypass-strict";
 
@@ -13,13 +16,8 @@ type Entry = {
   expiresAt: number;
 };
 
-type PersistedEntry = Entry & {
-  createdAt: number;
-};
-
 const signatures = new Map<string, Entry>();
 let signatureCacheMode: SignatureCacheMode = "enabled";
-let persistedPruneCounter = 0;
 const MAX_LOGGED_ERRORS = 50;
 const loggedPersistenceErrors = new Set<string>();
 
@@ -62,71 +60,6 @@ function pruneExpired() {
   }
 }
 
-function serializePersistedEntry(entry: PersistedEntry): string {
-  return JSON.stringify(entry);
-}
-
-function parsePersistedEntry(value: string, now = Date.now()) {
-  try {
-    const parsed = JSON.parse(value) as Partial<PersistedEntry>;
-    if (typeof parsed.signature !== "string" || parsed.signature.length === 0) return null;
-    const createdAt = typeof parsed.createdAt === "number" ? parsed.createdAt : now;
-    const expiresAt =
-      typeof parsed.expiresAt === "number" ? parsed.expiresAt : now + PERSISTED_TTL_MS;
-    if (expiresAt <= now) return null;
-    return {
-      entry: { signature: parsed.signature, createdAt, expiresAt },
-      shouldRewrite: createdAt !== parsed.createdAt || expiresAt !== parsed.expiresAt,
-    };
-  } catch {
-    if (!value) return null;
-    return {
-      entry: {
-        signature: value,
-        createdAt: now,
-        expiresAt: now + PERSISTED_TTL_MS,
-      },
-      shouldRewrite: true,
-    };
-  }
-}
-
-function maybePrunePersistedSignatures(db: ReturnType<typeof getDbInstance>) {
-  persistedPruneCounter += 1;
-  if (persistedPruneCounter % 100 !== 0) return;
-
-  const rows = db
-    .prepare("SELECT key, value FROM key_value WHERE namespace = ?")
-    .all(NAMESPACE) as Array<{ key: string; value: string }>;
-
-  const now = Date.now();
-  const validRows: Array<{ key: string; createdAt: number }> = [];
-  const keysToDelete = new Set<string>();
-
-  for (const row of rows) {
-    const parsed = parsePersistedEntry(row.value, now);
-    if (!parsed) {
-      keysToDelete.add(row.key);
-      continue;
-    }
-    validRows.push({ key: row.key, createdAt: parsed.entry.createdAt });
-  }
-
-  if (rows.length <= MAX_PERSISTED_SIGNATURES && keysToDelete.size === 0) return;
-
-  validRows.sort((a, b) => b.createdAt - a.createdAt);
-  for (const row of validRows.slice(MAX_PERSISTED_SIGNATURES)) {
-    keysToDelete.add(row.key);
-  }
-
-  if (keysToDelete.size === 0) return;
-  const remove = db.prepare("DELETE FROM key_value WHERE namespace = ? AND key = ?");
-  const tx = db.transaction((keys: string[]) => {
-    for (const key of keys) remove.run(NAMESPACE, key);
-  });
-  tx([...keysToDelete]);
-}
-
 export function storeGeminiThoughtSignature(toolCallId: unknown, signature: unknown) {
   if (typeof toolCallId !== "string" || !toolCallId) return;
   if (typeof signature !== "string" || !signature) return;
@@ -139,13 +72,11 @@ export function storeGeminiThoughtSignature(toolCallId: unknown, signature: unkn
   });
 
   try {
-    const db = getDbInstance();
-    db.prepare("INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES (?, ?, ?)").run(
-      NAMESPACE,
-      toolCallId,
-      serializePersistedEntry({ signature, createdAt: now, expiresAt: now + PERSISTED_TTL_MS })
-    );
-    maybePrunePersistedSignatures(db);
+    writeGeminiSignature(toolCallId, {
+      signature,
+      createdAt: now,
+      expiresAt: now + PERSISTED_TTL_MS,
+    });
   } catch (error) {
     warnPersistenceError("store", error);
   }
@@ -156,38 +87,16 @@ export function getGeminiThoughtSignature(toolCallId: unknown) {
 
   pruneExpired();
   const entry = signatures.get(toolCallId);
-  if (entry) return entry.signature;
+  if (entry && !requiresSharedSignatureReadthrough()) return entry.signature;
 
   try {
-    const db = getDbInstance();
-    const row = db
-      .prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?")
-      .get(NAMESPACE, toolCallId) as { value: string } | undefined;
-
-    if (row?.value) {
-      const persisted = parsePersistedEntry(row.value);
-      if (!persisted) {
-        db.prepare("DELETE FROM key_value WHERE namespace = ? AND key = ?").run(
-          NAMESPACE,
-          toolCallId
-        );
-        return null;
-      }
-
+    const persisted = readGeminiSignature(toolCallId);
+    if (persisted) {
       signatures.set(toolCallId, {
-        signature: persisted.entry.signature,
-        expiresAt: Date.now() + MEMORY_TTL_MS,
+        signature: persisted.signature,
+        expiresAt: Math.min(persisted.expiresAt, Date.now() + MEMORY_TTL_MS),
       });
-
-      if (persisted.shouldRewrite) {
-        db.prepare("UPDATE key_value SET value = ? WHERE namespace = ? AND key = ?").run(
-          serializePersistedEntry(persisted.entry),
-          NAMESPACE,
-          toolCallId
-        );
-      }
-
-      return persisted.entry.signature;
+      return persisted.signature;
     }
   } catch (error) {
     warnPersistenceError("read", error);
@@ -312,8 +221,7 @@ export function clearGeminiThoughtSignatures() {
   signatures.clear();
   signatureCacheMode = "enabled";
   try {
-    const db = getDbInstance();
-    db.prepare("DELETE FROM key_value WHERE namespace = ?").run(NAMESPACE);
+    clearPersistedGeminiSignatures();
   } catch (error) {
     warnPersistenceError("clear", error);
   }

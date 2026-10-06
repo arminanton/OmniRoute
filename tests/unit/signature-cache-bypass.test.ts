@@ -13,6 +13,8 @@ import {
   storeGeminiThoughtSignature,
 } from "../../open-sse/services/geminiThoughtSignatureStore.ts";
 
+process.env.STORAGE_ENCRYPTION_KEY = "signature-persistence-test-key";
+
 function makeSignature(bytes: number[]): string {
   return `R${Buffer.from(bytes).toString("base64")}`;
 }

@@ -7,6 +7,8 @@ import {
   UPSTREAM_POLICY_REJECTION,
   UpstreamPolicyRejectionError,
 } from "../services/upstreamPolicyRejection.ts";
+import { withProviderSignatureScope } from "../services/conversationState/signatureScope.ts";
+import { commitCodexStateDelivery } from "../services/conversationState/commitCodexState.ts";
 import { classifyAdmissionFeedback } from "../services/coordination/overloadClassification.ts";
 import {
   runGenerationDispatch,
@@ -106,10 +108,6 @@ import {
   isCodexOriginatedHeaders,
   isClaudeCodeOriginatedHeaders,
 } from "../config/codexIdentity.ts";
-import {
-  noteCodexTurnStateProvenance,
-  readCodexTurnStateHeader,
-} from "../config/codexTurnState.ts";
 import { trackDevice, extractIpFromHeaders } from "../services/deviceTracker.ts";
 import { getCombosCached } from "./chatCore/comboContextCache.ts";
 export { clearCombosCache, clearUpstreamProxyConfigCache } from "./chatCore/comboContextCache.ts";
@@ -1246,18 +1244,31 @@ export async function handleChatCore({
     model: requestedModel,
     body: body && typeof body === "object" ? (body as Record<string, unknown>) : null,
   });
+  const codexConversation =
+    getCodexClientSessionId(clientRawRequest?.headers) || explicitSessionIdHeader || conversationId;
   credentials = withCodexConversationIdentity(
     provider,
     credentials,
     apiKeyInfo?.id,
-    explicitSessionIdHeader || conversationId
+    codexConversation,
+    model
   );
   credentials = withAntigravityConversationIdentity(
     provider,
     credentials,
     apiKeyInfo?.id,
-    explicitSessionIdHeader || conversationId
+    explicitSessionIdHeader || conversationId,
+    model
   );
+  if (targetFormat === FORMATS.GEMINI || targetFormat === FORMATS.ANTIGRAVITY) {
+    credentials = withProviderSignatureScope(
+      provider,
+      credentials,
+      apiKeyInfo?.id,
+      explicitSessionIdHeader || conversationId,
+      model
+    );
+  }
   const geminiSignatureNamespace = credentials?._signatureNamespace ?? connectionId;
   effectiveServiceTier = resolveEffectiveServiceTier(body);
   setGeminiThoughtSignatureMode(settings.antigravitySignatureCacheMode);
@@ -3586,15 +3597,6 @@ export async function handleChatCore({
         const responseHeaders = new Headers(headersObj);
         stripStaleForwardingHeaders(responseHeaders);
         stripNextMiddlewareControlHeaders(responseHeaders);
-        // The upstream headers (turn-state included) are about to be committed
-        // to the client — record which connection minted the blob so a later
-        // cross-account echo can be stripped (Codex failover guard).
-        if (provider === "codex" && readCodexTurnStateHeader(responseHeaders)) {
-          noteCodexTurnStateProvenance(
-            getCodexClientSessionId(clientRawRequest?.headers),
-            rawResult._executionCredentials?.connectionId ?? credentials?.connectionId
-          );
-        }
         const contentType = (responseHeaders.get("content-type") || "").toLowerCase();
         const payload = await readNonStreamingResponseBody(
           rawResult.response,
@@ -6199,17 +6201,6 @@ export async function handleChatCore({
     comboStrategy,
   });
 
-  // The streaming headers (turn-state included, when present) are committed to
-  // the client from here on — record which connection minted the blob so a
-  // later cross-account echo can be stripped (Codex failover guard). The
-  // in-place failover update means `credentials` is the winning account.
-  if (provider === "codex" && readCodexTurnStateHeader(providerResponse.headers)) {
-    noteCodexTurnStateProvenance(
-      getCodexClientSessionId(clientRawRequest?.headers),
-      credentials?.connectionId
-    );
-  }
-
   // Create transform stream with logger for streaming response
   let transformStream;
   const responseToolNameMap = mergeResponseToolNameMap(
@@ -6604,6 +6595,16 @@ export async function handleChatCore({
     headers: clientRawRequest?.headers,
     response: { status: 200, streamed: true },
   });
+
+  commitCodexStateDelivery(
+    provider,
+    responseHeaders,
+    credentials,
+    apiKeyInfo?.id,
+    codexConversation,
+    model,
+    providerHeaders
+  );
 
   return {
     success: true,

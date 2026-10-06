@@ -1,3 +1,5 @@
+import { withCodexConversationIdentity } from "../../open-sse/services/codexConversationIdentity.ts";
+import { commitCodexStateDelivery } from "../../open-sse/services/conversationState/commitCodexState.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 
@@ -99,12 +101,27 @@ test("withCodexFingerprintCredentials stashes the allowed echo independent of mo
   reset();
   noteCodexTurnStateProvenance("session-1", "conn-a");
 
-  const baseCredentials = {
-    accessToken: "oauth-token",
-    connectionId: "conn-a",
-    providerSpecificData: { codexFingerprintMode: "off" as const },
-  };
+  const baseCredentials = withCodexConversationIdentity(
+    "codex",
+    {
+      accessToken: "oauth-token",
+      connectionId: "conn-a",
+      providerSpecificData: { codexFingerprintMode: "off" as const },
+    },
+    "principal",
+    "session-1",
+    "model"
+  );
   const clientHeaders = { "session-id": "session-1", "x-codex-turn-state": TURN_STATE };
+
+  commitCodexStateDelivery(
+    "codex",
+    clientHeaders,
+    baseCredentials,
+    "principal",
+    "session-1",
+    "model"
+  );
 
   // Same account, explicit off: echo survives alongside original identity passthrough.
   const sameAccount = withCodexFingerprintCredentials(baseCredentials, clientHeaders, {});
@@ -118,7 +135,7 @@ test("withCodexFingerprintCredentials stashes the allowed echo independent of mo
     clientHeaders,
     {}
   );
-  assert.equal(crossAccount.providerSpecificData?.codexTurnStateEcho, undefined);
+  assert.equal(crossAccount.providerSpecificData?.codexTurnStateEcho, null);
 
   // Compact endpoint: convergence identity is skipped but the echo guard still runs.
   const compact = withCodexFingerprintCredentials(
