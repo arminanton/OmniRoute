@@ -137,6 +137,7 @@ export default function EditConnectionModal({
     routingTags: "",
     excludedModels: "",
     customUserAgent: "",
+    billTo: "",
     accountId: "",
     codexReasoningEffort: "medium",
     codexServiceTier: "default" as CodexServiceTier,
@@ -291,6 +292,8 @@ export default function EditConnectionModal({
         stringField(connection.providerSpecificData?.accessKeyId) ||
         stringField(connection.providerSpecificData?.awsAccessKeyId);
       const existingCustomUserAgent = stringField(connection.providerSpecificData?.customUserAgent);
+      const existingBillTo = stringField(connection.providerSpecificData?.billTo);
+      if (effectiveProvider === "huggingface" && existingBillTo.trim()) setShowAdvanced(true);
       const existingOpenRouterPreset = stringField(connection.providerSpecificData?.preset);
       const existingCx = stringField(connection.providerSpecificData?.cx);
       const existingAccountId = stringField(connection.providerSpecificData?.accountId);
@@ -372,6 +375,7 @@ export default function EditConnectionModal({
             connection.providerSpecificData?.excluded_models
         ),
         customUserAgent: existingCustomUserAgent,
+        billTo: existingBillTo,
         accountId: existingAccountId,
         codexReasoningEffort: codexRequestDefaults.reasoningEffort,
         codexServiceTier: codexRequestDefaults.serviceTier ?? "default",
@@ -1224,6 +1228,14 @@ export default function EditConnectionModal({
                   placeholder="my-app/1.0"
                   hint={t("customUserAgentHint")}
                 />
+                {provider === "huggingface" && (
+                  <Input
+                    label="Hugging Face Bill-To Account"
+                    value={formData.billTo}
+                    onChange={(e) => setFormData({ ...formData, billTo: e.target.value })}
+                    hint="Optional. Sent as X-HF-Bill-To for billing attribution."
+                  />
+                )}
                 <ProviderTierField provider={provider} />
                 {isM365TierCapable && (
                   <Select

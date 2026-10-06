@@ -895,7 +895,7 @@ export class BaseExecutor {
         undefined,
         body
       );
-      applyConfiguredUserAgent(headers, requestCredentials?.providerSpecificData);
+      applyConfiguredUserAgent(headers, requestCredentials?.providerSpecificData, this.provider);
 
       // Strip OpenAI SDK (X-Stainless-*) metadata + normalize SDK-derived User-Agent
       // on OpenAI-compatible passthrough requests — some upstream gateways 403 on them.

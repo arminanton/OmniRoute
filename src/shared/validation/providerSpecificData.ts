@@ -202,6 +202,22 @@ export function validateProviderSpecificData(
     });
   }
 
+  const billTo = data.billTo;
+  if (
+    billTo !== undefined &&
+    billTo !== null &&
+    (typeof billTo !== "string" ||
+      billTo.length > 500 ||
+      /[\u0000-\u001f\u007f-\u009f]/.test(billTo))
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "providerSpecificData.billTo must be a string up to 500 chars without control characters",
+      path: ["billTo"],
+    });
+  }
+
   const cx = data.cx;
   if (cx !== undefined && cx !== null && (typeof cx !== "string" || cx.length > 500)) {
     ctx.addIssue({

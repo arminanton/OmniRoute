@@ -35,14 +35,36 @@ export function setUserAgentHeader(headers: Record<string, string>, userAgent: s
   }
 }
 
+export function applyHuggingFaceBillToHeader(
+  headers: Record<string, string>,
+  provider: string,
+  providerSpecificData?: JsonRecord | null
+): void {
+  if (provider !== "huggingface") return;
+  const rawBillTo = providerSpecificData?.billTo;
+  if (
+    typeof rawBillTo !== "string" ||
+    rawBillTo.length > 500 ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(rawBillTo)
+  ) {
+    return;
+  }
+  const billTo = rawBillTo.trim();
+  if (billTo) {
+    headers["X-HF-Bill-To"] = billTo;
+  }
+}
+
 export function applyConfiguredUserAgent(
   headers: Record<string, string>,
-  providerSpecificData?: JsonRecord | null
+  providerSpecificData?: JsonRecord | null,
+  provider?: string
 ): void {
   const customUserAgent = getCustomUserAgent(providerSpecificData);
   if (customUserAgent) {
     setUserAgentHeader(headers, customUserAgent);
   }
+  if (provider) applyHuggingFaceBillToHeader(headers, provider, providerSpecificData);
 }
 
 /**

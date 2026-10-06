@@ -127,6 +127,7 @@ export default function AddApiKeyModal({
     routingTags: "",
     excludedModels: "",
     customUserAgent: "",
+    billTo: "",
     accountId: "",
     consoleApiKey: "",
     newApiUserId: "",
@@ -1047,6 +1048,14 @@ export default function AddApiKeyModal({
                   placeholder="my-app/1.0"
                   hint={t("customUserAgentHint")}
                 />
+                {provider === "huggingface" && (
+                  <Input
+                    label="Hugging Face Bill-To Account"
+                    value={formData.billTo}
+                    onChange={(e) => setFormData({ ...formData, billTo: e.target.value })}
+                    hint="Optional. Sent as X-HF-Bill-To for billing attribution."
+                  />
+                )}
                 <Input
                   label={t("routingTagsLabel")}
                   value={formData.routingTags}

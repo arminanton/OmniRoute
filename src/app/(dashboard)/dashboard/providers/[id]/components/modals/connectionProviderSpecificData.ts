@@ -24,6 +24,7 @@ type FormData = QuotaScrapingFieldValues &
     ccCompatibleSummarizeThinking: boolean;
     consoleApiKey: string;
     customUserAgent: string;
+    billTo: string;
     cx: string;
     excludedModels: string;
     importFreeModelsOnly: boolean;
@@ -77,6 +78,7 @@ export function buildAddProviderSpecificData(options: {
   } = options;
   const data: ProviderSpecificData = {};
   if (formData.customUserAgent.trim()) data.customUserAgent = formData.customUserAgent.trim();
+  if (provider === "huggingface" && formData.billTo.trim()) data.billTo = formData.billTo.trim();
   openRouterPreset.applyTo(data);
   if (formData.routingTags.trim()) data.tags = parseRoutingTagsInput(formData.routingTags);
   if (formData.excludedModels.trim()) {
@@ -147,6 +149,11 @@ export function assignEditApiKeyProviderSpecificData(options: {
     ...o.openRouterPreset.getPatch(),
     ...(o.formData.passthroughModels ? { passthroughModels: true } : {}),
   });
+  if (o.provider === "huggingface") {
+    o.target.billTo = o.formData.billTo.trim() || null;
+  } else {
+    delete o.target.billTo;
+  }
   if (CONSOLE_API_KEY_PROVIDERS.has(o.provider)) {
     o.target.consoleApiKey = o.formData.consoleApiKey.trim() || undefined;
   }

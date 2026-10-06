@@ -42,6 +42,18 @@ function hasNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function normalizeHuggingFaceBillTo(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value.length > 500 ||
+    /[\u0000-\u001f\u007f-\u009f]/.test(value)
+  ) {
+    return undefined;
+  }
+  const billTo = value.trim();
+  return billTo || undefined;
+}
+
 function isClaudeCodeCompatibleProvider(provider: string | null | undefined): boolean {
   return (
     typeof provider === "string" && provider.startsWith(CLAUDE_CODE_COMPATIBLE_PROVIDER_PREFIX)
@@ -188,6 +200,13 @@ export function normalizeProviderSpecificData(
   if (Object.keys(record).length === 0) return undefined;
 
   const normalized: JsonRecord = { ...record };
+
+  if ("billTo" in normalized) {
+    const billTo =
+      provider === "huggingface" ? normalizeHuggingFaceBillTo(normalized.billTo) : undefined;
+    if (billTo) normalized.billTo = billTo;
+    else delete normalized.billTo;
+  }
 
   normalizeNestedSubObjects(provider, normalized);
 
