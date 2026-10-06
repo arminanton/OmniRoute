@@ -1,8 +1,10 @@
+import { serializeCatalogPayload } from "./catalogPayload";
+import { catalogReadinessErrorResponse } from "./catalogReadiness";
+import { buildSyncedBilling } from "./syncedBilling";
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
 import { NOAUTH_PROVIDERS } from "@/shared/constants/providers";
 import { getCombos } from "@/lib/db/combos";
 import { getSettings } from "@/lib/db/settings";
-import { getUserDatabaseSettings } from "@/lib/db/databaseSettings";
 import { createLazyConnectionView } from "@/lib/db/providers/lazyConnectionView";
 import { extractAliasBackedModels } from "./aliasBackedModels";
 import {
@@ -140,11 +142,7 @@ export { getCustomVisionCapabilityFields };
 // lives in ./catalogCache. Re-exported here because the existing tests import the
 // hooks from this module, and CATALOG_STALE_WHILE_REVALIDATE_MS is part of the
 // documented behavior of this endpoint.
-import {
-  CATALOG_CACHE_TTL_MS_DEFAULT,
-  resolveCachedCatalogResponse,
-  type BackgroundRefreshScheduler,
-} from "./catalogCache";
+import { resolveCachedCatalogResponse, type BackgroundRefreshScheduler } from "./catalogCache";
 
 export {
   CATALOG_STALE_WHILE_REVALIDATE_MS,
@@ -234,41 +232,15 @@ export async function getUnifiedModelsResponse(
     );
   } catch (err) {
     // Hard rule #12: never put a raw err.message/err.stack in a response body.
-    // Route it through the shared sanitizer instead — same status/type/code as
-    // before, minus the stack-trace/path leak.
-    const message = err instanceof Error ? err.message : String(err);
-    return Response.json(
-      buildErrorBody(500, message, undefined, {
-        type: "server_error",
-        code: INTERNAL_PROXY_ERROR,
-      }),
-      { status: 500, headers: { ...corsHeaders, ...diagnosticHeaders } }
-    );
+    // Keep unexpected failures sanitized; cold-readiness timeouts are retryable.
+    return catalogReadinessErrorResponse(err, { ...corsHeaders, ...diagnosticHeaders });
   }
 }
 
 async function buildCatalogPayload(
   request: Request
 ): Promise<{ body: string; headers: Record<string, string>; status: number; cacheTTL: number }> {
-  const built = await buildUnifiedModelsResponseCore(request);
-  const body = await built.text();
-  const headers: Record<string, string> = {};
-  built.headers.forEach((value, key) => {
-    headers[key] = value;
-  });
-  // Read the configurable cache TTL from database settings.
-  // Falls back to the hardcoded default if not set or on error.
-  let cacheTTL = CATALOG_CACHE_TTL_MS_DEFAULT;
-  try {
-    // Only the persisted cache section is needed here. The full database-settings
-    // view also calculates dbstat, WAL, schema and integrity diagnostics, which are
-    // synchronous and can pin the event loop after an otherwise cooperative build.
-    const dbSettings = getUserDatabaseSettings();
-    cacheTTL = dbSettings.cache?.modelCatalogCacheTtlMs ?? CATALOG_CACHE_TTL_MS_DEFAULT;
-  } catch {
-    // Swallow — use default TTL on DB error
-  }
-  return { body, headers, status: built.status, cacheTTL };
+  return serializeCatalogPayload(await buildUnifiedModelsResponseCore(request));
 }
 
 /**
@@ -1268,6 +1240,7 @@ async function buildUnifiedModelsResponseCore(
           // so the effort_tiers exclusion (codex/glm/kimi) and the entries agree.
           const syncedOwnedBy = resolvePublicOwnerId(providerId, canonicalProviderId);
           const syncedFields = {
+            ...buildSyncedBilling(sm),
             ...(modelType ? { type: modelType } : {}),
             ...(apiFormat !== "chat-completions" ? { api_format: apiFormat } : {}),
             ...(classification.subtype ? { subtype: classification.subtype } : {}),

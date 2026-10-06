@@ -351,6 +351,11 @@ export function normalizeDiscoveredModels(
       ...(defaultThinkingEffort !== undefined ? { defaultThinkingEffort } : {}),
       ...(typeof inputTokenLimit === "number" ? { inputTokenLimit } : {}),
       ...(typeof outputTokenLimit === "number" ? { outputTokenLimit } : {}),
+      ...(typeof record.premiumRequestMultiplier === "number" &&
+      Number.isFinite(record.premiumRequestMultiplier) &&
+      record.premiumRequestMultiplier >= 0
+        ? { premiumRequestMultiplier: record.premiumRequestMultiplier }
+        : {}),
       ...(typeof record.description === "string" ? { description: record.description } : {}),
       ...(typeof record.supportsThinking === "boolean"
         ? { supportsThinking: record.supportsThinking }
@@ -360,7 +365,11 @@ export function normalizeDiscoveredModels(
       ...(record.alwaysThinking === true ? { alwaysThinking: true } : {}),
       ...(typeof record.supportsTools === "boolean" ? { supportsTools: record.supportsTools } : {}),
       ...(typeof record.supportsVideo === "boolean" ? { supportsVideo: record.supportsVideo } : {}),
-      ...(supportsVision ? { supportsVision: true } : {}),
+      ...(typeof record.supportsVision === "boolean"
+        ? { supportsVision: record.supportsVision }
+        : supportsVision
+          ? { supportsVision: true }
+          : {}),
     });
   }
 

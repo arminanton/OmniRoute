@@ -15,6 +15,8 @@ export interface SyncedAvailableModel {
   defaultThinkingEffort?: string;
   inputTokenLimit?: number;
   outputTokenLimit?: number;
+  /** Native request-based billing unit, never USD/token pricing. */
+  premiumRequestMultiplier?: number;
   description?: string;
   supportsThinking?: boolean;
   alwaysThinking?: boolean;
@@ -81,6 +83,11 @@ function normalizeSyncedAvailableModel(model: unknown): SyncedAvailableModel | n
     ...(typeof record.outputTokenLimit === "number"
       ? { outputTokenLimit: record.outputTokenLimit }
       : {}),
+    ...(typeof record.premiumRequestMultiplier === "number" &&
+    Number.isFinite(record.premiumRequestMultiplier) &&
+    record.premiumRequestMultiplier >= 0
+      ? { premiumRequestMultiplier: record.premiumRequestMultiplier }
+      : {}),
     ...(typeof record.description === "string" ? { description: record.description } : {}),
     ...(typeof record.supportsThinking === "boolean"
       ? { supportsThinking: record.supportsThinking }
@@ -88,7 +95,9 @@ function normalizeSyncedAvailableModel(model: unknown): SyncedAvailableModel | n
     ...(record.alwaysThinking === true ? { alwaysThinking: true } : {}),
     ...(typeof record.supportsTools === "boolean" ? { supportsTools: record.supportsTools } : {}),
     ...(typeof record.supportsVideo === "boolean" ? { supportsVideo: record.supportsVideo } : {}),
-    ...(record.supportsVision === true ? { supportsVision: true } : {}),
+    ...(typeof record.supportsVision === "boolean"
+      ? { supportsVision: record.supportsVision }
+      : {}),
   };
 }
 

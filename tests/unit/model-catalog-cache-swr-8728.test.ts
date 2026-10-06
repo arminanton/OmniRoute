@@ -141,3 +141,32 @@ test("a state change invalidates the cache so the next read rebuilds", async () 
   const after = await resolve(async () => payload("after"));
   assert.equal(await after.text(), "after", "a write must be reflected on the very next read");
 });
+
+test("a cold build failure is shared, handled and followed by a successful retry", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const failure = async () => {
+    await gate;
+    throw new Error("cold discovery unavailable");
+  };
+  const calls = [resolve(failure), resolve(failure), resolve(failure)];
+  release();
+  const outcomes = await Promise.allSettled(calls);
+  assert.ok(outcomes.every((result) => result.status === "rejected"));
+  assert.equal(catalogCache.__getCatalogBuilderRunsForTest(), 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    await (await resolve(async () => payload("retry succeeded"))).text(),
+    "retry succeeded"
+  );
+});
+
+test("a returned cold HTTP error is never cached as a successful discovery snapshot", async () => {
+  const failed = await resolve(async () => payload("temporary error", 500));
+  assert.equal(failed.status, 500);
+  const retried = await resolve(async () => payload("recovered"));
+  assert.equal(retried.status, 200);
+  assert.equal(await retried.text(), "recovered");
+});

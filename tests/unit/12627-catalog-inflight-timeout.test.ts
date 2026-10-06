@@ -59,3 +59,21 @@ test("#12627 timeout serves last-good 200 when a prior build succeeded", async (
   assert.equal(await second.text(), "good");
   assert.equal(second.headers.get("x-omniroute-catalog"), "last-good");
 });
+
+test("catalog invalidation prevents timeout fallback to prior entitlement state", async () => {
+  await catalogCache.resolveCachedCatalogResponse(
+    request(),
+    { corsHeaders: {}, diagnosticHeaders: {} },
+    async () => payload("old entitlement")
+  );
+  const readCache = await import("../../src/lib/db/readCache.ts");
+  readCache.invalidateDbCache();
+  await assert.rejects(
+    catalogCache.resolveCachedCatalogResponse(
+      request(),
+      { corsHeaders: {}, diagnosticHeaders: {} },
+      neverResolves as (req: Request) => Promise<catalogCache.CatalogPayload>
+    ),
+    /catalog_build_timeout/
+  );
+});

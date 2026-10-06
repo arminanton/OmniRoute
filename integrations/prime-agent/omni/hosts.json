@@ -1,0 +1,4 @@
+{
+  "maria": { "OMNI_PRIME_BASE_URL": "http://127.0.0.1:20129/v1" },
+  "devvm": { "OMNI_PRIME_BASE_URL": "https://omni.saga-gourami.ts.net/v1" }
+}

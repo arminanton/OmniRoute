@@ -1,3 +1,5 @@
+import { getCodexBillingMetadata, getCodexLifecycleNotice } from "./codexBillingMetadata";
+import { getCatalogBillingModelCandidates } from "./catalogBillingIdentity";
 import { randomUUID } from "node:crypto";
 import { getCodexPublishedOutputLimit } from "./codexOutputMetadata";
 import { parseModel } from "@omniroute/open-sse/services/model.ts";
@@ -339,14 +341,21 @@ function resolveCatalogPricing(
   snapshot?: CatalogEnrichmentSnapshot
 ): Record<string, number> | null {
   if (!provider || !model) return null;
+  const billingModels = getCatalogBillingModelCandidates(provider, model);
 
   if (snapshot?.effectivePricing) {
     const alias = PROVIDER_ID_TO_ALIAS[provider];
     const providerTable = findInsensitive(snapshot.effectivePricing, provider);
     const aliasTable = alias ? findInsensitive(snapshot.effectivePricing, alias) : undefined;
-    const lookup = (table: Record<string, Record<string, unknown>> | undefined) =>
-      findInsensitive(table, model) || findInsensitive(table, model.replace(/\./g, "-"));
-    const row = lookup(providerTable) || lookup(aliasTable);
+    const row = billingModels
+      .map(
+        (candidate) =>
+          findInsensitive(providerTable, candidate) ||
+          findInsensitive(aliasTable, candidate) ||
+          findInsensitive(providerTable, candidate.replace(/\./g, "-")) ||
+          findInsensitive(aliasTable, candidate.replace(/\./g, "-"))
+      )
+      .find(Boolean);
     if (!row) return null;
     const rates: Record<string, number> = {};
     for (const key of ["input", "output", "cached", "cache_creation"]) {
@@ -524,12 +533,18 @@ export function enrichCatalogModelEntry<T extends JsonRecord>(
       ? metadata.capabilities.supportsTools === true || metadata.capabilities.toolCalling === true
         ? true
         : false
-      : metadata.capabilities.toolCalling,
+      : typeof metadata.capabilities.supportsTools !== "boolean" &&
+          typeof existingCapabilities.tool_calling === "boolean"
+        ? existingCapabilities.tool_calling
+        : metadata.capabilities.toolCalling,
     reasoning: specialtySurface
       ? metadata.capabilities.supportsThinking === true || metadata.capabilities.reasoning === true
         ? true
         : false
-      : metadata.capabilities.reasoning,
+      : typeof metadata.capabilities.supportsThinking !== "boolean" &&
+          typeof existingCapabilities.reasoning === "boolean"
+        ? existingCapabilities.reasoning
+        : metadata.capabilities.reasoning,
     // #6241: surface thinking support + the canonical effort tiers so the frontend can
     // render the effort/thinking toggles. `thinking` is kept for back-compat; `supportsThinking`
     // is the explicit flag and `effort_tiers` lists the selectable reasoning levels
@@ -656,6 +671,11 @@ export function enrichCatalogModelEntry<T extends JsonRecord>(
     const pricing = resolveCatalogPricing(provider, model, snapshot);
     if (pricing) nextEntry.pricing = pricing;
   }
+
+  const billing = getCodexBillingMetadata(provider, model);
+  if (billing) nextEntry.billing_metadata = billing;
+  const lifecycleNotice = getCodexLifecycleNotice(provider, model);
+  if (lifecycleNotice) nextEntry.lifecycle_notice = lifecycleNotice;
 
   return nextEntry as T;
 }

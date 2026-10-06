@@ -151,8 +151,14 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(label)), ms);
     promise.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      (err) => { clearTimeout(timer); reject(err); }
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
     );
   });
 }
@@ -194,6 +200,7 @@ function dropCatalogCacheIfStateChanged(): void {
   if (currentVersion === lastSeenCatalogCacheVersion) return;
   lastSeenCatalogCacheVersion = currentVersion;
   catalogCache.clear();
+  catalogLastGood.clear();
   // Deliberately NOT clearing catalogInFlight: an in-flight build bound to the
   // previous generation is left to finish for its original caller, but the
   // generation check in the join path (below) keeps new requests from joining
@@ -240,10 +247,10 @@ function storePayload(
     status: payload.status,
     expiresAt: Date.now() + payload.cacheTTL,
   };
-  if (buildGeneration === getModelCatalogCacheVersion()) {
+  if (buildGeneration === getModelCatalogCacheVersion() && entry.status === 200) {
     catalogCache.set(cacheKey, entry);
+    catalogLastGood.set(cacheKey, entry);
   }
-  if (entry.status === 200) catalogLastGood.set(cacheKey, entry);
   return entry;
 }
 
@@ -401,9 +408,12 @@ export async function resolveCachedCatalogResponse(
     );
     inflight = { generation, promise };
     catalogInFlight.set(cacheKey, inflight);
-    promise.finally(() => {
+    // Handle the cleanup branch too: discarded finally() promises reject again
+    // even when every waiting caller handles the original build failure.
+    const cleanup = () => {
       if (catalogInFlight.get(cacheKey)?.promise === promise) catalogInFlight.delete(cacheKey);
-    });
+    };
+    void promise.then(cleanup, cleanup);
   }
 
   return awaitCatalogInFlight(cacheKey, inflight, corsHeaders, diagnosticHeaders);

@@ -225,3 +225,62 @@ test("fetch falls back when no token is provided (unauthed refresh stays safe)",
     ["gpt-5.4"]
   );
 });
+
+test("native Copilot limits and request billing survive discovery without becoming USD prices", async () => {
+  const [discovered] = parseGitHubCopilotModels({
+    data: [
+      {
+        id: "account-native-model",
+        capabilities: {
+          type: "chat",
+          limits: {
+            max_context_window_tokens: 1000000,
+            max_output_tokens: 128000,
+          },
+          supports: {
+            vision: true,
+            tool_calls: true,
+            reasoning: true,
+            reasoning_effort: ["low", "high"],
+          },
+        },
+        supported_endpoints: ["/responses"],
+        billing: { multiplier: 3, secret: "never retain" },
+      },
+    ],
+  });
+  assert.equal(discovered.inputTokenLimit, 1000000);
+  assert.equal(discovered.outputTokenLimit, 128000);
+  assert.equal(discovered.premiumRequestMultiplier, 3);
+  assert.equal((discovered as Record<string, unknown>).pricing, undefined);
+  assert.equal((discovered as Record<string, unknown>).billing, undefined);
+  const { normalizeDiscoveredModels } =
+    await import("../../src/lib/providerModels/modelDiscovery.ts");
+  const { normalizeSyncedAvailableModels } = await import("../../src/lib/db/models/synced.ts");
+  const [persisted] = normalizeSyncedAvailableModels(
+    normalizeDiscoveredModels([discovered], "github"),
+    "github"
+  );
+  assert.equal(persisted.outputTokenLimit, 128000);
+  assert.equal(persisted.premiumRequestMultiplier, 3);
+  assert.deepEqual(persisted.supportedThinkingEfforts, ["low", "high"]);
+  assert.equal(persisted.supportsVision, true);
+});
+
+test("invalid native Copilot limits and multipliers remain unknown", () => {
+  const [row] = parseGitHubCopilotModels({
+    data: [
+      {
+        id: "account-native-model",
+        capabilities: {
+          type: "chat",
+          limits: { max_output_tokens: -1, max_context_window_tokens: Infinity },
+        },
+        billing: { multiplier: NaN },
+      },
+    ],
+  });
+  assert.equal(row.outputTokenLimit, undefined);
+  assert.equal(row.inputTokenLimit, undefined);
+  assert.equal(row.premiumRequestMultiplier, undefined);
+});

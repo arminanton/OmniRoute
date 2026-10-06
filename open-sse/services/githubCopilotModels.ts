@@ -17,6 +17,7 @@
  * A safe fallback to the existing static catalog is preserved for
  * offline/unauthed/failed refresh so the import flow never breaks.
  */
+import { parseCopilotModelMetadata } from "./copilotModelMetadata.ts";
 import { getGitHubCopilotChatHeaders } from "../config/providerHeaderProfiles.ts";
 
 export const GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models";
@@ -74,7 +75,7 @@ export type GitHubCopilotModel = {
   id: string;
   name: string;
   owned_by: string;
-};
+} & ReturnType<typeof parseCopilotModelMetadata>;
 
 type RawRecord = Record<string, unknown>;
 
@@ -155,7 +156,7 @@ export function parseGitHubCopilotModels(data: unknown): GitHubCopilotModel[] {
     if (!isRoutableChatModel(item)) continue;
     seen.add(id);
     const name = toNonEmptyString(item.name) || toNonEmptyString(item.display_name) || id;
-    models.push({ id, name, owned_by: "github" });
+    models.push({ id, name, owned_by: "github", ...parseCopilotModelMetadata(item) });
   }
 
   return models;
