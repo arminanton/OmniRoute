@@ -226,6 +226,7 @@ test(
       let rendered = result.stdout
         .replaceAll(generation.address, name === "old" ? "127.0.0.2" : "127.0.0.3")
         .replaceAll("/run/omni-local-next/canary", directory)
+        .replaceAll("/run/omni-canary-worker", directory)
         .replaceAll(`listen ${api};`, `listen 127.0.0.1:${api};`)
         .replaceAll(`listen ${dashboard};`, `listen 127.0.0.1:${dashboard};`)
         .replace("worker_processes auto;", "worker_processes 2;");
@@ -562,6 +563,7 @@ print(json.dumps({"snapshot":r,"location":a.nginx_location(r["path"])}))
       assert.equal(rendered.status, 0, rendered.stderr);
       let config = rendered.stdout
         .replaceAll("/run/omni-local-next/canary", directory)
+        .replaceAll("/run/omni-canary-worker", directory)
         .replace("worker_processes auto;", "worker_processes 1;");
       config = config
         .replaceAll(
