@@ -28,6 +28,13 @@ export async function acquireSharedSemaphore(
       key: r.key,
       limit: Math.trunc(Number(r.maxConcurrency)),
       adaptive: r.adaptive,
+      initialLimit:
+        r.initialConcurrency == null
+          ? undefined
+          : Math.min(
+              Math.trunc(Number(r.maxConcurrency)),
+              Math.max(1, Math.trunc(r.initialConcurrency))
+            ),
     }));
   if (!enabled.length) return () => {};
   const deadline = Date.now() + (options.timeoutMs ?? 30000);

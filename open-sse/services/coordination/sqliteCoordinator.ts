@@ -15,6 +15,7 @@ export interface CoordinationRequirement {
   key: string;
   limit: number;
   adaptive?: boolean;
+  initialLimit?: number;
 }
 export interface FencedLease {
   id: string;
@@ -76,9 +77,16 @@ export class SqliteCoordinator {
     now = Date.now()
   ): string {
     if (!requirements.length || !Number.isFinite(expiresAt)) throw new Error("Invalid reservation");
-    for (const r of requirements)
-      if (!r.key || !Number.isSafeInteger(r.limit) || r.limit < 1)
+    for (const r of requirements) {
+      if (
+        !r.key ||
+        !Number.isSafeInteger(r.limit) ||
+        r.limit < 1 ||
+        (r.initialLimit != null &&
+          (!Number.isSafeInteger(r.initialLimit) || r.initialLimit < 1 || r.initialLimit > r.limit))
+      )
         throw new Error("Invalid coordination requirement");
+    }
     const limits = new Map<string, number>();
     for (const r of requirements)
       limits.set(r.key, Math.min(limits.get(r.key) ?? r.limit, r.limit));
@@ -86,6 +94,10 @@ export class SqliteCoordinator {
       key,
       limit,
       adaptive: requirements.some((r) => r.key === key && r.adaptive),
+      initialLimit: Math.min(
+        limit,
+        ...requirements.filter((r) => r.key === key).map((r) => r.initialLimit ?? r.limit)
+      ),
     }));
     return this.atomic(() => {
       this.prune(now);
@@ -134,7 +146,9 @@ export class SqliteCoordinator {
       )
         return null;
       for (const r of requirements) {
-        const adaptiveCap = r.adaptive ? this.adaptiveLimit(r.key, r.limit, now) : r.limit;
+        const adaptiveCap = r.adaptive
+          ? this.adaptiveLimit(r.key, r.limit, now, r.initialLimit)
+          : r.limit;
         const block = this.db
           .prepare("SELECT until_ms FROM coordination_blocks WHERE resource=?")
           .get(r.key);
@@ -195,7 +209,7 @@ export class SqliteCoordinator {
   cancel(id: string): void {
     this.db.prepare("DELETE FROM coordination_waiters WHERE id=? AND owner=?").run(id, this.owner);
   }
-  private adaptiveLimit(resource: string, cap: number, now: number): number {
+  private adaptiveLimit(resource: string, cap: number, now: number, initialLimit?: number): number {
     const row = this.db
       .prepare("SELECT * FROM coordination_adaptation WHERE resource=?")
       .get(resource);
@@ -210,9 +224,10 @@ export class SqliteCoordinator {
     }).adaptation;
     const state = row
       ? (JSON.parse(String(row.state)) as AdaptationState)
-      : createAdaptationState(cap, 1, cap, now);
+      : createAdaptationState(initialLimit ?? cap, 1, cap, now);
     state.currentLimit = Math.min(cap, Math.max(1, state.currentLimit));
-    state.recoveryCeiling = cap;
+    // Idle recovery returns only to the starting budget; growth beyond it requires measured success/utilization.
+    state.recoveryCeiling = Math.min(cap, Math.max(1, initialLimit ?? state.recoveryCeiling));
     const active = Number(
       this.db
         .prepare("SELECT COUNT(*) AS n FROM coordination_resources WHERE resource=?")
