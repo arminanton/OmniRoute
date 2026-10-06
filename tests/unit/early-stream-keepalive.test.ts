@@ -17,7 +17,12 @@ import {
   OPENAI_RESPONSES_ERROR_FRAME,
 } from "../../open-sse/utils/earlyStreamKeepalive.ts";
 import { takeEarlyKeepaliveBytes } from "../../open-sse/utils/earlyKeepaliveByteBuffer.ts";
-import { OPENAI_RESPONSES_IN_PROGRESS_FRAME } from "../../open-sse/utils/sseHeartbeat.ts";
+import { buildOpenAIResponsesInProgressFrame } from "../../open-sse/utils/sseHeartbeat.ts";
+import {
+  createDisconnectAwareStream,
+  createStreamController,
+} from "../../open-sse/utils/streamHandler.ts";
+import { FORMATS } from "../../open-sse/translator/formats.ts";
 
 async function readAll(response: Response): Promise<string> {
   const reader = response.body!.getReader();
@@ -180,15 +185,22 @@ test("startupFrame defaults to keepaliveFrame when omitted (no behavior change)"
 // ignore comments without flooding the application event stream.
 test("slow Responses handler uses comments plus sparse in_progress events", async () => {
   const slow = new Promise<Response>((resolve) => {
-    setTimeout(() => resolve(sseResponse('data: {"type":"response.completed"}\n\n')), 900);
+    setTimeout(
+      () =>
+        resolve(
+          sseResponse('data: {"type":"response.completed","response":{"id":"resp_provider"}}\n\n')
+        ),
+      900
+    );
   });
 
   const result = await withEarlyStreamKeepalive(slow, {
     thresholdMs: 20,
     intervalMs: 250,
-    startupFrame: OPENAI_RESPONSES_IN_PROGRESS_FRAME,
+    syntheticResponsesId: "resp_early_stream",
+    startupFrame: buildOpenAIResponsesInProgressFrame("resp_template"),
     applicationKeepalive: {
-      frame: OPENAI_RESPONSES_IN_PROGRESS_FRAME,
+      frame: buildOpenAIResponsesInProgressFrame("resp_template"),
       intervalMs: 500,
     },
   });
@@ -196,7 +208,9 @@ test("slow Responses handler uses comments plus sparse in_progress events", asyn
   const body = await readAll(result);
   const frames = body.split("\n\n").filter(Boolean);
   const earlyFrames = frames.slice(0, -1);
-  assert.equal(earlyFrames[0], 'data: {"type":"response.in_progress"}');
+  const startupPayload = JSON.parse(earlyFrames[0].slice("data: ".length));
+  assert.equal(startupPayload.type, "response.in_progress");
+  assert.equal(startupPayload.response.id, "resp_early_stream");
   assert.ok(
     earlyFrames.some((frame) => frame === ": keepalive"),
     "transport ticks must remain lightweight SSE comments"
@@ -204,16 +218,77 @@ test("slow Responses handler uses comments plus sparse in_progress events", asyn
   const applicationFrames = earlyFrames.filter((frame) => frame.startsWith("data: "));
   assert.ok(applicationFrames.length >= 2, "expected startup and sparse application keepalives");
   for (const frame of applicationFrames) {
-    assert.deepEqual(JSON.parse(frame.slice("data: ".length)), {
-      type: "response.in_progress",
-    });
+    const payload = JSON.parse(frame.slice("data: ".length));
+    assert.equal(payload.type, "response.in_progress");
+    assert.equal(payload.response.id, "resp_early_stream");
+    assert.equal(payload.response.status, "in_progress");
     assert.doesNotMatch(frame, /output_item|reasoning|✨/);
   }
   assert.ok(
     applicationFrames.length < earlyFrames.length,
     "application events must be sparser than transport heartbeats"
   );
-  assert.match(body, /data: {"type":"response.completed"}/, "real upstream body forwarded");
+  assert.match(
+    body,
+    /data: {"type":"response.completed","response":{"id":"resp_provider"}}/,
+    "real upstream terminal ID is forwarded unchanged"
+  );
+});
+
+test("Responses startup and synthetic stream failure share one ID", async () => {
+  const correlationId = `corr-responses-stream-${Date.now()}-${Math.random()}`;
+  const requestController = new AbortController();
+  const streamController = createStreamController({
+    clientResponseFormat: FORMATS.OPENAI_RESPONSES,
+    correlationId,
+    clientAbortSignal: requestController.signal,
+  });
+  const otherStreamController = createStreamController({
+    clientResponseFormat: FORMATS.OPENAI_RESPONSES,
+    correlationId,
+    clientAbortSignal: new AbortController().signal,
+  });
+  assert.notEqual(
+    streamController.syntheticResponsesId,
+    otherStreamController.syntheticResponsesId
+  );
+  const failedBody = createDisconnectAwareStream(
+    {
+      readable: new ReadableStream({
+        start(controller) {
+          controller.error(Object.assign(new Error("provider failed"), { statusCode: 502 }));
+        },
+      }),
+      writable: { getWriter: () => ({ abort() {} }) },
+    },
+    streamController
+  );
+  const handlerPromise = new Promise<Response>((resolve) => {
+    setTimeout(
+      () => resolve(new Response(failedBody, { headers: { "Content-Type": "text/event-stream" } })),
+      25
+    );
+  });
+
+  const response = await withEarlyStreamKeepalive(handlerPromise, {
+    thresholdMs: 0,
+    intervalMs: 250,
+    correlationId,
+    signal: requestController.signal,
+    startupFrame: buildOpenAIResponsesInProgressFrame("resp_template"),
+  });
+  const events = (await readAll(response))
+    .split("\n\n")
+    .map((frame) => frame.split("\n").find((line) => line.startsWith("data: ")))
+    .filter((line): line is string => Boolean(line))
+    .map((line) => JSON.parse(line.slice("data: ".length)));
+  const inProgress = events.find((event) => event.type === "response.in_progress");
+  const failed = events.find((event) => event.type === "response.failed");
+
+  assert.ok(inProgress);
+  assert.ok(failed);
+  assert.equal(inProgress.response.id, failed.response.id);
+  assert.match(inProgress.response.id, /^resp_/);
 });
 
 test("a correlationId records the startup frame and keepalive ticks, but not the forwarded body", async () => {
@@ -228,9 +303,9 @@ test("a correlationId records the startup frame and keepalive ticks, but not the
   const result = await withEarlyStreamKeepalive(slow, {
     thresholdMs: 25,
     intervalMs: 250,
-    startupFrame: OPENAI_RESPONSES_IN_PROGRESS_FRAME,
+    startupFrame: buildOpenAIResponsesInProgressFrame("resp_template"),
     applicationKeepalive: {
-      frame: OPENAI_RESPONSES_IN_PROGRESS_FRAME,
+      frame: buildOpenAIResponsesInProgressFrame("resp_template"),
       intervalMs: 500,
     },
     correlationId,
@@ -238,11 +313,22 @@ test("a correlationId records the startup frame and keepalive ticks, but not the
   await readAll(result);
 
   const recorded = takeEarlyKeepaliveBytes(correlationId).join("");
-  assert.match(
-    recorded,
-    /data: {"type":"response\.in_progress"}/,
-    "startup frame must be recorded"
-  );
+  const recordedFrames = recorded
+    .split("\n")
+    .filter((line) => line.startsWith("data: "))
+    .map(
+      (line) =>
+        JSON.parse(line.slice("data: ".length)) as {
+          type?: string;
+          response?: { id?: string; status?: string };
+        }
+    );
+  const inProgressFrames = recordedFrames.filter((frame) => frame.type === "response.in_progress");
+  assert.ok(inProgressFrames.length > 0, "startup frame must be recorded");
+  const startupId = inProgressFrames[0].response?.id;
+  assert.match(startupId ?? "", /^resp_[a-f0-9]{32}$/);
+  assert.equal(inProgressFrames[0].response?.status, "in_progress");
+  assert.ok(inProgressFrames.every((frame) => frame.response?.id === startupId));
   assert.match(recorded, /: keepalive/, "transport heartbeat must be recorded");
   assert.doesNotMatch(
     recorded,
@@ -260,8 +346,8 @@ test("omitting correlationId leaves the buffer untouched (today's behavior, unch
   const result = await withEarlyStreamKeepalive(slow, {
     thresholdMs: 25,
     intervalMs: 20,
-    keepaliveFrame: OPENAI_RESPONSES_IN_PROGRESS_FRAME,
-    startupFrame: OPENAI_RESPONSES_IN_PROGRESS_FRAME,
+    keepaliveFrame: buildOpenAIResponsesInProgressFrame("resp_template"),
+    startupFrame: buildOpenAIResponsesInProgressFrame("resp_template"),
   });
   await readAll(result);
 

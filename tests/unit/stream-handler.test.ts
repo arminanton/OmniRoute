@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildStreamErrorChunks,
   createDisconnectAwareStream,
   createNoopAbortWritable,
   createStreamController,
@@ -17,6 +18,23 @@ import {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const PENDING_REQUEST_CLEARED_MARKER = "__omniroutePendingRequestCleared";
+
+test("Responses stream failures carry unique synthetic response IDs", () => {
+  const first = JSON.parse(
+    decoder
+      .decode(buildStreamErrorChunks("provider failed", 502, FORMATS.OPENAI_RESPONSES)[0])
+      .split("data: ")[1]
+      .split("\n")[0]
+  );
+  const second = JSON.parse(
+    decoder
+      .decode(buildStreamErrorChunks("provider failed", 502, FORMATS.OPENAI_RESPONSES)[0])
+      .split("data: ")[1]
+      .split("\n")[0]
+  );
+  assert.match(first.response.id, /^resp_/);
+  assert.notEqual(first.response.id, second.response.id);
+});
 
 async function readStreamText(stream) {
   const reader = stream.getReader();

@@ -4,6 +4,11 @@ import { FORMATS } from "../translator/formats.ts";
 import { buildErrorBody } from "./error.ts";
 import { PENDING_REQUEST_CLEARED_MARKER } from "./stream.ts";
 import { createCompletedResponsesToolHandoffWatcher } from "./responsesToolHandoff.ts";
+import {
+  associateSyntheticResponsesIdWithSignal,
+  createSyntheticResponsesId,
+  getOrCreateStreamSyntheticResponsesId,
+} from "./sseHeartbeat.ts";
 import { createStreamContentWatcher, type StreamContentWatcher } from "./streamReadiness.ts";
 
 // Stream handler with disconnect detection - shared for all providers
@@ -36,6 +41,7 @@ type StreamControllerOptions = {
   provider?: string;
   model?: string;
   connectionId?: string | null;
+  correlationId?: string | null;
   clientResponseFormat?: string | null;
   clientAbortSignal?: AbortSignal | null;
   allowCompletedToolHandoffGrace?: boolean;
@@ -244,12 +250,19 @@ export function createStreamController({
   provider,
   model,
   connectionId,
+  correlationId,
   clientResponseFormat,
   clientAbortSignal,
   allowCompletedToolHandoffGrace = false,
   clientDisconnectGracePeriodMs = 0,
 }: StreamControllerOptions = {}) {
   const abortController = new AbortController();
+  const syntheticResponsesId = isResponsesClientFormat(clientResponseFormat)
+    ? getOrCreateStreamSyntheticResponsesId(correlationId, clientAbortSignal)
+    : undefined;
+  if (syntheticResponsesId) {
+    associateSyntheticResponsesIdWithSignal(abortController.signal, syntheticResponsesId);
+  }
   const startTime = Date.now();
   let disconnected = false;
   let clientTerminalSeen = false;
@@ -308,6 +321,7 @@ export function createStreamController({
 
   const controller = {
     signal: abortController.signal,
+    syntheticResponsesId,
     startTime,
 
     isConnected: () => !disconnected,
@@ -454,7 +468,8 @@ export function createStreamController({
 export function buildStreamErrorChunks(
   errorMsg: string,
   statusCode: number,
-  clientResponseFormat?: string | null
+  clientResponseFormat?: string | null,
+  syntheticResponsesId = createSyntheticResponsesId()
 ) {
   const statusMapping = getStreamErrorStatusMapping(statusCode);
   const publicErrorMessage = getPublicErrorMessage(errorMsg, statusCode);
@@ -463,7 +478,7 @@ export function buildStreamErrorChunks(
     const errorEvent = {
       type: "response.failed",
       response: {
-        id: null,
+        id: syntheticResponsesId,
         status: "failed",
         error: {
           message: publicErrorMessage,
@@ -638,8 +653,12 @@ function resolveSilentCloseOutcome(input: {
 export function createDisconnectAwareStream(
   transformStream,
   streamController,
-  options: { highWaterMark?: number } = {}
+  options: { highWaterMark?: number; syntheticResponsesId?: string } = {}
 ) {
+  const syntheticResponsesId =
+    options.syntheticResponsesId ??
+    streamController.syntheticResponsesId ??
+    getOrCreateStreamSyntheticResponsesId(null, streamController.signal);
   const reader = transformStream.readable.getReader();
   const writer = transformStream.writable.getWriter();
   const terminalDecoder = new TextDecoder();
@@ -751,7 +770,8 @@ export function createDisconnectAwareStream(
                 for (const chunk of buildStreamErrorChunks(
                   silentClose.reason,
                   502,
-                  streamController.clientResponseFormat
+                  streamController.clientResponseFormat,
+                  syntheticResponsesId
                 )) {
                   controller.enqueue(chunk);
                 }
@@ -801,7 +821,8 @@ export function createDisconnectAwareStream(
             for (const chunk of buildStreamErrorChunks(
               errorMsg,
               statusCode,
-              streamController.clientResponseFormat
+              streamController.clientResponseFormat,
+              syntheticResponsesId
             )) {
               controller.enqueue(chunk);
             }

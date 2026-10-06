@@ -1,0 +1,1 @@
+- **fix(responses):** synthetic in-progress/failure events now share a valid response ID per stream; upstream terminal IDs remain unchanged.

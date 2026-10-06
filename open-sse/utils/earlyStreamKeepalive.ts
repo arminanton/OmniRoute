@@ -32,6 +32,7 @@
  */
 
 import { recordEarlyKeepaliveBytes } from "./earlyKeepaliveByteBuffer.ts";
+import { getOrCreateStreamSyntheticResponsesId } from "./sseHeartbeat.ts";
 
 const ENCODER = new TextEncoder();
 const KEEPALIVE_FRAME = ENCODER.encode(": keepalive\n\n");
@@ -89,6 +90,24 @@ export const OPENAI_RESPONSES_ERROR_FRAME = ENCODER.encode(
   })}\n\n`
 );
 
+function withSyntheticResponsesId(frame: Uint8Array, responsesId: string): Uint8Array {
+  let changed = false;
+  const text = new TextDecoder().decode(frame).replace(/^data:\s*(.+)$/gm, (line, json) => {
+    try {
+      const payload = JSON.parse(json);
+      if (payload.response && typeof payload.response === "object" && "id" in payload.response) {
+        payload.response.id = responsesId;
+        changed = true;
+        return `data: ${JSON.stringify(payload)}`;
+      }
+    } catch {
+      // Non-JSON synthetic frames pass through unchanged.
+    }
+    return line;
+  });
+  return changed ? ENCODER.encode(text) : frame;
+}
+
 export type EarlyStreamKeepaliveOptions = {
   /** Wait this long for the handler before committing to a keepalive stream. */
   thresholdMs?: number;
@@ -96,6 +115,8 @@ export type EarlyStreamKeepaliveOptions = {
   intervalMs?: number;
   /** Client request signal — propagated so a client disconnect cancels the upstream read. */
   signal?: AbortSignal | null;
+  /** Per-stream ID for synthetic Responses events; generated when omitted. */
+  syntheticResponsesId?: string;
   /**
    * Frame emitted on each keepalive tick. Defaults to an SSE comment
    * (`: keepalive`). Anthropic-format routes (/v1/messages) must pass
@@ -157,17 +178,31 @@ export async function withEarlyStreamKeepalive(
   const thresholdMs = Math.max(0, options.thresholdMs ?? 2_000);
   const intervalMs = Math.max(250, options.intervalMs ?? 2_500);
   const signal = options.signal ?? null;
-  const keepaliveFrame = options.keepaliveFrame ?? KEEPALIVE_FRAME;
-  const startupFrame = options.startupFrame ?? keepaliveFrame;
+  const syntheticResponsesId = getOrCreateStreamSyntheticResponsesId(
+    options.correlationId,
+    signal,
+    options.syntheticResponsesId
+  );
+  const keepaliveFrame = withSyntheticResponsesId(
+    options.keepaliveFrame ?? KEEPALIVE_FRAME,
+    syntheticResponsesId
+  );
+  const startupFrame = withSyntheticResponsesId(
+    options.startupFrame ?? keepaliveFrame,
+    syntheticResponsesId
+  );
   const applicationKeepalive =
     options.applicationKeepalive && options.applicationKeepalive.intervalMs > 0
       ? {
-          frame: options.applicationKeepalive.frame,
+          frame: withSyntheticResponsesId(options.applicationKeepalive.frame, syntheticResponsesId),
           intervalMs: Math.max(intervalMs, options.applicationKeepalive.intervalMs),
         }
       : null;
   const extraHeaders = options.extraHeaders ?? {};
-  const errorFrame = options.errorFrame ?? ERROR_FRAME;
+  const errorFrame = withSyntheticResponsesId(
+    options.errorFrame ?? ERROR_FRAME,
+    syntheticResponsesId
+  );
   // Single source of truth for whether THIS route's error framing uses a named SSE
   // `event: error` line (Anthropic) or a plain `data:` line (OpenAI Chat Completions /
   // Responses) — derived from errorFrame itself so the dynamic real-upstream-body case

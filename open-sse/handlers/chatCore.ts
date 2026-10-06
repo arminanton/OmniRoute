@@ -3088,6 +3088,7 @@ export async function handleChatCore({
     provider,
     model,
     connectionId,
+    correlationId,
     clientResponseFormat,
     clientAbortSignal: clientRawRequest?.signal,
     allowCompletedToolHandoffGrace: isCodexResponsesEcho,

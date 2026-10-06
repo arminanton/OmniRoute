@@ -6,14 +6,62 @@
  * - [2026-07-28] [Cursor Grok 4.5] - Brand-neutral default OpenAI keepalive id/model
  */
 const HEARTBEAT_ENCODER = new TextEncoder();
-const OPENAI_RESPONSES_IN_PROGRESS_PAYLOAD = 'data: {"type":"response.in_progress"}\n\n';
+let syntheticResponsesIdCounter = 0;
+
+export function createSyntheticResponsesId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return `resp_${uuid.replace(/-/g, "")}`;
+  syntheticResponsesIdCounter += 1;
+  return `resp_${Date.now().toString(36)}_${syntheticResponsesIdCounter.toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+const syntheticResponsesIdsByCorrelation = new Map<string, { id: string; createdAt: number }>();
+const syntheticResponsesIdsBySignal = new WeakMap<AbortSignal, string>();
+const SYNTHETIC_RESPONSES_ID_TTL_MS = 10 * 60 * 1000;
+
+export function getOrCreateStreamSyntheticResponsesId(
+  correlationId?: string | null,
+  signal?: AbortSignal | null,
+  preferredId?: string
+): string {
+  const now = Date.now();
+  for (const [key, entry] of syntheticResponsesIdsByCorrelation) {
+    if (entry.createdAt < now - SYNTHETIC_RESPONSES_ID_TTL_MS) {
+      syntheticResponsesIdsByCorrelation.delete(key);
+    }
+  }
+  const id =
+    preferredId ??
+    (signal ? syntheticResponsesIdsBySignal.get(signal) : undefined) ??
+    (!signal && correlationId
+      ? syntheticResponsesIdsByCorrelation.get(correlationId)?.id
+      : undefined) ??
+    createSyntheticResponsesId();
+  if (signal) syntheticResponsesIdsBySignal.set(signal, id);
+  if (correlationId) {
+    syntheticResponsesIdsByCorrelation.set(correlationId, { id, createdAt: now });
+  }
+  return id;
+}
+
+export function associateSyntheticResponsesIdWithSignal(signal: AbortSignal, id: string): void {
+  syntheticResponsesIdsBySignal.set(signal, id);
+}
+
+export function getSyntheticResponsesIdForSignal(signal?: AbortSignal | null): string | undefined {
+  return signal ? syntheticResponsesIdsBySignal.get(signal) : undefined;
+}
+
+export function buildOpenAIResponsesInProgressFrame(responsesId: string): Uint8Array {
+  return HEARTBEAT_ENCODER.encode(
+    `data: ${JSON.stringify({ type: "response.in_progress", response: { id: responsesId, status: "in_progress" } })}\n\n`
+  );
+}
+
+export const OPENAI_RESPONSES_IN_PROGRESS_FRAME =
+  buildOpenAIResponsesInProgressFrame("resp_template");
 
 export const DEFAULT_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
-
-/** Shared Responses API heartbeat frame for early and mid-stream keepalives. */
-export const OPENAI_RESPONSES_IN_PROGRESS_FRAME = HEARTBEAT_ENCODER.encode(
-  OPENAI_RESPONSES_IN_PROGRESS_PAYLOAD
-);
 
 export const HEARTBEAT_SHAPES = {
   COMMENT: "comment",
@@ -43,13 +91,13 @@ export function shapeForClientFormat(
 
 function buildHeartbeatPayload(
   shape: HeartbeatShape,
-  opts: { chunkId?: string; chunkModel?: string } = {}
+  opts: { chunkId?: string; chunkModel?: string; responsesId?: string } = {}
 ): string {
   switch (shape) {
     case HEARTBEAT_SHAPES.ANTHROPIC_PING:
       return 'event: ping\ndata: {"type":"ping"}\n\n';
     case HEARTBEAT_SHAPES.OPENAI_RESPONSES_IN_PROGRESS:
-      return OPENAI_RESPONSES_IN_PROGRESS_PAYLOAD;
+      return `data: ${JSON.stringify({ type: "response.in_progress", response: { id: opts.responsesId, status: "in_progress" } })}\n\n`;
     case HEARTBEAT_SHAPES.OPENAI_CHUNK: {
       const payload = {
         id: opts.chunkId ?? "chatcmpl-keepalive",
@@ -72,6 +120,7 @@ type SseHeartbeatTransformOptions = {
   shape?: HeartbeatShape;
   chunkId?: string;
   chunkModel?: string;
+  responsesId?: string;
 };
 
 /**
@@ -96,6 +145,7 @@ export function createSseHeartbeatTransform({
   shape = DEFAULT_SSE_HEARTBEAT_SHAPE,
   chunkId,
   chunkModel,
+  responsesId,
 }: SseHeartbeatTransformOptions = {}): TransformStream<Uint8Array, Uint8Array> {
   if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
     return new TransformStream<Uint8Array, Uint8Array>();
@@ -108,6 +158,11 @@ export function createSseHeartbeatTransform({
     return new TransformStream<Uint8Array, Uint8Array>();
   }
 
+  const streamResponsesId =
+    responsesId ??
+    (shape === HEARTBEAT_SHAPES.OPENAI_RESPONSES_IN_PROGRESS
+      ? (getSyntheticResponsesIdForSignal(signal) ?? createSyntheticResponsesId())
+      : undefined);
   let intervalId: ReturnType<typeof setInterval> | undefined;
 
   const stop = () => {
@@ -126,7 +181,9 @@ export function createSseHeartbeatTransform({
 
         try {
           controller.enqueue(
-            HEARTBEAT_ENCODER.encode(buildHeartbeatPayload(shape, { chunkId, chunkModel }))
+            HEARTBEAT_ENCODER.encode(
+              buildHeartbeatPayload(shape, { chunkId, chunkModel, responsesId: streamResponsesId })
+            )
           );
         } catch {
           stop();
