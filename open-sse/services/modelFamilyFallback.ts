@@ -1,3 +1,4 @@
+import { classifyUpstreamPolicyRejection } from "./upstreamPolicyRejection.ts";
 /**
  * Model Family Fallback — Phase 2 Feature (T5)
  *
@@ -130,6 +131,7 @@ export function isModelUnavailableError(
   errorMessage: string,
   provider?: string | null
 ): boolean {
+  if (classifyUpstreamPolicyRejection(errorMessage)) return false;
   if (status === 404) return !isResourceNotFoundResponse(errorMessage);
   if (status !== 400 && status !== 403) return false;
 

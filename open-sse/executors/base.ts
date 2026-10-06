@@ -11,6 +11,7 @@ export {
   mergeAbortSignals,
   stripVersionedToolModelPrefix,
 } from "./base/requestHelpers.ts";
+import { classifyUpstreamPolicyRejection } from "../services/upstreamPolicyRejection.ts";
 import {
   backoffGenerationRetry,
   isLogicalRetryBudgetError,
@@ -658,7 +659,12 @@ export class BaseExecutor {
 
       return { input_tokens: inputTokens, provider: this.provider, source: "provider" };
     } catch (error) {
-      if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+      if (
+        isRuntimePolicyError(error) ||
+        isLogicalRetryBudgetError(error) ||
+        classifyUpstreamPolicyRejection(error)
+      )
+        throw error;
       log?.debug?.(
         "COUNT_TOKENS",
         `${this.provider}/${model} real count unavailable: ${error instanceof Error ? error.message : String(error)}`
@@ -771,7 +777,12 @@ export class BaseExecutor {
           }
         }
       } catch (error) {
-        if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+        if (
+          isRuntimePolicyError(error) ||
+          isLogicalRetryBudgetError(error) ||
+          classifyUpstreamPolicyRejection(error)
+        )
+          throw error;
         // tokenRefresh.ts:1352 documents that onPersist throws are re-thrown so
         // the caller is aware of the persistence failure. Honor that contract:
         // log at error level (not warn), with sanitized message — and let the
@@ -1454,7 +1465,12 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+              if (
+                isRuntimePolicyError(error) ||
+                isLogicalRetryBudgetError(error) ||
+                classifyUpstreamPolicyRejection(error)
+              )
+                throw error;
               return "";
             });
           if (/context[_-]management|context editing/i.test(errText)) {
@@ -1490,7 +1506,12 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+              if (
+                isRuntimePolicyError(error) ||
+                isLogicalRetryBudgetError(error) ||
+                classifyUpstreamPolicyRejection(error)
+              )
+                throw error;
               return "";
             });
           const upstreamMax = parseThinkingBudgetMax(errText);
@@ -1534,7 +1555,12 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+              if (
+                isRuntimePolicyError(error) ||
+                isLogicalRetryBudgetError(error) ||
+                classifyUpstreamPolicyRejection(error)
+              )
+                throw error;
               return "";
             });
           const acceptedValues = parseReasoningEffortEnum(errText);
@@ -1580,7 +1606,12 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+              if (
+                isRuntimePolicyError(error) ||
+                isLogicalRetryBudgetError(error) ||
+                classifyUpstreamPolicyRejection(error)
+              )
+                throw error;
               return "";
             });
           const offending = findOffendingField(errText);
@@ -1650,7 +1681,12 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+              if (
+                isRuntimePolicyError(error) ||
+                isLogicalRetryBudgetError(error) ||
+                classifyUpstreamPolicyRejection(error)
+              )
+                throw error;
               return "";
             });
           if (/content[_-]blocked/i.test(wafErrText)) {
@@ -1711,7 +1747,12 @@ export class BaseExecutor {
 
         return { response, url, headers: finalHeaders, transformedBody: serializedBody };
       } catch (error) {
-        if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
+        if (
+          isRuntimePolicyError(error) ||
+          isLogicalRetryBudgetError(error) ||
+          classifyUpstreamPolicyRejection(error)
+        )
+          throw error;
         // Distinguish timeout errors from other abort errors
         const err = error instanceof Error ? error : new Error(String(error));
         if (err.name === "TimeoutError") {

@@ -1,3 +1,4 @@
+import { classifyUpstreamPolicyRejection } from "@omniroute/open-sse/services/upstreamPolicyRejection.ts";
 import { isProxyFetchExhaustedFailure } from "./networkFailure";
 
 /**
@@ -51,6 +52,8 @@ export function isRetryablePreOutputTransportError(
   if (isProxyFetchExhaustedFailure(errorCode)) return false;
 
   const text = String(errorText || "");
+  if (classifyUpstreamPolicyRejection({ message: text, code: errorCode, type: errorType }))
+    return false;
   const numericStatus = Number(status);
   if (numericStatus === 429 || numericStatus === 401 || numericStatus === 400) return false;
   if (/quota (threshold|exhausted)|credits exhausted/i.test(text)) return false;

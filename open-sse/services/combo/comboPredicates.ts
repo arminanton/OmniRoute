@@ -1,3 +1,4 @@
+import { UPSTREAM_POLICY_REJECTION } from "../upstreamPolicyRejection.ts";
 /**
  * Pure combo predicates + tuning constants extracted from combo.ts.
  *
@@ -257,7 +258,9 @@ export function isRequestScopedUpstreamFailure(error?: {
   return (
     REQUEST_SCOPED_UPSTREAM_ERROR_CODES[code] === true ||
     type === "context_length_exceeded" ||
-    type === "local_queue_capacity"
+    type === "local_queue_capacity" ||
+    type === UPSTREAM_POLICY_REJECTION ||
+    code === UPSTREAM_POLICY_REJECTION
   );
 }
 
@@ -422,7 +425,9 @@ export function isLocalQueueCapacityErrorBody(errorBody: unknown): boolean {
     code === "RATE_LIMIT_QUEUE_TIMEOUT" ||
     code === "RATE_LIMIT_QUEUE_FULL" ||
     code === "RATE_LIMIT_QUEUE_WEDGED" ||
-    type === "local_queue_capacity"
+    type === "local_queue_capacity" ||
+    type === UPSTREAM_POLICY_REJECTION ||
+    code === UPSTREAM_POLICY_REJECTION
   );
 }
 

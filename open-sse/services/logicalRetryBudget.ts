@@ -22,6 +22,7 @@ export const isLogicalRetryBudgetError = (error: unknown): error is LogicalRetry
 export class LogicalRetryBudget {
   private attempts = 0;
   private replayForbidden = false;
+  private terminalDecision: Error | null = null;
   constructor(
     readonly maxAttempts: number,
     readonly deadline: number,
@@ -33,7 +34,11 @@ export class LogicalRetryBudget {
   markOutputOrToolDelivered(): void {
     this.replayForbidden = true;
   }
+  denyFurtherAttempts(error: Error): void {
+    this.terminalDecision ??= error;
+  }
   consumeAttempt(): void {
+    if (this.terminalDecision) throw this.terminalDecision;
     if (this.replayForbidden || this.attempts >= this.maxAttempts || this.now() >= this.deadline)
       throw new LogicalRetryBudgetError("Logical retry budget exhausted");
     this.attempts++;
@@ -51,6 +56,7 @@ export class LogicalRetryBudget {
     signal?: AbortSignal | null,
     random = Math.random
   ): Promise<void> {
+    if (this.terminalDecision) throw this.terminalDecision;
     if (signal?.aborted) throw signal.reason ?? new Error("Request aborted");
     const draw = random();
     const jitter = Number.isFinite(draw) ? Math.min(1, Math.max(0, draw)) : 0;

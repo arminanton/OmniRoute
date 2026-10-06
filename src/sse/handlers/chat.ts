@@ -1,3 +1,4 @@
+import { classifyUpstreamPolicyRejection } from "../../../open-sse/services/upstreamPolicyRejection.ts";
 import { withLogicalRetryBudget } from "../../../open-sse/services/logicalRetryBudget.ts";
 import { randomUUID } from "crypto";
 import type { ReasoningCacheContext } from "@omniroute/open-sse/services/reasoningCacheContext.ts";
@@ -2246,6 +2247,15 @@ async function handleSingleModelChatImplementation(
 
         return withSelectedConnectionHeader(result.response, credentials?.connectionId);
       }
+
+      if (
+        classifyUpstreamPolicyRejection({
+          message: result.error,
+          code: result.errorCode,
+          type: result.errorType,
+        })
+      )
+        return withSelectedConnectionHeader(result.response, credentials?.connectionId);
 
       if (result.errorType === "logical_retry_budget")
         return withSelectedConnectionHeader(result.response, credentials?.connectionId);

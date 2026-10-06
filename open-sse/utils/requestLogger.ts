@@ -1,3 +1,4 @@
+import { classifyUpstreamPolicyRejection } from "../services/upstreamPolicyRejection.ts";
 import { getPendingById } from "@/lib/usage/usageHistory";
 import { getChatLogMaxDepth, getChatLogArrayTailItems } from "@/lib/logEnv";
 import { sanitizeErrorMessage } from "./error.ts";
@@ -474,7 +475,12 @@ export async function createRequestLogger(
     appendConvertedChunk: chunkMethods.appendConvertedChunk,
 
     logError(error, requestBody = null) {
+      const nativeError =
+        error && typeof error === "object" && "nativeError" in error
+          ? (error as { nativeError: unknown }).nativeError
+          : classifyUpstreamPolicyRejection(error);
       payloads.error = {
+        ...(nativeError ? { nativeError: cloneBoundedForLog(nativeError) } : {}),
         timestamp: new Date().toISOString(),
         error: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
         requestBody: cloneBoundedForLog(requestBody),

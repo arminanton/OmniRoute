@@ -1,3 +1,4 @@
+import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/errorSanitization.ts";
 import fs from "node:fs";
 import path from "node:path";
 import type { RequestPipelinePayloads } from "@omniroute/open-sse/utils/requestLogger.ts";
@@ -144,6 +145,31 @@ function truncateArtifactForStorage(artifact: CallLogArtifact): CallLogArtifact 
   };
 }
 
+function projectNativeErrorEnvelope(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>,
+    result: Record<string, unknown> = {};
+  for (const key of [
+    "message",
+    "code",
+    "type",
+    "requestId",
+    "request_id",
+    "responseId",
+    "wireStatus",
+  ]) {
+    const field = source[key];
+    if (typeof field === "string")
+      result[key] = truncateUtf8(
+        sanitizeErrorMessage(field),
+        key === "message" ? MAX_PRESERVED_ERROR_BYTES : 256
+      );
+    else if (key === "wireStatus" && typeof field === "number" && Number.isInteger(field))
+      result[key] = field;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
 /** Preserve bounded diagnostics; request bodies do not belong in a size-limit error fallback. */
 function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayloads {
   const original = artifact.pipeline?.error ?? {};
@@ -161,20 +187,43 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
     "errorType",
     "retryAfterMs",
     "stage",
+    "wireStatus",
+    "requestId",
   ]) {
     if (original[key] != null) error[key] = preserveErrorForSizeLimit(original[key]);
   }
+  const nativeDiagnostic = projectNativeErrorEnvelope(original.nativeError);
+  if (nativeDiagnostic) error.nativeError = nativeDiagnostic;
   const provider = artifact.pipeline?.providerResponse;
   const body = provider?.body;
   let providerResponse: Record<string, unknown> | undefined;
-  if (provider && Number(provider.status) >= 400) {
+  const nativeErrorSource = original.nativeError;
+  const providerBody =
+    body && typeof body === "object" && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : {};
+  const responseObject =
+    providerBody.response && typeof providerBody.response === "object"
+      ? (providerBody.response as Record<string, unknown>)
+      : {};
+  const semanticError =
+    providerBody.nativeError ?? providerBody.error ?? responseObject.error ?? nativeErrorSource;
+  if (provider && (Number(provider.status) >= 400 || semanticError)) {
     const parsed =
       body && typeof body === "object" && !Array.isArray(body)
         ? (body as Record<string, unknown>)
         : {};
     const details: Record<string, unknown> = {};
+    const semanticDiagnostic = projectNativeErrorEnvelope(semanticError);
+    if (semanticDiagnostic) details.nativeError = semanticDiagnostic;
     for (const key of ["error", "detail", "message", "code", "type"]) {
-      if (parsed[key] != null) details[key] = preserveErrorForSizeLimit(parsed[key]);
+      if (parsed[key] != null)
+        details[key] =
+          key === "error" && semanticDiagnostic
+            ? semanticDiagnostic
+            : typeof parsed[key] === "string"
+              ? truncateUtf8(sanitizeErrorMessage(String(parsed[key])), MAX_PRESERVED_ERROR_BYTES)
+              : preserveErrorForSizeLimit(parsed[key]);
     }
     const headerSource =
       provider.headers && typeof provider.headers === "object"
@@ -198,6 +247,7 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
     }
     providerResponse = {
       status: provider.status,
+      wireStatus: provider.status,
       statusText: provider.statusText,
       ...(Object.keys(headers).length ? { headers } : {}),
       ...(Object.keys(details).length ? { body: details } : {}),

@@ -1,3 +1,4 @@
+import { classifyUpstreamPolicyRejection } from "../upstreamPolicyRejection.ts";
 /** Round-robin combo dispatcher. Lift-as-is from combo.ts. @internal */
 import {
   checkFallbackError,
@@ -869,6 +870,12 @@ export async function handleRoundRobinCombo({
               errorText = String(errorText);
             }
           }
+
+          if (
+            classifyUpstreamPolicyRejection(errorBody) ||
+            classifyUpstreamPolicyRejection(errorText)
+          )
+            return result;
 
           const isStreamReadinessFailure =
             (result.status === 502 || result.status === 504) &&
