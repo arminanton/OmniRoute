@@ -221,6 +221,11 @@ const EXTRA_MODULE_ENTRIES = [
     dest: ["systemd-notify.mjs"],
   },
   {
+    label: "Canary body/socket lifecycle tracking",
+    src: ["scripts", "dev", "canary-lifecycle.cjs"],
+    dest: ["canary-lifecycle.cjs"],
+  },
+  {
     label: "HTTP method guard (server-ws.mjs dependency)",
     src: ["scripts", "dev", "http-method-guard.cjs"],
     dest: ["http-method-guard.cjs"],

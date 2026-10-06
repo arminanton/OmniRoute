@@ -127,6 +127,8 @@ export const LOCAL_ONLY_MANAGE_SCOPE_BYPASS_PREFIXES: ReadonlyArray<string> = ["
 
 export const ALWAYS_PROTECTED_API_PATHS: ReadonlyArray<string> = [
   "/api/shutdown",
+  "/api/canary-readiness",
+  "/api/canary-drain",
   "/api/providers/health-autopilot/actions",
   "/api/settings/database",
   // Full-database export/import: a credential dump and an irreversible replace.

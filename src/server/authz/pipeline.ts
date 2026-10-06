@@ -1,3 +1,4 @@
+import { isCanaryControlPath } from "@/lib/canaryLifecycle";
 import { jwtVerify, SignJWT } from "jose";
 import { NextResponse, type NextRequest } from "next/server";
 import { getCachedSettings } from "../../lib/db/readCache";
@@ -286,7 +287,11 @@ export async function runAuthzPipeline(
     classification.routeClass === "CLIENT_API" ||
     (classification.routeClass === "PUBLIC" && classification.reason === "public_readonly_prefix");
 
-  if (guardedPathname.startsWith("/api/") && isDraining()) {
+  if (
+    guardedPathname.startsWith("/api/") &&
+    isDraining() &&
+    !isCanaryControlPath(guardedPathname)
+  ) {
     const response = drainingResponse(requestId);
     stampRouteResponse(response, requestId, classification.routeClass);
     applyCorsHeaders(response, request, corsRelaxOrigin);

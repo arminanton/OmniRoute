@@ -1,3 +1,4 @@
+import { isDeploymentDraining } from "./canaryLifecycle";
 /**
  * Graceful Shutdown — E-2 Critical Fix
  *
@@ -42,7 +43,7 @@ function getShutdownState() {
  * Route handlers can use this to reject new requests.
  */
 export function isDraining(): boolean {
-  return getShutdownState().shuttingDown;
+  return getShutdownState().shuttingDown || isDeploymentDraining();
 }
 
 /**

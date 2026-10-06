@@ -1,3 +1,4 @@
+import canaryLifecycle from "./canary-lifecycle.cjs";
 import http from "node:http";
 import { handleBrowserLoginUpgrade } from "./browser-login-ws.mjs";
 import net from "node:net";
@@ -105,6 +106,12 @@ function proxyLiveWs(req, socket, head) {
 
 function wrapUpgradeListener(server, listener) {
   return async function responsesWsAwareUpgrade(req, socket, head) {
+    if (canaryLifecycle.getCanaryLifecycleState().draining) {
+      socket.end(
+        "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 2\r\nContent-Length: 0\r\n\r\n"
+      );
+      return;
+    }
     try {
       // If this server IS the LiveWS server (port 20132), the ws library's
       // own upgrade handler should process the request directly — proxying
@@ -172,7 +179,9 @@ http.createServer = function createServerWithResponsesWs(...args) {
     // HEAD request regardless of which inner layer ends up handling it (#6400).
     args[lastFnIdx] = wrapRequestListenerWithHeadResponseGuard(
       wrapRequestListenerWithMethodGuard(
-        wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(args[lastFnIdx]))
+        canaryLifecycle.wrapCanaryRequestListener(
+          wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(args[lastFnIdx]))
+        )
       )
     );
   }
@@ -180,7 +189,9 @@ http.createServer = function createServerWithResponsesWs(...args) {
   // When TLS is configured, return an https.Server (terminating TLS on the same
   // listener); otherwise the original http.Server. The downstream .on/.addListener
   // patches below apply identically to both (https.Server extends http.Server).
-  const server = createServerListener(args, tlsOptions, { createHttp: originalCreateServer });
+  const server = canaryLifecycle.attachCanaryLifecycle(
+    createServerListener(args, tlsOptions, { createHttp: originalCreateServer })
+  );
   // Node's http.Server default keepAliveTimeout (5_000ms) races pooled
   // keep-alive HTTP clients that idle longer than that between requests (e.g.
   // the JVM java.net.http.HttpClient used by JetBrains AI Assistant), which
@@ -207,7 +218,9 @@ http.createServer = function createServerWithResponsesWs(...args) {
         eventName,
         wrapRequestListenerWithHeadResponseGuard(
           wrapRequestListenerWithMethodGuard(
-            wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(listener))
+            canaryLifecycle.wrapCanaryRequestListener(
+              wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(listener))
+            )
           )
         )
       );
@@ -224,7 +237,9 @@ http.createServer = function createServerWithResponsesWs(...args) {
         eventName,
         wrapRequestListenerWithHeadResponseGuard(
           wrapRequestListenerWithMethodGuard(
-            wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(listener))
+            canaryLifecycle.wrapCanaryRequestListener(
+              wrapRequestListenerWithWebdav(wrapRequestListenerWithPeerStamp(listener))
+            )
           )
         )
       );
