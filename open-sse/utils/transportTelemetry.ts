@@ -18,6 +18,7 @@ export class TransportAttempt {
     bytes: 0,
     chunks: 0,
     maxObservedIdleMs: 0,
+    terminalObservedIdleMs: null as number | null,
     status: null as number | null,
     closedMs: null as number | null,
     closure: null as Closure | null,
@@ -110,6 +111,13 @@ export class TransportAttempt {
     if (!this.record.closure) {
       this.record.closure = closure;
       this.record.closedMs = this.elapsed();
+      if (this.lastByte !== null) {
+        this.record.terminalObservedIdleMs = this.record.closedMs - this.lastByte;
+        this.record.maxObservedIdleMs = Math.max(
+          this.record.maxObservedIdleMs,
+          this.record.terminalObservedIdleMs
+        );
+      }
     }
   }
 }

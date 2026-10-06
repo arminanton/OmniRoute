@@ -19,7 +19,9 @@ provider dispatch and waiting for headers. It is not a TCP/TLS connect duration.
 
 All ledger numeric times are monotonic milliseconds relative to logical request entry.
 `maxObservedIdleMs` measures gaps between observed body chunks/frames, not network
-idle-timeout configuration or token latency. `firstEventMs` is an SSE data event
+idle-timeout configuration or token latency. Terminal closure also observes the
+last-byte-to-close gap (`terminalObservedIdleMs`, null if no bytes arrived); this
+includes downstream backpressure and is not pure wire latency. `firstEventMs` is an SSE data event
 boundary or the native WebSocket semantic event callback, not first generated token.
 `bytes` counts observed upstream body bytes (decoded by fetch) or raw WS frame UTF-8
 bytes; `forwardedBytes` counts final downstream response bytes, so these need not
@@ -38,7 +40,9 @@ The safe terminal sink is a structured `TRANSPORT_TELEMETRY` console line; opera
 must retain the existing bounded container/journal log retention policy. It creates
 no additional file. The random ledger ID correlates that line with the bounded
 `transportTelemetry` snapshot captured through the existing requestLogger pipeline
-artifact. Artifact snapshots can precede EOF; the terminal line is the final record.
+artifact. Oversized artifacts preserve the random ledger ID and the last four attempts
+through every size-limit fallback using a strict field projection.
+Artifact snapshots can precede EOF; the terminal line is the final record.
 
 Focused tests cover slow admission/dispatch, fragmented SSE with comments/CRLF,
 unknown phases, EOF/cancel/error/no-prepull, native foreign error-body contracts,

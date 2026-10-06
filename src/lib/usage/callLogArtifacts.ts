@@ -170,6 +170,72 @@ function projectNativeErrorEnvelope(value: unknown): Record<string, unknown> | u
   return Object.keys(result).length ? result : undefined;
 }
 
+/** Strict projection: preserve correlation/timings without retaining arbitrary caller fields. */
+function compactTransportTelemetry(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  if (
+    source.schema !== "omni-transport-telemetry/v1" ||
+    typeof source.id !== "string" ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(source.id)
+  )
+    return undefined;
+  const number = (value: unknown) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= Number.MAX_SAFE_INTEGER
+      ? Math.round(value * 1000) / 1000
+      : null;
+  const closure = (value: unknown) =>
+    typeof value === "string" && ["eof", "cancel", "error", "no_body"].includes(value)
+      ? value
+      : null;
+  const result: Record<string, unknown> = {
+    schema: source.schema,
+    id: source.id,
+    closure: closure(source.closure),
+  };
+  for (const key of [
+    "elapsedMs",
+    "admissionWaitMs",
+    "transportAdmissionWaitMs",
+    "backoffMs",
+    "forwardedBytes",
+    "droppedAttempts",
+  ])
+    result[key] = number(source[key]);
+  const entries = Array.isArray(source.attempts) ? source.attempts : [];
+  result.retainedAttempts = Math.min(entries.length, 4);
+  result.omittedAttempts = Math.max(0, entries.length - 4);
+  result.attempts = entries.slice(-4).map((entry: unknown) => {
+    const item = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+    const projected: Record<string, unknown> = {
+      transport:
+        typeof item.transport === "string" && ["http", "websocket"].includes(item.transport)
+          ? item.transport
+          : null,
+      closure: closure(item.closure),
+    };
+    for (const key of [
+      "invokedMs",
+      "queuedMs",
+      "dispatchedMs",
+      "headersMs",
+      "firstByteMs",
+      "firstEventMs",
+      "status",
+      "closedMs",
+      "bytes",
+      "maxObservedIdleMs",
+      "terminalObservedIdleMs",
+    ])
+      projected[key] = number(item[key]);
+    return projected;
+  });
+  return result;
+}
+
 /** Preserve bounded diagnostics; request bodies do not belong in a size-limit error fallback. */
 function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayloads {
   const original = artifact.pipeline?.error ?? {};
@@ -253,7 +319,12 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
       ...(Object.keys(details).length ? { body: details } : {}),
     };
   }
-  return { error, ...(providerResponse ? { providerResponse } : {}) };
+  const transportTelemetry = compactTransportTelemetry(artifact.pipeline?.transportTelemetry);
+  return {
+    error,
+    ...(providerResponse ? { providerResponse } : {}),
+    ...(transportTelemetry ? { transportTelemetry } : {}),
+  };
 }
 
 function omitOversizedPipeline(artifact: CallLogArtifact): CallLogArtifact {
@@ -292,7 +363,10 @@ function serializeFinalSizeLimitFallback(artifact: CallLogArtifact, maxBytes: nu
 
   // The summary alone exceeded the cap (pathological). Keep the error so the
   // row stays diagnosable, drop everything else including the summary body.
+  const transportTelemetry = compactTransportTelemetry(artifact.pipeline?.transportTelemetry);
+  const telemetryPipeline = transportTelemetry ? { pipeline: { transportTelemetry } } : {};
   const errorOnly = JSON.stringify({
+    ...telemetryPipeline,
     schemaVersion: artifact.schemaVersion,
     _omniroute_truncated: true,
     reason: SIZE_LIMIT_EXCEEDED_REASON,
@@ -306,6 +380,7 @@ function serializeFinalSizeLimitFallback(artifact: CallLogArtifact, maxBytes: nu
   // rides along -- without it this row says only "something was too big",
   // which is the state this change exists to remove.
   return JSON.stringify({
+    ...telemetryPipeline,
     schemaVersion: artifact.schemaVersion,
     _omniroute_truncated: true,
     reason: SIZE_LIMIT_EXCEEDED_REASON,

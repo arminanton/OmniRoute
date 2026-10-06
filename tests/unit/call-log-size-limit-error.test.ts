@@ -131,3 +131,43 @@ test("size-limited pipeline retains compact upstream error diagnostics without t
   assert.equal(pipeline.providerResponse.headers["x-request-id"], "synthetic-upstream-id");
   assert.equal(pipeline.providerResponse.headers.authorization, undefined);
 });
+
+test("oversized pipeline preserves safe transport correlation and last attempts while dropping arbitrary fields", () => {
+  const id = "9f720aae-cfc4-4c34-bcd6-9f7a9a78001c";
+  for (const giantSummary of [false, true]) {
+    const base = artifact();
+    if (giantSummary) (base as unknown as { summary: { model: string } }).summary.model = HUGE_BODY;
+    const stored = roundTrip(
+      artifact({
+        ...base,
+        pipeline: {
+          providerRequest: { body: HUGE_BODY },
+          transportTelemetry: {
+            schema: "omni-transport-telemetry/v1",
+            id,
+            closure: "error",
+            authorization: "private-secret",
+            attempts: Array.from({ length: 24 }, () => ({
+              transport: "http",
+              headersMs: 45,
+              firstByteMs: 50,
+              status: 504,
+              closure: "error",
+              closedMs: 15000,
+              terminalObservedIdleMs: 14950,
+              requestBody: "private-secret",
+            })),
+          },
+        },
+      })
+    );
+    const pipeline = stored.pipeline as {
+      transportTelemetry: { id: string; attempts: { status: number }[]; omittedAttempts: number };
+    };
+    assert.equal(pipeline.transportTelemetry.id, id);
+    assert.equal(pipeline.transportTelemetry.attempts.length, 4);
+    assert.equal(pipeline.transportTelemetry.attempts[0].status, 504);
+    assert.equal(pipeline.transportTelemetry.omittedAttempts, 20);
+    assert.ok(!JSON.stringify(pipeline).includes("private-secret"));
+  }
+});

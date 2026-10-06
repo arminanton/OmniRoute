@@ -322,3 +322,17 @@ test("documented Undici sent callbacks capture bytes and completion timestamp, n
   assert.equal(attempt.record.uploadMs, null);
   assert.ok(!JSON.stringify(f.telemetry.snapshot()).includes("private-upload"));
 });
+
+test("terminal stall is observed at close, while never-received bytes stays unknown", () => {
+  const f = fixture();
+  const a = f.telemetry.attempt("http");
+  a.bytes(10);
+  f.tick(15000);
+  a.close("error");
+  assert.equal(a.record.terminalObservedIdleMs, 15000);
+  assert.equal(a.record.maxObservedIdleMs, 15000);
+  const untouched = f.telemetry.attempt("http");
+  f.tick(2000);
+  untouched.close("cancel");
+  assert.equal(untouched.record.terminalObservedIdleMs, null);
+});
