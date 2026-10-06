@@ -1,0 +1,1 @@
+- **fix(codex):** schedule parallel streams by available transport capacity, separate local queue wait from response-start timeouts, preserve SSE progress/terminal failures, and expose distinct `fast`/`ultrafast` tiers alongside legacy `priority`. No account entitlement or billing assumptions added.

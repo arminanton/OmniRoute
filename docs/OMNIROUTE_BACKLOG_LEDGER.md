@@ -1278,6 +1278,18 @@ Read-only source/evidence audit: `/home/ubuntu/_/omni/audit/committed-change-aud
 | ------------ | ------------------------------------------ | --------------------------------------------------------------------------- |
 | `eed359b42f` | CLI identity and Antigravity fallback pins | Committed; wire values and compatibility not fully verified                 |
 | `62c63ad529` | Gemini-Web files copied from blue          | Committed; three wiring checks passed, full parity/integration not verified |
+| `cbb9cbb091` | Codex transport, SSE and speed tiers       | Cherry-picked b1dffe40bd; focused checks pass; no deployment                |
+
+- **Codex integration validation:** focused Node tests 60/60, dashboard UI tests 2/2; core/Open-SSE typechecks, changed-file ESLint, docs-sync, explicit-any, tracked-artifact gates pass. UI-key coverage meets the 80% floor in 41 locales; this is not a full translation pass. 100 synthetic SSE calls over 32 connections pass; this proves local scheduling only, not upstream account capacity. Dashboard typecheck reports the same 10 provider-detail/model-visibility diagnostics on base `8581c6e82d` and integration; no new diagnostics.
+
+## Codex release follow-ups — pending (not implemented by `cbb9cbb091`)
+
+- Add native session/thread identity isolation before introducing conversation-bound upstream WebSocket pooling.
+- Implement reusable upstream WebSocket sessions for HTTP clients, incremental continuation, coordinated retry budgets, bounded buffers/backpressure, handshake cancellation, and explicit stage telemetry.
+- Verify public API `stream_id` multiplexing on the ChatGPT-backed endpoint; currently unverified. Do not enable based on assumption.
+- Verify tier eligibility per upstream account/model; do not infer entitlement from local catalog membership.
+- Establish dedicated GPT-6/Ultrafast pricing and billing multipliers. Current estimates use legacy values and remain unverified; do not invent multipliers.
+- Keep the app-server path disabled; optional investigation only.
 
 ## Outstanding operational investigations
 
