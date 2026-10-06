@@ -48,4 +48,9 @@ def command(policy, generation, boundary_receipt):
     # Add generation identity; never arbitrary caller env/mount/network/device options.
     args.insert(args.index(generation["image"]), "--label=io.omni.generation=" + generation["generation"])
     args.insert(args.index(generation["image"]), "--env=OMNIROUTE_APP_GENERATION=" + generation["generation"])
+    # Exact coordinated traffic-generation contract; no caller env override.
+    # Old/candidate readiness still verifies both actual modules and maintenance owner.
+    for value in ("OMNI_SHARED_ADMISSION=true", "OMNI_COORDINATION_DB=/app/data/coordination.sqlite",
+                  "OMNI_COORDINATION_PROCESS_ROLE=generation"):
+        args.insert(args.index(generation["image"]), "--env=" + value)
     return args
