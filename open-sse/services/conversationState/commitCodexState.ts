@@ -10,6 +10,7 @@ export function commitCodexStateDelivery(
     connectionId?: unknown;
     accessToken?: unknown;
     apiKey?: unknown;
+    providerSpecificData?: Record<string, unknown> | null;
   },
   principal: unknown,
   conversation: unknown,
@@ -24,7 +25,17 @@ export function commitCodexStateDelivery(
       ([name, value]) => name.toLowerCase() === "authorization" && typeof value === "string"
     )?.[1];
     if (typeof auth !== "string" || !/^Bearer\s+\S/.test(auth)) return false;
-    effective = { ...credentials, accessToken: auth.replace(/^Bearer\s+/, "") };
+    const workspace = Object.entries(outboundHeaders).find(
+      ([name, value]) => name.toLowerCase() === "chatgpt-account-id" && typeof value === "string"
+    )?.[1];
+    effective = {
+      ...credentials,
+      accessToken: auth.replace(/^Bearer\s+/, ""),
+      providerSpecificData: {
+        ...credentials.providerSpecificData,
+        ...(typeof workspace === "string" ? { workspaceId: workspace } : {}),
+      },
+    };
   }
   const scope = createConversationScope("codex", effective, principal, conversation, model);
   return !!token && !!scope && rememberCodexStateToken(scope, token);

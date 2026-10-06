@@ -17,6 +17,10 @@ export function createConversationScope(
     connectionId?: unknown;
     accessToken?: unknown;
     apiKey?: unknown;
+    providerSpecificData?: unknown;
+    projectId?: unknown;
+    workspaceId?: unknown;
+    accountId?: unknown;
   },
   principal: unknown,
   conversation: unknown,
@@ -28,13 +32,25 @@ export function createConversationScope(
     modelId = text(model);
   const credential = text(credentials.accessToken) ?? text(credentials.apiKey);
   if (!actor || !thread || !account || !modelId || !credential) return null;
+  const data =
+    credentials.providerSpecificData && typeof credentials.providerSpecificData === "object"
+      ? (credentials.providerSpecificData as Record<string, unknown>)
+      : {};
+  const realm = [
+    text(credentials.workspaceId) ?? text(data.workspaceId),
+    text(credentials.accountId) ?? text(data.accountId),
+    text(credentials.projectId) ?? text(data.projectId),
+  ];
+  const authGeneration = createHash("sha256")
+    .update(realm.some(Boolean) ? JSON.stringify([credential, ...realm]) : credential)
+    .digest("hex");
   const scope = {
     principal: actor,
     conversation: thread,
     provider,
     model: modelId,
     account,
-    authGeneration: createHash("sha256").update(credential).digest("hex"),
+    authGeneration,
   };
   trusted.add(scope);
   return Object.freeze(scope);

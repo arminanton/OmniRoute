@@ -339,3 +339,42 @@ test("sealed capability invalidates on current generation identity changes", () 
     process.env.OMNIROUTE_APP_GENERATION = generation;
   }
 });
+
+test("workspace/account/project realm changes invalidate scopes with unchanged credential bytes", () => {
+  const credentials = {
+    connectionId: "account",
+    accessToken: "same-token",
+    providerSpecificData: { workspaceId: "workspace-A", projectId: "project-A" },
+  };
+  const initial = scopes.createConversationScope("codex", credentials, "actor", "thread", "model")!;
+  for (const changed of [
+    { workspaceId: "workspace-B", projectId: "project-A" },
+    { workspaceId: "workspace-A", projectId: "project-B" },
+  ]) {
+    const updated = scopes.createConversationScope(
+      "codex",
+      { ...credentials, providerSpecificData: changed },
+      "actor",
+      "thread",
+      "model"
+    )!;
+    assert.notEqual(initial.authGeneration, updated.authGeneration);
+  }
+  const headers = { "x-codex-turn-state": "realm-header-token" };
+  commit.commitCodexStateDelivery("codex", headers, credentials, "actor", "thread", "model", {
+    Authorization: "Bearer same-token",
+    "chatgpt-account-id": "workspace-B",
+  });
+  const actual = scopes.createConversationScope(
+    "codex",
+    {
+      ...credentials,
+      providerSpecificData: { ...credentials.providerSpecificData, workspaceId: "workspace-B" },
+    },
+    "actor",
+    "thread",
+    "model"
+  )!;
+  assert.equal(token.canEchoCodexStateToken(initial, "realm-header-token"), false);
+  assert.equal(token.canEchoCodexStateToken(actual, "realm-header-token"), true);
+});

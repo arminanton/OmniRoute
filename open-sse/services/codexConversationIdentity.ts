@@ -9,6 +9,10 @@ type Credentials = {
   connectionId?: unknown;
   accessToken?: unknown;
   apiKey?: unknown;
+  providerSpecificData?: unknown;
+  projectId?: unknown;
+  workspaceId?: unknown;
+  accountId?: unknown;
   _codexConversationIdentity?: string;
   _codexTurnStateScope?: ConversationScope | null;
 };
