@@ -75,6 +75,7 @@ export async function getCanaryReadiness() {
   const ready = Boolean(
     generation &&
     databaseReady &&
+    lifecycle.diagnosticCaptureWork !== null &&
     Object.entries(coordination)
       .filter(([k]) => k !== "protocol")
       .every(([, v]) => v === true)

@@ -22,6 +22,7 @@ import { type AccessScope } from "@/lib/accessTokens/scopes";
 
 /** Sensitive management surfaces — require `admin` for ALL methods. */
 export const ADMIN_SCOPE_PREFIXES: readonly string[] = [
+  "/api/usage/diagnostic-overflow", // private complete provider payloads
   "/api/cli/tokens", // access-token management (create/list/revoke)
   "/api/oauth", // OAuth authorization flows
   "/api/auth", // login / logout / session

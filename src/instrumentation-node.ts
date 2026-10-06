@@ -422,6 +422,13 @@ export async function registerNodejs(): Promise<void> {
     ),
   ]);
 
+  // Register actual diagnostic flush ownership before traffic/capability readiness.
+  // Default-off performs no filesystem initialization; failures stay unknown/degraded.
+  const { bootstrapDiagnosticCaptureLifecycle } =
+    await import("@/lib/usage/diagnosticCaptureLifecycle");
+  if (!(await bootstrapDiagnosticCaptureLifecycle()))
+    console.warn("[STARTUP] Private diagnostic capture initialization unavailable");
+
   // Clear stale transient connection cooldowns persisted from an unclean crash.
   // A crash mid-burst can leave far-future `rate_limited_until` values in the DB
   // that cause every connection to be skipped by getProviderCredentials(), making
