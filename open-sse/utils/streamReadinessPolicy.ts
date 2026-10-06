@@ -67,7 +67,7 @@ function isCodexGpt5x(provider?: string | null, model?: string | null): boolean 
   const normalizedProvider = (provider || "").toLowerCase();
   const normalizedModel = (model || "").toLowerCase();
   // Match the gpt-5.x family (gpt-5, gpt-5.1, gpt-5.5, ...) on the codex provider.
-  return normalizedProvider === "codex" && /gpt-5(\.\d+)?/.test(normalizedModel);
+  return normalizedProvider === "codex" && /(?:^|\/)gpt-(?:5|6)(?:[.-]|$)/.test(normalizedModel);
 }
 
 /**
@@ -81,7 +81,7 @@ function isHighReasoningEffort(
   body: StreamReadinessBody
 ): boolean {
   const normalizedModel = (model || "").toLowerCase();
-  if (/-high\b/.test(normalizedModel) || normalizedModel.endsWith("-high")) return true;
+  if (/-(?:high|xhigh|max|ultra)$/.test(normalizedModel)) return true;
 
   const effort = (() => {
     const direct = body?.["reasoning_effort"];
@@ -93,7 +93,7 @@ function isHighReasoningEffort(
     }
     return "";
   })();
-  return effort.toLowerCase() === "high";
+  return ["high", "xhigh", "max", "ultra"].includes(effort.toLowerCase());
 }
 
 /**
@@ -122,7 +122,12 @@ export function resolveStreamReadinessTimeout(
 ): StreamReadinessPolicyResult {
   const baseTimeoutMs = Math.max(0, Math.floor(input.baseTimeoutMs || 0));
   if (baseTimeoutMs <= 0) {
-    return { timeoutMs: baseTimeoutMs, baseTimeoutMs, maxTimeoutMs: baseTimeoutMs, reasons: ["disabled"] };
+    return {
+      timeoutMs: baseTimeoutMs,
+      baseTimeoutMs,
+      maxTimeoutMs: baseTimeoutMs,
+      reasons: ["disabled"],
+    };
   }
 
   const maxTimeoutMs = Math.max(baseTimeoutMs, input.maxTimeoutMs ?? DEFAULT_MAX_TIMEOUT_MS);

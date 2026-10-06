@@ -20,6 +20,7 @@ export function toStringOrNull(value: unknown): string | null {
 export function normalizeServiceTier(value: unknown): string {
   const tier = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (tier === "priority" || tier === "fast") return "priority";
+  if (tier === "ultrafast") return "ultrafast";
   if (tier === "flex") return "flex";
   return "standard";
 }

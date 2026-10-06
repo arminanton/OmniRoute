@@ -112,7 +112,7 @@ test("provider connection persistence normalizes request defaults without droppi
 
   (assert as any).deepEqual((created.providerSpecificData as any).requestDefaults, {
     reasoningEffort: "high",
-    serviceTier: "priority",
+    serviceTier: "fast",
     customFlag: "keep-me",
   });
   assert.equal((created.providerSpecificData as any).openaiStoreEnabled, true);

@@ -627,6 +627,8 @@ export const CODEX_REASONING_STRENGTH_OPTIONS = [
 export const CODEX_ACCOUNT_SERVICE_TIER_VALUES: CodexServiceTier[] = [
   "default",
   "priority",
+  "fast",
+  "ultrafast",
   "flex",
 ];
 
@@ -681,6 +683,8 @@ export function getCodexServiceTierLabel(
   }
   if (value === "default") return providerText(t, "codexServiceTierDefault", "Default");
   if (value === "priority") return providerText(t, "codexServiceTierPriority", "Priority");
+  if (value === "fast") return providerText(t, "codexServiceTierFast", "Fast");
+  if (value === "ultrafast") return providerText(t, "codexServiceTierUltrafast", "Ultrafast");
   return providerText(t, "codexServiceTierFlex", "Flex");
 }
 
