@@ -1,3 +1,8 @@
+import {
+  beginGenerationLifetime,
+  bindGenerationResponse,
+  isGenerationFetchResponse,
+} from "./generationLifetime.ts";
 declare global {
   var __omniLogicalBudgetFailures: WeakSet<object> | undefined;
 }
@@ -96,8 +101,8 @@ export function runGenerationDispatch<T>(
 ): T {
   return generationContext.run(hooks ?? true, fn);
 }
-export function consumeGenerationAttempt(input?: unknown, options?: { method?: string }): void {
-  if (!generationContext.getStore()) return;
+export function isGenerationHttpDispatch(input?: unknown, options?: { method?: string }): boolean {
+  if (!generationContext.getStore()) return false;
   const target =
     typeof input === "string"
       ? input
@@ -114,9 +119,13 @@ export function consumeGenerationAttempt(input?: unknown, options?: { method?: s
       target
     )
   )
-    return;
-  retryContext.getStore()?.consumeAttempt();
+    return false;
+  return true;
 }
+export function consumeGenerationAttempt(input?: unknown, options?: { method?: string }): void {
+  if (isGenerationHttpDispatch(input, options)) retryContext.getStore()?.consumeAttempt();
+}
+
 export function withLogicalRetryBudget<Args extends unknown[], Result>(
   fn: (...args: Args) => Promise<Result>
 ): (...args: Args) => Promise<Result> {
@@ -155,8 +164,19 @@ export function budgetedGenerationFetch<Args extends unknown[], Result>(
   fn: (...args: Args) => Promise<Result>
 ): (...args: Args) => Promise<Result> {
   return async (...args: Args) => {
-    consumeGenerationAttempt(args[0], args[1] as { method?: string } | undefined);
-    return fn(...args);
+    const options = args[1] as { method?: string } | undefined;
+    const generation = isGenerationHttpDispatch(args[0], options);
+    consumeGenerationAttempt(args[0], options);
+    const finish = generation ? beginGenerationLifetime("http") : () => {};
+    try {
+      const response = await fn(...args);
+      return generation && isGenerationFetchResponse(response)
+        ? (bindGenerationResponse(response, finish) as Result)
+        : (finish(), response);
+    } catch (error) {
+      finish();
+      throw error;
+    }
   };
 }
 
