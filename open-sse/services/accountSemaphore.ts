@@ -21,6 +21,7 @@ export interface SemaphoreRequirement {
   key: string;
   maxConcurrency?: number | null;
   adaptive?: boolean;
+  initialConcurrency?: number;
 }
 
 export type AcquireManyOptions = Omit<AcquireAccountSemaphoreOptions, "maxConcurrency">;

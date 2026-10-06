@@ -16,6 +16,7 @@ import {
 import { withProviderSignatureScope } from "../services/conversationState/signatureScope.ts";
 import { commitCodexStateDelivery } from "../services/conversationState/commitCodexState.ts";
 import { classifyAdmissionFeedback } from "../services/coordination/overloadClassification.ts";
+import { resolveSharedAccountAdmissionRequirement } from "./chatCore/sharedAccountAdmission.ts";
 import {
   runGenerationDispatch,
   backoffGenerationRetry,
@@ -3207,6 +3208,15 @@ export async function handleChatCore({
               connectionId: attemptConnectionId,
               credentials: execCreds,
             });
+            const accountAdmissionRequirement = resolveSharedAccountAdmissionRequirement(
+              accountSemaphoreKey,
+              accountSemaphoreMaxConcurrency,
+              execCreds
+            );
+            const observeAccountOutcome = accountAdmissionRequirement.adaptive
+              ? (await import("../services/coordination/sharedSemaphore.ts"))
+                  .observeSharedAdmissionOutcome
+              : null;
             const canonicalProviderKey = resolveProviderId(String(provider).trim().toLowerCase());
             const providerConcurrency =
               resilienceSettings.providerQuotaOverrides[canonicalProviderKey]
@@ -3214,9 +3224,9 @@ export async function handleChatCore({
 
             trace("pre_semaphore", {
               semaphoreKey: accountSemaphoreKey,
-              max: accountSemaphoreMaxConcurrency,
+              max: accountAdmissionRequirement.maxConcurrency,
             });
-            if (accountSemaphoreKey && accountSemaphoreMaxConcurrency != null) {
+            if (accountSemaphoreKey && Number(accountAdmissionRequirement.maxConcurrency) > 0) {
               updatePendingScope(pendingScope, {
                 stage: "waiting_account_slot",
               });
@@ -3234,10 +3244,7 @@ export async function handleChatCore({
                       key: `provider:${canonicalProviderKey}`,
                       maxConcurrency: providerConcurrency,
                     },
-                    {
-                      key: accountSemaphoreKey || "",
-                      maxConcurrency: accountSemaphoreKey ? accountSemaphoreMaxConcurrency : null,
-                    },
+                    accountAdmissionRequirement,
                   ],
                   {
                     timeoutMs: resilienceSettings.requestQueue.maxWaitMs,
@@ -3260,17 +3267,10 @@ export async function handleChatCore({
                 attemptStatus >= 200 &&
                 attemptStatus < 300 &&
                 accountSemaphoreKey &&
-                execCreds.providerSpecificData?.quotaAdaptiveAdmission === true &&
+                accountAdmissionRequirement.adaptive === true &&
                 process.env.OMNI_SHARED_ADMISSION === "true"
               ) {
-                void import("../services/coordination/sharedSemaphore.ts").then(
-                  ({ observeSharedAdmissionOutcome }) =>
-                    observeSharedAdmissionOutcome(
-                      accountSemaphoreKey,
-                      "success",
-                      Date.now() - admittedAt
-                    )
-                );
+                observeAccountOutcome?.(accountSemaphoreKey, "success", Date.now() - admittedAt);
               }
               currentPermitRelease?.();
               currentPermitRelease = null;
@@ -3907,7 +3907,11 @@ export async function handleChatCore({
   }): Promise<void> => {
     if (
       process.env.OMNI_SHARED_ADMISSION === "true" &&
-      credentials.providerSpecificData?.quotaAdaptiveAdmission === true
+      resolveSharedAccountAdmissionRequirement(
+        resolveAccountSemaphoreKey({ provider, model: targetModel, connectionId, credentials }),
+        resolveAccountSemaphoreMaxConcurrency(credentials),
+        credentials
+      ).adaptive === true
     ) {
       const key = resolveAccountSemaphoreKey({
         provider,
