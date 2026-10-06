@@ -471,3 +471,53 @@ test("real descriptor write failure is incomplete and cannot reject inference or
     fs.rmSync(directory, { recursive: true });
   }
 });
+
+test("actual Node descriptor owner closes once and remains active until close acknowledgment", async () => {
+  const directory = root(),
+    store = new DiagnosticOverflowStore({ root: directory });
+  const trace = store.createTrace({ provider: "antigravity" });
+  const originalClose = fs.close;
+  let release: (() => void) | undefined,
+    observed: () => void = () => {},
+    calls = 0;
+  const closing = new Promise<void>((resolve) => {
+    observed = resolve;
+  });
+  try {
+    const attempt = await trace.beginAttempt({ requestBody: "fixture" });
+    await attempt.writeResponse(Buffer.from("complete response"));
+    const target = path.join(directory, trace.traceId, `${attempt.id}.provider_response.gz`);
+    fs.close = ((fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
+      let owns = false;
+      try {
+        owns = fs.readlinkSync(`/proc/self/fd/${fd}`) === target;
+      } catch {}
+      if (!owns) {
+        originalClose(fd, callback);
+        return;
+      }
+      calls++;
+      release = () => originalClose(fd, callback);
+      observed();
+    }) as typeof fs.close;
+    const file = attempt.finish();
+    await closing;
+    const all = trace.finish();
+    assert.equal(getDiagnosticOverflowActiveWork(), 1);
+    assert.equal(store.read(trace.traceId)?.attempts[0].response.state, "capturing");
+    const allow = release!;
+    release = undefined;
+    allow();
+    await file;
+    await all;
+    assert.equal(calls, 1);
+    assert.equal(getDiagnosticOverflowActiveWork(), 0);
+    assert.equal(store.read(trace.traceId)?.state, "complete");
+  } finally {
+    fs.close = originalClose;
+    release?.();
+    await trace.abort();
+    store.close();
+    fs.rmSync(directory, { recursive: true });
+  }
+});

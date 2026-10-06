@@ -139,6 +139,28 @@ export class DiagnosticOverflowWriter {
       });
     return this.chain;
   }
+  private closePromise: Promise<void> | undefined;
+  private closeOwner(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    const fd = this.fd;
+    this.fd = undefined;
+    const output = this.output;
+    this.closePromise = output
+      ? new Promise<void>((resolve) => {
+          if (output.closed) {
+            resolve();
+            return;
+          }
+          output.once("close", resolve);
+          // Node's WriteStream owns this descriptor after construction, including
+          // error destruction even when autoClose=false. Never close its number twice.
+          output.destroy();
+        })
+      : Promise.resolve().then(() => {
+          if (fd !== undefined) fs.closeSync(fd);
+        });
+    return this.closePromise;
+  }
   async writeBody(body: string | Uint8Array): Promise<void> {
     if (typeof body !== "string") {
       for (let offset = 0; offset < body.byteLength && !this.stopped; offset += 64 * 1024)
@@ -173,8 +195,8 @@ export class DiagnosticOverflowWriter {
       this.gzip.end();
       await finished;
       await sync(this.fd);
-      fs.closeSync(this.fd);
-      this.fd = undefined;
+      await this.closeOwner();
+      if (this.failure) throw this.failure;
       syncDirectory(path.join(this.coordinator.root, this.traceId));
       const metadata: DiagnosticOverflowFile = {
         representation:
@@ -195,12 +217,10 @@ export class DiagnosticOverflowWriter {
     } catch {
       this.stop("write_error");
       this.gzip.destroy();
-      this.output?.destroy();
-      if (this.fd !== undefined) {
-        try {
-          fs.closeSync(this.fd);
-        } catch {}
-        this.fd = undefined;
+      try {
+        await this.closeOwner();
+      } catch {
+        /* Capture remains incomplete. */
       }
       try {
         this.coordinator.sealFile(this.traceId, this.owner, this.attemptId, this.kind, {
