@@ -85,6 +85,7 @@ test("absence of transport and state instrumentation is unknown, not an idle pro
   assert.equal(data.activeWebSockets, null);
   assert.equal(data.conversationPins, null);
   assert.equal(data.upstreamLeases, null);
+  assert.equal(data.diagnosticCaptureWork, null);
 });
 test("normal API responses stamp their actual process generation rather than a caller marker", async () => {
   const previous = process.env.OMNIROUTE_APP_GENERATION;

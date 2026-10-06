@@ -160,7 +160,7 @@ class Boundary:
                 or state["coordination"]["protocol"] != "omni-coordination/v1" or state["databaseReady"] is not True):
             raise Refused("actual app generation/coordination protocol differs")
         lifecycle = state["lifecycle"]
-        exact(lifecycle, {"activeResponses", "activeWebSockets", "queuedRequests", "draining", "pendingUploads", "conversationPins", "upstreamLeases"})
+        exact(lifecycle, {"activeResponses", "activeWebSockets", "queuedRequests", "draining", "pendingUploads", "conversationPins", "upstreamLeases", "diagnosticCaptureWork"})
         if any(type(lifecycle[k]) is not int or lifecycle[k] < 0 for k in lifecycle if k != "draining") or type(lifecycle["draining"]) is not bool:
             raise Refused("invalid app lifecycle counters")
         self.verify_compatibility(g)
@@ -173,7 +173,8 @@ class Boundary:
                 "drain": {"fenced": lifecycle["draining"] and lifecycle["queuedRequests"] == 0,
                           "pendingBodies": lifecycle["activeResponses"], "pendingUploads": lifecycle["pendingUploads"],
                           "webSockets": lifecycle["activeWebSockets"], "conversationPins": lifecycle["conversationPins"],
-                          "upstreamLeases": lifecycle["upstreamLeases"]}}
+                          "upstreamLeases": lifecycle["upstreamLeases"],
+                          "diagnosticCaptureWork": lifecycle["diagnosticCaptureWork"]}}
 
 
 

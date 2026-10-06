@@ -196,7 +196,7 @@ class SharedAdapter(Adapter):
             if proof[key] is not True:raise Refused("shared overlap condition not verified")
         if proof["protocol"]!=1 or proof["helperSet"]!=g["helperSet"]:raise Refused("shared protocol/helper identity changed")
         if not (proof['appReady'] is True or proof['drain'].get('fenced') is True):raise Refused("shared app not ready")
-        exact(proof['drain'],{"fenced","pendingBodies","pendingUploads","webSockets","conversationPins","upstreamLeases"})
+        exact(proof['drain'],{"fenced","pendingBodies","pendingUploads","webSockets","conversationPins","upstreamLeases", "diagnosticCaptureWork"})
         for key,value in proof['drain'].items():
             if key=='fenced':
                 if type(value)is not bool:raise Refused("unknown drain")

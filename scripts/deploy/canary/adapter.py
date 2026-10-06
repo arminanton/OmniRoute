@@ -190,7 +190,7 @@ class Adapter:
         for flag in ("residentialEgress", "helperForwarding", "sharedCapacity", "oauthOwner", "jobOwner", "conversationState", "schemaOverlap"):
             if proof[flag] is not True:
                 raise Refused("overlap proof failed: " + flag)
-        exact(proof["drain"], {"fenced", "pendingBodies", "pendingUploads", "webSockets", "conversationPins", "upstreamLeases"})
+        exact(proof["drain"], {"fenced", "pendingBodies", "pendingUploads", "webSockets", "conversationPins", "upstreamLeases", "diagnosticCaptureWork"})
         for key, value in proof["drain"].items():
             if key == "fenced":
                 if type(value) is not bool:

@@ -97,5 +97,5 @@ class InstalledHost:
 
     def drained(self, generation):
         value = self.call("observe-drain", {"generation": generation})
-        fields = ("pendingBodies", "pendingUploads", "webSockets", "conversationPins", "upstreamLeases")
+        fields = ("pendingBodies", "pendingUploads", "webSockets", "conversationPins", "upstreamLeases", "diagnosticCaptureWork")
         return value.get("fenced") is True and all(type(value.get(key)) is int and value[key] == 0 for key in fields)
