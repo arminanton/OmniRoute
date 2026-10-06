@@ -1,5 +1,6 @@
 // @ts-nocheck
 import "./setupPolyfill.ts";
+import { combineAbortSignals } from "./combineAbortSignals.ts";
 import { getFencedTaskContext } from "../services/coordination/fencedTask.ts";
 import {
   budgetedGenerationFetch,
@@ -887,7 +888,7 @@ async function patchedFetch(
   if (taskFence) {
     taskFence.assertOwner();
     options.signal = options.signal
-      ? AbortSignal.any([options.signal, taskFence.signal])
+      ? combineAbortSignals([options.signal, taskFence.signal])
       : taskFence.signal;
   }
   // Credential-refresh egress is stricter than internal API routing. Validate

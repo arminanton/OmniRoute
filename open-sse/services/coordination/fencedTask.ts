@@ -1,3 +1,4 @@
+import { combineAbortSignals } from "../../utils/combineAbortSignals.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { acquireSharedSemaphore } from "./sharedSemaphore.ts";
 
@@ -16,7 +17,7 @@ export async function runFencedTask<T>(
   options: { signal?: AbortSignal | null; timeoutMs?: number } = {}
 ): Promise<T> {
   const lost = new AbortController();
-  const signal = options.signal ? AbortSignal.any([options.signal, lost.signal]) : lost.signal;
+  const signal = options.signal ? combineAbortSignals([options.signal, lost.signal]) : lost.signal;
   const release = await acquireSharedSemaphore([{ key: `task:${key}`, maxConcurrency: 1 }], {
     timeoutMs: options.timeoutMs ?? 30000,
     signal,

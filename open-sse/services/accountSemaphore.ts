@@ -210,9 +210,10 @@ export function acquire(
     timeoutMs = DEFAULT_TIMEOUT_MS,
     signal = null,
     maxQueueSize = DEFAULT_MAX_QUEUE_SIZE,
+    onLeaseLost,
   }: AcquireAccountSemaphoreOptions = {}
 ): Promise<() => void> {
-  return acquireMany([{ key, maxConcurrency }], { timeoutMs, signal, maxQueueSize });
+  return acquireMany([{ key, maxConcurrency }], { timeoutMs, signal, maxQueueSize, onLeaseLost });
 }
 
 /**
