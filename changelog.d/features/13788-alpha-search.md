@@ -1,0 +1,1 @@
+- **feat(search):** add `/v1/alpha/search` for Codex native search, adapting up to 10 supported search queries to the existing provider and fallback path; unsupported open/click/find/screenshot fields return 400 when present. ([#13788](https://github.com/diegosouzapw/OmniRoute/pull/13788))
