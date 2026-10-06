@@ -9,15 +9,15 @@
 
 export function wrapReadableStreamWithFinalize<T>(
   readable: ReadableStream<T>,
-  finalize: () => void
+  finalize: (completed?: boolean) => void
 ): ReadableStream<T> {
   const reader = readable.getReader();
   let finalized = false;
 
-  const runFinalize = () => {
+  const runFinalize = (completed = false) => {
     if (finalized) return;
     finalized = true;
-    finalize();
+    finalize(completed);
   };
 
   return new ReadableStream<T>({
@@ -25,13 +25,15 @@ export function wrapReadableStreamWithFinalize<T>(
       try {
         const { done, value } = await reader.read();
         if (done) {
-          runFinalize();
+          runFinalize(true);
+          reader.releaseLock();
           controller.close();
           return;
         }
         controller.enqueue(value);
       } catch (error) {
         runFinalize();
+        reader.releaseLock();
         controller.error(error);
       }
     },
@@ -40,8 +42,10 @@ export function wrapReadableStreamWithFinalize<T>(
       runFinalize();
       try {
         await reader.cancel(reason);
-      } catch (error) {
-        // Ignored
+      } catch {
+        // The underlying stream is already closing.
+      } finally {
+        reader.releaseLock();
       }
     },
   });

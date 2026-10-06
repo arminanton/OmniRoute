@@ -1,3 +1,4 @@
+import { runCoordinatedGrantRefresh } from "../../coordination/grantRefresh.ts";
 // @ts-nocheck
 // Extracted from open-sse/services/tokenRefresh.ts — see ../shared.ts for
 // provenance notes (ported idea from KooshaPari's PR #7338, redone on tip).
@@ -12,6 +13,11 @@ import { buildFormParams } from "../shared.ts";
  * consumed or is invalid, so callers can stop retrying and request re-authentication.
  */
 export async function refreshCodexToken(refreshToken, log, proxyConfig: unknown = null) {
+  return runCoordinatedGrantRefresh("openai-codex", refreshToken, (currentGrant) =>
+    refreshCodexTokenNative(currentGrant, log, proxyConfig)
+  );
+}
+async function refreshCodexTokenNative(refreshToken, log, proxyConfig: unknown = null) {
   try {
     const response = await runWithProxyContext(proxyConfig, () =>
       fetch(OAUTH_ENDPOINTS.openai.token, {

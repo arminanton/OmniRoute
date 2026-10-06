@@ -53,3 +53,12 @@ describe("creditBalance DB module", () => {
     assert.ok(all instanceof Map, "should always return a Map");
   });
 });
+
+it("older concurrent observations cannot replace newer persisted credits", () => {
+  const account = `ordered-credit-${Date.now()}`;
+  persistCreditBalance(account, 20, 2000);
+  persistCreditBalance(account, 99, 1000);
+  assert.equal(getPersistedCreditBalance(account), 20);
+  persistCreditBalance(account, 0, 3000);
+  assert.equal(getPersistedCreditBalance(account), 0);
+});

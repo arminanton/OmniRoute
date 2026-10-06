@@ -20,6 +20,12 @@ Live count: `ls open-sse/services/*.ts | wc -l` (currently 134). More including 
 - **`usage.ts`** — Per-request token/cost consumption tracking.
 - **`quotaCache.ts`** — In-memory quota snapshots, pre-loaded at startup.
 
+### Shared Coordination
+
+- `coordination/` — opt-in native SQLite/WAL composite admission, owner fencing, exact-grant encrypted rotations, durable cooldowns and measured adaptation. Both overlapping builds must support the protocol; generation/maintenance role startup barriers live in `src/lib/periodicServices.ts`. See `docs/guides/SHARED-COORDINATION.md` for bootstrap and limits.
+- `logicalRetryBudget.ts` — one request-owned generation retry budget and cancellable permit-releasing transport backoff, excluding control-plane requests.
+- `quotaIdentity.ts` — explicit or authenticated quota principal boundaries; never email-only merging.
+
 ### Account & Token Management
 
 - **`tokenRefresh.ts`** — OAuth token expiration detection and refresh.

@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 import { getAllSyncedAvailableModels } from "./db/models";
 import { getResolvedModelCapabilities } from "./modelCapabilities";
 import {
@@ -127,6 +128,7 @@ function resolveIntervalMs(): number {
  * static catalog remains the source of truth).
  */
 export function startContextWindowReconcile(intervalMs?: number): void {
+  if (!periodicServicesAllowed("context-window-sync")) return;
   if (reconcileTimer) return;
   const interval = intervalMs ?? resolveIntervalMs();
   if (!interval || interval <= 0) return;

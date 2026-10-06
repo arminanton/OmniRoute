@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 import { getProviderConnections } from "@/lib/db/providers";
 import { getSettings } from "@/lib/db/settings";
 import { resolveProxyForConnection } from "@/lib/db/settings";
@@ -90,6 +91,7 @@ function toPacificTime(date: Date): Date {
 }
 
 export function startWarmupScheduler(): NodeJS.Timeout | null {
+  if (!periodicServicesAllowed("provider-warmup")) return null;
   if (STATE.timer) return STATE.timer;
   if (!isEnabled()) {
     log.info("disabled (OMNIROUTE_WARMUP_ENABLED not set)");

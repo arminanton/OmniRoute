@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * AutoRefreshDaemon — Background cookie validity checker for web-cookie providers
  *
@@ -70,6 +71,7 @@ class AutoRefreshDaemon {
    * Start the daemon — begins periodic credential checks
    */
   start(): void {
+    if (!periodicServicesAllowed("oauth-auto-refresh")) return;
     if (this.running) return;
     this.running = true;
 
@@ -77,6 +79,7 @@ class AutoRefreshDaemon {
     this.check().catch(() => {});
 
     this.timerId = setInterval(() => {
+      if (!periodicServicesAllowed("oauth-auto-refresh")) return;
       this.check().catch(() => {});
     }, this.checkIntervalMs);
     // Don't keep the process alive solely for this periodic daemon.

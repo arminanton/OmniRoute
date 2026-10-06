@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 // @ts-nocheck
 /**
  * Proactive Token Health Check Scheduler
@@ -455,6 +456,7 @@ function getHCState() {
  * Start the health-check scheduler (idempotent).
  */
 export function initTokenHealthCheck() {
+  if (!periodicServicesAllowed("token-health")) return;
   const state = getHCState();
   if (state.initialized || isHealthCheckDisabled()) return;
   state.initialized = true;
@@ -569,11 +571,15 @@ export async function checkConnection(conn) {
     // process's 5-second read cache. An old sweep snapshot must not enter any
     // generic status update or trigger an unnecessary new single-use grant.
     const current = await getProviderConnectionById(conn.id);
-    if (!current || current.provider !== conn.provider ||
-        current.refreshToken !== conn.refreshToken ||
-        current.accessToken !== conn.accessToken ||
-        current.testStatus !== conn.testStatus ||
-        current.isActive !== conn.isActive) return;
+    if (
+      !current ||
+      current.provider !== conn.provider ||
+      current.refreshToken !== conn.refreshToken ||
+      current.accessToken !== conn.accessToken ||
+      current.testStatus !== conn.testStatus ||
+      current.isActive !== conn.isActive
+    )
+      return;
     conn = current;
   } else {
     const latestConnection = (await getCachedProviderConnectionById(conn.id)) || conn;
@@ -1120,8 +1126,10 @@ export async function checkConnection(conn) {
     // blind write can revert a newer 401 refresh or replace guest routing.
     if (result?.accessToken && result?.refreshToken) {
       const latest = await getProviderConnectionById(conn.id);
-      if (latest?.accessToken === result.accessToken &&
-          latest?.refreshToken === result.refreshToken) {
+      if (
+        latest?.accessToken === result.accessToken &&
+        latest?.refreshToken === result.refreshToken
+      ) {
         updateNousOAuthHealthIfRefreshUnchanged(conn.id, result.refreshToken, "success");
       }
     } else if (isUnrecoverableRefreshError(result)) {
@@ -1129,7 +1137,9 @@ export async function checkConnection(conn) {
       // The conditional DB UPDATE protects the final read/write race.
       updateNousOAuthHealthIfRefreshUnchanged(conn.id, attemptedRefreshToken, "invalid_grant");
     } else {
-      logWarn(`${LOG_PREFIX} ~ Nous OAuth refresh unavailable/uncertain; retry only after reconciliation or re-authentication`);
+      logWarn(
+        `${LOG_PREFIX} ~ Nous OAuth refresh unavailable/uncertain; retry only after reconciliation or re-authentication`
+      );
     }
     return;
   }

@@ -1,3 +1,9 @@
+import { classifyAdmissionFeedback } from "../services/coordination/overloadClassification.ts";
+import {
+  runGenerationDispatch,
+  backoffGenerationRetry,
+  isLogicalRetryBudgetError,
+} from "../services/logicalRetryBudget.ts";
 import { withCodexConversationIdentity } from "../services/codexConversationIdentity.ts";
 import { withAntigravityConversationIdentity } from "../services/antigravityIdentity.ts";
 import {
@@ -3167,27 +3173,61 @@ export async function handleChatCore({
                 stage: "waiting_account_slot",
               });
             }
-            const releaseAccountSemaphore = await acquireConcurrencyGates(
-              [
+            const acquireAttemptPermit = () =>
+              acquireConcurrencyGates(
+                [
+                  {
+                    key: "global",
+                    maxConcurrency: resilienceSettings.requestQueue.globalConcurrentRequests,
+                  },
+                  {
+                    key: `provider:${canonicalProviderKey}`,
+                    maxConcurrency: providerConcurrency,
+                  },
+                  {
+                    key: accountSemaphoreKey || "",
+                    maxConcurrency: accountSemaphoreKey ? accountSemaphoreMaxConcurrency : null,
+                  },
+                ],
                 {
-                  key: "global",
-                  maxConcurrency: resilienceSettings.requestQueue.globalConcurrentRequests,
-                },
-                {
-                  key: `provider:${canonicalProviderKey}`,
-                  maxConcurrency: providerConcurrency,
-                },
-                {
-                  key: accountSemaphoreKey || "",
-                  maxConcurrency: accountSemaphoreKey ? accountSemaphoreMaxConcurrency : null,
-                },
-              ],
-              {
-                timeoutMs: resilienceSettings.requestQueue.maxWaitMs,
-                maxQueueSize: resilienceSettings.requestQueue.maxQueueDepth,
-                signal: streamController.signal,
+                  timeoutMs: resilienceSettings.requestQueue.maxWaitMs,
+                  maxQueueSize: resilienceSettings.requestQueue.maxQueueDepth,
+                  signal: streamController.signal,
+                  onLeaseLost: () => streamController.abort(),
+                }
+              );
+            let currentPermitRelease: (() => void) | null = await acquireAttemptPermit();
+            const admittedAt = Date.now();
+            let attemptStatus = 0;
+            const releaseAccountSemaphore = (completed = false) => {
+              if (
+                currentPermitRelease &&
+                completed &&
+                attemptStatus >= 200 &&
+                attemptStatus < 300 &&
+                accountSemaphoreKey &&
+                execCreds.providerSpecificData?.quotaAdaptiveAdmission === true &&
+                process.env.OMNI_SHARED_ADMISSION === "true"
+              ) {
+                void import("../services/coordination/sharedSemaphore.ts").then(
+                  ({ observeSharedAdmissionOutcome }) =>
+                    observeSharedAdmissionOutcome(
+                      accountSemaphoreKey,
+                      "success",
+                      Date.now() - admittedAt
+                    )
+                );
               }
-            );
+              currentPermitRelease?.();
+              currentPermitRelease = null;
+            };
+            const generationAdmissionHooks = {
+              withPermitReleased: async (wait: () => Promise<void>) => {
+                releaseAccountSemaphore();
+                await wait();
+                currentPermitRelease = await acquireAttemptPermit();
+              },
+            };
             trace("post_semaphore");
             updatePendingScope(pendingScope, {
               stage: "waiting_rate_limit",
@@ -3216,30 +3256,35 @@ export async function handleChatCore({
                     log,
                     execute: (signal) =>
                       runWithCapture(providerRequestCapture, () =>
-                        executor.execute({
-                          model: modelToCall,
-                          body: bodyToSend,
-                          stream: upstreamStream,
-                          credentials: execCreds,
-                          signal,
-                          log,
-                          extendedContext,
-                          upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
-                          clientHeaders: buildExecutorClientHeaders(
-                            clientRawRequest?.headers,
-                            userAgent
-                          ),
-                          clientResponseFormat,
-                          onCredentialsRefreshed,
-                          skipUpstreamRetry,
-                          contextEditing: { enabled: contextEditingEnabled },
-                        })
+                        runGenerationDispatch(
+                          () =>
+                            executor.execute({
+                              model: modelToCall,
+                              body: bodyToSend,
+                              stream: upstreamStream,
+                              credentials: execCreds,
+                              signal,
+                              log,
+                              extendedContext,
+                              upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
+                              clientHeaders: buildExecutorClientHeaders(
+                                clientRawRequest?.headers,
+                                userAgent
+                              ),
+                              clientResponseFormat,
+                              onCredentialsRefreshed,
+                              skipUpstreamRetry,
+                              contextEditing: { enabled: contextEditingEnabled },
+                            }),
+                          generationAdmissionHooks
+                        )
                       ),
                   });
                 },
                 streamController.signal
               );
               const res = normalizeExecutorResult(rawExecutorResult);
+              attemptStatus = res.response.status;
               if (isRuntimePolicyResponse(res.response)) {
                 releaseAccountSemaphore();
                 return { ...res, _executionCredentials: execCreds };
@@ -3321,7 +3366,7 @@ export async function handleChatCore({
                     `429 ${decision.kind}; retrying in ${delay}ms (model remaining: ${decision.snapshot.modelRemaining ?? "unknown"})`
                   );
                   releaseAccountSemaphore();
-                  await new Promise((r) => setTimeout(r, delay));
+                  await backoffGenerationRetry(delay, streamController.signal);
                   attempts++;
                   continue;
                 }
@@ -3401,24 +3446,28 @@ export async function handleChatCore({
                         log,
                         execute: (signal) =>
                           runWithCapture(providerRequestCapture, () =>
-                            executor.execute({
-                              model: modelToCall,
-                              body,
-                              stream: upstreamStream,
-                              credentials: execCreds,
-                              signal,
-                              log,
-                              extendedContext,
-                              upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
-                              clientHeaders: buildExecutorClientHeaders(
-                                clientRawRequest?.headers,
-                                userAgent
-                              ),
-                              clientResponseFormat,
-                              onCredentialsRefreshed,
-                              skipUpstreamRetry,
-                              contextEditing: { enabled: contextEditingEnabled },
-                            })
+                            runGenerationDispatch(
+                              () =>
+                                executor.execute({
+                                  model: modelToCall,
+                                  body,
+                                  stream: upstreamStream,
+                                  credentials: execCreds,
+                                  signal,
+                                  log,
+                                  extendedContext,
+                                  upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
+                                  clientHeaders: buildExecutorClientHeaders(
+                                    clientRawRequest?.headers,
+                                    userAgent
+                                  ),
+                                  clientResponseFormat,
+                                  onCredentialsRefreshed,
+                                  skipUpstreamRetry,
+                                  contextEditing: { enabled: contextEditingEnabled },
+                                }),
+                              generationAdmissionHooks
+                            )
                           ),
                       });
                       const retryRes = normalizeExecutorResult(retryRaw);
@@ -3555,7 +3604,8 @@ export async function handleChatCore({
             status >= 400 ? payload : ""
           );
         }
-        releaseRawResultAccountSemaphore();
+        if (status >= 200 && status < 300) rawResult._accountSemaphoreRelease?.(true);
+        else releaseRawResultAccountSemaphore();
         releaseRawResultAccountSemaphore = () => {};
 
         return {
@@ -3810,6 +3860,22 @@ export async function handleChatCore({
     retryAfterMs?: number | null;
     targetModel: string;
   }): Promise<void> => {
+    if (
+      process.env.OMNI_SHARED_ADMISSION === "true" &&
+      credentials.providerSpecificData?.quotaAdaptiveAdmission === true
+    ) {
+      const key = resolveAccountSemaphoreKey({
+        provider,
+        model: targetModel,
+        connectionId,
+        credentials,
+      });
+      if (key) {
+        const { observeSharedAdmissionOutcome } =
+          await import("../services/coordination/sharedSemaphore.ts");
+        observeSharedAdmissionOutcome(key, classifyAdmissionFeedback(statusCode, message), 0);
+      }
+    }
     // T06/T10/T36: classify provider errors and persist terminal account states.
     let errorType = classifyProviderError(statusCode, message, provider);
     if (statusCode === 429 && isModelScope()) {
@@ -4296,6 +4362,18 @@ export async function handleChatCore({
       trackPendingRequest(model, provider, connectionId, false);
       if (isRuntimePolicyError(error)) return runtimePolicyFailureResult(error);
       if (isManagedLeaseFenceError(error)) return managedLeaseFenceErrorResult(error);
+      if (isLogicalRetryBudgetError(error)) {
+        const failureMessage = "Logical generation retry budget exhausted";
+        persistFailureUsage(503, "logical_retry_budget");
+        const result = stream
+          ? createStreamingErrorResult(503, failureMessage, "logical_retry_budget")
+          : createErrorResult(503, failureMessage);
+        return {
+          ...result,
+          errorType: "logical_retry_budget",
+          errorCode: "RETRY_BUDGET_EXHAUSTED",
+        };
+      }
       if (isSemaphoreCapacityError(error)) {
         appendRequestLog({
           model,
@@ -5819,6 +5897,18 @@ export async function handleChatCore({
       trackPendingRequest(model, provider, connectionId, false);
       if (isRuntimePolicyError(error)) return runtimePolicyFailureResult(error);
       if (isManagedLeaseFenceError(error)) return managedLeaseFenceErrorResult(error);
+      if (isLogicalRetryBudgetError(error)) {
+        const failureMessage = "Logical generation retry budget exhausted";
+        persistFailureUsage(503, "logical_retry_budget");
+        const result = stream
+          ? createStreamingErrorResult(503, failureMessage, "logical_retry_budget")
+          : createErrorResult(503, failureMessage);
+        return {
+          ...result,
+          errorType: "logical_retry_budget",
+          errorCode: "RETRY_BUDGET_EXHAUSTED",
+        };
+      }
       if (isSemaphoreCapacityError(error)) {
         appendRequestLog({
           model,

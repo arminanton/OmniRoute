@@ -1,3 +1,4 @@
+import { runCoordinatedGrantRefresh } from "../../coordination/grantRefresh.ts";
 // @ts-nocheck
 // Extracted from open-sse/services/tokenRefresh.ts — see ../shared.ts for
 // provenance notes (ported idea from KooshaPari's PR #7338, redone on tip).
@@ -9,6 +10,11 @@ import { buildFormParams, readRefreshErrorBody } from "../shared.ts";
  * Specialized refresh for Claude OAuth tokens
  */
 export async function refreshClaudeOAuthToken(refreshToken, log, proxyConfig: unknown = null) {
+  return runCoordinatedGrantRefresh("anthropic-oauth", refreshToken, (currentGrant) =>
+    refreshClaudeOAuthTokenNative(currentGrant, log, proxyConfig)
+  );
+}
+async function refreshClaudeOAuthTokenNative(refreshToken, log, proxyConfig: unknown = null) {
   try {
     // Standard OAuth2 token refresh uses form-urlencoded (not JSON)
     const params = buildFormParams({

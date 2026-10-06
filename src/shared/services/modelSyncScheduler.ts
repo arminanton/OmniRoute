@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * Model Auto-Sync Scheduler (#488)
  *
@@ -291,6 +292,7 @@ export function startModelSyncScheduler(
   apiBaseUrl = getModelSyncInternalBaseUrl(),
   intervalMs = DEFAULT_INTERVAL_MS
 ): void {
+  if (!periodicServicesAllowed("model-discovery-sync")) return;
   if (getRuntimePolicy().mode === "locked") return;
   if (schedulerTimer) {
     console.log("[ModelSync] Scheduler already running — skipping start");

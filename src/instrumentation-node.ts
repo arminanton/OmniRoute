@@ -1,3 +1,8 @@
+import {
+  periodicServicesAllowed,
+  confirmPeriodicStartupBarrier,
+  installPeriodicOwnershipAuthority,
+} from "@/lib/periodicServices";
 /**
  * Node.js-only instrumentation logic.
  *
@@ -106,6 +111,7 @@ export async function ensureDbReadyForBoot(
 }
 
 function isBackgroundServicesDisabled(): boolean {
+  if (!periodicServicesAllowed("instrumentation-periodics")) return true;
   const raw = process.env.OMNIROUTE_DISABLE_BACKGROUND_SERVICES;
   if (!raw) return false;
   return new Set(["1", "true", "yes", "on"]).has(raw.trim().toLowerCase());
@@ -424,7 +430,9 @@ export async function registerNodejs(): Promise<void> {
   // See: https://github.com/diegosouzapw/OmniRoute/issues/3625 (Part A)
   try {
     const { clearStaleCrashCooldowns } = await import("@/lib/db/providers");
-    const { cleared } = clearStaleCrashCooldowns();
+    const { cleared } = periodicServicesAllowed("crash-cooldown-reset")
+      ? clearStaleCrashCooldowns()
+      : { cleared: 0 };
     if (cleared > 0) {
       console.log(
         `[STARTUP] Cleared ${cleared} stale transient connection cooldown(s) from prior crash (#3625)`
@@ -436,6 +444,13 @@ export async function registerNodejs(): Promise<void> {
     console.warn("[STARTUP] Could not clear stale crash cooldowns (non-fatal):", msg);
   }
 
+  if (process.env.OMNI_COORDINATION_PROCESS_ROLE === "maintenance") {
+    const { getFencedTaskContext } =
+      await import("@omniroute/open-sse/services/coordination/fencedTask.ts");
+    const owner = getFencedTaskContext();
+    if (owner?.key !== "maintenance") throw new Error("Maintenance ownership absent");
+    installPeriodicOwnershipAuthority(() => owner.assertOwner());
+  }
   await scanComboModelNameCollisionsAtBoot();
   await warmAdaptiveVirtualLanesIntoRuntime();
 
@@ -472,10 +487,11 @@ export async function registerNodejs(): Promise<void> {
   ]);
 
   // Proxy health scheduler (auto-removes dead proxies on interval)
-  await import("@/lib/proxyHealth/scheduler");
+  if (periodicServicesAllowed("proxy-health")) await import("@/lib/proxyHealth/scheduler");
 
   // Free-proxy auto-sync scheduler (re-fetches free-proxy sources on interval, #7079)
-  await import("@/lib/freeProxyProviders/scheduler");
+  if (periodicServicesAllowed("free-proxy-sync"))
+    await import("@/lib/freeProxyProviders/scheduler");
 
   initGracefulShutdown();
   initApiBridgeServer();
@@ -596,7 +612,7 @@ export async function registerNodejs(): Promise<void> {
   // instrumentation startup), NOT in the unused src/server-init.ts.
   try {
     const { initCredentialHealthCheck } = await import("@/lib/credentialHealth/scheduler");
-    const started = initCredentialHealthCheck();
+    const started = periodicServicesAllowed("credential-health") && initCredentialHealthCheck();
     console.log(
       started
         ? "[STARTUP] Credential health scheduler started"
@@ -613,7 +629,9 @@ export async function registerNodejs(): Promise<void> {
     initAuditLog();
     console.log("[COMPLIANCE] Audit log table initialized");
 
-    const cleanup = await cleanupExpiredLogs();
+    const cleanup = periodicServicesAllowed("compliance-retention")
+      ? await cleanupExpiredLogs()
+      : {};
     if (
       cleanup.deletedUsage ||
       cleanup.deletedCallLogs ||
@@ -634,7 +652,7 @@ export async function registerNodejs(): Promise<void> {
   // Settings > System & Storage and persists lastVacuumAt for the UI.
   try {
     const { initVacuumScheduler } = await import("@/lib/db/vacuumScheduler");
-    initVacuumScheduler();
+    if (periodicServicesAllowed("vacuum")) initVacuumScheduler();
     console.log("[STARTUP] Scheduled VACUUM initialized (#4437)");
   } catch (err: unknown) {
     if (isRuntimePolicyError(err)) throw err;
@@ -647,7 +665,7 @@ export async function registerNodejs(): Promise<void> {
   // wired into the unused src/server-init.ts, so telemetry tables grew unboundedly
   // even with retention.autoCleanupEnabled=true. Idempotent (guarded internally).
   try {
-    startCleanupScheduler();
+    if (periodicServicesAllowed("retention-cleanup")) startCleanupScheduler();
   } catch (err: unknown) {
     if (isRuntimePolicyError(err)) throw err;
     const msg = err instanceof Error ? err.message : String(err);
@@ -844,5 +862,6 @@ export async function registerNodejs(): Promise<void> {
     }
   }
 
+  confirmPeriodicStartupBarrier();
   markServerReady();
 }

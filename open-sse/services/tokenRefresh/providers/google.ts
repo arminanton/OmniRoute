@@ -1,3 +1,4 @@
+import { runCoordinatedGrantRefresh } from "../../coordination/grantRefresh.ts";
 // @ts-nocheck
 // Extracted from open-sse/services/tokenRefresh.ts — see ../shared.ts for
 // provenance notes (ported idea from KooshaPari's PR #7338, redone on tip).
@@ -9,6 +10,17 @@ import { buildFormParams } from "../shared.ts";
  * Specialized refresh for Google providers (Gemini, Antigravity)
  */
 export async function refreshGoogleToken(
+  refreshToken,
+  clientId,
+  clientSecret,
+  log,
+  proxyConfig: unknown = null
+) {
+  return runCoordinatedGrantRefresh(`google-oauth:${clientId}`, refreshToken, (currentGrant) =>
+    refreshGoogleTokenNative(currentGrant, clientId, clientSecret, log, proxyConfig)
+  );
+}
+async function refreshGoogleTokenNative(
   refreshToken,
   clientId,
   clientSecret,

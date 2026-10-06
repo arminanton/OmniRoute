@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * openrouterProviderStats.ts
  *
@@ -336,6 +337,7 @@ function startPeriodicSync(intervalMs?: number): void {
  * On by default; opt out via OPENROUTER_PROVIDER_STATS_ENABLED=false.
  */
 export function initOpenRouterProviderStatsSync(): boolean {
+  if (!periodicServicesAllowed("provider-stats-sync")) return false;
   if (!getEffectiveOpenRouterProviderStatsEnabled()) {
     console.log("[OpenRouterProviderStats] Disabled via OPENROUTER_PROVIDER_STATS_ENABLED=false.");
     return false;

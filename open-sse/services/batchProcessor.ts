@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 import { v4 as uuidv4 } from "uuid";
 import {
   type BatchItemCheckpoint,
@@ -42,6 +43,7 @@ interface BatchRequestItem {
 }
 
 export function initBatchProcessor() {
+  if (!periodicServicesAllowed("batch-poller")) return;
   if (pollInterval) return pollInterval;
   console.log("[BATCH] Initializing batch processor polling...");
 

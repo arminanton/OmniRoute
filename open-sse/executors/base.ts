@@ -1,4 +1,8 @@
 import {
+  backoffGenerationRetry,
+  isLogicalRetryBudgetError,
+} from "../services/logicalRetryBudget.ts";
+import {
   assertRuntimeProviderSupported,
   assertRuntimeExecutorEntrypoint,
 } from "@/shared/runtimePolicyEntrypoints";
@@ -735,7 +739,7 @@ export class BaseExecutor {
 
       return { input_tokens: inputTokens, provider: this.provider, source: "provider" };
     } catch (error) {
-      if (isRuntimePolicyError(error)) throw error;
+      if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
       log?.debug?.(
         "COUNT_TOKENS",
         `${this.provider}/${model} real count unavailable: ${error instanceof Error ? error.message : String(error)}`
@@ -848,7 +852,7 @@ export class BaseExecutor {
           }
         }
       } catch (error) {
-        if (isRuntimePolicyError(error)) throw error;
+        if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
         // tokenRefresh.ts:1352 documents that onPersist throws are re-thrown so
         // the caller is aware of the persistence failure. Honor that contract:
         // log at error level (not warn), with sanitized message — and let the
@@ -1543,7 +1547,7 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error)) throw error;
+              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
               return "";
             });
           if (/context[_-]management|context editing/i.test(errText)) {
@@ -1579,7 +1583,7 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error)) throw error;
+              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
               return "";
             });
           const upstreamMax = parseThinkingBudgetMax(errText);
@@ -1623,7 +1627,7 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error)) throw error;
+              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
               return "";
             });
           const acceptedValues = parseReasoningEffortEnum(errText);
@@ -1669,7 +1673,7 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error)) throw error;
+              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
               return "";
             });
           const offending = findOffendingField(errText);
@@ -1739,7 +1743,7 @@ export class BaseExecutor {
             .clone()
             .text()
             .catch((error: unknown) => {
-              if (isRuntimePolicyError(error)) throw error;
+              if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
               return "";
             });
           if (/content[_-]blocked/i.test(wafErrText)) {
@@ -1752,7 +1756,8 @@ export class BaseExecutor {
               "WAF_RETRY",
               `400 content-blocked intra-retry ${wafAttempt}/${BaseExecutor.WAF_RETRY_CONFIG.maxAttempts} on ${url} — waiting ${wafBackoff}ms`
             );
-            await new Promise((resolve) => setTimeout(resolve, wafBackoff));
+            await response.body?.cancel().catch(() => {});
+            await backoffGenerationRetry(wafBackoff, signal);
             urlIndex--; // re-run this urlIndex on the next loop iteration
             continue;
           }
@@ -1770,7 +1775,18 @@ export class BaseExecutor {
             "RETRY",
             `429 intra-retry ${attempt}/${BaseExecutor.RETRY_CONFIG.maxAttempts} on ${url} — waiting ${BaseExecutor.RETRY_CONFIG.delayMs}ms`
           );
-          await new Promise((resolve) => setTimeout(resolve, BaseExecutor.RETRY_CONFIG.delayMs));
+          const retryHint = response.headers.get("retry-after");
+          const hintSeconds = retryHint ? Number(retryHint) : NaN;
+          const hintMs = Number.isFinite(hintSeconds)
+            ? Math.max(0, hintSeconds * 1000)
+            : retryHint
+              ? Math.max(0, Date.parse(retryHint) - Date.now())
+              : 0;
+          await response.body?.cancel().catch(() => {});
+          await backoffGenerationRetry(
+            Math.max(BaseExecutor.RETRY_CONFIG.delayMs, Number.isFinite(hintMs) ? hintMs : 0),
+            signal
+          );
           urlIndex--; // re-run this urlIndex on the next loop iteration
           continue;
         }
@@ -1788,7 +1804,7 @@ export class BaseExecutor {
 
         return { response, url, headers: finalHeaders, transformedBody: serializedBody };
       } catch (error) {
-        if (isRuntimePolicyError(error)) throw error;
+        if (isRuntimePolicyError(error) || isLogicalRetryBudgetError(error)) throw error;
         // Distinguish timeout errors from other abort errors
         const err = error instanceof Error ? error : new Error(String(error));
         if (err.name === "TimeoutError") {

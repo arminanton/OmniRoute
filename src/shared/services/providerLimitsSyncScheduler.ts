@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 import {
   getLastProviderLimitsAutoSyncTime,
   getProviderLimitsSyncIntervalMinutes,
@@ -33,6 +34,7 @@ async function runProviderLimitsSyncCycle(): Promise<void> {
 }
 
 export function startProviderLimitsSyncScheduler(): void {
+  if (!periodicServicesAllowed("provider-limits-sync")) return;
   if (schedulerTimer || startupTimer) {
     console.log("[ProviderLimitsSync] Scheduler already running — skipping start");
     return;

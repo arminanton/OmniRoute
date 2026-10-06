@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { isCloudEnabled } from "@/lib/db/settings";
 import { getRuntimePorts } from "@/lib/runtime/ports";
@@ -37,6 +38,7 @@ export class CloudSyncScheduler {
    * Start periodic sync (delays first sync to allow server to be ready)
    */
   async start() {
+    if (!periodicServicesAllowed("cloud-sync")) return;
     if (this.intervalId) {
       return;
     }
@@ -45,14 +47,14 @@ export class CloudSyncScheduler {
 
     // Delay first sync by 30 seconds to ensure server is ready
     const startupTimer = setTimeout(() => {
-      this.syncWithRetry().catch(() => {});
+      if (periodicServicesAllowed("cloud-sync")) this.syncWithRetry().catch(() => {});
     }, 30000);
     startupTimer.unref?.();
 
     // Then sync periodically
     this.intervalId = setInterval(
       () => {
-        this.syncWithRetry().catch(() => {});
+        if (periodicServicesAllowed("cloud-sync")) this.syncWithRetry().catch(() => {});
       },
       this.intervalMinutes * 60 * 1000
     );

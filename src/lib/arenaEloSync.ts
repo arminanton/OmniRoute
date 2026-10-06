@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * arenaEloSync.ts — Arena AI leaderboard ELO sync engine.
  *
@@ -621,6 +622,7 @@ export function getArenaEloSyncStatus(): SyncStatus {
  * — initialization is never fatal.
  */
 export async function initArenaEloSync(): Promise<boolean> {
+  if (!periodicServicesAllowed("arena-elo-sync")) return false;
   if (!getEffectiveArenaEloSyncEnabled()) {
     console.log(
       "[ARENA_ELO_SYNC] Disabled by the effective ARENA_ELO_SYNC_ENABLED feature flag. Enable it from Dashboard Feature Flags, unset the env var, or set it to true to enable."

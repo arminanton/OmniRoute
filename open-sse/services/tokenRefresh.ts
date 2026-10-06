@@ -1,3 +1,4 @@
+import { assertRefreshOwner } from "./coordination/grantRefresh.ts";
 // @ts-nocheck
 //
 // Per-provider refresh implementations live in ./tokenRefresh/providers/ (one
@@ -11,6 +12,7 @@
 // importers (open-sse/index.ts, executors, src/sse/services/tokenRefresh.ts,
 // tests) keep a stable surface.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runSharedRefresh } from "./coordination/fencedTask.ts";
 import { randomUUID } from "node:crypto";
 import {
   hasBlockingProxyAssignment,
@@ -284,17 +286,27 @@ export function isSelfPersistedOAuthProvider(provider: string): boolean {
 export async function refreshNousOAuthToken(credentials, log, proxyConfig: unknown = null) {
   const id = credentials?.connectionId;
   if (!id || typeof id !== "string" || !credentials?.refreshToken) {
-    log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh requires a persisted connection ID and refresh token");
+    log?.warn?.(
+      "TOKEN_REFRESH",
+      "Nous OAuth refresh requires a persisted connection ID and refresh token"
+    );
     return null;
   }
   const ambientProxyType = getAmbientProxyType()?.toLowerCase();
-  if (!isNousOAuthDirectOrConnectProxy(proxyConfig) ||
-      (ambientProxyType && ambientProxyType !== "http" && ambientProxyType !== "https")) {
-    log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh requires direct or approved HTTP(S) CONNECT proxy; SOCKS egress is not validated");
+  if (
+    !isNousOAuthDirectOrConnectProxy(proxyConfig) ||
+    (ambientProxyType && ambientProxyType !== "http" && ambientProxyType !== "https")
+  ) {
+    log?.warn?.(
+      "TOKEN_REFRESH",
+      "Nous OAuth refresh requires direct or approved HTTP(S) CONNECT proxy; SOCKS egress is not validated"
+    );
     return null;
   }
-  if (hasBlockingProxyAssignmentForProvider("nous-oauth") ||
-      hasBlockingProxyAssignment(id, "nous-oauth")) {
+  if (
+    hasBlockingProxyAssignmentForProvider("nous-oauth") ||
+    hasBlockingProxyAssignment(id, "nous-oauth")
+  ) {
     log?.warn?.("TOKEN_REFRESH", "Nous OAuth assigned proxy unavailable; refresh blocked");
     return null;
   }
@@ -307,9 +319,15 @@ export async function refreshNousOAuthToken(credentials, log, proxyConfig: unkno
   } = await import("@/lib/db/providers");
   const load = async () => {
     const row = await getProviderConnectionById(id);
-    if (row?.provider !== "nous-oauth" || row?.authType !== "oauth" ||
-        typeof row.accessToken !== "string" || !row.accessToken ||
-        typeof row.refreshToken !== "string" || !row.refreshToken) return null;
+    if (
+      row?.provider !== "nous-oauth" ||
+      row?.authType !== "oauth" ||
+      typeof row.accessToken !== "string" ||
+      !row.accessToken ||
+      typeof row.refreshToken !== "string" ||
+      !row.refreshToken
+    )
+      return null;
     const inferenceBaseUrl = validateNousOAuthInferenceBaseUrl(
       row.providerSpecificData?.[NOUS_OAUTH_INFERENCE_PSD_KEY]
     );
@@ -329,10 +347,12 @@ export async function refreshNousOAuthToken(credentials, log, proxyConfig: unkno
     const before = await load();
     if (!before) return null;
     const usable = before.expiresAt && new Date(before.expiresAt).getTime() > Date.now() + 30_000;
-    if (usable && (
-      (credentials.accessToken && credentials.accessToken !== before.accessToken) ||
-      credentials.refreshToken !== before.refreshToken
-    )) return before;
+    if (
+      usable &&
+      ((credentials.accessToken && credentials.accessToken !== before.accessToken) ||
+        credentials.refreshToken !== before.refreshToken)
+    )
+      return before;
 
     const owner = randomUUID();
     const lease = acquireNousOAuthRefreshLease(id, before.refreshToken, owner);
@@ -340,8 +360,12 @@ export async function refreshNousOAuthToken(credentials, log, proxyConfig: unkno
       // A concurrent process may have just committed while we waited for the DB.
       // Never POST when the lease is busy or the version has changed.
       const newest = await load();
-      if (newest && newest.accessToken !== before.accessToken &&
-          new Date(newest.expiresAt).getTime() > Date.now() + 30_000) return newest;
+      if (
+        newest &&
+        newest.accessToken !== before.accessToken &&
+        new Date(newest.expiresAt).getTime() > Date.now() + 30_000
+      )
+        return newest;
       return null;
     }
     let entered = false;
@@ -350,30 +374,36 @@ export async function refreshNousOAuthToken(credentials, log, proxyConfig: unkno
     const performGrant = async () => {
       entered = true; // proxy family precheck has finished before this callback
       try {
-      // The lease serializes the network request across processes. The HTTP
-      // timeout is far shorter than its 90s expiry, so normal requests cannot
-      // outlive ownership and a crashed process can recover after expiry.
-      // Strict egress: runWithProxyContext (NOT its OrDirect variant) ignores
-      // control-plane direct-fallback flags. NO_PROXY can still override a
-      // pinned context, so refuse before sending a single-use secret if it did.
-      const route = resolveProxyForRequest(NOUS_TOKEN_URL);
+        // The lease serializes the network request across processes. The HTTP
+        // timeout is far shorter than its 90s expiry, so normal requests cannot
+        // outlive ownership and a crashed process can recover after expiry.
+        // Strict egress: runWithProxyContext (NOT its OrDirect variant) ignores
+        // control-plane direct-fallback flags. NO_PROXY can still override a
+        // pinned context, so refuse before sending a single-use secret if it did.
+        const route = resolveProxyForRequest(NOUS_TOKEN_URL);
         // Env HTTPS_PROXY/ALL_PROXY may silently select SOCKS when DB has no
         // assignment. Validate effective transport BEFORE quarantining/POSTing.
         if (!isNousOAuthDirectOrConnectProxy(route.proxyUrl)) {
           throw new Error("Nous OAuth refresh requires an approved HTTP(S) CONNECT proxy");
         }
-        const needsProxy = Boolean(proxyConfig || hasAmbientProxyContext() ||
-          process.env.HTTPS_PROXY || process.env.https_proxy || process.env.ALL_PROXY || process.env.all_proxy);
+        const needsProxy = Boolean(
+          proxyConfig ||
+          hasAmbientProxyContext() ||
+          process.env.HTTPS_PROXY ||
+          process.env.https_proxy ||
+          process.env.ALL_PROXY ||
+          process.env.all_proxy
+        );
         if (needsProxy && (route.source === "direct" || !route.proxyUrl)) {
           throw new Error("Assigned Nous OAuth refresh proxy cannot be used");
         }
-      // Persist uncertain-grant quarantine immediately BEFORE the POST, but
-      // AFTER proxy family/egress prechecks. An upstream timeout/crash cannot
-      // permit another process to spend this token; an unentered callback has
-      // provably sent nothing and releases the ordinary lease below.
-      if (!quarantineNousOAuthRefreshLease(id, lease.leaseOwner)) return null;
-      sent = true;
-      const response = await fetch(NOUS_TOKEN_URL, {
+        // Persist uncertain-grant quarantine immediately BEFORE the POST, but
+        // AFTER proxy family/egress prechecks. An upstream timeout/crash cannot
+        // permit another process to spend this token; an unentered callback has
+        // provably sent nothing and releases the ordinary lease below.
+        if (!quarantineNousOAuthRefreshLease(id, lease.leaseOwner)) return null;
+        sent = true;
+        const response = await fetch(NOUS_TOKEN_URL, {
           method: "POST",
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
@@ -384,63 +414,80 @@ export async function refreshNousOAuthToken(credentials, log, proxyConfig: unkno
           signal: AbortSignal.timeout(20_000),
           redirect: "manual",
         });
-      if (response.redirected || (response.url && new URL(response.url).origin !== "https://portal.nousresearch.com") ||
-          (response.status >= 300 && response.status < 400)) {
-        log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh refused a redirected portal response");
-        return null;
-      }
-      if (!response.ok) {
-        const raw = await readBoundedNousRefreshBody(response);
-        // Even a complete 429/5xx/invalid_grant can arrive after the portal
-        // consumed a single-use token. Do not clear quarantine on an error.
-        const code = extractOAuthErrorCode(raw);
-        if (code === "invalid_grant" && response.status < 500 &&
-            !response.headers.get("x-vercel-mitigated")) {
-          // A stale token that was already rotated is NOT terminal. Re-read
-          // after the failure before the health-check can deactivate this row.
-          const current = await load();
-          if (!current) return null;
-          if (current.refreshToken !== before.refreshToken) return current;
-          return { error: "unrecoverable_refresh_error", code: "invalid_grant" };
+        if (
+          response.redirected ||
+          (response.url && new URL(response.url).origin !== "https://portal.nousresearch.com") ||
+          (response.status >= 300 && response.status < 400)
+        ) {
+          log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh refused a redirected portal response");
+          return null;
         }
-        // 429, WAF/403, 5xx, malformed responses: transient, never deactivate.
-        log?.warn?.("TOKEN_REFRESH", `Nous OAuth refresh transient HTTP ${response.status}`);
-        return null;
-      }
-      const body = JSON.parse(await readBoundedNousRefreshBody(response));
-      if (typeof body?.access_token !== "string" || !body.access_token ||
-          typeof body?.refresh_token !== "string" || !body.refresh_token ||
+        if (!response.ok) {
+          const raw = await readBoundedNousRefreshBody(response);
+          // Even a complete 429/5xx/invalid_grant can arrive after the portal
+          // consumed a single-use token. Do not clear quarantine on an error.
+          const code = extractOAuthErrorCode(raw);
+          if (
+            code === "invalid_grant" &&
+            response.status < 500 &&
+            !response.headers.get("x-vercel-mitigated")
+          ) {
+            // A stale token that was already rotated is NOT terminal. Re-read
+            // after the failure before the health-check can deactivate this row.
+            const current = await load();
+            if (!current) return null;
+            if (current.refreshToken !== before.refreshToken) return current;
+            return { error: "unrecoverable_refresh_error", code: "invalid_grant" };
+          }
+          // 429, WAF/403, 5xx, malformed responses: transient, never deactivate.
+          log?.warn?.("TOKEN_REFRESH", `Nous OAuth refresh transient HTTP ${response.status}`);
+          return null;
+        }
+        const body = JSON.parse(await readBoundedNousRefreshBody(response));
+        if (
+          typeof body?.access_token !== "string" ||
+          !body.access_token ||
+          typeof body?.refresh_token !== "string" ||
+          !body.refresh_token ||
           body.refresh_token === before.refreshToken ||
-          !Number.isFinite(Number(body.expires_in)) || Number(body.expires_in) <= 0) {
-        log?.warn?.("TOKEN_REFRESH", "Nous OAuth refresh returned incomplete rotating credentials");
-        return null;
-      }
-      // Invalid network metadata cannot drop a successfully rotated credential.
-      // Keep the previous known-good, credential-bound URL if absent/unsafe.
-      let inferenceBaseUrl = before.providerSpecificData[NOUS_OAUTH_INFERENCE_PSD_KEY];
-      if (body.inference_base_url != null && body.inference_base_url !== "") {
-        try {
-          inferenceBaseUrl = validateNousOAuthInferenceBaseUrl(body.inference_base_url);
-        } catch {
-          log?.warn?.("TOKEN_REFRESH", "Nous refresh returned an untrusted inference URL; preserving existing binding");
+          !Number.isFinite(Number(body.expires_in)) ||
+          Number(body.expires_in) <= 0
+        ) {
+          log?.warn?.(
+            "TOKEN_REFRESH",
+            "Nous OAuth refresh returned incomplete rotating credentials"
+          );
+          return null;
         }
-      }
-      const committed = commitNousOAuthRefresh(id, lease.leaseOwner, lease.expectedCipher, {
-        accessToken: body.access_token,
-        refreshToken: body.refresh_token,
-        expiresIn: Number(body.expires_in),
-        inferenceBaseUrl,
-      });
-      if (!committed) {
-        // Another writer won the CAS. Never expose an unpersisted bearer.
-        const current = await load();
-        safeToRelease = Boolean(current && current.refreshToken !== before.refreshToken);
-        return safeToRelease ? current : null;
-      }
-      safeToRelease = true; // durable pair committed; release is now safe
-      // The encrypted access/refresh pair has been committed together. Read
-      // the row back for authoritative expiry and all stored routing metadata.
-      return await load();
+        // Invalid network metadata cannot drop a successfully rotated credential.
+        // Keep the previous known-good, credential-bound URL if absent/unsafe.
+        let inferenceBaseUrl = before.providerSpecificData[NOUS_OAUTH_INFERENCE_PSD_KEY];
+        if (body.inference_base_url != null && body.inference_base_url !== "") {
+          try {
+            inferenceBaseUrl = validateNousOAuthInferenceBaseUrl(body.inference_base_url);
+          } catch {
+            log?.warn?.(
+              "TOKEN_REFRESH",
+              "Nous refresh returned an untrusted inference URL; preserving existing binding"
+            );
+          }
+        }
+        const committed = commitNousOAuthRefresh(id, lease.leaseOwner, lease.expectedCipher, {
+          accessToken: body.access_token,
+          refreshToken: body.refresh_token,
+          expiresIn: Number(body.expires_in),
+          inferenceBaseUrl,
+        });
+        if (!committed) {
+          // Another writer won the CAS. Never expose an unpersisted bearer.
+          const current = await load();
+          safeToRelease = Boolean(current && current.refreshToken !== before.refreshToken);
+          return safeToRelease ? current : null;
+        }
+        safeToRelease = true; // durable pair committed; release is now safe
+        // The encrypted access/refresh pair has been committed together. Read
+        // the row back for authoritative expiry and all stored routing metadata.
+        return await load();
       } finally {
         // This finalizer belongs to the ACTUAL network work, not to the outer
         // proxy-health race. Even if the wrapper returns early on a failed
@@ -793,7 +840,7 @@ export async function getAccessToken(
     }
 
     const entry = { promise: null, waiters: 0 };
-    entry.promise = (async () => {
+    entry.promise = runSharedRefresh(provider, connectionId, async () => {
       const result = await _getAccessTokenWithStalenessCheck(
         provider,
         credentials,
@@ -809,6 +856,7 @@ export async function getAccessToken(
           return result;
         }
         try {
+          assertRefreshOwner();
           await effectiveOnPersist(result);
         } catch (persistErr) {
           const { sanitizeErrorMessage } = await import("../utils/error.ts");
@@ -820,7 +868,7 @@ export async function getAccessToken(
         }
       }
       return result;
-    })().finally(() => {
+    }).finally(() => {
       connectionRefreshMutex.delete(connectionId);
     });
     connectionRefreshMutex.set(connectionId, entry);
@@ -849,6 +897,7 @@ export async function getAccessToken(
           return result;
         }
         try {
+          assertRefreshOwner();
           await effectiveOnPersist(result);
         } catch (persistErr) {
           const { sanitizeErrorMessage } = await import("../utils/error.ts");

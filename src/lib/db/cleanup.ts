@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * Database cleanup functions for removing old data based on retention policies.
  *
@@ -775,6 +776,7 @@ let _cleanupSchedulerTimer: ReturnType<typeof setInterval> | null = null;
  * from better-sqlite3 memory mapping.
  */
 export function startCleanupScheduler(): void {
+  if (!periodicServicesAllowed("retention-cleanup")) return;
   if (_cleanupSchedulerTimer) return;
 
   // Run cleanup 30s after startup (let the server initialize first).

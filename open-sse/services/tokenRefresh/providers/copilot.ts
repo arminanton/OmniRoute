@@ -1,3 +1,4 @@
+import { runCoordinatedGrantRefresh } from "../../coordination/grantRefresh.ts";
 // @ts-nocheck
 // Extracted from open-sse/services/tokenRefresh.ts — see ../shared.ts for
 // provenance notes (ported idea from KooshaPari's PR #7338, redone on tip).
@@ -14,6 +15,18 @@ import { runWithProxyContext } from "../../../utils/proxyFetch.ts";
  * GHE account).
  */
 export async function refreshCopilotToken(
+  githubAccessToken,
+  log,
+  proxyConfig: unknown = null,
+  baseUrl: string = "https://api.github.com"
+) {
+  return runCoordinatedGrantRefresh(
+    `github-copilot:${baseUrl}`,
+    githubAccessToken,
+    (currentGrant) => refreshCopilotTokenNative(currentGrant, log, proxyConfig, baseUrl)
+  );
+}
+async function refreshCopilotTokenNative(
   githubAccessToken,
   log,
   proxyConfig: unknown = null,

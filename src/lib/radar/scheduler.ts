@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 /**
  * scheduler.ts — daily background sync for the Radar feed (spec: "GET 1×/dia,
  * só quando opt-in").
@@ -175,6 +176,7 @@ export function stopRadarSyncScheduler(deps: RadarSchedulerDeps = {}): void {
  * polling loop). Never throws.
  */
 export function initRadarSyncScheduler(deps: RadarSchedulerDeps = {}): boolean {
+  if (!periodicServicesAllowed("radar-sync")) return false;
   try {
     const getFlag = deps.getFlag ?? isFeatureFlagEnabled;
     if (!getFlag("RADAR_ENABLED")) return false;

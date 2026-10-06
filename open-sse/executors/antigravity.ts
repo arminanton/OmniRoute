@@ -1,3 +1,7 @@
+import { runCoordinatedGrantRefresh } from "../services/coordination/grantRefresh.ts";
+import { runSharedRefresh } from "../services/coordination/fencedTask.ts";
+import { getActiveOnPersist } from "../services/tokenRefresh.ts";
+import { isLogicalRetryBudgetError } from "../services/logicalRetryBudget.ts";
 import { randomUUID } from "crypto";
 import {
   BaseExecutor,
@@ -21,7 +25,7 @@ import {
   getCreditsMode,
   handleCreditsFailure,
 } from "../services/antigravityCredits.ts";
-import { persistCreditBalance, getAllPersistedCreditBalances } from "@/lib/db/creditBalance";
+import { persistCreditBalance, getAllPersistedCreditBalanceEntries } from "@/lib/db/creditBalance";
 import { setConnectionRateLimitUntil } from "@/lib/db/providers";
 import { markAntigravityModelQuotaExhausted } from "../services/antigravityFamilyCooldown.ts";
 import { getMitmAlias, getSyncedAvailableModelsForConnection } from "@/lib/db/models";
@@ -175,17 +179,26 @@ type AntigravityRequestEnvelope = Record<string, unknown> & {
 
 const MAX_CREDIT_BALANCE_ENTRIES = 50;
 const CREDIT_BALANCE_TTL_MS = 5 * 60 * 1000;
-const creditBalanceCache = new Map<string, { balance: number; updatedAt: number }>();
+const creditBalanceCache = new Map<
+  string,
+  { balance: number; updatedAt: number; observedAt?: number }
+>();
 let creditCacheHydrated = false;
 
 function hydrateCreditCacheFromDb(): void {
   if (creditCacheHydrated) return;
   creditCacheHydrated = true;
   try {
-    const persisted = getAllPersistedCreditBalances();
-    for (const [accountId, balance] of persisted) {
+    const persisted = getAllPersistedCreditBalanceEntries();
+    for (const [accountId, entry] of persisted) {
+      const observedAt = Date.parse(entry.updatedAt);
+      if (Date.now() - observedAt > CREDIT_BALANCE_TTL_MS) continue;
       if (!creditBalanceCache.has(accountId)) {
-        creditBalanceCache.set(accountId, { balance, updatedAt: Date.now() });
+        creditBalanceCache.set(accountId, {
+          balance: entry.balance,
+          updatedAt: observedAt,
+          observedAt,
+        });
       }
     }
   } catch {}
@@ -221,14 +234,21 @@ export function getAntigravityRemainingCredits(accountId: string): number | null
   return entry.balance;
 }
 
-export function updateAntigravityRemainingCredits(accountId: string, balance: number): void {
+export function updateAntigravityRemainingCredits(
+  accountId: string,
+  balance: number,
+  observedAt = Date.now()
+): void {
+  if (!Number.isFinite(balance) || balance < 0 || !Number.isFinite(observedAt)) return;
+  const previous = creditBalanceCache.get(accountId);
+  if (previous && observedAt < (previous.observedAt ?? previous.updatedAt)) return;
   if (creditBalanceCache.size >= MAX_CREDIT_BALANCE_ENTRIES && !creditBalanceCache.has(accountId)) {
     const oldestKey = creditBalanceCache.keys().next().value;
     if (oldestKey !== undefined) creditBalanceCache.delete(oldestKey);
   }
-  creditBalanceCache.set(accountId, { balance, updatedAt: Date.now() });
+  creditBalanceCache.set(accountId, { balance, updatedAt: Date.now(), observedAt });
   try {
-    persistCreditBalance(accountId, balance);
+    persistCreditBalance(accountId, balance, observedAt);
   } catch {}
 }
 
@@ -920,6 +940,23 @@ export class AntigravityExecutor extends BaseExecutor {
     credentials: AntigravityCredentials,
     log?: ExecutorLog | null
   ): Promise<AntigravityCredentials | null> {
+    return runSharedRefresh(this.provider, credentials.connectionId ?? "", async () => {
+      const result = await runCoordinatedGrantRefresh(
+        `google-oauth:${this.config.clientId}`,
+        credentials.refreshToken ?? "",
+        (currentGrant) =>
+          this.refreshCredentialsNative({ ...credentials, refreshToken: currentGrant }, log)
+      );
+      const persist = getActiveOnPersist();
+      if (result?.accessToken && persist) await persist(result);
+      return result;
+    });
+  }
+
+  private async refreshCredentialsNative(
+    credentials: AntigravityCredentials,
+    log?: ExecutorLog | null
+  ): Promise<AntigravityCredentials | null> {
     if (!credentials.refreshToken) return null;
 
     try {
@@ -1007,6 +1044,7 @@ export class AntigravityExecutor extends BaseExecutor {
         providerSpecificData: credentials.providerSpecificData,
       };
     } catch (error) {
+      if (isLogicalRetryBudgetError(error)) throw error;
       const message = error instanceof Error ? error.message : String(error);
       log?.error?.("TOKEN", `Antigravity refresh error: ${message}`);
       return null;
@@ -1167,6 +1205,7 @@ export class AntigravityExecutor extends BaseExecutor {
       try {
         result = await this.executeOnce(input, candidate);
       } catch (error) {
+        if (isLogicalRetryBudgetError(error)) throw error;
         const outcome = handleAntigravityFallbackChainError(
           input,
           error,
@@ -1293,6 +1332,7 @@ export class AntigravityExecutor extends BaseExecutor {
         if (outcome.sameUrl) urlIndex--;
         continue;
       } catch (error) {
+        if (isLogicalRetryBudgetError(error)) throw error;
         if (signal?.aborted || isAbortError(error)) {
           throw signal?.reason ?? error;
         }
@@ -1652,6 +1692,7 @@ export class AntigravityExecutor extends BaseExecutor {
           decision.kind === "full_quota_exhausted",
       };
     } catch (error) {
+      if (isLogicalRetryBudgetError(error)) throw error;
       if (signal?.aborted || isAbortError(error)) {
         throw signal?.reason ?? error;
       }

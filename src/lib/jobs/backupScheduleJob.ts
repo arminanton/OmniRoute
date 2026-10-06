@@ -1,3 +1,4 @@
+import { periodicServicesAllowed } from "@/lib/periodicServices";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { matchesCron } from "@/lib/jobs/cronMatch";
@@ -111,6 +112,7 @@ export async function runBackupScheduleTick(now: Date = new Date()): Promise<boo
 }
 
 export function startBackupScheduleJob() {
+  if (!periodicServicesAllowed("backup-schedule")) return;
   if (timer) {
     return timer;
   }
