@@ -4,7 +4,6 @@ import { combineAbortSignals } from "./combineAbortSignals.ts";
 import { getFencedTaskContext } from "../services/coordination/fencedTask.ts";
 import {
   budgetedGenerationFetch,
-  consumeGenerationAttempt,
   isLogicalRetryBudgetError,
   backoffGenerationRetry,
 } from "../services/logicalRetryBudget.ts";
@@ -952,17 +951,19 @@ async function patchedFetch(
       isTlsRequestEligible(input, options)
     ) {
       try {
-        consumeGenerationAttempt(input, options);
-        const response = await activeTlsClient.fetch(targetUrl, {
-          method: options.method,
-          headers: options.headers,
-          body: options.body as TlsFetchOptions["body"],
-          redirect: options.redirect,
-          signal: getEffectiveSignal(input, options),
-          proxy: null,
-          sessionScope: tlsStore?.sessionScope,
-          ...tlsProfileForProvider(tlsStore?.provider),
-        });
+        const response = await budgetedGenerationFetch(activeTlsClient.fetch.bind(activeTlsClient))(
+          targetUrl,
+          {
+            method: options.method,
+            headers: options.headers,
+            body: options.body as TlsFetchOptions["body"],
+            redirect: options.redirect,
+            signal: getEffectiveSignal(input, options),
+            proxy: null,
+            sessionScope: tlsStore?.sessionScope,
+            ...tlsProfileForProvider(tlsStore?.provider),
+          }
+        );
         if (tlsStore) tlsStore.used = true;
         return response;
       } catch (error) {
@@ -1203,14 +1204,17 @@ async function patchedFetch(
       const onCallerAbort = () => relayController.abort();
       options.signal?.addEventListener("abort", onCallerAbort, { once: true });
       try {
-        consumeGenerationAttempt(input, options);
-        return await _undiciRelay(relayUrl, {
-          ...options,
-          headers: mergedHeaders,
-          duplex: "half",
-          dispatcher: attempt === 0 ? RELAY_POOL_AGENT : RELAY_RETRY_AGENT,
-          signal: relayController.signal,
-        });
+        const relayDispatch = budgetedGenerationFetch(
+          (_upstreamInput: unknown, _upstreamOptions: unknown) =>
+            _undiciRelay(relayUrl, {
+              ...options,
+              headers: mergedHeaders,
+              duplex: "half",
+              dispatcher: attempt === 0 ? RELAY_POOL_AGENT : RELAY_RETRY_AGENT,
+              signal: relayController.signal,
+            })
+        );
+        return await relayDispatch(input, options);
       } catch (relayError) {
         if (isRuntimePolicyError(relayError) || isLogicalRetryBudgetError(relayError))
           throw relayError;
@@ -1271,17 +1275,19 @@ async function patchedFetch(
     isWreqProxySupported(proxyUrl)
   ) {
     try {
-      consumeGenerationAttempt(input, options);
-      const response = await activeTlsClient.fetch(targetUrl, {
-        method: options.method,
-        headers: options.headers,
-        body: options.body as TlsFetchOptions["body"],
-        redirect: options.redirect,
-        signal: getEffectiveSignal(input, options),
-        proxy: proxyUrl,
-        sessionScope: tlsStore?.sessionScope,
-        ...tlsProfileForProvider(tlsStore?.provider),
-      });
+      const response = await budgetedGenerationFetch(activeTlsClient.fetch.bind(activeTlsClient))(
+        targetUrl,
+        {
+          method: options.method,
+          headers: options.headers,
+          body: options.body as TlsFetchOptions["body"],
+          redirect: options.redirect,
+          signal: getEffectiveSignal(input, options),
+          proxy: proxyUrl,
+          sessionScope: tlsStore?.sessionScope,
+          ...tlsProfileForProvider(tlsStore?.provider),
+        }
+      );
       if (tlsStore) tlsStore.used = true;
       return response;
     } catch (error) {
