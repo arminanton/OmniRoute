@@ -1,6 +1,8 @@
 name: Publish to Docker Hub
 
 on:
+  schedule:
+    - cron: "*/15 * * * *"
   push:
     branches:
       - main
@@ -31,8 +33,8 @@ on:
 # channel only needs the newest SHA; cancel-in-progress is the same pattern as
 # quality.yml / nightly-release-green.
 concurrency:
-  group: docker-publish-${{ github.ref }}
-  cancel-in-progress: true
+  group: docker-publish-${{ github.event_name == 'schedule' && 'runner-alert' || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 # Least-privilege default: read-only at the top level; the build and merge jobs that
 # push to GHCR grant packages: write themselves (Scorecard TokenPermissions).
@@ -42,6 +44,7 @@ permissions:
 jobs:
   prepare:
     name: Resolve Docker release metadata
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -122,10 +125,146 @@ jobs:
 
           echo "Publishing diegosouzapw/omniroute:$VERSION (promote_latest=$PROMOTE, skip=$SKIP)"
 
+  runner-preflight:
+    name: Check omni-build runner availability
+    needs: prepare
+    if: >-
+      github.event_name != 'schedule' &&
+      needs.prepare.outputs.skip != 'true' &&
+      vars.USE_VPS_RUNNER == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Check for an online omni-build runner
+        run: |
+          set -euo pipefail
+
+          # Runner listing requires a token with repository Administration: read.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error title=RUNNER_STATUS_TOKEN required::Set RUNNER_STATUS_TOKEN with repository Administration: read permission; VPS publishing is fail-closed."
+            exit 1
+          fi
+
+          if ! ONLINE_RUNNERS=$(gh api --paginate \
+            --jq '.runners | if type == "array" then .[] | select(.status == "online") | .labels[]? | select(.name == "omni-build") | .name else error("runner response missing runners array") end' \
+            "repos/${REPOSITORY}/actions/runners?per_page=100"); then
+            echo "::error title=Runner status check failed::Could not query or parse Actions runners. Verify RUNNER_STATUS_TOKEN has repository Administration: read permission; VPS publishing is fail-closed."
+            exit 1
+          fi
+
+          if [ -z "$ONLINE_RUNNERS" ]; then
+            MESSAGE='No online self-hosted runner has the omni-build label. Restart the self-hosted runner listener. To use hosted runners, set USE_VPS_RUNNER=false; note ubuntu-24.04 is known to fail this build with ResourceExhausted (#11976).'
+            echo "### Docker runner preflight failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=No online omni-build runner::$MESSAGE"
+            exit 1
+          fi
+
+          echo "Found online omni-build runner(s)."
+
+  runner-alert:
+    name: Alert on omni-build runner availability
+    concurrency:
+      group: runner-alert
+      cancel-in-progress: false
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      REPOSITORY: ${{ github.repository }}
+      RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+      ISSUE_TOKEN: ${{ github.token }}
+    steps:
+      - name: Report omni-build runner status
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RUNNER_STATUS_TOKEN:-}" ]; then
+            echo "::error title=RUNNER_STATUS_TOKEN required::Set RUNNER_STATUS_TOKEN with repository Administration: read permission for runner alerts."
+            exit 1
+          fi
+          if ! RUNNER_EVIDENCE=$(GH_TOKEN="$RUNNER_STATUS_TOKEN" gh api --paginate \
+            --jq '.runners | if type == "array" then .[] | select(any(.labels[]?; .name == "omni-build")) | [.name, .status] | @tsv else error("runner response missing runners array") end' \
+            "repos/${REPOSITORY}/actions/runners?per_page=100"); then
+            echo "::error title=Runner status check failed::Could not query or parse Actions runners. Verify RUNNER_STATUS_TOKEN has repository Administration: read permission."
+            exit 1
+          fi
+
+          ONLINE_RUNNERS=$(printf '%s\n' "$RUNNER_EVIDENCE" | awk -F '\t' '$2 == "online" { print $1 }')
+          TITLE='[Runner Alert] omni-build runner pool offline'
+          if ! ISSUE_ROWS=$(GH_TOKEN="$ISSUE_TOKEN" gh api --paginate \
+            --jq '.[] | select(.pull_request == null and .title == "[Runner Alert] omni-build runner pool offline") | [.number, .state] | @tsv' \
+            "repos/${REPOSITORY}/issues?state=all&per_page=100"); then
+            echo "::error title=Runner alert issue lookup failed::runner-alert requires issues: write permission."
+            exit 1
+          fi
+          OPEN_ISSUES=$(printf '%s\n' "$ISSUE_ROWS" | awk -F '\t' '$2 == "open" { print $1 }')
+          TIMESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+
+          if [ -z "$ONLINE_RUNNERS" ]; then
+            BODY=$(cat <<EOF
+          No online self-hosted runner has the omni-build label.
+
+          Fresh Actions API evidence at $TIMESTAMP (runner name / status):
+          ${RUNNER_EVIDENCE:-No registered omni-build runners found.}
+
+          Restart the self-hosted runner listener, or set USE_VPS_RUNNER=false to use hosted runners.
+          EOF
+          )
+            if [ -n "$OPEN_ISSUES" ]; then
+              ISSUE_NUMBER=${OPEN_ISSUES%%$'\n'*}
+              if ! GH_TOKEN="$ISSUE_TOKEN" gh issue comment "$ISSUE_NUMBER" --repo "$REPOSITORY" --body "$BODY"; then
+                echo "::error title=Runner alert comment failed::runner-alert requires issues: write permission."
+                exit 1
+              fi
+            else
+              if ! GH_TOKEN="$ISSUE_TOKEN" gh issue create --repo "$REPOSITORY" --title "$TITLE" --body "$BODY"; then
+                echo "::error title=Runner alert issue creation failed::runner-alert requires issues: write permission."
+                exit 1
+              fi
+            fi
+          else
+            BODY=$(cat <<EOF
+          omni-build runner pool recovered at $TIMESTAMP.
+
+          Fresh Actions API evidence (runner name / status):
+          $RUNNER_EVIDENCE
+          EOF
+          )
+            while IFS= read -r ISSUE_NUMBER; do
+              [ -n "$ISSUE_NUMBER" ] || continue
+              if ! GH_TOKEN="$ISSUE_TOKEN" gh issue comment "$ISSUE_NUMBER" --repo "$REPOSITORY" --body "$BODY"; then
+                echo "::error title=Runner recovery comment failed::runner-alert requires issues: write permission."
+                exit 1
+              fi
+              if ! GH_TOKEN="$ISSUE_TOKEN" gh api --method PATCH "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" -f state=closed -f state_reason=completed; then
+                echo "::error title=Runner alert close failed::runner-alert requires issues: write permission."
+                exit 1
+              fi
+            done <<< "$OPEN_ISSUES"
+          fi
+
   build:
     name: Build Docker (${{ matrix.platform }})
-    needs: prepare
-    if: needs.prepare.outputs.skip != 'true'
+    needs:
+      - prepare
+      - runner-preflight
+    if: >-
+      github.event_name != 'schedule' &&
+      !cancelled() &&
+      needs.prepare.result == 'success' &&
+      needs.prepare.outputs.skip != 'true' &&
+      (needs.runner-preflight.result == 'success' || needs.runner-preflight.result == 'skipped')
+    # Limits an assigned build only; this does not bound runner queue time.
+    timeout-minutes: 350
     # amd64: the .113 omni-build pool (31 GB / 32 cores, ONE listener since
     # #12048). Hosted ubuntu-24.04 is ~7 GB and dies ResourceExhausted (#11976).
     # Falls back to hosted when USE_VPS_RUNNER is off. arm64: no ARM box — stay
@@ -342,7 +481,7 @@ jobs:
     needs:
       - prepare
       - build
-    if: needs.prepare.outputs.skip != 'true'
+    if: github.event_name != 'schedule' && needs.prepare.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
