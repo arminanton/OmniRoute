@@ -1,3 +1,4 @@
+import { projectErrorHeaders } from "../../utils/googleErrorDiagnostics.ts";
 import { classify429 } from "../../services/antigravity429Engine.ts";
 // Pure-ish per-attempt request/result helpers for the Antigravity executor (#7408
 // complexity-gate decomposition): building + sending one upstream request, and
@@ -457,7 +458,8 @@ export async function tryEmbedLongRetryAfter(
   url: string,
   finalHeaders: Record<string, string>,
   transformedBody: Record<string, unknown>,
-  log: ExecutorLog | null | undefined
+  log: ExecutorLog | null | undefined,
+  signal?: AbortSignal | null
 ): Promise<SsePassthroughResult | null> {
   if (
     response.status !== HTTP_STATUS.RATE_LIMITED ||
@@ -467,7 +469,7 @@ export async function tryEmbedLongRetryAfter(
     return null;
   }
   try {
-    const respBody = await readAntigravityErrorBody(response);
+    const respBody = await readAntigravityErrorBody(response, signal);
     let obj;
     try {
       obj = JSON.parse(respBody);
@@ -487,6 +489,7 @@ export async function tryEmbedLongRetryAfter(
       transformedBody,
     };
   } catch (err) {
+    signal?.throwIfAborted();
     log?.warn?.("RETRY", `Failed to embed retryAfterMs: ${err}`);
     return null;
   }
@@ -497,14 +500,18 @@ async function buildUpstreamErrorResult(
   response: Response,
   url: string,
   finalHeaders: Record<string, string>,
-  transformedBody: Record<string, unknown>
+  transformedBody: Record<string, unknown>,
+  signal?: AbortSignal | null
 ): Promise<SsePassthroughResult> {
-  const rawBody = await readAntigravityErrorBody(response).catch(() => "");
+  const rawBody = await readAntigravityErrorBody(response, signal).catch(() => {
+    signal?.throwIfAborted();
+    return "";
+  });
   const errorBody = buildAntigravityUpstreamError(response.status, response.statusText, rawBody);
   return {
     response: new Response(JSON.stringify(errorBody), {
       status: response.status,
-      headers: { "Content-Type": "application/json" },
+      headers: { ...projectErrorHeaders(response.headers), "Content-Type": "application/json" },
     }),
     url,
     headers: finalHeaders,
@@ -533,7 +540,7 @@ async function buildNonStreamingExecuteOnceResult(
   // #3229: surface a real upstream error instead of masking a 4xx/5xx as an
   // empty `chat.completion` envelope.
   if (!response.ok) {
-    return buildUpstreamErrorResult(response, url, finalHeaders, transformedBody);
+    return buildUpstreamErrorResult(response, url, finalHeaders, transformedBody, signal);
   }
 
   if (response.body) {
@@ -584,7 +591,7 @@ async function buildStreamingExecuteOnceResult(
   onCreditsUpdate: OnAntigravityCreditsUpdate
 ): Promise<SsePassthroughResult> {
   if (!response.ok) {
-    return buildUpstreamErrorResult(response, url, finalHeaders, transformedBody);
+    return buildUpstreamErrorResult(response, url, finalHeaders, transformedBody, signal);
   }
 
   if (response.body) {

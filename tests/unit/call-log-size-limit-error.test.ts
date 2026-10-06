@@ -171,3 +171,142 @@ test("oversized pipeline preserves safe transport correlation and last attempts 
     assert.ok(!JSON.stringify(pipeline).includes("private-secret"));
   }
 });
+
+test("real wrapped Antigravity quota errors and safe upstream headers survive oversized artifacts", async () => {
+  const { buildFinalAntigravityResult } =
+    await import("../../open-sse/executors/antigravity/executeAttempt.ts");
+  const google = {
+    code: 429,
+    status: "RESOURCE_EXHAUSTED",
+    message: "Quota exhausted",
+    details: [
+      { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "30s" },
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        reason: "RATE_LIMIT_EXCEEDED",
+        domain: "googleapis.com",
+        metadata: {
+          quota_metric: "generate_requests",
+          quota_limit_value: "10",
+          consumer: "projects/private-project",
+          authorization: "Bearer private-secret",
+        },
+      },
+      {
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        violations: [
+          {
+            quotaMetric: "generate_requests",
+            quotaId: "RequestsPerMinute",
+            quotaValue: "10",
+            quotaDimensions: {
+              model: "gemini-test",
+              location: "global",
+              consumer: "private-project",
+            },
+            subject: "projects/private-project",
+            description: "Quota reached",
+          },
+        ],
+      },
+    ],
+  };
+  for (const stream of [false, true]) {
+    const result = await buildFinalAntigravityResult(
+      stream,
+      new Response(JSON.stringify({ error: google }), {
+        status: 429,
+        headers: {
+          "retry-after": "30",
+          "x-goog-request-id": "synthetic-google-id",
+          authorization: "Bearer private-secret",
+          "set-cookie": "private-secret",
+        },
+      }),
+      "https://example.invalid",
+      {},
+      {},
+      "synthetic-account",
+      null,
+      () => {}
+    );
+    const body = await result.response.json();
+    assert.equal(result.response.headers.get("retry-after"), "30");
+    for (const giantSummary of [false, true]) {
+      const input = artifact({
+        pipeline: {
+          providerRequest: { body: HUGE_BODY },
+          providerResponse: {
+            status: 429,
+            headers: Object.fromEntries(result.response.headers),
+            body,
+          },
+        },
+      });
+      if (giantSummary)
+        (input as unknown as { summary: { model: string } }).summary.model = HUGE_BODY;
+      const stored = roundTrip(input);
+      const pipeline = stored.pipeline as {
+        providerResponse: {
+          body: { error: { code: string }; upstream_details: { error: typeof google } };
+          headers: Record<string, string>;
+        };
+      };
+      assert.equal(pipeline.providerResponse.body.error.code, body.error.code);
+      const native = pipeline.providerResponse.body.upstream_details.error;
+      assert.equal(native.code, 429);
+      assert.equal(native.status, "RESOURCE_EXHAUSTED");
+      assert.equal(native.details[0].retryDelay, "30s");
+      assert.equal(native.details[1].metadata?.quota_limit_value, "10");
+      assert.equal(native.details[2].violations?.[0].quotaValue, "10");
+      assert.equal(pipeline.providerResponse.headers["x-goog-request-id"], "synthetic-google-id");
+      assert.ok(!JSON.stringify(pipeline).includes("private-secret"));
+      assert.ok(!JSON.stringify(pipeline).includes("private-project"));
+    }
+  }
+});
+
+test("cancelled stalled Antigravity error bodies remain cancellation, never generic responses", async () => {
+  const { buildFinalAntigravityResult, tryEmbedLongRetryAfter } =
+    await import("../../open-sse/executors/antigravity/executeAttempt.ts");
+  for (const status of [429, 503])
+    for (const stream of [false, true]) {
+      const controller = new AbortController();
+      const reason = new Error("synthetic caller cancelled");
+      let cancelled = false;
+      const response = new Response(
+        new ReadableStream({
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { status }
+      );
+      const pending = buildFinalAntigravityResult(
+        stream,
+        response,
+        "https://example.invalid",
+        {},
+        {},
+        "synthetic",
+        controller.signal,
+        () => {}
+      );
+      controller.abort(reason);
+      await assert.rejects(pending, (error) => error === reason);
+      assert.equal(cancelled, true);
+    }
+  const controller = new AbortController();
+  const reason = new Error("synthetic embed cancellation");
+  const pending = tryEmbedLongRetryAfter(
+    new Response(new ReadableStream(), { status: 429 }),
+    90000,
+    "https://example.invalid",
+    {},
+    {},
+    null,
+    controller.signal
+  );
+  controller.abort(reason);
+  await assert.rejects(pending, (error) => error === reason);
+});

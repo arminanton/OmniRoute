@@ -7,6 +7,7 @@
  * success envelope — masking the real error. Route non-ok responses through
  * `buildErrorBody` instead so the client sees a proper error (hard rule #12).
  */
+import { projectGoogleError } from "../utils/googleErrorDiagnostics.ts";
 import { buildErrorBody } from "../utils/error.ts";
 import { isGeoBlockedError } from "../services/errorClassifier.ts";
 
@@ -28,13 +29,18 @@ export function buildAntigravityUpstreamError(status: number, statusText: string
   } catch {
     // upstream body is not JSON (e.g. HTML error page) — omit structured details
   }
+  const native =
+    upstreamDetails && typeof upstreamDetails === "object"
+      ? projectGoogleError((upstreamDetails as Record<string, unknown>).error)
+      : undefined;
+  const wrap = (message: string) => {
+    const body = buildErrorBody(status, message, upstreamDetails);
+    if (native) body.upstream_details = { error: native };
+    return body;
+  };
   const suffix = statusText ? `: ${statusText}` : "";
   if (isGeoBlockedError(rawBody)) {
-    return buildErrorBody(
-      status,
-      `Antigravity upstream error (${status})${suffix}. ${GEO_BLOCKED_HINT}`,
-      upstreamDetails
-    );
+    return wrap(`Antigravity upstream error (${status})${suffix}. ${GEO_BLOCKED_HINT}`);
   }
-  return buildErrorBody(status, `Antigravity upstream error (${status})${suffix}`, upstreamDetails);
+  return wrap(`Antigravity upstream error (${status})${suffix}`);
 }
