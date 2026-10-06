@@ -129,7 +129,9 @@ export async function fetchAntigravityDiscoveryModelsCached(
     const configuredProject =
       typeof configured === "string" &&
       configured.trim() &&
-      configured !== ANTIGRAVITY_REQUIRES_MANUAL_PROJECT
+      ![ANTIGRAVITY_REQUIRES_MANUAL_PROJECT, "test-project", "project-id"].includes(
+        configured.trim()
+      )
         ? configured.trim()
         : undefined;
     const bootstrapProject =

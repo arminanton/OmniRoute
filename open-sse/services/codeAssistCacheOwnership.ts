@@ -16,6 +16,7 @@ const receiptSchema = z
     serviceCapabilityVerified: z.literal(true),
     reference: referenceSchema,
     connectionId: z.string().min(1).max(256),
+    projectId: z.string().min(1).max(256),
     namespace: z.string().regex(/^ag:[a-f0-9]{64}$/),
     model: z.string().min(1).max(256),
     expiresAt: z.number().int().positive(),
@@ -25,6 +26,7 @@ const receiptSchema = z
 export type CodeAssistCacheOwnershipReceipt = z.infer<typeof receiptSchema>;
 export type CodeAssistCacheCredentials = {
   connectionId?: string | null;
+  projectId?: string | null;
   _signatureNamespace?: string | null;
   /** Private ephemeral credentials state, never accepted from a request body. */
   _codeAssistCacheOwnershipReceipt?: unknown;
@@ -59,6 +61,7 @@ export function guardCodeAssistCacheReference(
   if (
     receipt.reference !== reference.data ||
     receipt.connectionId !== credentials.connectionId ||
+    receipt.projectId !== credentials.projectId ||
     receipt.namespace !== credentials._signatureNamespace ||
     receipt.model !== model ||
     receipt.expiresAt <= now

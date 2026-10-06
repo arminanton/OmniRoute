@@ -895,7 +895,7 @@ export class AntigravityExecutor extends BaseExecutor {
     try {
       scopedRequest = guardCodeAssistCacheReference(
         rawTransformedRequest,
-        credentials,
+        { ...credentials, projectId },
         upstreamModel
       );
     } catch (error) {
