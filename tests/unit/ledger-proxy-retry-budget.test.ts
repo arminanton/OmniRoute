@@ -1,3 +1,4 @@
+import { isUncertainGenerationAcceptance } from "../../open-sse/services/generationReplay.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { proxyFetch } from "../../open-sse/utils/proxyFetch.ts";
@@ -5,10 +6,9 @@ import {
   LogicalRetryBudget,
   runWithLogicalRetryBudget,
   runGenerationDispatch,
-  isLogicalRetryBudgetError,
 } from "../../open-sse/services/logicalRetryBudget.ts";
 
-test("fresh socket and native fallback share the same generation budget", async () => {
+test("uncertain generation dispatch never replays on fresh socket or native fallback", async () => {
   const names = [
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -44,11 +44,11 @@ test("fresh socket and native fallback share the same generation budget", async 
           )
         )
       ),
-      isLogicalRetryBudgetError
+      isUncertainGenerationAcceptance
     );
-    assert.equal(dispatched, 2);
+    assert.equal(dispatched, 1);
     assert.equal(native, 0);
-    assert.equal(b.snapshot().attempts, 2);
+    assert.equal(b.snapshot().attempts, 1);
   } finally {
     for (const k of names) {
       if (old[k] === undefined) delete process.env[k];

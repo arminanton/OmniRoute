@@ -32,6 +32,7 @@ const NON_RETRYABLE_ERROR_TYPES = new Set([
   "lease_error",
   "account_semaphore_capacity",
   "logical_retry_budget",
+  "upstream_acceptance_uncertain",
 ]);
 
 export function isRetryableTransportStatus(status: unknown): boolean {

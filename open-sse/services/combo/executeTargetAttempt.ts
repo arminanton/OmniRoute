@@ -733,7 +733,12 @@ export async function executeTargetAttempt(opts: {
       }
     }
 
-    if (classifyUpstreamPolicyRejection(errorBody) || classifyUpstreamPolicyRejection(errorText))
+    if (
+      (errorBody?.error as { type?: unknown } | undefined)?.type ===
+        "upstream_acceptance_uncertain" ||
+      classifyUpstreamPolicyRejection(errorBody) ||
+      classifyUpstreamPolicyRejection(errorText)
+    )
       return { ok: false, response: result };
     const isStreamReadinessFailure =
       (result.status === 502 || result.status === 504) &&

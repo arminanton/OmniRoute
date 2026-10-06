@@ -1,4 +1,8 @@
 import {
+  isUncertainGenerationAcceptance,
+  getGenerationDispatchPhase,
+} from "../services/generationReplay.ts";
+import {
   classifyUpstreamPolicyRejection,
   UPSTREAM_POLICY_REJECTION,
   UpstreamPolicyRejectionError,
@@ -4399,6 +4403,37 @@ export async function handleChatCore({
             );
         return { ...result, errorType: UPSTREAM_POLICY_REJECTION, nativeError: policy };
       }
+      if (isUncertainGenerationAcceptance(error)) {
+        const status = error.name === "TimeoutError" ? 504 : 502;
+        const message =
+          "Generation transport failed after dispatch or without acceptance proof; automatic replay stopped because the upstream may still be processing this request";
+        persistFailureUsage(status, "upstream_acceptance_uncertain");
+        const details = {
+          message: error.message,
+          code: getUpstreamErrorIdentifier(error),
+          phase: getGenerationDispatchPhase(error),
+        };
+        const result = stream
+          ? createStreamingErrorResult(
+              status,
+              message,
+              "upstream_acceptance_uncertain",
+              "upstream_acceptance_uncertain"
+            )
+          : createErrorResult(
+              status,
+              message,
+              null,
+              "upstream_acceptance_uncertain",
+              "upstream_acceptance_uncertain",
+              details
+            );
+        return {
+          ...result,
+          errorType: "upstream_acceptance_uncertain",
+          errorCode: "upstream_acceptance_uncertain",
+        };
+      }
       if (isLogicalRetryBudgetError(error)) {
         const failureMessage = "Logical generation retry budget exhausted";
         persistFailureUsage(503, "logical_retry_budget");
@@ -5994,6 +6029,37 @@ export async function handleChatCore({
               policy
             );
         return { ...result, errorType: UPSTREAM_POLICY_REJECTION, nativeError: policy };
+      }
+      if (isUncertainGenerationAcceptance(error)) {
+        const status = error.name === "TimeoutError" ? 504 : 502;
+        const message =
+          "Generation transport failed after dispatch or without acceptance proof; automatic replay stopped because the upstream may still be processing this request";
+        persistFailureUsage(status, "upstream_acceptance_uncertain");
+        const details = {
+          message: error.message,
+          code: getUpstreamErrorIdentifier(error),
+          phase: getGenerationDispatchPhase(error),
+        };
+        const result = stream
+          ? createStreamingErrorResult(
+              status,
+              message,
+              "upstream_acceptance_uncertain",
+              "upstream_acceptance_uncertain"
+            )
+          : createErrorResult(
+              status,
+              message,
+              null,
+              "upstream_acceptance_uncertain",
+              "upstream_acceptance_uncertain",
+              details
+            );
+        return {
+          ...result,
+          errorType: "upstream_acceptance_uncertain",
+          errorCode: "upstream_acceptance_uncertain",
+        };
       }
       if (isLogicalRetryBudgetError(error)) {
         const failureMessage = "Logical generation retry budget exhausted";

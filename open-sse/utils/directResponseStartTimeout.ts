@@ -1,3 +1,6 @@
+import { getObservedResponseStartTimeoutMs } from "./fetchDispatchObserver.ts";
+import { getLogicalRetryBudget, LogicalRetryBudgetError } from "../services/logicalRetryBudget.ts";
+import { noteGenerationDispatchPhase } from "../services/generationReplay.ts";
 import type { Dispatcher } from "undici";
 
 type DirectFetchOptions = RequestInit & { dispatcher?: unknown };
@@ -10,14 +13,15 @@ export function resolveDirectHeadersTimeoutMs(
   env: Record<string, string | undefined> = process.env
 ): number {
   const raw = env.OMNIROUTE_DIRECT_HEADERS_TIMEOUT_MS;
-  if (raw == null || raw.trim() === "") return DEFAULT_DIRECT_HEADERS_TIMEOUT_MS;
+  if (raw == null || raw.trim() === "")
+    return getObservedResponseStartTimeoutMs() ?? DEFAULT_DIRECT_HEADERS_TIMEOUT_MS;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
 }
 
 function createDirectResponseStartTimeout(timeoutMs: number): Error & { code: string } {
   const err = new Error(
-    `Direct response did not start within ${timeoutMs}ms — retrying on a fresh socket`
+    `Direct response did not start within ${timeoutMs}ms while awaiting provider headers`
   ) as Error & { code: string };
   err.name = "TimeoutError";
   err.code = DIRECT_RESPONSE_START_TIMEOUT_CODE;
@@ -60,14 +64,22 @@ export async function directFetchWithBoundedResponseStart(
   trackDispatchStart = false,
   queueTimeoutMs = 90_000
 ): Promise<Response> {
-  if (!timeoutMs || timeoutMs <= 0) return fetchImpl(input, options);
+  const budget = getLogicalRetryBudget();
+  const remaining = budget ? Math.max(0, budget.snapshot().deadline - Date.now()) : Infinity;
+  if (remaining <= 0)
+    throw new LogicalRetryBudgetError("Logical request deadline expired before dispatch");
+  const effectiveHeadersMs = Math.min(timeoutMs > 0 ? timeoutMs : Infinity, remaining);
+  const effectiveQueueMs = Math.min(queueTimeoutMs, remaining);
+  if (!Number.isFinite(effectiveHeadersMs)) return fetchImpl(input, options);
+  let phase = "unknown",
+    requestStarted: boolean | null = null;
   const attemptController = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const startHeadersTimer = () => {
     clearTimeout(timer);
     timer = setTimeout(
-      () => attemptController.abort(createDirectResponseStartTimeout(timeoutMs)),
-      timeoutMs
+      () => attemptController.abort(createDirectResponseStartTimeout(effectiveHeadersMs)),
+      effectiveHeadersMs
     );
     timer.unref?.();
   };
@@ -88,6 +100,8 @@ export async function directFetchWithBoundedResponseStart(
             handler: Dispatcher.DispatchHandler
           ) => {
             clearTimeout(timer);
+            phase = "transport_queue";
+            requestStarted = false;
             // Bound local queue/connect wait independently. The caller's signal
             // remains authoritative when its remaining deadline is shorter.
             timer = setTimeout(() => {
@@ -98,13 +112,15 @@ export async function directFetchWithBoundedResponseStart(
               // penalize an upstream account as an upstream 504 outage.
               error.code = "SEMAPHORE_TIMEOUT";
               attemptController.abort(error);
-            }, queueTimeoutMs);
+            }, effectiveQueueMs);
             timer.unref?.();
             const tracked = new Proxy(handler, {
               get(receiver, name) {
                 const value = Reflect.get(receiver, name, receiver);
                 if (name === "onRequestStart") {
                   return (...args: unknown[]) => {
+                    phase = "headers";
+                    requestStarted = true;
                     startHeadersTimer();
                     if (typeof value === "function") return Reflect.apply(value, receiver, args);
                   };
@@ -126,6 +142,9 @@ export async function directFetchWithBoundedResponseStart(
       dispatcher,
       signal: mergeAbortSignals(options.signal, attemptController.signal),
     });
+  } catch (error) {
+    noteGenerationDispatchPhase(error, phase, requestStarted);
+    throw error;
   } finally {
     clearTimeout(timer);
   }
