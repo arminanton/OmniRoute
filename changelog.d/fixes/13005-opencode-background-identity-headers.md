@@ -1,0 +1,1 @@
+- **fix(opencode):** send CLI identity headers and a stable connection-scoped `x-opencode-session` on background model discovery and quota calls; session IDs are hashed, with connection ID fallback ([#13005](https://github.com/diegosouzapw/OmniRoute/pull/13005))
