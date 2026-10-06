@@ -1,3 +1,4 @@
+import { installControlPlaneRuntime } from "./controlPlaneRuntime.ts";
 import {
   markUncertainGenerationAcceptance,
   noteGenerationDispatchPhase,
@@ -362,3 +363,6 @@ export async function backoffGenerationRetry(
 export function consumeCurrentGenerationAttempt(): void {
   getLogicalRetryBudget()?.consumeAttempt();
 }
+
+// Server-only bootstrap: shared browser modules never import Node retry ownership.
+installControlPlaneRuntime(runControlPlaneDispatch);
