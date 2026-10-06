@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 🐛 Antigravity reliability
+
+- Preserve independent conversation sessions and tool thought signatures across streaming and non-streaming turns; keep valid account affinity ahead of capacity scoring.
+- Bound stream queues by bytes, release upstream readers on cancellation, drain discarded retry responses, and report interrupted responses as failures.
+- Separate transport queue wait from response-start time; make retry backoff cancellable with jitter and preserve credits after transient throttling or transport failures.
+- Coalesce post-usage quota refreshes through the network phase and retain the five-second default when its environment override is unset.
+
 ### ✨ New Features
 
 - **feat(dashboard):** adaptive context-budget dial on the compression settings panel — mode (`off` / `floor` / `replace-autotrigger`) and policy (`reserve-output` / `percentage` / `absolute`) persist via `PUT /api/settings/compression` `contextBudget`. Completes the dashboard half of #7005 (API + DB already shipped in #7183).

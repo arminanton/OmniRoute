@@ -1,3 +1,4 @@
+import { withAntigravityConversationIdentity } from "../services/antigravityIdentity.ts";
 import {
   extractRequestToolIdentityMap,
   resolveResponseToolNameMap,
@@ -1228,6 +1229,13 @@ export async function handleChatCore({
     model: requestedModel,
     body: body && typeof body === "object" ? (body as Record<string, unknown>) : null,
   });
+  credentials = withAntigravityConversationIdentity(
+    provider,
+    credentials,
+    apiKeyInfo?.id,
+    explicitSessionIdHeader || conversationId
+  );
+  const geminiSignatureNamespace = credentials?._signatureNamespace ?? connectionId;
   effectiveServiceTier = resolveEffectiveServiceTier(body);
   setGeminiThoughtSignatureMode(settings.antigravitySignatureCacheMode);
   // A semantic cache hit also bypasses the managed lease's execution fence;
@@ -2535,7 +2543,7 @@ export async function handleChatCore({
           normalizeToolCallId,
           preserveDeveloperRole,
           preserveCacheControl,
-          signatureNamespace: connectionId,
+          signatureNamespace: geminiSignatureNamespace,
           copilotClient: copilotCompatibleReasoning,
           reasoningCacheContext,
           reasoningCacheScope,
@@ -5280,7 +5288,7 @@ export async function handleChatCore({
                 sourceFormat
               ),
               preserveCacheControl,
-              signatureNamespace: connectionId,
+              signatureNamespace: geminiSignatureNamespace,
               copilotClient: copilotCompatibleReasoning,
               reasoningCacheContext,
               reasoningCacheScope,
@@ -6253,7 +6261,8 @@ export async function handleChatCore({
       // openai-responses → openai translation still wants the namespace identity
       // map for #7936-style round-trip closure when the client also speaks
       // Responses (Codex CLI).
-      requestToolIdentityMap
+      requestToolIdentityMap,
+      geminiSignatureNamespace
     );
   } else if (needsTranslation(targetFormat, clientResponseFormat)) {
     // Standard translation for other providers
@@ -6283,7 +6292,8 @@ export async function handleChatCore({
         clientResponseFormat,
       }),
       customToolNames,
-      requestToolIdentityMap
+      requestToolIdentityMap,
+      geminiSignatureNamespace
     );
   } else {
     log?.debug?.("STREAM", `Standard passthrough mode`);
@@ -6298,7 +6308,8 @@ export async function handleChatCore({
       apiKeyInfo,
       handleStreamFailure,
       clientResponseFormat,
-      requestToolIdentityMap
+      requestToolIdentityMap,
+      geminiSignatureNamespace
     );
   }
 

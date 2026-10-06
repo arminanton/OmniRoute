@@ -60,7 +60,10 @@ import {
   getQuotaScopeLabelForProvider,
   isAntigravityQuotaProvider,
 } from "@omniroute/open-sse/services/antigravityQuotaFamily.ts";
-import { rehydrateAntigravityFamilyLocksForConnections, persistAntigravityFamilyCooldownIfQuota } from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
+import {
+  rehydrateAntigravityFamilyLocksForConnections,
+  persistAntigravityFamilyCooldownIfQuota,
+} from "@omniroute/open-sse/services/antigravityFamilyCooldown.ts";
 import { markQuotaPreflightAccountUnavailable } from "./quotaPreflightUnavailable.ts";
 import { getCreditsMode } from "@omniroute/open-sse/services/antigravityCredits.ts";
 import { preferAntigravityConnectionsWithStoredProject } from "@omniroute/open-sse/services/antigravityProjectPersistence.ts";
@@ -2099,7 +2102,11 @@ export async function getProviderCredentials(
       connection = orderedConnections[0];
     }
 
-    if (options.reserveOAuthSession === true && connection?.authType === "oauth") {
+    if (
+      options.reserveOAuthSession === true &&
+      connection?.authType === "oauth" &&
+      !affinityConnection
+    ) {
       const selectedPriority = connection.priority || 999;
       const selectedAvailability = getOAuthSessionAvailability(connection.id, options.sessionKey);
       const moreAvailablePeer = [...orderedConnections]
@@ -2455,7 +2462,7 @@ export function isAgentrouterConnectionQuotaScope(
 }
 
 async function resolveDailyResetForProvider(
-  provider: string | null,
+  provider: string | null
 ): Promise<{ timezone?: unknown; hour?: unknown } | null> {
   if (!provider) return null;
   try {
@@ -2693,7 +2700,7 @@ export async function markAccountUnavailable(
       effectiveProviderProfile,
       null,
       null,
-      await resolveDailyResetForProvider(provider),
+      await resolveDailyResetForProvider(provider)
     );
 
     // T-PROBE: probe-origin failures (model test-all) must never remove the
@@ -2947,7 +2954,13 @@ export async function markAccountUnavailable(
         "AUTH",
         `Model-only lockout for ${provider}:${model} — ${status} ${reason} ${Math.ceil(lockout.cooldownMs / 1000)}s (failureCount=${lockout.failureCount}, connection stays active)`
       );
-      persistAntigravityFamilyCooldownIfQuota({ provider, connectionId, model, cooldownMs: lockout.cooldownMs, reason });
+      persistAntigravityFamilyCooldownIfQuota({
+        provider,
+        connectionId,
+        model,
+        cooldownMs: lockout.cooldownMs,
+        reason,
+      });
       return { shouldFallback: true, cooldownMs: lockout.cooldownMs };
     }
     const result = fallbackResult;

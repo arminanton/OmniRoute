@@ -1,3 +1,4 @@
+import { classify429 } from "../../services/antigravity429Engine.ts";
 // Pure-ish per-attempt request/result helpers for the Antigravity executor (#7408
 // complexity-gate decomposition): building + sending one upstream request, and
 // building the final non-streaming/streaming result. No host state of their own —
@@ -5,7 +6,7 @@
 // import the executor's credit-balance cache. Extracted from antigravity.ts
 // (file-size cap), mirroring the existing antigravity/streamingPassthrough.ts and
 // antigravity/sseCollect.ts submodule pattern.
-import { mergeAbortSignals, type ExecutorLog } from "../base.ts";
+import { type ExecutorLog } from "../base.ts";
 import { applyFingerprint, isCliCompatEnabled } from "../../config/cliFingerprints.ts";
 import { buildAntigravityUpstreamError } from "../antigravityUpstreamError.ts";
 import { maybeTriggerReactiveModelSync } from "@/lib/providerModels/reactiveModelSync.ts";
@@ -21,11 +22,9 @@ import {
   removeHeaderCaseInsensitive,
 } from "../../services/antigravityClientProfile.ts";
 import * as prl from "../../utils/providerRequestLogging.ts";
-import {
-  createCreditsExtractionTransform as createCreditsExtractionTransformImpl,
-  buildSsePassthroughResult,
-  type SsePassthroughResult,
-} from "./streamingPassthrough.ts";
+import { buildSsePassthroughResult, type SsePassthroughResult } from "./streamingPassthrough.ts";
+import { disposeAntigravityResponse, readAntigravityErrorBody } from "./lifecycle.ts";
+import { withFetchDispatchObserver } from "../../utils/fetchDispatchObserver.ts";
 import type { AntigravityCredentials } from "../antigravity.ts";
 
 const LONG_RETRY_THRESHOLD_MS = 60_000;
@@ -96,16 +95,6 @@ class AntigravityPreResponseTimeoutError extends Error {
   }
 }
 
-function getAbortErrorCode(error: unknown): string | null {
-  if (!error || typeof error !== "object") return null;
-  const value = (error as { code?: unknown }).code;
-  return typeof value === "string" ? value : null;
-}
-
-function isAntigravityPreResponseTimeout(error: unknown): boolean {
-  return getAbortErrorCode(error) === ANTIGRAVITY_PRE_RESPONSE_TIMEOUT_CODE;
-}
-
 export function isAbortError(error: unknown): boolean {
   return (
     (error instanceof DOMException && error.name === "AbortError") ||
@@ -122,7 +111,8 @@ export function isAbortError(error: unknown): boolean {
 export async function fetchAntigravityWithReadinessTimeout(
   url: string,
   init: RequestInit,
-  timeoutMs = STREAM_READINESS_TIMEOUT_MS
+  timeoutMs = STREAM_READINESS_TIMEOUT_MS,
+  queueTimeoutMs = 90_000
 ): Promise<Response> {
   const boundedTimeoutMs = Math.max(0, Math.floor(timeoutMs));
   if (boundedTimeoutMs <= 0) {
@@ -130,26 +120,49 @@ export async function fetchAntigravityWithReadinessTimeout(
   }
 
   const timeoutController = new AbortController();
-  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-    timeoutController.abort(new AntigravityPreResponseTimeoutError(boundedTimeoutMs, url));
-  }, boundedTimeoutMs);
+  let active = true;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const startHeadersTimer = () => {
+    if (!active) return;
+    if (timeoutId) clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => {
+      timeoutController.abort(new AntigravityPreResponseTimeoutError(boundedTimeoutMs, url));
+    }, boundedTimeoutMs);
+  };
+  const startQueueTimer = () => {
+    if (!active) return;
+    if (timeoutId) clearTimeout(timeoutId);
+    timeoutId = setTimeout(
+      () => {
+        const error = new Error(
+          "Antigravity request waited too long for a transport slot"
+        ) as Error & { code: string };
+        error.code = "SEMAPHORE_TIMEOUT";
+        timeoutController.abort(error);
+      },
+      Math.max(1, queueTimeoutMs)
+    );
+  };
+  startHeadersTimer();
 
   const existingSignal = init.signal instanceof AbortSignal ? init.signal : null;
   const combinedSignal = existingSignal
-    ? mergeAbortSignals(existingSignal, timeoutController.signal)
+    ? AbortSignal.any([existingSignal, timeoutController.signal])
     : timeoutController.signal;
 
   try {
-    return await fetch(url, { ...init, signal: combinedSignal });
+    return await withFetchDispatchObserver(
+      { queued: startQueueTimer, started: startHeadersTimer },
+      () => fetch(url, { ...init, signal: combinedSignal })
+    );
   } catch (error) {
-    if (
-      timeoutController.signal.aborted &&
-      isAntigravityPreResponseTimeout(timeoutController.signal.reason)
-    ) {
+    if (existingSignal?.aborted) throw existingSignal.reason;
+    if (timeoutController.signal.aborted) {
       throw timeoutController.signal.reason;
     }
     throw error;
   } finally {
+    active = false;
     if (timeoutId) {
       clearTimeout(timeoutId);
       timeoutId = null;
@@ -369,6 +382,7 @@ export async function sendAntigravityRequest(
     removeHeaderCaseInsensitive(retryHeaders, "x-goog-user-project");
     log.debug("RETRY", "403 with x-goog-user-project, retrying once without it");
     await prl.captureCurrentProviderBody(url, retryHeaders, serializedRequest.bodyString, log);
+    await disposeAntigravityResponse(response);
     response = await fetchAntigravityWithReadinessTimeout(url, {
       method: "POST",
       headers: retryHeaders,
@@ -441,43 +455,39 @@ export async function tryCreditsRetry(
       signal,
     });
     if (creditsResp.ok || creditsResp.status !== HTTP_STATUS.RATE_LIMITED) {
-      log.info("AG_CREDITS", `Credits retry succeeded: ${creditsResp.status}`);
-      if (!stream && creditsResp.body) {
-        // Raw SSE pass-through + credits extraction (see
-        // streamingPassthrough.ts); 499s early if the client
-        // already disconnected instead of piping a cancelled body.
-        return buildSsePassthroughResult(
-          creditsResp.body,
-          creditsResp,
-          accountId,
-          onCreditsUpdate,
-          url,
-          finalCreditsHeaders,
-          creditsBody,
-          signal
-        );
-      }
-      return {
-        response: creditsResp,
+      return buildFinalAntigravityResult(
+        stream,
+        creditsResp,
         url,
-        headers: finalCreditsHeaders,
-        transformedBody: creditsBody,
-      };
+        finalCreditsHeaders,
+        creditsBody,
+        accountId,
+        signal,
+        onCreditsUpdate
+      );
     }
 
-    // Credit retry also 429'd
-    handleCreditsFailure(credentials?.accessToken || "");
-    log.warn("AG_CREDITS", "Credits retry also 429'd");
-
-    // Also mark in our legacy exhaustion map to avoid retrying other routes
-    markCreditsExhausted(accountId);
+    const errorBody = await readAntigravityErrorBody(creditsResp, signal);
+    let message = errorBody;
+    try {
+      message = buildAntigravity429ErrorMessage(JSON.parse(errorBody));
+    } catch {
+      /* Plain-text upstream error. */
+    }
+    if (classify429(message) === "quota_exhausted") {
+      handleCreditsFailure(credentials?.accessToken || "");
+      markCreditsExhausted(accountId);
+      log.warn("AG_CREDITS", "Credits retry reports exhausted quota or credit balance");
+    } else {
+      log.warn("AG_CREDITS", "Credits retry was throttled; preserving credit eligibility");
+    }
     return null;
   } catch (creditsErr) {
     if (signal?.aborted || isAbortError(creditsErr)) {
       throw signal?.reason ?? creditsErr;
     }
-    handleCreditsFailure(credentials?.accessToken || "");
-    log.warn("AG_CREDITS", `Credits retry failed: ${creditsErr}`);
+    // A transport failure is not evidence that account credits are exhausted.
+    log.warn("AG_CREDITS", `Credits retry transport failed: ${creditsErr}`);
     return null;
   }
 }
@@ -504,7 +514,7 @@ export async function tryEmbedLongRetryAfter(
     return null;
   }
   try {
-    const respBody = await response.clone().text();
+    const respBody = await readAntigravityErrorBody(response);
     let obj;
     try {
       obj = JSON.parse(respBody);
@@ -536,10 +546,7 @@ async function buildUpstreamErrorResult(
   finalHeaders: Record<string, string>,
   transformedBody: Record<string, unknown>
 ): Promise<SsePassthroughResult> {
-  const rawBody = await response
-    .clone()
-    .text()
-    .catch(() => "");
+  const rawBody = await readAntigravityErrorBody(response).catch(() => "");
   const errorBody = buildAntigravityUpstreamError(response.status, response.statusText, rawBody);
   return {
     response: new Response(JSON.stringify(errorBody), {
@@ -628,38 +635,16 @@ async function buildStreamingExecuteOnceResult(
   }
 
   if (response.body) {
-    // If the downstream client aborts, cancel the upstream fetch body immediately
-    // to release the socket back to the Undici agent pool and prevent memory leaks.
-    if (signal) {
-      const abortHandler = () => {
-        try {
-          response.body?.cancel().catch(() => {});
-        } catch (_) {}
-      };
-      if (signal.aborted) {
-        abortHandler();
-      } else {
-        signal.addEventListener("abort", abortHandler, { once: true });
-      }
-    }
-
-    const passThrough = createCreditsExtractionTransformImpl(
+    return buildSsePassthroughResult(
+      response.body,
+      response,
       accountId,
       onCreditsUpdate,
-      16 * 1024 // 16KB sliding-window cap to prevent OOM
-    );
-    const tappedBody = response.body.pipeThrough(passThrough);
-    const tappedResponse = new Response(tappedBody, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
-    return {
-      response: tappedResponse,
       url,
-      headers: finalHeaders,
+      finalHeaders,
       transformedBody,
-    };
+      signal
+    );
   }
 
   return {

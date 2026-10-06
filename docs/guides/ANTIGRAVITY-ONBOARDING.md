@@ -20,7 +20,7 @@ lastUpdated: 2026-07-31
 
 ## 1. Antigravity vs Antigravity CLI (agy)
 
-Both providers share the **same Google backend** — identical OAuth client, token refresh, endpoints, and Google accounts. The difference is what models you see.
+OmniRoute currently routes both profiles through Google Cloud Code generation endpoints. Profiles and model catalogs differ; quota can be shared when the same Google account is imported under both providers. Native CLI and IDE products may also contain other generation transports.
 
 > See [Antigravity CLI announcement](https://antigravity.google/blog/introducing-google-antigravity-cli) for Google's official comparison.
 
@@ -276,3 +276,15 @@ Account not working?
 ---
 
 _Last updated: 2026-07-31. Based on OmniRoute v3.8.50._
+
+## Parallel conversations and tool turns
+
+Send a stable `x-omniroute-session-id` for each independent conversation. Use a different ID for each child agent; reusing a parent ID across all children defeats conversation isolation. OmniRoute derives the native session and thought-signature namespace from the selected account, calling API key, and conversation ID. Native requests with their own `request.sessionId` retain that value.
+
+Configure a positive `sessionAffinityTtlMs` to keep a healthy account pinned through a conversation. Capacity preference cannot replace a valid pin or active lease. An explicit zero retains routing without session affinity; account failover can also change native identity. Transport capacity and model/account routing strategies remain separate concerns.
+
+Antigravity stream queues use byte limits. Caller cancellation releases the upstream reader even when downstream output is blocked. Broken body reads, in-band errors, and native responses ending before a completion marker are failures. Transport queue time has a separate deadline from the response-header deadline; retry waits honor cancellation and add jitter.
+
+Post-usage quota refreshes coalesce per connection through the network phase. An unset or blank `PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS` keeps the five-second default; an explicit zero requests immediate refresh. Transient credits throttling and transport errors do not establish that credit balance is exhausted.
+
+The local concurrency checks cover 1, 30, 70, and 100 independent conversations with streaming and non-streaming tool round trips. They do not establish Google's available capacity or account quota. Native SDK WebSockets connect to a local runtime; upstream HTTP/2 and AI Code transports require separate validation before adoption.

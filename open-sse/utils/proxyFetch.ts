@@ -1,5 +1,6 @@
 // @ts-nocheck
 import "./setupPolyfill.ts";
+import { observeFetchDispatcher, notifyFetchRequestStart } from "./fetchDispatchObserver.ts";
 import { prepareOwnListenerSelfHop } from "./selfHop.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
@@ -974,6 +975,7 @@ async function patchedFetch(
     if (process.versions.bun) {
       const _nativeFetch =
         (deps.nativeFetch as FetchWithDispatcher | undefined) ?? originalFetchWithDispatcher;
+      notifyFetchRequestStart();
       return _nativeFetch(input, options);
     }
     // Direct undici path: bound response-start, fresh-socket retry, and body guard.
@@ -997,7 +999,9 @@ async function patchedFetch(
           input,
           {
             ...options,
-            dispatcher: attempt === 0 ? getDefaultDispatcher() : getRetryDispatcher(),
+            dispatcher: observeFetchDispatcher(
+              attempt === 0 ? getDefaultDispatcher() : getRetryDispatcher()
+            ),
           },
           _undiciDirect,
           directHeadersTimeoutMs,
@@ -1080,7 +1084,10 @@ async function patchedFetch(
               if (fallbackProxyUrl) {
                 try {
                   const dispatcher = createProxyDispatcher(fallbackProxyUrl);
-                  return await _undiciDirect(input, { ...options, dispatcher });
+                  return await _undiciDirect(input, {
+                    ...options,
+                    dispatcher: observeFetchDispatcher(dispatcher),
+                  });
                 } catch (error) {
                   if (isRuntimePolicyError(error)) throw error;
                   // Proxy also failed — fall through to native fetch
@@ -1288,8 +1295,9 @@ async function patchedFetch(
     try {
       return await _undiciProxy(input, {
         ...options,
-        dispatcher:
-          attempt === 0 ? createProxyDispatcher(proxyUrl) : getProxyRetryDispatcher(proxyUrl),
+        dispatcher: observeFetchDispatcher(
+          attempt === 0 ? createProxyDispatcher(proxyUrl) : getProxyRetryDispatcher(proxyUrl)
+        ),
       });
     } catch (error) {
       if (isRuntimePolicyError(error)) throw error;

@@ -1,3 +1,4 @@
+import { createPostUsageRefreshScheduler } from "./providerLimits/postUsageRefresh";
 import {
   getProviderConnectionById,
   getProviderConnections,
@@ -94,33 +95,17 @@ const PROVIDER_LIMITS_APIKEY_PROVIDERS = new Set([
 ]);
 const DEFAULT_PROVIDER_LIMITS_SYNC_INTERVAL_MINUTES = 70;
 const PROVIDER_LIMITS_AUTO_SYNC_SETTING_KEY = "provider_limits_auto_sync_last_run";
-const DEFAULT_PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS = 5_000;
-const pendingPostUsageRefreshes = new Set<string>();
-
-function getProviderLimitsPostUsageRefreshDelayMs(): number {
-  const raw = Number(process.env.PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS ?? "");
-  return Number.isFinite(raw) && raw >= 0
-    ? raw
-    : DEFAULT_PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS;
-}
-
-function scheduleProviderLimitsPostUsageRefresh(connectionId: string): void {
-  if (!connectionId || pendingPostUsageRefreshes.has(connectionId)) return;
-
-  pendingPostUsageRefreshes.add(connectionId);
-  const timer = setTimeout(() => {
-    pendingPostUsageRefreshes.delete(connectionId);
-    void fetchAndPersistProviderLimits(connectionId, "scheduled", {
-      allowRotatingRefresh: true,
-    }).catch((error) => {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(
-        `[ProviderLimits] Post-usage refresh failed for connection ${connectionId}: ${message}`
-      );
-    });
-  }, getProviderLimitsPostUsageRefreshDelayMs());
-  timer.unref?.();
-}
+const scheduleProviderLimitsPostUsageRefresh = createPostUsageRefreshScheduler(
+  (connectionId) =>
+    fetchAndPersistProviderLimits(connectionId, "scheduled", { allowRotatingRefresh: true }),
+  undefined,
+  (connectionId, error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[ProviderLimits] Post-usage refresh failed for connection ${connectionId}: ${message}`
+    );
+  }
+);
 
 export function notifyProviderUsageRecorded(
   provider: string | null | undefined,

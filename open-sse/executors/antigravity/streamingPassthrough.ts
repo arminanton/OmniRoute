@@ -18,92 +18,91 @@ function asCreditRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/**
- * Create a pass-through TransformStream that extracts `remainingCredits`
- * from SSE data without consuming the stream.  The downstream client
- * receives the unmodified bytes.
- *
- * @param accountId  Provider account ID for credit-balance persistence.
- * @param onCreditsUpdate  Invoked with the parsed GOOGLE_ONE_AI balance.
- *                   Injected by the caller (antigravity.ts's
- *                   updateAntigravityRemainingCredits) to avoid this module
- *                   importing back the executor's credit-balance cache.
- * @param bufferSize  Optional sliding-window buffer cap in bytes.
- *                   Pass 0 or omit for unlimited (non-streaming callers
- *                   where the full body is already buffered upstream).
- *                   The streaming path uses 16384 (16 KB) to prevent OOM
- *                   on long-lived SSE connections.  Credit-balance data
- *                   appears near the end of the SSE stream (after
- *                   content), so the sliding window captures it even at
- *                   16 KB -- only truly massive responses (>16 KB of
- *                   consecutive non-newline content) would lose credits.
- */
+/** Tap complete SSE data lines immediately; bound only incomplete metadata. */
 export function createCreditsExtractionTransform(
   accountId: string,
   onCreditsUpdate: (accountId: string, balance: number) => void,
-  bufferSize = 0
+  bufferSize = 0,
+  validateCompletion = false
 ): TransformStream<Uint8Array, Uint8Array> {
   let buffer = "";
+  let nativeCandidateSeen = false;
+  let completed = false;
+  let discardingLine = false;
   const decoder = new TextDecoder();
-
-  return new TransformStream(
+  const extract = (line: string) => {
+    if (!line.trimStart().startsWith("data:")) return;
+    const payload = line.trimStart().slice(5).trim();
+    if (payload === "[DONE]") {
+      completed = true;
+      return;
+    }
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      return;
+    }
+    const response = asCreditRecord(parsed.response);
+    const candidates = response?.candidates;
+    if (Array.isArray(candidates) && candidates.length > 0) {
+      nativeCandidateSeen = true;
+      if (asCreditRecord(candidates[0])?.finishReason) completed = true;
+    }
+    const upstreamError = asCreditRecord(parsed.error ?? response?.error);
+    if (validateCompletion && upstreamError) {
+      const error = new Error("Antigravity upstream stream reported an error") as Error & {
+        status: number;
+      };
+      const code = Number(upstreamError.code);
+      error.status = Number.isInteger(code) && code >= 400 && code <= 599 ? code : 502;
+      throw error;
+    }
+    try {
+      const entries = parsed.remainingCredits ?? response?.remainingCredits;
+      if (!Array.isArray(entries)) return;
+      const credit = entries.find(
+        (entry: unknown) => asCreditRecord(entry)?.creditType === "GOOGLE_ONE_AI"
+      );
+      const balance = Number(credit?.creditAmount);
+      if (credit?.creditAmount != null && Number.isFinite(balance) && balance >= 0)
+        onCreditsUpdate(accountId, balance);
+    } catch {
+      // Metadata is optional; malformed lines must not alter the forwarded bytes.
+    }
+  };
+  const consume = (text: string, final = false) => {
+    buffer += text;
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      if (!discardingLine) extract(buffer.slice(0, newline));
+      discardingLine = false;
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf("\n");
+    }
+    if (final) {
+      if (!discardingLine) extract(buffer);
+      buffer = "";
+    } else if (buffer.length > (bufferSize > 0 ? bufferSize : 256 * 1024)) {
+      buffer = "";
+      discardingLine = true;
+    }
+  };
+  return new TransformStream<Uint8Array, Uint8Array>(
     {
       transform(chunk, controller) {
         controller.enqueue(chunk);
-        try {
-          buffer += decoder.decode(chunk, { stream: true });
-          // Sliding-window cap: truncate after the last complete newline
-          // in the discard region so SSE lines are never split mid-payload.
-          if (bufferSize > 0 && buffer.length > bufferSize) {
-            const lastNewline = buffer.lastIndexOf("\n", buffer.length - bufferSize);
-            if (lastNewline !== -1) {
-              buffer = buffer.slice(lastNewline + 1);
-            } else {
-              // No newline in the discard region -- incomplete line, discard entirely.
-              buffer = "";
-            }
-          }
-        } catch {
-          /* decoding best-effort */
-        }
+        consume(decoder.decode(chunk, { stream: true }));
       },
       flush() {
-        try {
-          buffer += decoder.decode();
-        } catch {
-          /* decoding best-effort */
+        consume(decoder.decode(), true);
+        if (validateCompletion && nativeCandidateSeen && !completed) {
+          throw new Error("Antigravity upstream stream ended before completion");
         }
-        try {
-          const lines = buffer.split("\n");
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              const parsed = JSON.parse(payload);
-              if (Array.isArray(parsed?.remainingCredits)) {
-                const googleCredit = parsed.remainingCredits.find((c: unknown) => {
-                  const credit = asCreditRecord(c);
-                  return credit?.creditType === "GOOGLE_ONE_AI";
-                }) as AntigravityCreditEntry | undefined;
-                if (googleCredit) {
-                  const balance = parseInt(String(googleCredit.creditAmount ?? ""), 10);
-                  if (!isNaN(balance)) onCreditsUpdate(accountId, balance);
-                }
-              }
-            } catch {
-              /* skip malformed lines */
-            }
-          }
-        } catch {
-          /* credits extraction is best-effort */
-        }
-        buffer = "";
       },
     },
-    { highWaterMark: 16384 },
-    { highWaterMark: 16384 }
+    new ByteLengthQueuingStrategy({ highWaterMark: 16 * 1024 }),
+    new ByteLengthQueuingStrategy({ highWaterMark: 16 * 1024 })
   );
 }
 
@@ -115,14 +114,67 @@ export type SsePassthroughResult = {
   transformedBody: unknown;
 };
 
-/** Cancel `body` when `signal` aborts, releasing the upstream connection. */
-function cancelBodyOnAbort(body: ReadableStream<Uint8Array>, signal: AbortSignal): void {
-  signal.addEventListener(
-    "abort",
-    () => {
-      body.cancel().catch(() => {});
+/** Own the reader so abort can free a socket even while a transform write is blocked. */
+function abortableBody(
+  body: ReadableStream<Uint8Array>,
+  signal?: AbortSignal | null
+): ReadableStream<Uint8Array> {
+  if (!signal) return body;
+  const reader = body.getReader();
+  let ended = false;
+  const cleanup = () => signal.removeEventListener("abort", abort);
+  const release = () => {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* A read may still be settling. */
+    }
+  };
+  let output: ReadableStreamDefaultController<Uint8Array>;
+  const abort = () => {
+    if (ended) return;
+    ended = true;
+    cleanup();
+    output.error(signal.reason);
+    void reader
+      .cancel(signal.reason)
+      .catch(() => {})
+      .finally(release);
+  };
+  return new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        output = controller;
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+      },
+      async pull(controller) {
+        try {
+          const { done, value } = await reader.read();
+          if (ended) return;
+          if (done) {
+            ended = true;
+            cleanup();
+            release();
+            controller.close();
+          } else controller.enqueue(value);
+        } catch (error) {
+          if (!ended) {
+            ended = true;
+            cleanup();
+            release();
+            controller.error(error);
+          }
+        }
+      },
+      async cancel(reason) {
+        ended = true;
+        cleanup();
+        await reader.cancel(reason).catch(() => {});
+        release();
+      },
     },
-    { once: true }
+    new ByteLengthQueuingStrategy({ highWaterMark: 16 * 1024 })
   );
 }
 
@@ -157,11 +209,9 @@ export function buildSsePassthroughResult(
       transformedBody: null,
     };
   }
-  // Cancel upstream body on client disconnect
-  if (signal) cancelBodyOnAbort(body, signal);
-
-  const tapped = body.pipeThrough(
-    createCreditsExtractionTransform(accountId, onCreditsUpdate, 16 * 1024)
+  const tapped = abortableBody(body, signal).pipeThrough(
+    createCreditsExtractionTransform(accountId, onCreditsUpdate, 256 * 1024, true),
+    signal ? { signal } : undefined
   );
   return {
     response: new Response(tapped, {

@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 
 export type AntigravityCredentialsLike = {
+  _antigravitySessionId?: string | null;
+  _signatureNamespace?: string | null;
   accessToken?: string | null;
   connectionId?: string | null;
   email?: string | null;
@@ -76,6 +78,35 @@ export function getAntigravitySessionId(
 ): string {
   return (
     toNonEmptyString(fallback) ||
+    toNonEmptyString(credentials?._antigravitySessionId) ||
     generateAntigravitySessionId()
   );
+}
+
+/** Ephemeral request identity; never persist conversation fields on an account row. */
+export function withAntigravityConversationIdentity<T extends AntigravityCredentialsLike>(
+  provider: string | null | undefined,
+  credentials: T,
+  principal: unknown,
+  conversation: unknown
+): T {
+  if (provider !== "antigravity" && provider !== "agy") return credentials;
+  const conversationKey = toNonEmptyString(conversation);
+  if (!conversationKey) return credentials;
+  const account =
+    toNonEmptyString(credentials.connectionId) ?? getAntigravityAccountKey(credentials);
+  if (!account) return credentials;
+  const namespace =
+    "ag:" +
+    crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify([account, toNonEmptyString(principal) ?? "anonymous", conversationKey])
+      )
+      .digest("hex");
+  return {
+    ...credentials,
+    _signatureNamespace: namespace,
+    _antigravitySessionId: deriveAntigravitySessionId(namespace),
+  };
 }

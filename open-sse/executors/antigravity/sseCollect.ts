@@ -1,15 +1,21 @@
+import { randomUUID } from "node:crypto";
 // Pure SSE-payload -> collected-stream parsing for the Antigravity executor.
 // Extracted verbatim from antigravity.ts (no host state, no fetch/auth).
 import { normalizeOpenAICompatibleFinishReasonString } from "../../utils/finishReason.ts";
 import { stripObfuscationZeroWidth } from "../../utils/zeroWidth.ts";
 
 export type AntigravityCollectedStream = {
+  nativeCandidateSeen?: boolean;
+  completed?: boolean;
+  pendingThoughtSignature?: string;
+  upstreamError?: { status: number };
   textContent: string;
   finishReason: string;
   toolCalls: Array<{
     id: string;
     index: number;
     type: "function";
+    thought_signature?: string;
     function: { name: string; arguments: string };
   }>;
   usage: Record<string, unknown> | null;
@@ -18,8 +24,7 @@ export type AntigravityCollectedStream = {
 
 // Both run once per SSE data line / per text part (processAntigravitySSEPayload),
 // so the literals are hoisted to module constants.
-const TEXTUAL_TOOL_CALL_RE =
-  /^[\s\S]*?\[Tool call:\s*([^\]\n]+)\]\s*\nArguments:\s*([\s\S]+?)\s*$/;
+const TEXTUAL_TOOL_CALL_RE = /^[\s\S]*?\[Tool call:\s*([^\]\n]+)\]\s*\nArguments:\s*([\s\S]+?)\s*$/;
 
 export function stripZeroWidth(value: unknown): unknown {
   if (typeof value === "string") {
@@ -61,7 +66,7 @@ export function addAntigravityTextualToolCall(
   parsed: { name: string; args: unknown }
 ): void {
   collected.toolCalls.push({
-    id: `${parsed.name}-${Date.now()}-${collected.toolCalls.length}`,
+    id: `call_${randomUUID()}`,
     index: collected.toolCalls.length,
     type: "function",
     function: {
@@ -77,9 +82,21 @@ export function processAntigravitySSEPayload(
   collected: AntigravityCollectedStream,
   log?: { debug?: (scope: string, message: string) => void }
 ) {
-  if (!payload || payload === "[DONE]") return;
+  if (!payload) return;
+  if (payload === "[DONE]") {
+    collected.completed = true;
+    return;
+  }
   try {
     const parsed = JSON.parse(payload);
+    const error = parsed?.error ?? parsed?.response?.error;
+    if (error && typeof error === "object") {
+      const code = Number(error.code);
+      collected.upstreamError = {
+        status: Number.isInteger(code) && code >= 400 && code <= 599 ? code : 502,
+      };
+      return;
+    }
     const markdown =
       typeof parsed?.markdown === "string"
         ? parsed.markdown
@@ -90,8 +107,13 @@ export function processAntigravitySSEPayload(
       collected.textContent += markdown;
     }
     const candidate = parsed?.response?.candidates?.[0];
+    if (candidate) collected.nativeCandidateSeen = true;
+    if (candidate?.finishReason) collected.completed = true;
     if (candidate?.content?.parts) {
       for (const part of candidate.content.parts) {
+        const signature = part.thoughtSignature ?? part.thought_signature;
+        if (typeof signature === "string" && signature.length > 0)
+          collected.pendingThoughtSignature = signature;
         // Native function calls: Gemini 3.x responds to functionDeclarations with a
         // native functionCall part (usually carrying a thoughtSignature), NOT the
         // legacy "[Tool call: ...]" textual format. Dropping these left the collected
@@ -100,17 +122,18 @@ export function processAntigravitySSEPayload(
         if (part.functionCall && typeof part.functionCall.name === "string") {
           const fc = part.functionCall;
           collected.toolCalls.push({
-            id:
-              typeof fc.id === "string" && fc.id.length > 0
-                ? fc.id
-                : `${fc.name}-${Date.now()}-${collected.toolCalls.length}`,
+            id: typeof fc.id === "string" && fc.id.length > 0 ? fc.id : `call_${randomUUID()}`,
             index: collected.toolCalls.length,
             type: "function",
+            ...(collected.pendingThoughtSignature
+              ? { thought_signature: collected.pendingThoughtSignature }
+              : {}),
             function: {
               name: fc.name,
               arguments: JSON.stringify(stripZeroWidth(fc.args ?? {})),
             },
           });
+          collected.pendingThoughtSignature = undefined;
           collected.finishReason = "tool_calls";
           continue;
         }

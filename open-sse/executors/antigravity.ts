@@ -1,4 +1,4 @@
-import crypto, { randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import {
   BaseExecutor,
   mergeUpstreamExtraHeaders,
@@ -6,17 +6,14 @@ import {
   type ExecutorLog,
   type ProviderCredentials,
 } from "./base.ts";
-import { PROVIDERS, OAUTH_ENDPOINTS, HTTP_STATUS, FETCH_TIMEOUT_MS } from "../config/constants.ts";
+import { PROVIDERS, OAUTH_ENDPOINTS, HTTP_STATUS } from "../config/constants.ts";
 import { scrubProxyAndFingerprintHeaders } from "../services/antigravityHeaderScrub.ts";
 import {
   getAntigravityContentHeaders,
   getAntigravityOAuthUserAgent,
 } from "../services/antigravityHeaders.ts";
 import { classify429, decide429, type Decision } from "../services/antigravity429Engine.ts";
-import {
-  parseRetryFromErrorText,
-  type RetryHintProvenance,
-} from "../services/accountFallback.ts";
+import { parseRetryFromErrorText, type RetryHintProvenance } from "../services/accountFallback.ts";
 import { parseDetailedRetryHintFromJsonBody } from "../services/retryAfterJson.ts";
 import {
   shouldRetryWithCredits,
@@ -33,6 +30,11 @@ import {
   isSelectedAntigravityClaudeModel,
   getAntigravityClaudeThinkingLevel,
 } from "../config/antigravityClaudeEffort.ts";
+import {
+  readAntigravityErrorBody,
+  disposeAntigravityResponse,
+  waitForAntigravityRetry,
+} from "./antigravity/lifecycle.ts";
 import { buildErrorBody } from "../utils/error.ts";
 import {
   MAX_ANTIGRAVITY_OUTPUT_TOKENS,
@@ -54,11 +56,7 @@ import {
   stripCloudCodeThinkingConfig,
 } from "../services/cloudCodeThinking.ts";
 import { buildGeminiTools } from "../translator/helpers/geminiToolsSanitizer.ts";
-import {
-  type AntigravityCollectedStream,
-  processAntigravitySSEText,
-  flushAntigravitySSEText,
-} from "./antigravity/sseCollect.ts";
+import { collectAntigravityResponse } from "./antigravity/collectResponse.ts";
 // processAntigravitySSEPayload re-exported for external importers (tests).
 export { processAntigravitySSEPayload } from "./antigravity/sseCollect.ts";
 import {
@@ -146,6 +144,8 @@ interface AntigravityContent {
 }
 
 export type AntigravityCredentials = ProviderCredentials & {
+  _signatureNamespace?: string | null;
+  _antigravitySessionId?: string | null;
   projectId?: string | null;
   expiresIn?: number;
 };
@@ -385,7 +385,9 @@ const COMPETITIVE_AGENT_PROMPT_PATTERNS: RegExp[] = [
  */
 export function stripCompetitiveAgentPrompts(systemInstruction: unknown): unknown {
   const record = asRecord(systemInstruction);
-  const parts = Array.isArray(record?.parts) ? (record.parts as Array<Record<string, unknown>>) : [];
+  const parts = Array.isArray(record?.parts)
+    ? (record.parts as Array<Record<string, unknown>>)
+    : [];
   if (parts.length === 0) return systemInstruction;
 
   let changed = false;
@@ -393,7 +395,10 @@ export function stripCompetitiveAgentPrompts(systemInstruction: unknown): unknow
     if (typeof part.text !== "string" || part.text.length === 0) return part;
     let text = part.text;
     for (const pattern of COMPETITIVE_AGENT_PROMPT_PATTERNS) {
-      const stripped = text.replace(pattern, "").replace(/\n{3,}/g, "\n\n").trimStart();
+      const stripped = text
+        .replace(pattern, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trimStart();
       if (stripped !== text) {
         changed = true;
         text = stripped;
@@ -603,7 +608,9 @@ export class AntigravityExecutor extends BaseExecutor {
     // account-scoped; never union another account's model capabilities.
     for (const provider of ["agy", "antigravity"]) {
       const models = await getSyncedAvailableModelsForConnection(provider, connectionId);
-      if (models.some((entry) => entry.id === baseModel && entry.supportsAdaptiveThinking === true)) {
+      if (
+        models.some((entry) => entry.id === baseModel && entry.supportsAdaptiveThinking === true)
+      ) {
         return true;
       }
     }
@@ -740,19 +747,32 @@ export class AntigravityExecutor extends BaseExecutor {
 
     const requestedClaude = splitAntigravityClaudeEffort(model);
     const thinkingLevel = getAntigravityClaudeThinkingLevel(model, bodyRecord);
-    const adaptiveClaude = (requestedClaude.effort !== null || thinkingLevel !== null) &&
-      await this.supportsAdaptiveClaudeForConnection(model, credentials.connectionId);
+    const adaptiveClaude =
+      (requestedClaude.effort !== null || thinkingLevel !== null) &&
+      (await this.supportsAdaptiveClaudeForConnection(model, credentials.connectionId));
     if (requestedClaude.effort && (!adaptiveClaude || !thinkingLevel)) {
-      return new Response(JSON.stringify(buildErrorBody(400,
-        "Claude effort alias requires authenticated adaptive-thinking capability and a supported low/medium/high effort."
-      )), { status: 400, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify(
+          buildErrorBody(
+            400,
+            "Claude effort alias requires authenticated adaptive-thinking capability and a supported low/medium/high effort."
+          )
+        ),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
     }
     const dispatchModel = adaptiveClaude ? requestedClaude.baseModel : model;
     const upstreamModel = await cleanModelName(dispatchModel, modelIdOverride);
     if (requestedClaude.effort && upstreamModel !== requestedClaude.baseModel) {
-      return new Response(JSON.stringify(buildErrorBody(400,
-        "Claude effort alias cannot be applied to a different upstream model."
-      )), { status: 400, headers: { "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify(
+          buildErrorBody(
+            400,
+            "Claude effort alias cannot be applied to a different upstream model."
+          )
+        ),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
     }
     const isClaude = upstreamModel.toLowerCase().includes("claude");
     // #10104: newer Gemini endpoints reject a request ending on a `model` turn with
@@ -768,8 +788,12 @@ export class AntigravityExecutor extends BaseExecutor {
       ? stripCloudCodeThinkingConfig(baseBody)
       : baseBody;
     const normalizedRequest = asRecord(normalizedBody.request);
-    if (adaptiveClaude && thinkingLevel && normalizedRequest &&
-        upstreamModel === requestedClaude.baseModel) {
+    if (
+      adaptiveClaude &&
+      thinkingLevel &&
+      normalizedRequest &&
+      upstreamModel === requestedClaude.baseModel
+    ) {
       normalizedRequest.generationConfig = {
         ...asRecord(normalizedRequest.generationConfig),
         thinkingConfig: { thinkingLevel },
@@ -1090,112 +1114,19 @@ export class AntigravityExecutor extends BaseExecutor {
     headers: Record<string, string>,
     transformedBody: Record<string, unknown>,
     log?: ExecutorLog | null,
-    signal?: AbortSignal | null
+    signal?: AbortSignal | null,
+    signatureNamespace?: string | null
   ) {
-    if (!response.body) {
-      return Promise.resolve({ response, url, headers, transformedBody });
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    const logger = log || undefined;
-
-    // Guard against indefinite hangs when the upstream sends headers but
-    // stalls on the body.  Inherit the global FETCH_TIMEOUT_MS (default 600 s,
-    // overridable via env) so reasoning-heavy models (gemini-3.1-pro-high on
-    // large prompts) are not killed by a hardcoded 120 s ceiling.
-    const SSE_COLLECT_TIMEOUT_MS = FETCH_TIMEOUT_MS;
-
-    const collect = async () => {
-      const collected: AntigravityCollectedStream = {
-        textContent: "",
-        finishReason: "stop",
-        toolCalls: [],
-        usage: null,
-        remainingCredits: null,
-      };
-      const partialLine = { value: "" };
-      let timedOut = false;
-      const timeout = AbortSignal.timeout(SSE_COLLECT_TIMEOUT_MS);
-      try {
-        while (true) {
-          if (signal?.aborted) throw new Error("Request aborted during SSE collection");
-          const { done, value } = await Promise.race([
-            reader.read(),
-            new Promise<never>((_, reject) =>
-              timeout.addEventListener(
-                "abort",
-                () => reject(new Error("SSE collection timed out")),
-                { once: true }
-              )
-            ),
-          ]);
-          if (done) break;
-          processAntigravitySSEText(
-            decoder.decode(value, { stream: true }),
-            partialLine,
-            collected,
-            logger
-          );
-        }
-      } catch (err) {
-        const msg = err?.message || String(err);
-        timedOut = msg.includes("timed out");
-        log?.warn?.("SSE_COLLECT", `Error collecting SSE stream: ${msg}`);
-        // Cancel the stream to prevent locking the socket in Undici pool
-        try {
-          reader.releaseLock();
-        } catch (_) {}
-        try {
-          response.body?.cancel().catch(() => {});
-        } catch (_) {}
-      } finally {
-        try {
-          reader.releaseLock();
-        } catch (_) {}
-      }
-      processAntigravitySSEText(decoder.decode(), partialLine, collected, logger);
-      flushAntigravitySSEText(partialLine, collected, logger);
-
-      const result = {
-        id: `chatcmpl-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [
-          {
-            index: 0,
-            message:
-              collected.toolCalls.length > 0
-                ? {
-                    role: "assistant",
-                    content: collected.textContent || null,
-                    tool_calls: collected.toolCalls,
-                  }
-                : { role: "assistant", content: collected.textContent },
-            finish_reason: timedOut
-              ? "length"
-              : collected.toolCalls.length > 0
-                ? "tool_calls"
-                : collected.finishReason,
-          },
-        ],
-        ...(collected.usage && { usage: collected.usage }),
-        // Expose credit balance for upstream consumers (usage service, dashboard)
-        ...(collected.remainingCredits && { _remainingCredits: collected.remainingCredits }),
-      };
-
-      const syntheticStatus = timedOut ? 504 : response.status;
-      const syntheticResponse = new Response(JSON.stringify(result), {
-        status: syntheticStatus,
-        statusText: timedOut ? "Gateway Timeout" : response.statusText,
-        headers: [["Content-Type", "application/json"]],
-      });
-
-      return { response: syntheticResponse, url, headers, transformedBody };
-    };
-
-    return collect();
+    return collectAntigravityResponse(
+      response,
+      model,
+      url,
+      headers,
+      transformedBody,
+      log,
+      signal,
+      signatureNamespace
+    );
   }
 
   /**
@@ -1426,7 +1357,25 @@ export class AntigravityExecutor extends BaseExecutor {
       });
 
       if (rateLimitOutcome.action === "return") {
-        return { action: "return", result: rateLimitOutcome.result };
+        const creditsResult = rateLimitOutcome.result;
+        if (!stream && creditsResult.response.ok && creditsResult.response.body) {
+          const collected = await this.buildAntigravityAttemptResult(
+            model,
+            false,
+            creditsResult.response,
+            creditsResult.url,
+            creditsResult.headers,
+            asRecord(creditsResult.transformedBody) ?? {},
+            accountId,
+            signal,
+            log,
+            typeof credentials._signatureNamespace === "string"
+              ? credentials._signatureNamespace
+              : accountId
+          );
+          return { action: "return", result: collected };
+        }
+        return { action: "return", result: creditsResult };
       }
       if (rateLimitOutcome.action === "retrySameUrl") return { action: "retry", sameUrl: true };
       if (rateLimitOutcome.action === "retryNextUrl") {
@@ -1438,6 +1387,7 @@ export class AntigravityExecutor extends BaseExecutor {
     }
 
     if (this.shouldRetry(response.status, urlIndex)) {
+      await disposeAntigravityResponse(response);
       log.debug("RETRY", `${response.status} on ${url}, trying fallback ${urlIndex + 1}`);
       return { action: "retry", sameUrl: false, lastStatus: response.status };
     }
@@ -1462,7 +1412,10 @@ export class AntigravityExecutor extends BaseExecutor {
       transformedBody,
       accountId,
       signal,
-      log
+      log,
+      typeof credentials._signatureNamespace === "string"
+        ? credentials._signatureNamespace
+        : accountId
     );
     return { action: "return", result };
   }
@@ -1487,7 +1440,8 @@ export class AntigravityExecutor extends BaseExecutor {
     transformedBody: Record<string, unknown>,
     accountId: string,
     signal: AbortSignal | null | undefined,
-    log: SafeAntigravityLog
+    log: SafeAntigravityLog,
+    signatureNamespace?: string | null
   ): Promise<SsePassthroughResult> {
     if (!stream && response.ok && response.body) {
       return this.collectStreamToResponse(
@@ -1497,7 +1451,8 @@ export class AntigravityExecutor extends BaseExecutor {
         finalHeaders,
         transformedBody,
         log,
-        signal
+        signal,
+        signatureNamespace
       );
     }
 
@@ -1530,10 +1485,10 @@ export class AntigravityExecutor extends BaseExecutor {
 
     // If no retry time in headers, try to parse from error message body
     let switchAuth = false;
-    if (!retryMs) {
+    {
       const resolved = await this.tryResolveRetryFromErrorBody(ctx);
       if (resolved.kind === "return") return { action: "return", result: resolved.result };
-      retryMs = resolved.retryMs;
+      retryMs = Math.max(retryMs ?? 0, resolved.retryMs ?? 0) || null;
       switchAuth = resolved.switchAuth;
     }
 
@@ -1554,7 +1509,8 @@ export class AntigravityExecutor extends BaseExecutor {
         "RETRY",
         `${response.status} retry ${retryAttemptsByUrl[urlIndex]}/${MAX_AUTO_RETRIES} with Retry-After: ${Math.ceil(effectiveRetryMs / 1000)}s, waiting...`
       );
-      await new Promise((resolve) => setTimeout(resolve, effectiveRetryMs));
+      await disposeAntigravityResponse(response);
+      await waitForAntigravityRetry(effectiveRetryMs, ctx.signal);
       return { action: "retrySameUrl" };
     }
 
@@ -1575,7 +1531,8 @@ export class AntigravityExecutor extends BaseExecutor {
           "RETRY",
           `${response.status} transient auto retry ${retryAttemptsByUrl[urlIndex]}/${MAX_AUTO_RETRIES} after ${backoffMs / 1000}s`
         );
-        await new Promise((resolve) => setTimeout(resolve, backoffMs));
+        await disposeAntigravityResponse(response);
+        await waitForAntigravityRetry(backoffMs, ctx.signal);
         return { action: "retrySameUrl" };
       }
     }
@@ -1586,6 +1543,7 @@ export class AntigravityExecutor extends BaseExecutor {
     );
 
     if (urlIndex + 1 < fallbackCount) {
+      await disposeAntigravityResponse(response);
       return { action: "retryNextUrl", lastStatus: response.status };
     }
 
@@ -1619,13 +1577,15 @@ export class AntigravityExecutor extends BaseExecutor {
     } = ctx;
 
     try {
-      const errorBody = await response.clone().text();
+      const errorBody = await readAntigravityErrorBody(response);
       const errorJson = JSON.parse(errorBody);
       const errorMessage = buildAntigravity429ErrorMessage(errorJson);
 
       // 1. Try to parse explicit retry time from message
       const bodyRetryHint = resolveAntigravityBodyRetryHint(errorBody, errorMessage);
-      const parsedRetryMs = bodyRetryHint?.retryMs ?? null;
+      const parsedRetryMs =
+        Math.max(this.parseRetryHeaders(response.headers) ?? 0, bodyRetryHint?.retryMs ?? 0) ||
+        null;
 
       // 2. Classify 429, then decide the final retry time BEFORE the credits retry so
       //    full_quota_exhausted can skip the credits attempt entirely (avoids ~41s hold
@@ -1664,17 +1624,26 @@ export class AntigravityExecutor extends BaseExecutor {
           updateAntigravityRemainingCredits
         );
         if (creditsResult) return { kind: "return", result: creditsResult };
-        if (retryMs && (decision.kind === "full_quota_exhausted" || decision.kind === "short_cooldown_switch_auth")) {
+        if (
+          retryMs &&
+          (decision.kind === "full_quota_exhausted" ||
+            decision.kind === "short_cooldown_switch_auth")
+        ) {
           markConnectionQuotaExhausted(accountId, retryMs, ctx.model);
         }
-      } else if (decision.kind === "full_quota_exhausted" || decision.kind === "short_cooldown_switch_auth") {
+      } else if (
+        decision.kind === "full_quota_exhausted" ||
+        decision.kind === "short_cooldown_switch_auth"
+      ) {
         if (retryMs) markConnectionQuotaExhausted(accountId, retryMs, ctx.model);
       }
 
       return {
         kind: "resolved",
         retryMs,
-        switchAuth: decision.kind === "short_cooldown_switch_auth",
+        switchAuth:
+          decision.kind === "short_cooldown_switch_auth" ||
+          decision.kind === "full_quota_exhausted",
       };
     } catch (error) {
       if (signal?.aborted || isAbortError(error)) {
@@ -1693,7 +1662,7 @@ export class AntigravityExecutor extends BaseExecutor {
     if (response.status === HTTP_STATUS.RATE_LIMITED) return true;
     if (!ANTIGRAVITY_TRANSIENT_STATUSES.has(response.status)) return false;
     try {
-      const errBody = await response.clone().text();
+      const errBody = await readAntigravityErrorBody(response);
       let errJson: unknown = null;
       try {
         errJson = errBody ? JSON.parse(errBody) : null;
