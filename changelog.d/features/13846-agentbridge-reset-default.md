@@ -1,0 +1,1 @@
+Add an authenticated per-agent AgentBridge restore-default endpoint. It removes only that agent’s host entries and mappings, clears its DNS/setup flags, and best-effort flushes Windows DNS cache. Shared MITM server and root CA remain untouched.

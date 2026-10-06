@@ -29,6 +29,7 @@ interface AgentCardProps {
   mappings: MappingRow[];
   onDnsToggle: (agentId: string, enabled: boolean) => Promise<void>;
   onMappingsSave: (agentId: string, mappings: MappingRow[]) => Promise<void>;
+  onReset: (agentId: string) => Promise<boolean>;
 }
 
 /**
@@ -42,9 +43,14 @@ export function AgentCard({
   mappings,
   onDnsToggle,
   onMappingsSave,
+  onReset,
 }: AgentCardProps) {
   const t = useTranslations("agentBridge");
   const [expanded, setExpanded] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetDone, setResetDone] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [dnsLoading, setDnsLoading] = useState(false);
   const [riskModalOpen, setRiskModalOpen] = useState(false);
@@ -111,6 +117,23 @@ export function AgentCard({
     setRiskModalOpen(false);
     await reallyToggleDns(true);
   };
+
+  const handleResetConfirm = async () => {
+    setResetLoading(true);
+    setResetError(null);
+    try {
+      if (await onReset(target.id)) {
+        setConfirmReset(false);
+        setResetDone(true);
+      }
+    } catch (error) {
+      setResetError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const hasConfiguredState = dnsEnabled || setupCompleted || mappings.length > 0;
 
   return (
     <>
@@ -201,6 +224,23 @@ export function AgentCard({
               </div>
             )}
 
+            {resetDone && (
+              <div className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+                <span className="material-symbols-outlined text-[16px] shrink-0">check_circle</span>
+                <span>
+                  {(
+                    t("resetDone") ||
+                    "Default DNS restored for {agent}. Fully quit the app (not just minimize) and reopen it for the change to take effect."
+                  ).replace("{agent}", target.name)}
+                </span>
+              </div>
+            )}
+            {resetError && (
+              <p role="alert" className="text-xs text-red-600 dark:text-red-400">
+                {resetError}
+              </p>
+            )}
+
             {/* Action buttons */}
             <div className="flex flex-wrap gap-2">
               {!isInvestigating && (
@@ -243,6 +283,48 @@ export function AgentCard({
                 <span className="material-symbols-outlined text-[14px]">network_check</span>
                 {t("viewTraffic") || "View traffic"}
               </a>
+
+              {!isInvestigating &&
+                hasConfiguredState &&
+                (confirmReset ? (
+                  <span className="inline-flex items-center gap-1 rounded-lg border border-red-500/30 bg-red-500/5 px-2 py-1 text-xs">
+                    <span className="text-red-600 dark:text-red-400">
+                      {t("resetAgentConfirm") || "Restore default?"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleResetConfirm}
+                      disabled={resetLoading}
+                      className="rounded bg-red-500/15 px-2 py-0.5 font-medium text-red-600 hover:bg-red-500/25 disabled:opacity-50"
+                    >
+                      {resetLoading
+                        ? t("resetting") || "Restoring…"
+                        : t("resetAgent") || "Restore default"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmReset(false)}
+                      disabled={resetLoading}
+                      className="rounded px-2 py-0.5 text-text-muted hover:bg-surface/50 disabled:opacity-50"
+                    >
+                      {t("cancel") || "Cancel"}
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResetError(null);
+                      setConfirmReset(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-500/20"
+                  >
+                    <span className="material-symbols-outlined text-[14px]">
+                      settings_backup_restore
+                    </span>
+                    {t("resetAgent") || "Restore default"}
+                  </button>
+                ))}
             </div>
           </div>
         )}
