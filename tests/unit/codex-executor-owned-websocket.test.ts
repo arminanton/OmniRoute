@@ -23,7 +23,8 @@ test("executor receipts permit the same owner and reject foreign/untracked previ
       onerror: null,
       onclose: null,
       close() {},
-      send() {
+      send(payload) {
+        assert.equal(JSON.parse(String(payload)).service_tier, "priority");
         const id = `resp_owned_fixture_${++sends}`;
         queueMicrotask(() => {
           socket.onmessage?.({
@@ -59,6 +60,7 @@ test("executor receipts permit the same owner and reject foreign/untracked previ
       credentials: credential(principal),
       body: {
         model: "gpt-6.1-sol",
+        service_tier: "fast",
         input: [{ role: "user", content: "synthetic" }],
         ...(previous ? { previous_response_id: previous } : {}),
       },
@@ -96,3 +98,18 @@ test("executor receipts permit the same owner and reject foreign/untracked previ
     Reflect.get(executor, "conversationSockets").close();
   }
 });
+
+for (const tier of ["fast", "priority", "default", "ultrafast"]) {
+  test(`native OAuth maps logical ${tier} without rewriting custom API endpoints`, () => {
+    const executor = new CodexExecutor();
+    const credentials = { accessToken: "synthetic-access-only" };
+    const body = { model: "gpt-6-luna", input: [], service_tier: tier };
+    assert.equal(executor.transformRequest("gpt-6-luna", body, true, credentials).service_tier,
+      tier === "fast" ? "priority" : tier);
+    assert.equal(body.service_tier, tier);
+    const external = new CodexExecutor();
+    external.config = { ...external.config, baseUrl: "https://api.openai.com/v1" };
+    assert.equal(external.transformRequest("gpt-6-luna", body, true, credentials).service_tier, tier);
+    assert.equal(executor.transformRequest("gpt-6-luna", body, true, { apiKey: "synthetic" }).service_tier, tier);
+  });
+}
