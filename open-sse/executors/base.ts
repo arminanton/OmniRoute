@@ -1,3 +1,4 @@
+import { withProviderResponseStartDeadline } from "../utils/providerResponseStartDeadline.ts";
 import type { ProviderConfig } from "./base/types.ts";
 export type { ProviderConfig } from "./base/types.ts";
 import {
@@ -893,32 +894,19 @@ export class BaseExecutor {
           // GHSA-4f49: guard here (not only next to the first buildUrl) so retries
           // and fallback URLs are validated too, before any bytes leave the host.
           this.assertOutboundUrlAllowed(requestUrl);
-          const timeoutController = fetchStartTimeoutMs > 0 ? new AbortController() : null;
-          let timeoutId: ReturnType<typeof setTimeout> | null = null;
-          if (timeoutController) {
-            timeoutId = setTimeout(() => {
-              const timeoutError = new Error(
+          return withProviderResponseStartDeadline(
+            fetchStartTimeoutMs,
+            signal,
+            (combinedSignal) =>
+              requestFetch(requestUrl, { ...requestOptions, signal: combinedSignal }),
+            () => {
+              const error = new Error(
                 `Fetch timeout after ${fetchStartTimeoutMs}ms on ${requestUrl}`
               );
-              timeoutError.name = "TimeoutError";
-              timeoutController.abort(timeoutError);
-            }, fetchStartTimeoutMs);
-          }
-
-          const timeoutSignal = timeoutController?.signal ?? null;
-          const combinedSignal =
-            signal && timeoutSignal
-              ? mergeAbortSignals(signal, timeoutSignal)
-              : signal || timeoutSignal;
-          const optionsWithSignal = combinedSignal
-            ? { ...requestOptions, signal: combinedSignal }
-            : requestOptions;
-
-          try {
-            return await requestFetch(requestUrl, optionsWithSignal);
-          } finally {
-            if (timeoutId) clearTimeout(timeoutId);
-          }
+              error.name = "TimeoutError";
+              return error;
+            }
+          );
         };
 
         const isClaudeCodeClient =

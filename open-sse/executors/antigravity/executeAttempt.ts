@@ -24,7 +24,7 @@ import {
 import * as prl from "../../utils/providerRequestLogging.ts";
 import { buildSsePassthroughResult, type SsePassthroughResult } from "./streamingPassthrough.ts";
 import { disposeAntigravityResponse, readAntigravityErrorBody } from "./lifecycle.ts";
-import { withFetchDispatchObserver } from "../../utils/fetchDispatchObserver.ts";
+import { withProviderResponseStartDeadline } from "../../utils/providerResponseStartDeadline.ts";
 import type { AntigravityCredentials } from "../antigravity.ts";
 
 const LONG_RETRY_THRESHOLD_MS = 60_000;
@@ -114,60 +114,13 @@ export async function fetchAntigravityWithReadinessTimeout(
   timeoutMs = STREAM_READINESS_TIMEOUT_MS,
   queueTimeoutMs = 90_000
 ): Promise<Response> {
-  const boundedTimeoutMs = Math.max(0, Math.floor(timeoutMs));
-  if (boundedTimeoutMs <= 0) {
-    return fetch(url, init);
-  }
-
-  const timeoutController = new AbortController();
-  let active = true;
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
-  const startHeadersTimer = () => {
-    if (!active) return;
-    if (timeoutId) clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => {
-      timeoutController.abort(new AntigravityPreResponseTimeoutError(boundedTimeoutMs, url));
-    }, boundedTimeoutMs);
-  };
-  const startQueueTimer = () => {
-    if (!active) return;
-    if (timeoutId) clearTimeout(timeoutId);
-    timeoutId = setTimeout(
-      () => {
-        const error = new Error(
-          "Antigravity request waited too long for a transport slot"
-        ) as Error & { code: string };
-        error.code = "SEMAPHORE_TIMEOUT";
-        timeoutController.abort(error);
-      },
-      Math.max(1, queueTimeoutMs)
-    );
-  };
-  startHeadersTimer();
-
-  const existingSignal = init.signal instanceof AbortSignal ? init.signal : null;
-  const combinedSignal = existingSignal
-    ? AbortSignal.any([existingSignal, timeoutController.signal])
-    : timeoutController.signal;
-
-  try {
-    return await withFetchDispatchObserver(
-      { queued: startQueueTimer, started: startHeadersTimer },
-      () => fetch(url, { ...init, signal: combinedSignal })
-    );
-  } catch (error) {
-    if (existingSignal?.aborted) throw existingSignal.reason;
-    if (timeoutController.signal.aborted) {
-      throw timeoutController.signal.reason;
-    }
-    throw error;
-  } finally {
-    active = false;
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      timeoutId = null;
-    }
-  }
+  return withProviderResponseStartDeadline(
+    Math.max(0, Math.floor(timeoutMs)),
+    init.signal,
+    (signal) => fetch(url, { ...init, signal }),
+    () => new AntigravityPreResponseTimeoutError(timeoutMs, url),
+    queueTimeoutMs
+  );
 }
 
 /** ExecutorLog with every method always callable — see toSafeAntigravityLog(). */

@@ -8,14 +8,17 @@ import { fetchAntigravityWithReadinessTimeout } from "../../open-sse/executors/a
 
 test("100 queued Antigravity streams wait for a lane before their header deadline starts", async () => {
   let reached = 0;
+  const startedAt = Date.now();
+  let lastArrival = startedAt;
   const server = http.createServer((_req, res) => {
     reached++;
+    lastArrival = Date.now();
     setTimeout(() => {
       res.writeHead(200, { "Content-Type": "text/event-stream" });
       res.write(
         'data: {"response":{"candidates":[{"content":{"parts":[{"text":"OK"}]},"finishReason":"STOP"}]}}\n\n'
       );
-      setTimeout(() => res.end("data: [DONE]\n\n"), 60);
+      setTimeout(() => res.end("data: [DONE]\n\n"), 100);
     }, 5);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -33,8 +36,8 @@ test("100 queued Antigravity streams wait for a lane before their header deadlin
         const response = await fetchAntigravityWithReadinessTimeout(
           `http://127.0.0.1:${port}`,
           {},
-          120,
-          6000
+          500,
+          10000
         );
         assert.equal(response.status, 200);
         assert.match(await response.text(), /STOP/);
@@ -46,6 +49,7 @@ test("100 queued Antigravity streams wait for a lane before their header deadlin
       JSON.stringify(results.filter((r) => r.status === "rejected"))
     );
     assert.equal(reached, 100);
+    assert.ok(lastArrival - startedAt > 500, "queued turns outlive the response-start budget");
   } finally {
     globalThis.fetch = original;
     await agent.close();

@@ -4,8 +4,18 @@ import type { Dispatcher } from "undici";
 export interface FetchDispatchObserver {
   queued(): void;
   started(): void;
+  responseStartTimeoutMs?: number;
 }
-const dispatchObserver = new AsyncLocalStorage<FetchDispatchObserver>();
+declare global {
+  var __omniFetchDispatchObserver: AsyncLocalStorage<FetchDispatchObserver> | undefined;
+}
+const dispatchObserver = (globalThis.__omniFetchDispatchObserver ??=
+  new AsyncLocalStorage<FetchDispatchObserver>());
+
+export function getObservedResponseStartTimeoutMs(): number | null {
+  const value = dispatchObserver.getStore()?.responseStartTimeoutMs;
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
 
 /** Keep provider deadlines independent of time spent in a transport queue. */
 export function withFetchDispatchObserver<T>(observer: FetchDispatchObserver, run: () => T): T {

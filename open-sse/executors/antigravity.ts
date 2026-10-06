@@ -566,6 +566,7 @@ type AntigravityAttemptContext = {
   urlIndex: number;
   retryAttemptsByUrl: Record<number, number>;
   fallbackCount: number;
+  skipUpstreamRetry?: boolean;
 };
 
 /** Context threaded through the 429/503 handling helpers — adds the sent response. */
@@ -1276,7 +1277,16 @@ export class AntigravityExecutor extends BaseExecutor {
    * status of the first response so `execute()` can decide whether to fall through. @internal
    */
   private async executeOnce(
-    { model, body, stream, credentials, signal, log, upstreamExtraHeaders }: ExecuteInput,
+    {
+      model,
+      body,
+      stream,
+      credentials,
+      signal,
+      log,
+      upstreamExtraHeaders,
+      skipUpstreamRetry,
+    }: ExecuteInput,
     modelIdOverride?: string
   ) {
     await resolveAntigravityClientVersion(getAntigravityClientProfile(credentials));
@@ -1344,6 +1354,7 @@ export class AntigravityExecutor extends BaseExecutor {
           urlIndex,
           retryAttemptsByUrl,
           fallbackCount,
+          skipUpstreamRetry,
         });
 
         if (outcome.action === "return") return outcome.result;
@@ -1565,6 +1576,7 @@ export class AntigravityExecutor extends BaseExecutor {
     if (
       retryMs &&
       retryMs <= LONG_RETRY_THRESHOLD_MS &&
+      !ctx.skipUpstreamRetry &&
       !switchAuth &&
       retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES
     ) {
@@ -1582,7 +1594,11 @@ export class AntigravityExecutor extends BaseExecutor {
     // Auto retry for 429 (no Retry-After) or transient 5xx errors.
     // For 5xx we read the body to detect known transient patterns
     // ("Agent execution terminated due to error", "high traffic", "capacity").
-    if ((!retryMs || retryMs === 0) && retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES) {
+    if (
+      !ctx.skipUpstreamRetry &&
+      (!retryMs || retryMs === 0) &&
+      retryAttemptsByUrl[urlIndex] < MAX_AUTO_RETRIES
+    ) {
       const shouldAutoRetry = await this.shouldAutoRetryTransient(response);
       if (shouldAutoRetry) {
         retryAttemptsByUrl[urlIndex]++;
@@ -1663,6 +1679,7 @@ export class AntigravityExecutor extends BaseExecutor {
       const creditsAlreadyInjected =
         (transformedBody as { enabledCreditTypes?: unknown }).enabledCreditTypes != null;
       const creditsRetryEligible =
+        !ctx.skipUpstreamRetry &&
         category === "quota_exhausted" &&
         !creditsAlreadyInjected &&
         !creditsRetryState.attempted &&

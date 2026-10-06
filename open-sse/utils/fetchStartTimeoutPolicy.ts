@@ -1,19 +1,10 @@
-// #11526: the fetch-start (headers-wait) phase had no ceiling comparable to a
-// real client's patience for STREAMING requests — it inherited the flat,
-// non-adaptive FETCH_TIMEOUT_MS (default 600_000ms / 10 minutes), five times
-// longer than Codex's own ~120s hard client-abort window. When an upstream
-// never returns a response at all (not even headers), OmniRoute kept the
-// connection open with nothing but keepalives, guaranteeing the client gave
-// up first with an opaque 499 instead of OmniRoute detecting the stall and
-// failing fast/over within a client-realistic window.
-//
-// This mirrors the adaptive philosophy of streamReadinessPolicy.ts's
-// resolveStreamReadinessTimeout (which already protects the BODY phase, after
-// headers arrive) but inverted: instead of bumping a small base timeout up for
-// heavy payloads, it caps an oversized base timeout down for the HEADERS
-// phase of streaming requests specifically. Non-streaming requests are left
-// on the existing flat default — providers that are legitimately slow to
-// accept a connection (but not streaming SSE) are unaffected.
+// Bound the headers-wait phase separately from streaming body inactivity and
+// local admission queues. This is OmniRoute's conservative compatibility policy;
+// it is not a Codex CLI hard abort deadline. The inspected CLI v0.160.0 defines
+// a configurable 300_000ms stream idle timeout and 15_000ms WebSocket connect
+// timeout in codex-rs/model-provider-info/src/lib.rs. Those are different phases.
+// Caller cancellation remains authoritative. Non-streaming requests retain their
+// configured base timeout.
 
 export type FetchStartTimeoutPolicyInput = {
   baseTimeoutMs: number;
@@ -29,9 +20,7 @@ export type FetchStartTimeoutPolicyResult = {
   capped: boolean;
 };
 
-// Codex's documented hard client-abort window for a stalled turn (nothing but
-// keepalives in flight) is ~120s. Keep the cap safely under that so OmniRoute's
-// own headers-phase watchdog always fires before the client gives up on its own.
+// Retained public compatibility constant; this is not a verified native CLI deadline.
 export const CODEX_CLIENT_ABORT_MS = 120_000;
 export const DEFAULT_FETCH_START_TIMEOUT_CAP_MS = 110_000;
 
