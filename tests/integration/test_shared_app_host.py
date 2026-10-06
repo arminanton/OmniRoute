@@ -57,7 +57,7 @@ class SharedHostTests(unittest.TestCase):
 class SharedJournalRecoveryTests(unittest.TestCase):
  def test_atomic_apply_crash_adopts_existing_exact_pair_once_and_partial_refuses(self):
   from scripts.deploy.canary import sharedAppHost as h
-  from test_shared_app_profile import fixture
+  from tests.integration.test_shared_app_profile import fixture
   p,g,r=fixture();a=object.__new__(SharedAdapter);a.records={g['generation']:{'generation':g,'runtime':p,'boundaryReceipt':r}};a.layout={'approvalDigest':'a'*64};a.clock=lambda:100
   state={'rules':[],'journal':None,'applies':0,'fail':True}
   def runner(kind,args,payload=None):
