@@ -1,3 +1,5 @@
+import { isLogicalRetryBudgetError } from "../../services/logicalRetryBudget.ts";
+import { isUncertainGenerationAcceptance } from "../../services/generationReplay.ts";
 /**
  * Non-streaming provider leg - one round of provider execution.
  * Extracted from chatCore.ts (lines ~3804-5096) by symbol boundaries.
@@ -496,7 +498,12 @@ export async function runNonStreamingProviderLeg(
       );
     }
   } catch (error) {
-    if (isRuntimePolicyError(error)) throw error;
+    if (
+      isRuntimePolicyError(error) ||
+      isLogicalRetryBudgetError(error) ||
+      isUncertainGenerationAcceptance(error)
+    )
+      throw error;
     if (
       !!error &&
       typeof error === "object" &&
@@ -693,7 +700,12 @@ export async function runNonStreamingProviderLeg(
             }
           }
         } catch (error) {
-          if (isRuntimePolicyError(error)) throw error;
+          if (
+            isRuntimePolicyError(error) ||
+            isLogicalRetryBudgetError(error) ||
+            isUncertainGenerationAcceptance(error)
+          )
+            throw error;
           // fallback also failed - fall through to standard error
         }
       }
@@ -775,7 +787,12 @@ export async function runNonStreamingProviderLeg(
             }
           }
         } catch (error) {
-          if (isRuntimePolicyError(error)) throw error;
+          if (
+            isRuntimePolicyError(error) ||
+            isLogicalRetryBudgetError(error) ||
+            isUncertainGenerationAcceptance(error)
+          )
+            throw error;
           // fallback also failed - fall through to standard error
         }
       }
@@ -979,7 +996,12 @@ export async function runNonStreamingProviderLeg(
           }
         }
       } catch (error) {
-        if (isRuntimePolicyError(error)) throw error;
+        if (
+          isRuntimePolicyError(error) ||
+          isLogicalRetryBudgetError(error) ||
+          isUncertainGenerationAcceptance(error)
+        )
+          throw error;
         // retry failed, fall through
       }
     }
@@ -1139,7 +1161,12 @@ export async function runNonStreamingProviderLeg(
             };
           }
         } catch (error) {
-          if (isRuntimePolicyError(error)) throw error;
+          if (
+            isRuntimePolicyError(error) ||
+            isLogicalRetryBudgetError(error) ||
+            isUncertainGenerationAcceptance(error)
+          )
+            throw error;
           const receipt = buildReceipt(input, {
             httpStatus: 502,
             errorType: "empty_content",

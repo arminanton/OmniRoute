@@ -1,3 +1,4 @@
+import { markUncertainGenerationAcceptance } from "../../services/generationDispatchEvidence.ts";
 import {
   getLogicalRetryBudget,
   LogicalRetryBudgetError,
@@ -330,6 +331,7 @@ export class CodexConversationSocketPool {
       const prepared = prepareCodexContinuation(fullBody, reusable ? session.baseline : null);
       const wire = JSON.stringify({ type: "response.create", ...prepared.body });
       const encoder = new TextEncoder();
+      let sent = false;
       let finished = false;
       let first = true;
       let expectedId: string | null = null;
@@ -367,8 +369,9 @@ export class CodexConversationSocketPool {
           () => {
             if (logicalWins) {
               const error = new LogicalRetryBudgetError("Logical pre-output deadline exhausted");
+              if (sent) markUncertainGenerationAcceptance(error);
               budget?.denyFurtherAttempts(error);
-              finish(error.code);
+              finish(sent ? "upstream_acceptance_uncertain" : error.code);
             } else
               finish(
                 first ? "upstream_websocket_first_event_timeout" : "upstream_websocket_idle_timeout"
@@ -474,6 +477,7 @@ export class CodexConversationSocketPool {
               if (budget && budget.remainingTimeMs() <= 0)
                 throw new LogicalRetryBudgetError("Logical pre-output deadline exhausted");
               resetTimer();
+              sent = true;
               request.onSend?.();
               await bounded(
                 Promise.resolve(socket.send(wire)),
@@ -486,8 +490,9 @@ export class CodexConversationSocketPool {
         }
       } catch (error) {
         if (isLogicalRetryBudgetError(error)) {
+          if (sent) markUncertainGenerationAcceptance(error);
           budget?.denyFurtherAttempts(error);
-          finish(error.code);
+          finish(sent ? "upstream_acceptance_uncertain" : error.code);
         } else
           finish(request.signal?.aborted ? "client_aborted" : "upstream_websocket_send_failed");
       }

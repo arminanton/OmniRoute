@@ -26,6 +26,10 @@ const exactStatuses =
     statuses.includes(status);
 
 const CODEX_PUBLIC_ERROR_RULES = new Map<string, CodexPublicErrorRule>([
+  [
+    "upstream_acceptance_uncertain",
+    { type: "upstream_acceptance_uncertain", allowsStatus: exactStatuses(502, 503, 504) },
+  ],
   ["browser_stream_inconsistent", { type: "server_error", allowsStatus: exactStatuses(502) }],
   ["chatgpt_session_expired", { type: "authentication_error", allowsStatus: exactStatuses(401) }],
   ["chatgpt_submission_ambiguous", { type: "server_error", allowsStatus: exactStatuses(502) }],
