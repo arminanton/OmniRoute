@@ -834,3 +834,41 @@ for (const [provider, status, error] of [
     assert.equal(outcome.kind, "error");
   });
 }
+
+for (const [provider, status, error] of [
+  ["codex", 429, { message: "Too many concurrent requests", type: "rate_limit_error" }],
+  [
+    "antigravity",
+    422,
+    { message: "GCP_PROJECT_REQUIRED", type: "gcp_project_required", code: "gcp_project_required" },
+  ],
+] as const) {
+  test(`unpinned ${provider} keeps recovery through an allowed sibling`, async () => {
+    const { runProviderExecutionPipeline } =
+      await import("../../open-sse/handlers/chatCore/providerExecutionPipeline.ts");
+    let sends = 0,
+      selections = 0;
+    const input = makeInput({
+      provider,
+      policy: {
+        allowAccountRotation: true,
+        allowModelFallback: false,
+        allowedConnectionIds: ["conn-a", "conn-c"],
+      },
+      send: async () =>
+        ++sends === 1
+          ? makeAttempt({ error }, status)
+          : makeAttempt({ choices: [{ message: { content: "allowed" } }] }, 200),
+      getProviderCredentials: async (_provider, _exclude, allowed) => {
+        selections++;
+        assert.deepEqual(allowed, ["conn-a", "conn-c"]);
+        return { connectionId: "conn-c", accessToken: "synthetic-allowed" };
+      },
+    });
+    const result = await runProviderExecutionPipeline(input);
+    assert.equal(result.kind, "response");
+    assert.equal(sends, 2);
+    assert.equal(selections, 1);
+    assert.equal(input.connection.getCurrentConnectionId(), "conn-c");
+  });
+}
