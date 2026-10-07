@@ -50,8 +50,23 @@ describe("Cloudflare tunnel structured errors", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows the message from a structured Cloudflare error", async () => {
+  it("preserves POST errors and safely extracts Cloudflare status errors", async () => {
     const actionableMessage = "Check the Cloudflare tunnel token and try again.";
+    const statusMessage = "Cloudflare status is temporarily unavailable.";
+    const errorArguments: unknown[] = [];
+    const NativeError = globalThis.Error;
+    const CapturedError = new Proxy(NativeError, {
+      apply(target, thisArg, args: [string?]) {
+        errorArguments.push(args[0]);
+        return Reflect.apply(target, thisArg, args);
+      },
+      construct(target, args: [string?], newTarget) {
+        errorArguments.push(args[0]);
+        return Reflect.construct(target, args, newTarget);
+      },
+    });
+    vi.stubGlobal("Error", CapturedError);
+    let statusRequestCount = 0;
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const path = getRequestPath(input);
       if (path === "/api/settings") {
@@ -74,8 +89,11 @@ describe("Cloudflare tunnel structured errors", () => {
         );
       }
       if (path === "/api/tunnels/cloudflared") {
+        statusRequestCount += 1;
         return Promise.resolve(
-          jsonResponse({ supported: true, installed: true, running: false, phase: "stopped" })
+          statusRequestCount === 1
+            ? jsonResponse({ supported: true, installed: true, running: false, phase: "stopped" })
+            : jsonResponse({ error: { code: "STATUS_FAILED", message: statusMessage } }, false)
         );
       }
       if (path === "/v1/models") return Promise.resolve(jsonResponse({ data: [] }));
@@ -113,6 +131,7 @@ describe("Cloudflare tunnel structured errors", () => {
       timeout: 3000,
     });
     expect(container.textContent).not.toContain("[object Object]");
+    await waitFor(() => expect(errorArguments).toContain(statusMessage));
     expect(
       fetchMock.mock.calls.some(
         ([input, init]) =>

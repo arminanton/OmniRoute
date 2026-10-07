@@ -1,1 +1,1 @@
-- **fix(dashboard):** Cloudflare tunnel failures now display the actionable message from structured API errors.
+- **fix(dashboard):** Cloudflare tunnel failures now show actionable nested API error messages on status and action requests. Structured objects fall back safely instead of rendering as `[object Object]`; string errors remain supported.

@@ -25,3 +25,10 @@ test("uses the prior fallback when the API error has no message", () => {
     "Tunnel update failed"
   );
 });
+
+test("uses the status fallback for malformed Cloudflare error values", () => {
+  const fallback = "Failed to load Cloudflare tunnel status";
+  for (const error of [null, 42, true, [], { message: 42 }]) {
+    assert.equal(extractApiErrorMessage({ error }, fallback), fallback);
+  }
+});

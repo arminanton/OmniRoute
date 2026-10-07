@@ -212,11 +212,13 @@ export default function APIPageClient({ machineId }: Readonly<APIPageClientProps
         const data = await res.json().catch(() => null);
         if (!res.ok) {
           throw new Error(
-            data?.error ||
+            extractApiErrorMessage(
+              data,
               translateOrFallback(
                 "cloudflaredRequestFailed",
                 "Failed to load Cloudflare tunnel status"
               )
+            )
           );
         }
 
