@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { POST } from "../../src/app/api/v1/chat/completions/route.ts";
-import { getCallLogPipelineCaptureStreamChunks } from "../../src/lib/logEnv.ts";
+import {
+  getCallLogPipelineCaptureStreamChunks,
+  getCallLogPipelineStreamChunkMaxSizeBytes,
+} from "../../src/lib/logEnv.ts";
 
 const originalConsoleError = console.error;
 const originalCaptureChunks = process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS;
+const originalStreamChunkBudget = process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB;
 const originalRequestShape = process.env.OMNIROUTE_LOG_REQUEST_SHAPE;
 
 test.afterEach(() => {
@@ -15,6 +19,12 @@ test.afterEach(() => {
     delete process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS;
   } else {
     process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS = originalCaptureChunks;
+  }
+
+  if (originalStreamChunkBudget === undefined) {
+    delete process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB;
+  } else {
+    process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = originalStreamChunkBudget;
   }
 
   if (originalRequestShape === undefined) {
@@ -33,6 +43,17 @@ test("stream-chunk pipeline capture is disabled by default and supports explicit
 
   process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS = "false";
   assert.equal(getCallLogPipelineCaptureStreamChunks(), false);
+});
+
+test("stream excerpt memory budget defaults to 512 KiB and is capped at 1 MiB", () => {
+  delete process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB;
+  assert.equal(getCallLogPipelineStreamChunkMaxSizeBytes(), 512 * 1024);
+
+  process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = "768";
+  assert.equal(getCallLogPipelineStreamChunkMaxSizeBytes(), 768 * 1024);
+
+  process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = "2048";
+  assert.equal(getCallLogPipelineStreamChunkMaxSizeBytes(), 1024 * 1024);
 });
 
 async function requestShapeMarkers(value: string | undefined): Promise<string[]> {

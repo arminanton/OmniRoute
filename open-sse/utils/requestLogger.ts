@@ -84,8 +84,13 @@ type RequestLoggerOptions = {
   connectionId?: string | null;
 };
 
-const DEFAULT_MAX_STREAM_CHUNK_BYTES = 128 * 1024;
-const DEFAULT_MAX_STREAM_CHUNK_ITEMS = 10_240;
+const DEFAULT_MAX_STREAM_CHUNK_BYTES = 512 * 1024;
+const MAX_MAX_STREAM_CHUNK_BYTES = 1024 * 1024;
+const MIN_MAX_STREAM_CHUNK_BYTES = 256;
+const DEFAULT_MAX_STREAM_CHUNK_ITEMS = 1024;
+const MAX_STREAM_CHUNK_ITEM_BYTES = 64;
+const STREAM_CHUNK_TRUNCATION_MARKER =
+  "[stream chunk log truncated: aggregate capture budget reached]";
 // Was its own separate hardcoded 24, independent of the sibling
 // cloneBoundedChatLogPayload (chatCore/logTruncation.ts) implementation's
 // configurable cap — the two duplicated the same "bound an array for
@@ -243,39 +248,108 @@ export function cloneBoundedForLog(value: unknown, depth = 0, key: string | null
   return result;
 }
 
-function appendBoundedChunk(
+type AggregateStreamChunkBudget = {
+  value: number;
+  itemCount: number;
+  truncated: boolean;
+};
+
+/**
+ * Bound retained text by the larger of its UTF-16 backing store and UTF-8
+ * serialized form. Counting only JS characters undercounts non-ASCII JSON;
+ * counting only UTF-8 undercounts V8's two-byte string representation for
+ * ASCII. The fixed allowance covers the string object and array slot.
+ */
+function estimateRetainedChunkBytes(value: string): number {
+  return Math.max(value.length * 2, Buffer.byteLength(value, "utf8")) + MAX_STREAM_CHUNK_ITEM_BYTES;
+}
+
+function safePrefixLength(value: string, maxCodeUnits: number): number {
+  let length = Math.min(value.length, Math.max(0, maxCodeUnits));
+  // Keep a UTF-16 surrogate pair together so the captured excerpt remains valid.
+  if (
+    length > 0 &&
+    length < value.length &&
+    value.charCodeAt(length - 1) >= 0xd800 &&
+    value.charCodeAt(length - 1) <= 0xdbff &&
+    value.charCodeAt(length) >= 0xdc00 &&
+    value.charCodeAt(length) <= 0xdfff
+  ) {
+    length--;
+  }
+  return length;
+}
+
+function copyUtf16(value: string): string {
+  // A substring may keep a much larger upstream chunk alive in V8. Round-trip
+  // through UTF-16LE to retain an owned, bounded copy and preserve lone surrogates.
+  return Buffer.from(value, "utf16le").toString("utf16le");
+}
+
+function appendAggregateBoundedChunk(
   chunks: string[],
-  bytes: { value: number; truncated: boolean },
+  budget: AggregateStreamChunkBudget,
   chunk: string,
+  timestampPrefix: string,
   maxBytes: number,
-  maxItems = DEFAULT_MAX_STREAM_CHUNK_ITEMS
+  maxItems: number
 ) {
-  if (typeof chunk !== "string" || chunk.length === 0) {
-    return;
-  }
-  if (chunks.length >= maxItems) {
-    bytes.truncated = true;
-    chunks[maxItems - 1] = `[stream chunk log truncated after ${maxItems} chunks]`;
-    return;
-  }
-  if (bytes.value >= maxBytes) {
-    bytes.truncated = true;
+  if (typeof chunk !== "string" || chunk.length === 0 || budget.truncated) return;
+
+  const markerBytes = estimateRetainedChunkBytes(STREAM_CHUNK_TRUNCATION_MARKER);
+  const dataItemsLimit = Math.max(0, maxItems - 1); // reserve a single loss marker
+  const availableBytes = Math.max(0, maxBytes - budget.value - markerBytes);
+  const availableItems = dataItemsLimit - budget.itemCount;
+  const candidateCost = (payloadLength: number, payloadBytes: number) =>
+    Math.max(
+      2 * (timestampPrefix.length + payloadLength),
+      Buffer.byteLength(timestampPrefix, "utf8") + payloadBytes
+    ) + MAX_STREAM_CHUNK_ITEM_BYTES;
+
+  const payloadBytes = Buffer.byteLength(chunk, "utf8");
+  const fullCost = candidateCost(chunk.length, payloadBytes);
+  if (availableItems > 0 && fullCost <= availableBytes) {
+    // The full input chunk is already an owned decoded string, so retain it
+    // directly under the aggregate budget and avoid allocating a second copy.
+    chunks.push(timestampPrefix + chunk);
+    budget.value += fullCost;
+    budget.itemCount++;
     return;
   }
 
-  const remaining = maxBytes - bytes.value;
-  if (chunk.length <= remaining) {
-    chunks.push(chunk);
-    bytes.value += chunk.length;
-    return;
+  // Add the largest code-point-safe prefix that fits the remaining aggregate
+  // budget. Binary search avoids a per-code-point walk for large stream frames.
+  let retainedLength = 0;
+  if (availableItems > 0) {
+    let low = 0;
+    let high = safePrefixLength(chunk, Math.floor(availableBytes / 2));
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      const safeLength = safePrefixLength(chunk, middle);
+      const prefixBytes = Buffer.byteLength(chunk.slice(0, safeLength), "utf8");
+      if (safeLength > 0 && candidateCost(safeLength, prefixBytes) <= availableBytes) {
+        low = middle;
+      } else {
+        high = middle - 1;
+      }
+    }
+    retainedLength = safePrefixLength(chunk, low);
   }
 
-  chunks.push(chunk.slice(0, remaining));
-  if (chunks.length < maxItems) {
-    chunks.push(`[stream chunk log truncated after ${maxBytes} bytes]`);
+  if (retainedLength > 0) {
+    const retained = chunk.slice(0, retainedLength);
+    const retainedCost = candidateCost(retainedLength, Buffer.byteLength(retained, "utf8"));
+    chunks.push(copyUtf16(timestampPrefix + retained));
+    budget.value += retainedCost;
+    budget.itemCount++;
   }
-  bytes.value = maxBytes;
-  bytes.truncated = true;
+
+  // One marker is shared across all three tracks; reserve its memory and item
+  // slot before retaining any stream data so the limit is never exceeded.
+  chunks.push(STREAM_CHUNK_TRUNCATION_MARKER);
+  budget.value += markerBytes;
+  budget.itemCount++;
+  budget.truncated = true;
 }
 
 function hasOwnValues(value: unknown): boolean {
@@ -329,18 +403,22 @@ function compactPipelinePayloads(
 }
 function makeStreamChunkMethods(options: RequestLoggerOptions, captureChunks: boolean) {
   const streamChunks = createEmptyStreamChunks();
-  const streamChunkBytes = {
-    provider: { value: 0, truncated: false },
-    openai: { value: 0, truncated: false },
-    client: { value: 0, truncated: false },
+  const streamChunkBudget: AggregateStreamChunkBudget = {
+    value: 0,
+    itemCount: 0,
+    truncated: false,
   };
-  const maxBytes =
+  const requestedMaxBytes =
     Number.isInteger(options.maxStreamChunkBytes) && Number(options.maxStreamChunkBytes) > 0
       ? Number(options.maxStreamChunkBytes)
       : DEFAULT_MAX_STREAM_CHUNK_BYTES;
+  const maxBytes = Math.max(
+    MIN_MAX_STREAM_CHUNK_BYTES,
+    Math.min(requestedMaxBytes, MAX_MAX_STREAM_CHUNK_BYTES)
+  );
   const maxItems =
     Number.isInteger(options.maxStreamChunkItems) && Number(options.maxStreamChunkItems) > 0
-      ? Number(options.maxStreamChunkItems)
+      ? Math.min(Number(options.maxStreamChunkItems), DEFAULT_MAX_STREAM_CHUNK_ITEMS)
       : DEFAULT_MAX_STREAM_CHUNK_ITEMS;
   let pendingPushed = false;
 
@@ -374,24 +452,24 @@ function makeStreamChunkMethods(options: RequestLoggerOptions, captureChunks: bo
     }
   };
 
-  const append = (arr: string[], bytes: { value: number; truncated: boolean }, chunk: string) => {
+  const append = (arr: string[], chunk: string) => {
     if (!captureChunks) return;
+    if (streamChunkBudget.truncated) return;
     push();
     const ts = new Date().toISOString().slice(11, 23);
-    appendBoundedChunk(arr, bytes, `[${ts}] ${chunk}`, maxBytes, maxItems);
+    appendAggregateBoundedChunk(arr, streamChunkBudget, chunk, `[${ts}] `, maxBytes, maxItems);
   };
 
   return {
     streamChunks,
-    streamChunkBytes,
     appendProviderChunk(chunk: string) {
-      append(streamChunks.provider, streamChunkBytes.provider, chunk);
+      append(streamChunks.provider, chunk);
     },
     appendOpenAIChunk(chunk: string) {
-      append(streamChunks.openai, streamChunkBytes.openai, chunk);
+      append(streamChunks.openai, chunk);
     },
     appendConvertedChunk(chunk: string) {
-      append(streamChunks.client, streamChunkBytes.client, chunk);
+      append(streamChunks.client, chunk);
     },
   };
 }

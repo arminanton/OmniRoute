@@ -18,16 +18,9 @@ const {
 const { FORMATS } = await import("../../open-sse/translator/formats.ts");
 const { createRequestLogger } = await import("../../open-sse/utils/requestLogger.ts");
 
-// Retained stream chunks are prefixed with a fixed-width per-chunk arrival timestamp
-// ("[HH:MM:SS.mmm] ", 15 chars) by the request logger for streaming-latency
-// observability (added in #5834). Strip it before comparing raw chunk payloads.
-const STREAM_CHUNK_TS_PREFIX_LEN = "[HH:MM:SS.mmm] ".length;
 const stripChunkTs = (chunk: string): string => chunk.replace(/^\[\d{2}:\d{2}:\d{2}\.\d{3}\] /, "");
 
 const textEncoder = new TextEncoder();
-// PR #3399 intentionally changed the synthetic empty-response text to "" so that
-// proxy internals no longer leak into chat history. Tests assert on the new behavior.
-const SYNTHETIC_CLAUDE_EMPTY_RESPONSE_TEXT = "";
 
 async function readTransformed(chunks, options) {
   const source = new ReadableStream({
@@ -600,7 +593,7 @@ test("createSSEStream passthrough suppresses malformed textual tool-call content
 test("createSSEStream suppresses malformed compact textual tool-call content", async () => {
   let onCompletePayload = null;
 
-  const text = await readTransformed(
+  await readTransformed(
     [
       `data: ${JSON.stringify({
         candidates: [
@@ -2160,9 +2153,10 @@ test("createSSEStream passthrough aborts on Responses usage-limit failures and r
   assert.equal(failurePayload.code, "usage_limit_reached");
 });
 
-test("createRequestLogger skips disabled logs and caps retained stream chunk bytes", async () => {
+test("createRequestLogger bounds all three stream tracks with one aggregate memory budget", async () => {
   const disabled = await createRequestLogger("openai", "openai", "gpt-test", {
     enabled: false,
+    captureStreamChunks: false,
   });
   disabled.logClientRawRequest("/v1/chat/completions", { prompt: "hello" });
   disabled.appendProviderChunk("x".repeat(32));
@@ -2171,24 +2165,59 @@ test("createRequestLogger skips disabled logs and caps retained stream chunk byt
   const logger = await createRequestLogger("openai", "openai", "gpt-test", {
     enabled: true,
     captureStreamChunks: true,
-    // The byte budget now also counts the 15-char timestamp prefix, so size it as
-    // prefix + 5 to keep the original intent: cap the *payload* to 5 bytes ("abcde").
-    maxStreamChunkBytes: STREAM_CHUNK_TS_PREFIX_LEN + 5,
+    maxStreamChunkBytes: 1024,
   });
-  logger.appendProviderChunk("abcdef");
-  logger.appendProviderChunk("ghijkl");
+  logger.appendProviderChunk("p".repeat(100));
+  logger.appendOpenAIChunk("o".repeat(100));
+  logger.appendConvertedChunk("c".repeat(100));
+  logger.appendProviderChunk("later data is dropped after the aggregate cap");
   const payloads = logger.getPipelinePayloads();
 
-  // First chunk retained but its payload truncated to 5 bytes; second replaced by marker.
-  assert.equal(stripChunkTs(payloads.streamChunks.provider[0]), "abcde");
+  const chunks = payloads.streamChunks;
+  assert.equal(stripChunkTs(chunks.provider[0]), "p".repeat(100));
+  assert.equal(stripChunkTs(chunks.openai[0]), "o".repeat(100));
+  assert.ok(chunks.client.length >= 1);
   assert.equal(
-    payloads.streamChunks.provider[1],
-    `[stream chunk log truncated after ${STREAM_CHUNK_TS_PREFIX_LEN + 5} bytes]`
+    chunks.client.at(-1),
+    "[stream chunk log truncated: aggregate capture budget reached]"
   );
-  assert.equal(payloads.streamChunks.provider.length, 2);
+  assert.equal(
+    chunks.provider.some((chunk) => chunk.includes("later data")),
+    false
+  );
+  const estimatedBytes = Object.values(chunks)
+    .flat()
+    .reduce(
+      (total, chunk) => total + Math.max(chunk.length * 2, Buffer.byteLength(chunk, "utf8")) + 64,
+      0
+    );
+  assert.ok(estimatedBytes <= 1024, `aggregate capture accounting exceeded cap: ${estimatedBytes}`);
 });
 
-test("createRequestLogger caps retained stream chunk item count", async () => {
+test("createRequestLogger accounts for Unicode bytes and keeps surrogate pairs intact", async () => {
+  const logger = await createRequestLogger("openai", "openai", "gpt-test", {
+    enabled: true,
+    captureStreamChunks: true,
+    maxStreamChunkBytes: 1024,
+  });
+
+  logger.appendProviderChunk("界😀".repeat(200));
+  logger.appendOpenAIChunk("must not exceed the shared Unicode budget");
+
+  const chunks = logger.getPipelinePayloads().streamChunks;
+  const stored = Object.values(chunks).flat();
+  const firstExcerpt = stripChunkTs(chunks.provider[0]);
+  assert.ok(firstExcerpt.length > 0, "retain part of the Unicode stream");
+  assert.equal(/[\uD800-\uDBFF]$/.test(firstExcerpt), false, "must not end on a high surrogate");
+  assert.ok(stored.some((chunk) => chunk.includes("aggregate capture budget reached")));
+  const estimatedBytes = stored.reduce(
+    (total, chunk) => total + Math.max(chunk.length * 2, Buffer.byteLength(chunk, "utf8")) + 64,
+    0
+  );
+  assert.ok(estimatedBytes <= 1024, `Unicode accounting exceeded cap: ${estimatedBytes}`);
+});
+
+test("createRequestLogger caps the total retained stream chunk item count", async () => {
   const logger = await createRequestLogger("openai", "openai", "gpt-test", {
     enabled: true,
     captureStreamChunks: true,
@@ -2197,13 +2226,37 @@ test("createRequestLogger caps retained stream chunk item count", async () => {
   });
 
   logger.appendProviderChunk("one");
-  logger.appendProviderChunk("two");
-  logger.appendProviderChunk("three");
+  logger.appendOpenAIChunk("two");
+  logger.appendConvertedChunk("three");
 
   const payloads = logger.getPipelinePayloads();
   assert.equal(stripChunkTs(payloads.streamChunks.provider[0]), "one");
-  assert.equal(payloads.streamChunks.provider[1], "[stream chunk log truncated after 2 chunks]");
-  assert.equal(payloads.streamChunks.provider.length, 2);
+  assert.equal(
+    payloads.streamChunks.openai[0],
+    "[stream chunk log truncated: aggregate capture budget reached]"
+  );
+  assert.equal(payloads.streamChunks.client, undefined);
+  assert.equal(
+    Object.values(payloads.streamChunks).flat().length,
+    2,
+    "data and its marker share the aggregate item cap"
+  );
+});
+
+test("createRequestLogger capture-off omits arrays while capture-on retains bounded excerpts", async () => {
+  const off = await createRequestLogger("openai", "openai", "gpt-test", {
+    enabled: true,
+    captureStreamChunks: false,
+  });
+  off.appendProviderChunk("not retained");
+  assert.equal(off.getPipelinePayloads()?.streamChunks, undefined);
+
+  const on = await createRequestLogger("openai", "openai", "gpt-test", {
+    enabled: true,
+    captureStreamChunks: true,
+  });
+  on.appendProviderChunk("retained");
+  assert.equal(stripChunkTs(on.getPipelinePayloads().streamChunks.provider[0]), "retained");
 });
 
 // T-VERIFY: passthrough mode failure decrements pending requests
