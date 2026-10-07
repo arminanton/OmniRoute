@@ -14,6 +14,7 @@ import {
 } from "../../src/sse/handlers/chat/clientRawRequest.ts";
 import {
   getDiagnosticClientJson,
+  releaseDiagnosticClientJson,
   runWithDiagnosticCaptureLifecycle,
 } from "../../open-sse/utils/diagnosticCaptureContext.ts";
 import {
@@ -435,6 +436,34 @@ test("noLog/video eligibility false creates no payload files and defaultoff does
     null
   );
   process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = original;
+});
+
+test("non-Antigravity requests release the overflow snapshot without serializing it", async () => {
+  let serialized = 0;
+  const body = {
+    model: "cx/gpt-6.1-sol",
+    messages: [{ role: "user", content: "a large request body" }],
+    toJSON() {
+      serialized++;
+      return { model: this.model, messages: this.messages };
+    },
+  };
+  const raw = buildClientRawRequest(
+    new Request("http://synthetic.invalid/v1/chat/completions"),
+    body,
+    true
+  );
+  assert.equal(serialized, 0);
+  const log = await createRequestLogger(undefined, undefined, undefined, {
+    enabled: true,
+    provider: "codex",
+    diagnosticOverflowEligible: true,
+    diagnosticClientJson: () => getDiagnosticClientJson(raw),
+    releaseDiagnosticClientJson: () => releaseDiagnosticClientJson(raw),
+  });
+  assert.equal(log.getDiagnosticOverflowTrace(), null);
+  assert.equal(serialized, 0, "Codex should not stringify an AG-only overflow payload");
+  assert.equal(getDiagnosticClientJson(raw), undefined, "non-AG snapshot should be released");
 });
 
 test("credits retry has its own exact serialized body and complete captured response", async () => {

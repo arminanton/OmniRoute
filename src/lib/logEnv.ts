@@ -11,6 +11,7 @@ const DEFAULT_CALL_LOG_PIPELINE_MAX_SIZE_KB = 512;
 const DEFAULT_CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = 512;
 const MAX_CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = 1024;
 const MIN_CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = 1;
+const MAX_CHAT_LOG_CLIENT_TEXT_LIMIT = 4 * 1024 * 1024;
 const DEFAULT_PROXY_LOGS_TABLE_MAX_ROWS = 100000;
 /**
  * Default app log path, anchored to DATA_DIR (never `process.cwd()`).
@@ -165,6 +166,14 @@ export function getAppLogFormat(defaultFormat: string): string {
 
 export function getChatLogTextLimit(): number {
   return parsePositiveInt(process.env.CHAT_LOG_TEXT_LIMIT, 64 * 1024);
+}
+
+/** Keep transcript source text intact without widening every provider-log preview. */
+export function getChatLogClientTextLimit(): number {
+  return Math.min(
+    parsePositiveInt(process.env.CHAT_LOG_CLIENT_TEXT_LIMIT, getChatLogTextLimit()),
+    MAX_CHAT_LOG_CLIENT_TEXT_LIMIT
+  );
 }
 
 /**

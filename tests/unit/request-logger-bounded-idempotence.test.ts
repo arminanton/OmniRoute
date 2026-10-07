@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 
 const { cloneBoundedForLog, MAX_LOG_ARRAY_ITEMS } =
   await import("../../open-sse/utils/requestLogger.ts");
+const { getChatLogClientTextLimit } = await import("../../src/lib/logEnv.ts");
 
 const MAX_KEYS = 80;
 const MAX_STRING = 64 * 1024;
@@ -76,6 +77,30 @@ test("truncated previews preserve UTF-16 content", () => {
   } finally {
     if (previousLimit === undefined) delete process.env.CHAT_LOG_TEXT_LIMIT;
     else process.env.CHAT_LOG_TEXT_LIMIT = previousLimit;
+  }
+});
+
+test("client transcript text can stay complete while generic provider previews remain bounded", () => {
+  const previousTextLimit = process.env.CHAT_LOG_TEXT_LIMIT;
+  const previousClientTextLimit = process.env.CHAT_LOG_CLIENT_TEXT_LIMIT;
+  process.env.CHAT_LOG_TEXT_LIMIT = "1024";
+  process.env.CHAT_LOG_CLIENT_TEXT_LIMIT = "2097152";
+  try {
+    const text = "client transcript ".repeat(10_000);
+    const ordinaryPreview = cloneBoundedForLog(text) as string;
+    const clientTranscript = cloneBoundedForLog(
+      text,
+      0,
+      null,
+      getChatLogClientTextLimit()
+    ) as string;
+    assert.ok(ordinaryPreview.length <= 1024);
+    assert.equal(clientTranscript, text);
+  } finally {
+    if (previousTextLimit === undefined) delete process.env.CHAT_LOG_TEXT_LIMIT;
+    else process.env.CHAT_LOG_TEXT_LIMIT = previousTextLimit;
+    if (previousClientTextLimit === undefined) delete process.env.CHAT_LOG_CLIENT_TEXT_LIMIT;
+    else process.env.CHAT_LOG_CLIENT_TEXT_LIMIT = previousClientTextLimit;
   }
 });
 

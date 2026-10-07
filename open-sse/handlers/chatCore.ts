@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   getDiagnosticClientJson,
+  releaseDiagnosticClientJson,
   runWithDiagnosticCaptureLifecycle,
 } from "../utils/diagnosticCaptureContext.ts";
 import {
@@ -1321,6 +1322,7 @@ async function handleChatCoreOwned({
     enabled: detailedLoggingEnabled,
     diagnosticOverflowEligible: detailedLoggingEnabled && !videoBridgeObserved,
     diagnosticClientJson: () => getDiagnosticClientJson(clientRawRequest),
+    releaseDiagnosticClientJson: () => releaseDiagnosticClientJson(clientRawRequest),
     diagnosticSignal: clientRawRequest?.signal,
     captureStreamChunks: capturePipelineStreamChunks,
     maxStreamChunkBytes: getCallLogPipelineStreamChunkMaxSizeBytes(),

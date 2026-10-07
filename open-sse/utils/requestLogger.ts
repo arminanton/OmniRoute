@@ -12,6 +12,7 @@ import {
   getChatLogMaxDepth,
   getChatLogArrayTailItems,
   getChatLogTextLimit,
+  getChatLogClientTextLimit,
   getChatLogMaxObjectKeys,
 } from "@/lib/logEnv";
 import { sanitizeErrorMessage } from "./error.ts";
@@ -73,6 +74,7 @@ type RequestLogger = {
 type RequestLoggerOptions = {
   diagnosticOverflowEligible?: boolean;
   diagnosticClientJson?: () => string | undefined;
+  releaseDiagnosticClientJson?: () => void;
   diagnosticSignal?: AbortSignal | null;
   enabled?: boolean;
   captureStreamChunks?: boolean;
@@ -194,9 +196,14 @@ function truncateLogString(value: string, maxLength = getChatLogTextLimit()): st
  * recursing into an object's values, enabling the per-field exemption above.
  * Top-level arrays (no key context) remain subject to truncation.
  */
-export function cloneBoundedForLog(value: unknown, depth = 0, key: string | null = null): unknown {
+export function cloneBoundedForLog(
+  value: unknown,
+  depth = 0,
+  key: string | null = null,
+  maxTextLength = getChatLogTextLimit()
+): unknown {
   if (value === null || value === undefined) return value;
-  if (typeof value === "string") return truncateLogString(value);
+  if (typeof value === "string") return truncateLogString(value, maxTextLength);
   if (typeof value !== "object") return value;
   // Binary/opaque byte views (Uint8Array, Buffer, DataView, ...) are not
   // "real" arrays to Array.isArray(); without this guard they fall through
@@ -213,12 +220,15 @@ export function cloneBoundedForLog(value: unknown, depth = 0, key: string | null
     // item and rewrite originalLength with the truncated length (25 instead of the true 800), so
     // the log would misreport how much was cut. Keep the original marker, re-bound only the tail.
     if (isTruncatedArrayMarker(value[0])) {
-      return [value[0], ...value.slice(1).map((item) => cloneBoundedForLog(item, depth + 1))];
+      return [
+        value[0],
+        ...value.slice(1).map((item) => cloneBoundedForLog(item, depth + 1, null, maxTextLength)),
+      ];
     }
     const exempt = key === "tools";
     const shouldTruncate = !exempt && value.length > MAX_LOG_ARRAY_ITEMS;
     const source = shouldTruncate ? value.slice(-MAX_LOG_ARRAY_ITEMS) : value;
-    const mapped = source.map((item) => cloneBoundedForLog(item, depth + 1));
+    const mapped = source.map((item) => cloneBoundedForLog(item, depth + 1, null, maxTextLength));
     if (shouldTruncate) {
       return [
         {
@@ -242,7 +252,7 @@ export function cloneBoundedForLog(value: unknown, depth = 0, key: string | null
   );
   const maxKeys = getChatLogMaxObjectKeys();
   for (const [k, item] of maxKeys > 0 ? entries.slice(0, maxKeys) : entries) {
-    result[k] = cloneBoundedForLog(item, depth + 1, k);
+    result[k] = cloneBoundedForLog(item, depth + 1, k, maxTextLength);
   }
   const dropped = (maxKeys > 0 ? Math.max(0, entries.length - maxKeys) : 0) + carried;
   if (dropped > 0) {
@@ -494,8 +504,12 @@ export async function createRequestLogger(
   registerDiagnosticTrace(diagnosticTrace);
   if (diagnosticTrace) {
     const json = options.diagnosticClientJson?.();
-    if (json !== undefined) await diagnosticTrace.writeClientRequest(json);
-    else diagnosticTrace.markIncomplete("client_unavailable");
+    try {
+      if (json !== undefined) await diagnosticTrace.writeClientRequest(json);
+      else diagnosticTrace.markIncomplete("client_unavailable");
+    } finally {
+      options.releaseDiagnosticClientJson?.();
+    }
     if (options.diagnosticSignal) {
       const abort = () => {
         void diagnosticTrace.abort("abort");
@@ -503,6 +517,10 @@ export async function createRequestLogger(
       options.diagnosticSignal.addEventListener("abort", abort, { once: true });
       if (options.diagnosticSignal.aborted) abort();
     }
+  } else {
+    // Non-Antigravity providers never create overflow traces. Drop the raw
+    // snapshot without serializing another copy of every client request.
+    options.releaseDiagnosticClientJson?.();
   }
   const telemetry = getRequestTransportTelemetry();
   const captureStreamChunks = options.captureStreamChunks !== false;
@@ -548,7 +566,7 @@ export async function createRequestLogger(
         timestamp: new Date().toISOString(),
         endpoint,
         headers: maskSensitiveHeaders(headers),
-        body: cloneBoundedForLog(body),
+        body: cloneBoundedForLog(body, 0, null, getChatLogClientTextLimit()),
         // The actual `input` this request dispatched with, captured AFTER
         // OmniRoute's own previous_response_id reconstruction (see
         // src/sse/handlers/chat.ts) -- `body` above is deliberately the

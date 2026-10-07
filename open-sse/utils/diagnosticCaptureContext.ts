@@ -1,32 +1,102 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DiagnosticOverflowTrace } from "@/lib/usage/diagnosticOverflow";
 const key = Symbol.for("omniroute.diagnosticCaptureContext.v1");
+type ClientJsonSnapshot = { body: unknown; json?: string };
 const runtime = globalThis as typeof globalThis & {
   [key]?: {
-    originals: WeakMap<object, string>;
+    originals: WeakMap<object, ClientJsonSnapshot>;
     context: AsyncLocalStorage<Set<DiagnosticOverflowTrace>>;
   };
 };
 const shared = (runtime[key] ??= {
-  originals: new WeakMap<object, string>(),
+  originals: new WeakMap<object, ClientJsonSnapshot>(),
   context: new AsyncLocalStorage<Set<DiagnosticOverflowTrace>>(),
 });
 const { originals, context } = shared;
 
-/** Private parsed-and-reserialized JSON, captured before request translation mutates it. */
+const MAX_CLIENT_SNAPSHOT_VALUES = 500_000;
+const MAX_CLIENT_SNAPSHOT_DEPTH = 64;
+
+/** Clone JSON structure while sharing immutable string/primitive values. */
+function snapshotJsonBody(value: unknown): unknown {
+  const ancestors = new WeakSet<object>();
+  let values = 0;
+  const visit = (current: unknown, depth: number): unknown => {
+    if (++values > MAX_CLIENT_SNAPSHOT_VALUES || depth > MAX_CLIENT_SNAPSHOT_DEPTH) {
+      throw new Error("diagnostic_client_snapshot_limit");
+    }
+    if (!current || typeof current !== "object") return current;
+    const objectValue = current as object;
+    if (ancestors.has(objectValue)) throw new Error("diagnostic_client_snapshot_cycle");
+    ancestors.add(objectValue);
+    try {
+      if (Array.isArray(current)) {
+        const result = new Array(current.length);
+        for (let index = 0; index < current.length; index++) {
+          const descriptor = Object.getOwnPropertyDescriptor(current, String(index));
+          if (!descriptor) continue;
+          if (!("value" in descriptor)) throw new Error("diagnostic_client_snapshot_accessor");
+          result[index] = visit(descriptor.value, depth + 1);
+        }
+        return result;
+      }
+      const prototype = Object.getPrototypeOf(current);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new Error("diagnostic_client_snapshot_prototype");
+      }
+      const result: Record<string, unknown> = {};
+      for (const property of Object.keys(current)) {
+        const descriptor = Object.getOwnPropertyDescriptor(current, property);
+        if (!descriptor || !("value" in descriptor)) {
+          throw new Error("diagnostic_client_snapshot_accessor");
+        }
+        result[property] = visit(descriptor.value, depth + 1);
+      }
+      return result;
+    } finally {
+      ancestors.delete(objectValue);
+    }
+  };
+  return visit(value, 0);
+}
+
+/** Preserve a client snapshot cheaply; serialize it only for an eligible AG trace. */
 export function recordDiagnosticClientJson(envelope: object, body: unknown, eligible: boolean) {
   if (!eligible || process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED !== "true") return;
   try {
-    const json = JSON.stringify(body);
-    if (typeof json === "string") originals.set(envelope, json);
-  } catch {}
+    originals.set(envelope, { body: snapshotJsonBody(body) });
+  } catch {
+    // Diagnostic capture is best-effort and must never block request routing.
+  }
 }
 export function inheritDiagnosticClientJson(original: object, copy: object) {
-  const json = originals.get(original);
-  if (json !== undefined) originals.set(copy, json);
+  const snapshot = originals.get(original);
+  if (snapshot !== undefined) originals.set(copy, snapshot);
 }
 export function getDiagnosticClientJson(envelope: unknown): string | undefined {
-  return envelope && typeof envelope === "object" ? originals.get(envelope) : undefined;
+  if (!envelope || typeof envelope !== "object") return undefined;
+  const snapshot = originals.get(envelope);
+  if (!snapshot) return undefined;
+  if (snapshot.json !== undefined) return snapshot.json;
+  try {
+    const json = JSON.stringify(snapshot.body);
+    if (typeof json !== "string") return undefined;
+    snapshot.json = json;
+    snapshot.body = undefined;
+    return json;
+  } catch {
+    snapshot.body = undefined;
+    return undefined;
+  }
+}
+export function releaseDiagnosticClientJson(envelope: unknown) {
+  if (!envelope || typeof envelope !== "object") return;
+  const snapshot = originals.get(envelope);
+  if (snapshot) {
+    snapshot.body = undefined;
+    snapshot.json = undefined;
+  }
+  originals.delete(envelope);
 }
 export function registerDiagnosticTrace(trace: DiagnosticOverflowTrace | null) {
   if (trace) context.getStore()?.add(trace);

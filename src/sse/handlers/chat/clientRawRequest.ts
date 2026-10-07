@@ -10,6 +10,7 @@
  */
 import { mergeAbortSignals } from "@omniroute/open-sse/executors/base.ts";
 import { cloneBoundedForLog } from "@omniroute/open-sse/utils/requestLogger.ts";
+import { getChatLogClientTextLimit } from "@/lib/logEnv";
 
 import {
   recordDiagnosticClientJson,
@@ -35,7 +36,7 @@ export function buildClientRawRequest(
     // 3.19 MiB vs 0.08 MiB on the incident's 3.05 MiB / 729-message request.
     // Still a clone, not an alias — `body` is rewritten downstream (plugin onRequest hook,
     // compression), and this has to stay a snapshot of what the client actually sent.
-    body: cloneBoundedForLog(body),
+    body: cloneBoundedForLog(body, 0, null, getChatLogClientTextLimit()),
     headers,
     signal: request.signal ?? null,
   };
