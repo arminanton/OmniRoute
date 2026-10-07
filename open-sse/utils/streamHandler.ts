@@ -249,6 +249,13 @@ export function createStreamController({
   allowCompletedToolHandoffGrace = false,
   clientDisconnectGracePeriodMs = 0,
 }: StreamControllerOptions = {}) {
+  // Stream controllers can remain reachable briefly after their client body has
+  // completed. Their callbacks close over the full chat request, so release
+  // those references at the terminal transition instead of retaining large
+  // prompt bodies through the response stream's cleanup window.
+  let onDisconnectCallback = onDisconnect;
+  let onErrorCallback = onError;
+  let abortSignal = clientAbortSignal;
   const abortController = new AbortController();
   const startTime = Date.now();
   let disconnected = false;
@@ -295,8 +302,16 @@ export function createStreamController({
     cleanupClientAbortSignal = null;
   };
 
+  const releaseTerminalReferences = () => {
+    cleanupClientAbortListener();
+    onDisconnectCallback = undefined;
+    onErrorCallback = undefined;
+    abortSignal = undefined;
+    completedToolHandoffDrain = null;
+  };
+
   const getClientAbortReason = () => {
-    const reason = clientAbortSignal?.reason;
+    const reason = abortSignal?.reason;
     if (typeof reason === "string" && reason.trim().length > 0) {
       return reason;
     }
@@ -339,14 +354,15 @@ export function createStreamController({
         abortController.abort(reason);
       }
 
-      onDisconnect?.({ reason, duration: Date.now() - startTime });
+      onDisconnectCallback?.({ reason, duration: Date.now() - startTime });
+      releaseTerminalReferences();
     },
 
     // Call when stream completes normally
     handleComplete: () => {
       if (disconnected) return;
       disconnected = true;
-      cleanupClientAbortListener();
+      releaseTerminalReferences();
 
       logStream("complete");
     },
@@ -380,6 +396,7 @@ export function createStreamController({
       if (disconnected || isClientDisconnectError(error)) {
         clearPendingRequest(error);
         logStream(disconnected ? "client_disconnect (post-abort)" : "client_disconnect");
+        releaseTerminalReferences();
         return;
       }
 
@@ -388,7 +405,7 @@ export function createStreamController({
       if (!alreadyCleared) {
         try {
           handled =
-            onError?.({
+            onErrorCallback?.({
               error,
               message: getErrorMessage(error),
               statusCode: getErrorStatusCode(error),
@@ -407,14 +424,17 @@ export function createStreamController({
 
       if (error instanceof Error && error.name === "AbortError") {
         logStream("aborted");
+        releaseTerminalReferences();
         return;
       }
 
       if (error instanceof Error) {
         logStream(`error: ${getPublicErrorMessage(error.message, getErrorStatusCode(error))}`);
+        releaseTerminalReferences();
         return;
       }
       logStream("error: unknown");
+      releaseTerminalReferences();
     },
 
     abort: () => {
@@ -425,9 +445,9 @@ export function createStreamController({
     clientDisconnectGracePeriodMs,
   };
 
-  if (clientAbortSignal && typeof clientAbortSignal.addEventListener === "function") {
+  if (abortSignal && typeof abortSignal.addEventListener === "function") {
     const handleClientAbort = () => {
-      const reason = clientAbortSignal.reason;
+      const reason = abortSignal?.reason;
       if (isDeadlineAbortReason(reason)) {
         // An AbortSignal can represent an OmniRoute-owned deadline as well as
         // a caller disconnect. Preserve deadline failures as 504; classifying
@@ -438,12 +458,12 @@ export function createStreamController({
       }
       controller.handleDisconnect(getClientAbortReason());
     };
-    if (clientAbortSignal.aborted) {
+    if (abortSignal.aborted) {
       queueMicrotask(handleClientAbort);
     } else {
-      clientAbortSignal.addEventListener("abort", handleClientAbort, { once: true });
+      abortSignal.addEventListener("abort", handleClientAbort, { once: true });
       cleanupClientAbortSignal = () => {
-        clientAbortSignal.removeEventListener("abort", handleClientAbort);
+        abortSignal?.removeEventListener("abort", handleClientAbort);
       };
     }
   }

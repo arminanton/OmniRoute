@@ -3,10 +3,22 @@ import test from "node:test";
 import {
   clearCompletedDetails,
   getCompletedDetails,
+  projectCompletedArtifactPreview,
   storeCompletedDetail,
 } from "../../src/lib/usage/completedRequestDetails.ts";
 
 test.afterEach(() => clearCompletedDetails());
+
+test("artifact enrichment retains a sanitized bounded preview instead of full payloads", () => {
+  const preview = projectCompletedArtifactPreview({
+    authorization: "Bearer completed-artifact-secret",
+    content: "x".repeat(2_000_000),
+  }) as { authorization: string; content: string };
+
+  assert.equal(preview.content.length, 1203);
+  assert.doesNotMatch(JSON.stringify(preview), /completed-artifact-secret/);
+  assert.ok(JSON.stringify(preview).length < 2_000);
+});
 
 test("completed-detail stream excerpts have a 64 MiB aggregate memory ceiling", () => {
   // Reuse one backing value so the test exercises weighted accounting without

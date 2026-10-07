@@ -1,5 +1,7 @@
 import { getDbInstance } from "../db/core";
+import { protectPayloadForLog } from "@/lib/logPayloads";
 import type { PendingRequestDetail } from "./usageHistory";
+import { truncatePendingPreview } from "./usageHistory/helpers";
 
 const COMPLETED_DETAIL_TTL_MS = 120_000;
 const MAX_COMPLETED_DETAILS = 256;
@@ -12,6 +14,12 @@ const completedDetails = new Map<string, PendingRequestDetail>();
 const completedDetailTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const completedDetailStreamBytes = new Map<string, number>();
 let totalCompletedDetailStreamBytes = 0;
+
+export function projectCompletedArtifactPreview(value: unknown): unknown {
+  // Completed detail is an in-memory dashboard cache. Persisted artifacts keep
+  // the full protected payload; this cache must retain only a bounded preview.
+  return protectPayloadForLog(truncatePendingPreview(value));
+}
 
 function estimateStreamChunkMemory(detail: PendingRequestDetail): number {
   const tracks = detail.streamChunks;
@@ -118,17 +126,19 @@ export function maybeEnrichCompletedDetail(updated: PendingRequestDetail, connec
         const pipeline = art.artifact.pipeline as
           { providerResponse?: unknown; clientResponse?: unknown } | undefined;
         if (missingProvider && pipeline?.providerResponse) {
-          updated.providerResponse = pipeline.providerResponse;
+          updated.providerResponse = projectCompletedArtifactPreview(pipeline.providerResponse);
         }
         if (missingClient && pipeline?.clientResponse) {
-          updated.clientResponse = pipeline.clientResponse;
+          updated.clientResponse = projectCompletedArtifactPreview(pipeline.clientResponse);
         }
         if (
           (missingProvider && art.artifact.responseBody) ||
           (missingClient && art.artifact.responseBody)
         ) {
-          if (missingProvider) updated.providerResponse = art.artifact.responseBody;
-          if (missingClient) updated.clientResponse = art.artifact.responseBody;
+          if (missingProvider)
+            updated.providerResponse = projectCompletedArtifactPreview(art.artifact.responseBody);
+          if (missingClient)
+            updated.clientResponse = projectCompletedArtifactPreview(art.artifact.responseBody);
         }
         if (updated.providerResponse || updated.clientResponse) {
           if (completedDetails.has(updated.id)) storeCompletedDetail(updated);
