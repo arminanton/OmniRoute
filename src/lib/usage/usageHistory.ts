@@ -107,21 +107,24 @@ function normalizePendingMetadata(metadata?: PendingRequestMetadata): PendingReq
         : null;
   }
   if (metadata.clientRequest !== undefined) {
-    normalized.clientRequest = truncatePendingPreview(protectPayloadForLog(metadata.clientRequest));
+    // Pending dashboard details need only a bounded preview. Truncate before
+    // privacy protection so multi-megabyte request bodies are not deep-cloned
+    // through each sanitizer stage before being discarded.
+    normalized.clientRequest = protectPayloadForLog(truncatePendingPreview(metadata.clientRequest));
   }
   if (metadata.providerRequest !== undefined) {
-    normalized.providerRequest = truncatePendingPreview(
-      protectPayloadForLog(metadata.providerRequest)
+    normalized.providerRequest = protectPayloadForLog(
+      truncatePendingPreview(metadata.providerRequest)
     );
   }
   if (metadata.providerResponse !== undefined) {
-    normalized.providerResponse = truncatePendingPreview(
-      protectPayloadForLog(metadata.providerResponse)
+    normalized.providerResponse = protectPayloadForLog(
+      truncatePendingPreview(metadata.providerResponse)
     );
   }
   if (metadata.clientResponse !== undefined) {
-    normalized.clientResponse = truncatePendingPreview(
-      protectPayloadForLog(metadata.clientResponse)
+    normalized.clientResponse = protectPayloadForLog(
+      truncatePendingPreview(metadata.clientResponse)
     );
   }
   if (metadata.status !== undefined) {
@@ -366,7 +369,10 @@ export function trackPendingRequest(
       pendingRequests.details[connectionId][modelKey].push(newDetail);
       pendingById.set(newDetail.id, newDetail);
       if (normalizedMetadata.correlationId) {
-        pendingIdByCorrelation.set(normalizedMetadata.correlationId, { id: newDetail.id, touchedAt: now });
+        pendingIdByCorrelation.set(normalizedMetadata.correlationId, {
+          id: newDetail.id,
+          touchedAt: now,
+        });
       }
       return newDetail.id;
     } else if (!started && nextCount >= 0) {

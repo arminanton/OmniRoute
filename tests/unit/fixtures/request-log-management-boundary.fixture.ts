@@ -88,6 +88,38 @@ test("management detail sanitizes completed error metadata and cached chunks", a
   );
 });
 
+test("completed pending previews bound large bodies before privacy sanitization", () => {
+  const requestId = usageHistory.trackPendingRequest(
+    "model",
+    "provider",
+    "conn-large-preview",
+    true
+  );
+  assert.ok(requestId);
+  const large = "x".repeat(2_000_000);
+  assert.equal(
+    usageHistory.finalizePendingRequestById(requestId, {
+      status: 200,
+      clientRequest: { authorization: "Bearer management-cache-secret", content: large },
+      providerRequest: { content: large },
+      providerResponse: { content: large },
+      clientResponse: { content: large },
+    }),
+    true
+  );
+
+  const completed = usageHistory.getCompletedDetails().get(requestId);
+  assert.ok(completed);
+  const serialized = JSON.stringify({
+    clientRequest: completed.clientRequest,
+    providerRequest: completed.providerRequest,
+    providerResponse: completed.providerResponse,
+    clientResponse: completed.clientResponse,
+  });
+  assert.ok(serialized.length < 10_000, "the dashboard cache must retain only bounded previews");
+  assert.doesNotMatch(serialized, /management-cache-secret/);
+});
+
 test("usage history endpoint exposes pending counters without raw request details", async () => {
   const requestId = usageHistory.trackPendingRequest("model", "provider", "conn-usage", true);
   assert.ok(requestId);
