@@ -7,8 +7,12 @@ import path from "node:path";
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-call-log-worker-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 
-const { writeCallArtifactAsync, closeCallLogArtifactWriter, resolveCallLogArtifactWorker } =
-  await import("../../src/lib/usage/callLogArtifactWriter.ts");
+const {
+  writeCallArtifactAsync,
+  closeCallLogArtifactWriter,
+  resolveCallLogArtifactWorker,
+  estimateCallLogArtifactFootprint,
+} = await import("../../src/lib/usage/callLogArtifactWriter.ts");
 
 test.after(async () => {
   await closeCallLogArtifactWriter();
@@ -144,6 +148,72 @@ test("async worker writes call-log artifact and returns matching metadata", asyn
   assert.equal(result.sizeBytes, Buffer.byteLength(serialized));
   assert.match(result.sha256, /^[0-9a-f]{8}$/);
   assert.deepEqual(JSON.parse(serialized), artifact);
+});
+
+test("artifact footprint estimate bounds large strings, tool arrays, and sparse arrays", () => {
+  const text = estimateCallLogArtifactFootprint({ content: "x".repeat(1_000_000) });
+  assert.equal(text.reason, undefined);
+  assert.ok(text.estimatedBytes >= 10_000_000);
+
+  const tools = estimateCallLogArtifactFootprint({
+    tool_calls: Array.from({ length: 48 }, (_, index) => ({
+      id: `call_${index}`,
+      function: { name: `tool_${index}`, arguments: '{"value":"large"}' },
+    })),
+  });
+  assert.equal(tools.reason, undefined);
+  assert.ok(tools.estimatedBytes > 48 * 128);
+
+  const sparse = new Array(10_000);
+  const sparseEstimate = estimateCallLogArtifactFootprint(sparse);
+  assert.equal(sparseEstimate.reason, undefined);
+  assert.ok(sparseEstimate.estimatedBytes >= sparse.length * 32);
+});
+
+test("artifact footprint estimation terminates safely on cycles and object count caps", () => {
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  assert.equal(estimateCallLogArtifactFootprint(cyclic).reason, "cycle");
+
+  const tooManyObjects = Array.from({ length: 50_001 }, () => ({}));
+  assert.equal(estimateCallLogArtifactFootprint(tooManyObjects).reason, "object_limit");
+
+  const tooManyValues = Array.from({ length: 100_001 }, () => null);
+  assert.equal(estimateCallLogArtifactFootprint(tooManyValues).reason, "value_limit");
+});
+
+test("artifact footprint estimation rejects accessors without invoking them", () => {
+  let getterInvoked = false;
+  const artifact = Object.defineProperty({}, "payload", {
+    enumerable: true,
+    get() {
+      getterInvoked = true;
+      return "must not be read by the admission estimator";
+    },
+  });
+
+  assert.equal(estimateCallLogArtifactFootprint(artifact).reason, "unsupported");
+  assert.equal(getterInvoked, false);
+});
+
+test("aggregate artifact budget includes active writes and releases reservations on completion", async () => {
+  const largePayload = "x".repeat(2_000_000);
+  const writes = Array.from({ length: 7 }, (_, index) => {
+    const artifact = buildArtifact(`worker-budget-${index}`);
+    artifact.requestBody = { content: largePayload };
+    return writeCallArtifactAsync(artifact);
+  });
+
+  // Six estimates of about 20 MiB fit the 128 MiB aggregate cap; the seventh
+  // is omitted while those writes are active or waiting behind the worker.
+  const initialResults = await Promise.all(writes);
+  assert.equal(initialResults.filter(Boolean).length, 6);
+  assert.equal(initialResults.filter((result) => result === null).length, 1);
+
+  const retryArtifact = buildArtifact("worker-budget-after-release");
+  retryArtifact.requestBody = { content: largePayload };
+  const retryResult = await writeCallArtifactAsync(retryArtifact);
+  assert.ok(retryResult);
 });
 
 test("bounded queue fails open and rate-limits saturation warnings", async () => {
