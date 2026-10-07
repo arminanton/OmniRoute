@@ -329,7 +329,7 @@ import { getQuotaScopeLabelForProvider } from "../services/antigravityQuotaFamil
 import { getKimiTemporaryRateLimitResetAt } from "./chatCore/kimiQuotaRecovery.ts";
 import {
   getCallLogPipelineCaptureStreamChunks,
-  getCallLogPipelineMaxSizeBytes,
+  getCallLogPipelineStreamChunkMaxSizeBytes,
 } from "@/lib/logEnv";
 import { logAuditEvent } from "@/lib/compliance";
 import { emit } from "@/lib/events/eventBus";
@@ -1323,7 +1323,7 @@ async function handleChatCoreOwned({
     diagnosticClientJson: () => getDiagnosticClientJson(clientRawRequest),
     diagnosticSignal: clientRawRequest?.signal,
     captureStreamChunks: capturePipelineStreamChunks,
-    maxStreamChunkBytes: getCallLogPipelineMaxSizeBytes(),
+    maxStreamChunkBytes: getCallLogPipelineStreamChunkMaxSizeBytes(),
     requestId: pendingRequestId,
     model,
     provider: provider || undefined,

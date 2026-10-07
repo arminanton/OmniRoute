@@ -8,6 +8,9 @@ const DEFAULT_APP_LOG_MAX_FILES = 20;
 const DEFAULT_CALL_LOG_MAX_ENTRIES = 10000;
 const DEFAULT_CALL_LOGS_TABLE_MAX_ROWS = 100000;
 const DEFAULT_CALL_LOG_PIPELINE_MAX_SIZE_KB = 512;
+const DEFAULT_CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = 512;
+const MAX_CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = 1024;
+const MIN_CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = 1;
 const DEFAULT_PROXY_LOGS_TABLE_MAX_ROWS = 100000;
 /**
  * Default app log path, anchored to DATA_DIR (never `process.cwd()`).
@@ -126,6 +129,24 @@ export function getCallLogPipelineMaxSizeBytes(): number {
       DEFAULT_CALL_LOG_PIPELINE_MAX_SIZE_KB
     ) * 1024
   );
+}
+
+/**
+ * Aggregate in-memory budget for all retained provider/OpenAI/client stream
+ * excerpts on one request. This is deliberately independent of the serialized
+ * pipeline artifact budget above. The request logger accounts for both UTF-16
+ * backing storage and UTF-8 serialized bytes, plus a fixed per-entry allowance.
+ */
+export function getCallLogPipelineStreamChunkMaxSizeBytes(): number {
+  const configuredKb = parsePositiveInt(
+    process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB,
+    DEFAULT_CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB
+  );
+  const boundedKb = Math.max(
+    MIN_CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB,
+    Math.min(configuredKb, MAX_CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB)
+  );
+  return boundedKb * 1024;
 }
 
 export function getProxyLogsTableMaxRows(): number {

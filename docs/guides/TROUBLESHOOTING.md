@@ -428,7 +428,9 @@ Set `APP_LOG_TO_FILE=true` in your `.env` file. Application logs are written und
 Request artifacts are stored under `${DATA_DIR}/call_logs/` when the call log pipeline is
 enabled in settings.
 When pipeline capture is enabled, set `CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS=false` to omit
-stream chunk payloads, or tune `CALL_LOG_PIPELINE_MAX_SIZE_KB` to change the artifact cap in KB.
+stream chunk payloads, tune `CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB` to change the per-request
+aggregate excerpt memory budget (default 512 KiB, maximum 1 MiB), or tune
+`CALL_LOG_PIPELINE_MAX_SIZE_KB` independently to change the serialized artifact cap in KB.
 
 ### Check Provider Health
 
