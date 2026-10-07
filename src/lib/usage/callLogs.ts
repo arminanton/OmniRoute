@@ -45,7 +45,15 @@ import {
   type CallLogArtifact,
   type CallLogDetailState,
 } from "./callLogArtifacts";
-import { closeCallLogArtifactWriter, writeCallArtifactAsync } from "./callLogArtifactWriter";
+import {
+  closeCallLogArtifactWriter,
+  releaseCallLogArtifactPreparation,
+  reserveCallLogArtifactPreparation,
+  writeCallArtifactAsync,
+  writeDiagnosticOverflowStubAsync,
+  type CallLogArtifactReservation,
+} from "./callLogArtifactWriter";
+import { projectDiagnosticOverflowReference } from "./diagnosticOverflowTypes";
 import {
   toNumber,
   toStringOrNull,
@@ -136,11 +144,6 @@ type LegacyInlineRow = {
   error: string | null;
 };
 
-type DeleteResult = {
-  deletedRows: number;
-  deletedArtifacts: number;
-};
-
 async function resolveAccountName(connectionId: string | null | undefined) {
   let account = connectionId ? connectionId.slice(0, 8) : "-";
 
@@ -222,6 +225,7 @@ function buildArtifact(
     targetFormat: string | null;
     apiKeyId: string | null;
     apiKeyName: string | null;
+    correlationId?: string | null;
     comboName: string | null;
     comboStepId: string | null;
     comboExecutionKey: string | null;
@@ -258,6 +262,7 @@ function buildArtifact(
       targetFormat: logEntry.targetFormat,
       apiKeyId: logEntry.apiKeyId,
       apiKeyName: logEntry.apiKeyName,
+      correlationId: logEntry.correlationId ?? null,
       comboName: logEntry.comboName,
       comboStepId: logEntry.comboStepId,
       comboExecutionKey: logEntry.comboExecutionKey,
@@ -451,6 +456,7 @@ function getLegacyInlineDetail(id: string) {
 async function saveCallLogOperation(entry: any): Promise<void> {
   let identity: CallLogIdentity | null = null;
   let ownedArtifactRelPath: string | null = null;
+  let preparationReservation: CallLogArtifactReservation | null = null;
   let published = false;
   try {
     const apiKeyContext = getCallLogApiKeyContext();
@@ -461,25 +467,104 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     const apiKeyName = entry.apiKeyName || apiKeyContext?.apiKeyName || null;
     const noLogEnabled = Boolean(entry.noLog) || (apiKeyId ? isNoLog(apiKeyId) : false);
 
-    const protectedRequestBody = noLogEnabled ? null : protectPayloadForLog(entry.requestBody);
     const responseStatus = Number(entry.status);
     const failedResponse = Number.isFinite(responseStatus) && responseStatus >= 400;
-    const protectedResponseBody = noLogEnabled
+    let rawRequestBody: unknown = noLogEnabled ? null : entry.requestBody;
+    let rawResponseBody: unknown = noLogEnabled ? null : entry.responseBody;
+    let rawPipelinePayloads: unknown = noLogEnabled
       ? null
-      : failedResponse
-        ? protectErrorPayloadForLog(entry.responseBody)
-        : protectPayloadForLog(entry.responseBody);
-    const protectedPipelinePayloads = noLogEnabled
-      ? null
-      : protectPipelinePayloads(
-          entry.pipelinePayloads ?? entry.pipeline ?? null,
-          failedResponse ? responseStatus : undefined
-        );
-    const protectedError = sanitizeErrorForLog(entry.error);
+      : (entry.pipelinePayloads ?? entry.pipeline ?? null);
+    let rawError: unknown = noLogEnabled ? null : entry.error;
+    let rawPipelineRecord =
+      rawPipelinePayloads &&
+      typeof rawPipelinePayloads === "object" &&
+      !Array.isArray(rawPipelinePayloads)
+        ? (rawPipelinePayloads as Record<string, unknown>)
+        : null;
+    const diagnosticOverflowReference = noLogEnabled
+      ? undefined
+      : projectDiagnosticOverflowReference(rawPipelineRecord?.diagnosticOverflow);
+    rawPipelineRecord = null;
+    const rawDetailExpected =
+      !noLogEnabled &&
+      (rawRequestBody != null ||
+        rawResponseBody != null ||
+        rawPipelinePayloads != null ||
+        rawError != null);
+    const rawHasRequestBody = rawRequestBody != null;
+    const rawHasResponseBody = rawResponseBody != null;
+    const rawHasPipelineDetails = rawPipelinePayloads != null;
+    const rawHasError = rawError != null;
+    if (rawDetailExpected) {
+      preparationReservation = reserveCallLogArtifactPreparation({
+        requestBody: rawRequestBody,
+        responseBody: rawResponseBody,
+        pipeline: rawPipelinePayloads,
+        error: rawError,
+      });
+    }
+    const preparationRefused = rawDetailExpected && !preparationReservation;
 
-    const account = await resolveAccountName(entry.connectionId || null);
+    let protectedRequestBody: unknown =
+      noLogEnabled || preparationRefused ? null : protectPayloadForLog(rawRequestBody);
+    let protectedResponseBody: unknown =
+      noLogEnabled || preparationRefused
+        ? null
+        : failedResponse
+          ? protectErrorPayloadForLog(rawResponseBody)
+          : protectPayloadForLog(rawResponseBody);
+    let protectedPipelinePayloads: RequestPipelinePayloads | null =
+      noLogEnabled || preparationRefused
+        ? null
+        : protectPipelinePayloads(rawPipelinePayloads, failedResponse ? responseStatus : undefined);
+    let protectedError: unknown =
+      noLogEnabled || preparationRefused ? null : sanitizeErrorForLog(rawError);
+
     const rawProvider: string = entry.provider || "-";
     const rawRequestedModel: string | null = entry.requestedModel || null;
+    const connectionId = entry.connectionId || null;
+    const tokensReasoning = getReasoningTokensOrNull(entry.tokens);
+    const reasoningObservation = preparationRefused
+      ? { source: null, chars: null }
+      : resolveReasoningObservation(tokensReasoning, rawResponseBody);
+    const errorType = classifyCallLogError(entry.status, rawError, rawProvider);
+
+    // Keep only summary scalars while asynchronous account/provider lookups run.
+    // The original entry may still reference large request and response bodies.
+    entry = {
+      id: entry.id,
+      timestamp: entry.timestamp,
+      method: entry.method,
+      path: entry.path,
+      status: entry.status,
+      model: entry.model,
+      requestedModel: entry.requestedModel,
+      provider: entry.provider,
+      connectionId,
+      duration: entry.duration,
+      tokens: entry.tokens,
+      tokensCompressed: entry.tokensCompressed,
+      cacheSource: entry.cacheSource,
+      requestType: entry.requestType,
+      sourceFormat: entry.sourceFormat,
+      targetFormat: entry.targetFormat,
+      apiKeyId: entry.apiKeyId,
+      apiKeyName: entry.apiKeyName,
+      comboName: entry.comboName,
+      comboStepId: entry.comboStepId,
+      comboExecutionKey: entry.comboExecutionKey,
+      correlationId: entry.correlationId,
+      modelPinned: entry.modelPinned,
+      sessionTag: entry.sessionTag,
+      responseId: entry.responseId,
+      videoContentRemoved: entry.videoContentRemoved,
+    };
+    rawRequestBody = null;
+    rawResponseBody = null;
+    rawPipelinePayloads = null;
+    rawError = null;
+
+    const account = await resolveAccountName(connectionId);
     let resolvedRequestedModel = rawRequestedModel;
     if (rawRequestedModel && isCompatibleProviderId(rawProvider)) {
       const nodePrefix = await resolveProviderPrefix(rawProvider);
@@ -487,9 +572,6 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     }
     // #6187: usage-derived reasoning tokens stay UNCHANGED (cost math reads this),
     // while reasoning source/char-count are recorded separately for observability.
-    const tokensReasoning = getReasoningTokensOrNull(entry.tokens);
-    const reasoningObservation = resolveReasoningObservation(tokensReasoning, entry.responseBody);
-    const errorType = classifyCallLogError(entry.status, entry.error, entry.provider);
     // Reserve before dispatching an artifact job. Caller IDs are durable lookup
     // aliases, never reused primary keys or filesystem paths.
     identity = reserveCallLogIdentity(entry.id);
@@ -539,15 +621,24 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       videoContentRemoved: entry.videoContentRemoved ? 1 : 0,
     };
 
-    const requestSummary = noLogEnabled
-      ? null
-      : buildRequestSummary(logEntry.requestType, protectedRequestBody);
-    const detailExpected =
-      !noLogEnabled &&
-      (protectedRequestBody !== null ||
-        protectedResponseBody !== null ||
-        protectedError !== null ||
-        protectedPipelinePayloads !== null);
+    let requestSummary =
+      noLogEnabled || preparationRefused
+        ? null
+        : buildRequestSummary(logEntry.requestType, protectedRequestBody);
+    const detailExpected = rawDetailExpected;
+    const hasRequestBody = preparationRefused ? rawHasRequestBody : protectedRequestBody !== null;
+    const hasResponseBody = preparationRefused
+      ? rawHasResponseBody
+      : protectedResponseBody !== null;
+    const hasPipelineDetails = preparationRefused
+      ? rawHasPipelineDetails
+      : protectedPipelinePayloads !== null;
+    const errorSummary = preparationRefused
+      ? rawHasError
+        ? "Call-log detail omitted because the preparation memory budget was full."
+        : null
+      : toStoredErrorSummary(protectedError);
+    entry = null;
 
     let detailState: CallLogDetailState = "none";
     let artifactRelPath: string | null = null;
@@ -555,15 +646,37 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     let artifactSha256: string | null = null;
 
     if (detailExpected) {
-      const artifact = buildArtifact(
-        logEntry,
-        protectedRequestBody,
-        protectedResponseBody,
-        protectedError,
-        protectedPipelinePayloads
-      );
-      const artifactResult = await writeCallArtifactAsync(artifact);
+      let artifactResult: Awaited<ReturnType<typeof writeCallArtifactAsync>>;
+      if (preparationRefused) {
+        requestSummary = null;
+        if (diagnosticOverflowReference) {
+          const stubSummary = buildArtifact(logEntry, null, null, null, null).summary;
+          artifactResult = await writeDiagnosticOverflowStubAsync(
+            stubSummary,
+            diagnosticOverflowReference
+          );
+        } else {
+          artifactResult = null;
+        }
+      } else {
+        let artifact: CallLogArtifact | null = buildArtifact(
+          logEntry,
+          protectedRequestBody,
+          protectedResponseBody,
+          protectedError,
+          protectedPipelinePayloads
+        );
+        const artifactWrite = writeCallArtifactAsync(artifact, preparationReservation);
+        preparationReservation = null; // The writer now owns or has released the lease.
+        artifact = null;
+        protectedRequestBody = null;
+        protectedResponseBody = null;
+        protectedPipelinePayloads = null;
+        protectedError = null;
+        artifactResult = await artifactWrite;
+      }
       if (artifactResult) {
+        if (artifactResult.diagnosticOverflowStub) requestSummary = null;
         detailState = "ready";
         artifactRelPath = artifactResult.relPath;
         ownedArtifactRelPath = artifactRelPath;
@@ -607,14 +720,14 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         )
         .run({
           ...logEntry,
-          errorSummary: toStoredErrorSummary(protectedError),
+          errorSummary,
           detailState,
           artifactRelPath,
           artifactSizeBytes,
           artifactSha256,
-          hasRequestBody: protectedRequestBody !== null ? 1 : 0,
-          hasResponseBody: protectedResponseBody !== null ? 1 : 0,
-          hasPipelineDetails: protectedPipelinePayloads ? 1 : 0,
+          hasRequestBody: hasRequestBody ? 1 : 0,
+          hasResponseBody: hasResponseBody ? 1 : 0,
+          hasPipelineDetails: hasPipelineDetails ? 1 : 0,
           requestSummary,
         })
     );
@@ -623,6 +736,8 @@ async function saveCallLogOperation(entry: any): Promise<void> {
 
     scheduleCallLogRotation();
   } catch (error) {
+    releaseCallLogArtifactPreparation(preparationReservation);
+    preparationReservation = null;
     if (identity && !published) {
       try {
         if (releaseCallLogIdentity(identity)) deleteCallArtifact(ownedArtifactRelPath);

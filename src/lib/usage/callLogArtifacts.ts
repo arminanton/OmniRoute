@@ -87,6 +87,7 @@ export type CallLogArtifact = {
     targetFormat: string | null;
     apiKeyId: string | null;
     apiKeyName: string | null;
+    correlationId?: string | null;
     comboName: string | null;
     comboStepId: string | null;
     comboExecutionKey: string | null;
@@ -101,6 +102,7 @@ export type CallLogArtifactWriteResult = {
   relPath: string;
   sizeBytes: number;
   sha256: string;
+  diagnosticOverflowStub?: true;
 };
 
 export type PurgeCallLogArtifactDirectoryResult = {

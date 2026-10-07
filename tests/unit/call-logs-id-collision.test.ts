@@ -196,6 +196,34 @@ test("duplicate no-log saves remain distinct without payload artifacts", async (
   }
 });
 
+test("NoLog skips payload getters before preparation reservation or protection", async () => {
+  const noLogEntry = {
+    id: "no-log-payload-getters",
+    timestamp,
+    correlationId: "no-log-payload-getters",
+    status: 200,
+    model: "fixture-model",
+    provider: "fixture-provider",
+    noLog: true,
+  };
+  for (const key of ["requestBody", "responseBody", "pipelinePayloads", "pipeline", "error"]) {
+    Object.defineProperty(noLogEntry, key, {
+      enumerable: true,
+      get() {
+        throw new Error(`NoLog must not read ${key}`);
+      },
+    });
+  }
+
+  await logs.saveCallLog(noLogEntry);
+  const detail = await logs.getCallLogById("no-log-payload-getters");
+  assert.equal(detail?.detailState, "none");
+  assert.equal(detail?.artifactRelPath, null);
+  assert.equal(detail?.hasRequestBody, false);
+  assert.equal(detail?.hasResponseBody, false);
+  assert.equal(detail?.hasPipelineDetails, false);
+});
+
 test("persistAttemptLogs can save twice from the same captured dispatch context, then retry", async () => {
   const { persistAttemptLogs } = await import("../../open-sse/handlers/chatCore/attemptLogging.ts");
   const logicalId = "captured-dispatch-request";

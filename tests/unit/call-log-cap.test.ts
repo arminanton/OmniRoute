@@ -33,6 +33,7 @@ const ORIGINAL_CALL_LOG_PIPELINE_MAX_SIZE_KB = process.env.CALL_LOG_PIPELINE_MAX
 
 const core = await import("../../src/lib/db/core.ts");
 const callLogs = await import("../../src/lib/usage/callLogs.ts");
+const artifactWriter = await import("../../src/lib/usage/callLogArtifactWriter.ts");
 const detailedLogs = await import("../../src/lib/db/detailedLogs.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 
@@ -634,6 +635,64 @@ test("saveCallLog omits oversized non-stream pipeline payloads to enforce artifa
       reason: "call_log_artifact_size_limit_exceeded",
     },
   });
+});
+
+test("preparation budget refuses body clones but persists the private overflow pointer stub", async () => {
+  const blocker = artifactWriter.reserveCallLogArtifactPreparation({
+    content: "x".repeat(6_000_000),
+  });
+  assert.ok(blocker);
+
+  const diagnosticOverflow = {
+    schema: "omni-diagnostic-overflow/v1" as const,
+    traceId: "11234567-89ab-cdef-0123-456789abcdef",
+    state: "complete" as const,
+  };
+  try {
+    await callLogs.saveCallLog({
+      id: "preparation-budget-overflow-stub",
+      timestamp: "2026-03-31T09:05:01.000Z",
+      method: "POST",
+      path: "/v1/responses?api_key=private-query-secret",
+      status: 503,
+      model: "antigravity/gemini-3.8-flash-high",
+      requestedModel: "antigravity/gemini-3.8-flash-high",
+      provider: "antigravity",
+      correlationId: "corr-preparation-overflow",
+      requestType: "search",
+      apiKeyId: "sk-private-key-id",
+      apiKeyName: "private-key-name",
+      account: "private-account@example.test",
+      requestBody: { query: "private request body", content: "r".repeat(2_000_000) },
+      responseBody: { secret: "private response body marker" },
+      error: "private error body marker",
+      pipelinePayloads: {
+        diagnosticOverflow,
+        providerRequest: { body: { secret: "private provider body marker" } },
+      },
+    });
+  } finally {
+    artifactWriter.releaseCallLogArtifactPreparation(blocker);
+  }
+
+  const detail = await callLogs.getCallLogById("preparation-budget-overflow-stub");
+  assert.equal(detail?.detailState, "ready");
+  assert.equal(detail?.correlationId, "corr-preparation-overflow");
+  assert.equal(detail?.requestSummary, null);
+  assert.match(String(detail?.requestBody), /artifact queue memory budget exceeded/);
+  assert.deepEqual(detail?.pipelinePayloads?.diagnosticOverflow, diagnosticOverflow);
+
+  const artifactFile = path.join(TEST_DATA_DIR, "call_logs", detail!.artifactRelPath!);
+  const serialized = fs.readFileSync(artifactFile, "utf8");
+  assert.doesNotMatch(
+    serialized,
+    /private request body|private response body marker|private provider body marker|private-query-secret|sk-private/
+  );
+  const artifact = JSON.parse(serialized);
+  assert.equal(artifact.summary.apiKeyId, null);
+  assert.equal(artifact.summary.apiKeyName, null);
+  assert.equal(artifact.summary.account, "-");
+  assert.equal(artifact.summary.path, "/v1/responses");
 });
 
 test("saveCallLog honors CALL_LOG_PIPELINE_MAX_SIZE_KB for pipeline artifacts", async () => {

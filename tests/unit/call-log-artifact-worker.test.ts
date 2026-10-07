@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { CallLogArtifact } from "../../src/lib/usage/callLogArtifacts.ts";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-call-log-worker-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
@@ -12,6 +13,9 @@ const {
   closeCallLogArtifactWriter,
   resolveCallLogArtifactWorker,
   estimateCallLogArtifactFootprint,
+  reserveCallLogArtifactPreparation,
+  releaseCallLogArtifactPreparation,
+  writeDiagnosticOverflowStubAsync,
 } = await import("../../src/lib/usage/callLogArtifactWriter.ts");
 
 test.after(async () => {
@@ -19,7 +23,7 @@ test.after(async () => {
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
-function buildArtifact(id: string) {
+function buildArtifact(id: string): CallLogArtifact {
   return {
     schemaVersion: 5 as const,
     summary: {
@@ -47,6 +51,7 @@ function buildArtifact(id: string) {
       targetFormat: "openai",
       apiKeyId: null,
       apiKeyName: null,
+      correlationId: "corr-worker-artifact",
       comboName: null,
       comboStepId: null,
       comboExecutionKey: null,
@@ -214,6 +219,114 @@ test("aggregate artifact budget includes active writes and releases reservations
   retryArtifact.requestBody = { content: largePayload };
   const retryResult = await writeCallArtifactAsync(retryArtifact);
   assert.ok(retryResult);
+});
+
+test("queue budget overflow stores only a safe private diagnostic reference stub", async () => {
+  const largePayload = "x".repeat(2_000_000);
+  const writes = Array.from({ length: 6 }, (_, index) => {
+    const artifact = buildArtifact(`worker-stub-budget-${index}`);
+    artifact.requestBody = { content: largePayload };
+    return writeCallArtifactAsync(artifact);
+  });
+
+  const overflow = buildArtifact("worker-stub-overflow");
+  overflow.requestBody = { content: largePayload };
+  overflow.summary.apiKeyId = "sk-never-persist-this";
+  overflow.summary.apiKeyName = "credential-name-never-persist-this";
+  overflow.summary.account = "private-account@example.test";
+  overflow.summary.connectionId = "private-connection-id";
+  overflow.summary.path = "/v1/responses?api_key=secret-query-value#fragment";
+  overflow.summary.correlationId = "corr-safe-overflow-17";
+  const diagnosticOverflow = {
+    schema: "omni-diagnostic-overflow/v1" as const,
+    traceId: "01234567-89ab-cdef-0123-456789abcdef",
+    state: "complete" as const,
+  };
+  overflow.pipeline = {
+    diagnosticOverflow,
+    providerRequest: { body: { secret: "provider-body-must-not-be-retained" } },
+  };
+  const overflowWrite = writeCallArtifactAsync(overflow);
+
+  const results = await Promise.all([...writes, overflowWrite]);
+  assert.ok(results.slice(0, 6).every(Boolean));
+  assert.ok(
+    results[6],
+    "a bounded pointer-only artifact should survive the full-payload rejection"
+  );
+  assert.equal(results[6]?.diagnosticOverflowStub, true);
+
+  const saved = JSON.parse(
+    fs.readFileSync(path.join(TEST_DATA_DIR, "call_logs", results[6]!.relPath), "utf8")
+  ) as CallLogArtifact;
+  assert.deepEqual(saved.pipeline?.diagnosticOverflow, diagnosticOverflow);
+  assert.equal(saved.summary.id, overflow.summary.id);
+  assert.equal(saved.summary.method, "POST");
+  assert.equal(saved.summary.path, "/v1/responses");
+  assert.equal(saved.summary.model, overflow.summary.model);
+  assert.equal(saved.summary.provider, overflow.summary.provider);
+  assert.equal(saved.summary.status, overflow.summary.status);
+  assert.equal(saved.summary.correlationId, "corr-safe-overflow-17");
+  assert.equal(saved.summary.apiKeyId, null);
+  assert.equal(saved.summary.apiKeyName, null);
+  assert.equal(saved.summary.account, "-");
+  assert.equal(saved.summary.connectionId, null);
+  assert.match(String(saved.requestBody), /artifact queue memory budget exceeded/);
+  assert.match(String(saved.responseBody), /artifact queue memory budget exceeded/);
+  assert.doesNotMatch(
+    JSON.stringify(saved),
+    /provider-body-must-not-be-retained|secret-query-value|sk-never/
+  );
+});
+
+test("100 concurrent preparations stay under the shared cap and transfer or release once", async () => {
+  const records = Array.from({ length: 100 }, (_, index) => {
+    const artifact = buildArtifact(`worker-preparation-${index}`);
+    artifact.requestBody = { content: "x".repeat(256 * 1024) };
+    const diagnosticOverflow = {
+      schema: "omni-diagnostic-overflow/v1" as const,
+      traceId: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
+      state: "complete" as const,
+    };
+    artifact.pipeline = { diagnosticOverflow };
+    return {
+      artifact,
+      diagnosticOverflow,
+      reservation: reserveCallLogArtifactPreparation({
+        requestBody: artifact.requestBody,
+        pipeline: artifact.pipeline,
+      }),
+    };
+  });
+
+  const accepted = records.filter((record) => record.reservation !== null);
+  const refused = records.filter((record) => record.reservation === null);
+  const reservedBytes = accepted.reduce(
+    (total, record) => total + (record.reservation?.estimatedBytes ?? 0),
+    0
+  );
+  assert.ok(accepted.length > 0);
+  assert.ok(
+    refused.length > 0,
+    "large parallel preparations must fail open before copying details"
+  );
+  assert.ok(reservedBytes <= 128 * 1024 * 1024);
+
+  const acceptedWrites = accepted.map((record) =>
+    writeCallArtifactAsync(record.artifact, record.reservation)
+  );
+  const refusedWrites = refused.map((record) =>
+    writeDiagnosticOverflowStubAsync(record.artifact.summary, record.diagnosticOverflow)
+  );
+  const results = await Promise.all([...acceptedWrites, ...refusedWrites]);
+  assert.ok(results.every(Boolean));
+  assert.ok(
+    results.slice(accepted.length).every((result) => result?.diagnosticOverflowStub === true)
+  );
+
+  const released = reserveCallLogArtifactPreparation({ requestBody: { content: "small" } });
+  assert.ok(released, "worker completion must release transferred reservations");
+  releaseCallLogArtifactPreparation(released);
 });
 
 test("bounded queue fails open and rate-limits saturation warnings", async () => {
