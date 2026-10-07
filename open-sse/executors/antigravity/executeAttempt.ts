@@ -1,5 +1,5 @@
 import { isLogicalRetryBudgetError } from "../../services/logicalRetryBudget.ts";
-import { captureAntigravityFetch } from "./diagnosticAttempt.ts";
+import { captureAntigravityFetch, diagnosticDrainEnabled } from "./diagnosticAttempt.ts";
 import { projectErrorHeaders } from "../../utils/googleErrorDiagnostics.ts";
 import { classify429 } from "../../services/antigravity429Engine.ts";
 // Pure-ish per-attempt request/result helpers for the Antigravity executor (#7408
@@ -347,6 +347,18 @@ export async function sendAntigravityRequest(
     removeHeaderCaseInsensitive(retryHeaders, "x-goog-user-project");
     log.debug("RETRY", "403 with x-goog-user-project, retrying once without it");
     await prl.captureCurrentProviderBody(url, retryHeaders, serializedRequest.bodyString, log);
+    if (!diagnosticDrainEnabled(response)) {
+      const diagnosticSignal = AbortSignal.any([
+        AbortSignal.timeout(100),
+        ...(signal ? [signal] : []),
+      ]);
+      try {
+        await readAntigravityErrorBody(response, diagnosticSignal);
+      } catch {
+        // Reading an error body is diagnostic only; it must not delay the 403 fallback.
+        signal?.throwIfAborted();
+      }
+    }
     await disposeAntigravityResponse(response);
     response = await fetchAntigravityWithReadinessTimeout(
       url,

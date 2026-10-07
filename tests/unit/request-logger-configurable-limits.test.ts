@@ -83,3 +83,27 @@ test("diagnostic limit changes preserve secret-header and binary redaction", asy
     assert.equal(body.content, content);
   });
 });
+
+test("provider attempt diagnostics are retained with a fixed per-request cap", async () => {
+  const logger = await createRequestLogger(undefined, undefined, "gemini-3.8-flash-high", {
+    provider: "antigravity",
+    captureStreamChunks: false,
+  });
+  assert.equal(typeof logger.logProviderAttempt, "function");
+
+  for (let index = 0; index < 25; index++) {
+    logger.logProviderAttempt?.({
+      kind: "http_error",
+      status: 429,
+      index,
+      upstreamError: {
+        status: "RESOURCE_EXHAUSTED",
+        details: [{ reason: "RATE_LIMIT_EXCEEDED" }],
+      },
+    });
+  }
+
+  const payloads = logger.getPipelinePayloads();
+  assert.equal(payloads?.providerAttemptDiagnostics?.length, 24);
+  assert.equal(payloads?.providerAttemptDiagnosticsDropped, 1);
+});

@@ -8,6 +8,8 @@ import {
   LogicalRetryBudgetError,
 } from "../../services/logicalRetryBudget.ts";
 import { backoffGenerationRetry } from "../../services/logicalRetryBudget.ts";
+import { captureCurrentProviderAttempt } from "../../utils/providerRequestLogging.ts";
+import { projectGoogleAttemptError } from "../../utils/googleErrorDiagnostics.ts";
 /** Ownership and cancellation helpers shared by all Antigravity attempts. */
 const errorBodies = new WeakMap<Response, Promise<string>>();
 const MAX_ERROR_BODY_BYTES = 256 * 1024;
@@ -48,7 +50,24 @@ export async function disposeAntigravityResponse(response: Response): Promise<vo
 }
 
 async function consumeErrorBody(response: Response, signal?: AbortSignal | null): Promise<string> {
-  if (!response.body) return "";
+  const recordFailure = (body: string, bodyBytes: number, bodyTruncated: boolean) => {
+    if (response.status < 400) return;
+    captureCurrentProviderAttempt(
+      projectGoogleAttemptError({
+        url: response.url,
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+        body,
+        bodyBytes,
+        bodyTruncated,
+      })
+    );
+  };
+  if (!response.body) {
+    recordFailure("", 0, false);
+    return "";
+  }
   const reader = response.body.getReader();
   const diagnostic = diagnosticDrainEnabled(response);
   const bounded = diagnostic
@@ -56,20 +75,32 @@ async function consumeErrorBody(response: Response, signal?: AbortSignal | null)
     : AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]);
   const decoder = new TextDecoder();
   let text = "",
-    bytes = 0;
+    bytes = 0,
+    observedBytes = 0,
+    bodyTruncated = false;
   try {
     while (true) {
       const { done, value } = await readWithCancellation(reader, bounded);
-      if (done) return text + decoder.decode();
+      if (done) {
+        const decoded = text + decoder.decode();
+        recordFailure(decoded, observedBytes, bodyTruncated);
+        return decoded;
+      }
+      observedBytes += value.byteLength;
       const remaining = Math.max(0, MAX_ERROR_BODY_BYTES - bytes);
+      if (value.byteLength > remaining) bodyTruncated = true;
       text += decoder.decode(value.subarray(0, remaining), { stream: true });
-      bytes += value.byteLength;
+      bytes += Math.min(value.byteLength, remaining);
       if (bytes >= MAX_ERROR_BODY_BYTES && !diagnosticDrainEnabled(response)) {
+        bodyTruncated = true;
         await reader.cancel().catch(() => {});
-        return text + decoder.decode();
+        const decoded = text + decoder.decode();
+        recordFailure(decoded, observedBytes, bodyTruncated);
+        return decoded;
       }
     }
   } catch (error) {
+    recordFailure(text, observedBytes, true);
     await reader.cancel(error).catch(() => {});
     const capture = getAntigravityDiagnosticCapture(response);
     if (diagnostic && capture?.budget && capture.budget.remainingTimeMs() <= 0 && !signal?.aborted)

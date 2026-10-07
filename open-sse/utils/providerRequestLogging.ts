@@ -15,6 +15,7 @@ export type Capture = {
   enabled?: boolean;
   diagnosticTrace?: DiagnosticOverflowTrace | null;
   capture: (request: ProviderRequestPrepared) => Promise<void> | void;
+  attempt?: (diagnostic: Record<string, unknown>) => void;
   body: (fallback: unknown) => unknown;
   latest?: () => ProviderRequestPrepared | null;
   /** Drop any retained prepared request after its terminal log has been written. */
@@ -24,6 +25,7 @@ export type Capture = {
 type RequestLoggerLike = {
   getDiagnosticOverflowTrace?: () => DiagnosticOverflowTrace | null;
   logTargetRequest: (url: unknown, headers: Record<string, string>, body: unknown) => void;
+  logProviderAttempt?: (diagnostic: Record<string, unknown>) => void;
 };
 
 type WarnLog = {
@@ -134,6 +136,17 @@ export function captureCurrentProviderBody(
   return captureCurrentProviderRequest(url, headers, parseBody(bodyString), bodyString, log);
 }
 
+/** Record one pre-projected provider failure without retaining the raw response. */
+export function captureCurrentProviderAttempt(diagnostic: Record<string, unknown>) {
+  const activeCapture = captureState.context.getStore();
+  if (!activeCapture || activeCapture.enabled === false || !activeCapture.attempt) return;
+  try {
+    activeCapture.attempt(diagnostic);
+  } catch {
+    // Failure evidence is best-effort and cannot change provider execution.
+  }
+}
+
 export function runWithCapture<T>(requestCapture: Capture, fn: () => Promise<T>): Promise<T> {
   if (requestCapture.enabled === false) return fn();
   installFetchCapture();
@@ -236,6 +249,10 @@ export function createPreparedRequestLogger(
   return {
     enabled,
     diagnosticTrace: enabled ? reqLogger.getDiagnosticOverflowTrace?.() : null,
+    attempt(diagnostic) {
+      if (!enabled) return;
+      reqLogger.logProviderAttempt?.(diagnostic);
+    },
     capture(request) {
       if (!enabled) return;
       latest = request;

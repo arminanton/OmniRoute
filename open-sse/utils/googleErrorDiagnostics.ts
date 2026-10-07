@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { containsSensitiveErrorCredential, sanitizeErrorMessage } from "./errorSanitization.ts";
 
 const TYPES = "type.googleapis.com/google.rpc.";
@@ -190,4 +191,72 @@ export function projectErrorHeaders(
       result[lower] = sanitizeErrorMessage(value).slice(0, 256);
   }
   return result;
+}
+
+function projectAttemptUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`.slice(0, 512);
+  } catch {
+    return "unknown";
+  }
+}
+
+/** Bounded evidence for a failed provider attempt; never retains the raw body. */
+export function projectGoogleAttemptError(input: {
+  url: string;
+  status: number;
+  statusText: string;
+  headers: Headers | Record<string, unknown>;
+  body: string;
+  bodyBytes: number;
+  bodyTruncated: boolean;
+}) {
+  const bodyBytes =
+    Number.isSafeInteger(input.bodyBytes) && input.bodyBytes >= 0
+      ? input.bodyBytes
+      : Buffer.byteLength(input.body, "utf8");
+  const result: Record<string, unknown> = {
+    kind: "http_error",
+    url: projectAttemptUrl(input.url),
+    status: Number.isInteger(input.status) ? input.status : 0,
+    statusText: sanitizeErrorMessage(input.statusText).slice(0, 128),
+    headers: projectErrorHeaders(input.headers),
+    bodyBytes,
+    bodyTruncated: input.bodyTruncated === true,
+    bodySha256: createHash("sha256").update(input.body).digest("hex").slice(0, 24),
+  };
+
+  if (!input.bodyTruncated) {
+    try {
+      const parsed: unknown = JSON.parse(input.body);
+      const root = record(parsed);
+      const projected = projectGoogleError(record(root?.error) ?? root);
+      if (projected) result.upstreamError = projected;
+      else result.bodyFormat = root ? "json" : "non_object_json";
+    } catch {
+      result.bodyFormat = input.body ? "non_json" : "empty";
+    }
+  } else {
+    result.bodyFormat = "truncated";
+  }
+
+  return result;
+}
+
+/** Safe transport failure metadata for attempts that never received HTTP headers. */
+export function projectGoogleAttemptTransportError(url: string, error: unknown) {
+  const source = record(error);
+  const cause = record(source?.cause);
+  const safeCode = (value: unknown) =>
+    typeof value === "string" && /^[A-Z0-9_.-]{1,80}$/i.test(value) ? value : undefined;
+  const code = safeCode(source?.code) ?? safeCode(cause?.code);
+  const message = error instanceof Error ? sanitizeErrorMessage(error.message).slice(0, 384) : "";
+  return {
+    kind: "transport_error",
+    url: projectAttemptUrl(url),
+    ...(typeof source?.name === "string" ? { name: source.name.slice(0, 80) } : {}),
+    ...(code ? { code } : {}),
+    ...(message ? { message } : {}),
+  };
 }

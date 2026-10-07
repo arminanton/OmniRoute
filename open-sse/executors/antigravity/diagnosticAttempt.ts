@@ -2,7 +2,11 @@ import type {
   DiagnosticOverflowAttempt,
   DiagnosticOverflowAttemptMetadata,
 } from "@/lib/usage/diagnosticOverflow";
-import { getCurrentDiagnosticOverflowTrace } from "../../utils/providerRequestLogging.ts";
+import {
+  captureCurrentProviderAttempt,
+  getCurrentDiagnosticOverflowTrace,
+} from "../../utils/providerRequestLogging.ts";
+import { projectGoogleAttemptTransportError } from "../../utils/googleErrorDiagnostics.ts";
 import {
   getLogicalRetryBudget,
   type LogicalRetryBudget,
@@ -141,7 +145,14 @@ export async function captureAntigravityFetch(
   invoke: () => Promise<Response>
 ): Promise<Response> {
   const trace = getCurrentDiagnosticOverflowTrace();
-  if (!trace || serializedBody === undefined) return invoke();
+  if (!trace || serializedBody === undefined) {
+    try {
+      return await invoke();
+    } catch (error) {
+      captureCurrentProviderAttempt(projectGoogleAttemptTransportError(url, error));
+      throw error;
+    }
+  }
   const attempt = await trace.beginAttempt({
     requestBody: serializedBody,
     method: init.method || "POST",
@@ -158,6 +169,7 @@ export async function captureAntigravityFetch(
       metadata: { status: response.status, headers: response.headers },
     });
   } catch (error) {
+    captureCurrentProviderAttempt(projectGoogleAttemptTransportError(url, error));
     await attempt.fail(
       init.signal?.aborted
         ? "abort"

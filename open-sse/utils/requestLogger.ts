@@ -34,6 +34,8 @@ export type RequestPipelinePayloads = {
   openaiRequest?: JsonRecord;
   providerRequest?: JsonRecord;
   providerResponse?: JsonRecord;
+  providerAttemptDiagnostics?: JsonRecord[];
+  providerAttemptDiagnosticsDropped?: number;
   clientResponse?: JsonRecord;
   error?: JsonRecord;
   toolLoop?: { legs: JsonRecord[] };
@@ -62,6 +64,7 @@ type RequestLogger = {
     headers: HeaderInput,
     body: unknown
   ) => void;
+  logProviderAttempt?: (diagnostic: JsonRecord) => void;
   appendProviderChunk: (chunk: string) => void;
   appendOpenAIChunk: (chunk: string) => void;
   logConvertedResponse: (body: unknown) => void;
@@ -102,6 +105,7 @@ const STREAM_CHUNK_TRUNCATION_MARKER =
 // existing plain-constant shape; CHAT_LOG_ARRAY_TAIL_ITEMS still overrides it.
 export const MAX_LOG_ARRAY_ITEMS = getChatLogArrayTailItems();
 const MAX_TOOL_LOOP_LEGS = 4;
+const MAX_PROVIDER_ATTEMPT_DIAGNOSTICS = 24;
 
 function maskSensitiveHeaders(headers: HeaderInput): Record<string, unknown> {
   if (!headers) return {};
@@ -400,6 +404,16 @@ function compactPipelinePayloads(
       continue;
     }
 
+    if (key === "providerAttemptDiagnostics" && Array.isArray(value)) {
+      if (value.length > 0) result.providerAttemptDiagnostics = value as JsonRecord[];
+      continue;
+    }
+
+    if (key === "providerAttemptDiagnosticsDropped") {
+      if (typeof value === "number" && value > 0) result.providerAttemptDiagnosticsDropped = value;
+      continue;
+    }
+
     if (key === "diagnosticOverflow") {
       const reference = projectDiagnosticOverflowReference(value);
       if (reference) result.diagnosticOverflow = reference;
@@ -407,7 +421,11 @@ function compactPipelinePayloads(
     }
     const payloadKey = key as Exclude<
       keyof RequestPipelinePayloads,
-      "streamChunks" | "toolLoop" | "diagnosticOverflow"
+      | "streamChunks"
+      | "toolLoop"
+      | "providerAttemptDiagnostics"
+      | "providerAttemptDiagnosticsDropped"
+      | "diagnosticOverflow"
     >;
     result[payloadKey] = value as JsonRecord;
   }
@@ -556,6 +574,7 @@ export async function createRequestLogger(
   const payloads: RequestPipelinePayloads = {
     ...(captureStreamChunks ? { streamChunks: chunkMethods.streamChunks } : {}),
   };
+  let providerAttemptDiagnosticsDropped = 0;
 
   return {
     getDiagnosticOverflowTrace: () => diagnosticTrace,
@@ -614,6 +633,20 @@ export async function createRequestLogger(
       };
     },
 
+    logProviderAttempt(diagnostic) {
+      if (!diagnostic || typeof diagnostic !== "object" || Array.isArray(diagnostic)) return;
+      if ((payloads.providerAttemptDiagnostics?.length ?? 0) >= MAX_PROVIDER_ATTEMPT_DIAGNOSTICS) {
+        providerAttemptDiagnosticsDropped++;
+        return;
+      }
+      const cloned = cloneBoundedForLog(diagnostic);
+      if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) return;
+      payloads.providerAttemptDiagnostics = [
+        ...(payloads.providerAttemptDiagnostics ?? []),
+        cloned as JsonRecord,
+      ];
+    },
+
     appendProviderChunk: chunkMethods.appendProviderChunk,
     appendOpenAIChunk: chunkMethods.appendOpenAIChunk,
     logConvertedResponse(body) {
@@ -648,6 +681,7 @@ export async function createRequestLogger(
     getPipelinePayloads() {
       return compactPipelinePayloads({
         ...payloads,
+        ...(providerAttemptDiagnosticsDropped > 0 ? { providerAttemptDiagnosticsDropped } : {}),
         ...(diagnosticTrace ? { diagnosticOverflow: diagnosticTrace.snapshot() } : {}),
         ...(telemetry ? { transportTelemetry: telemetry.snapshot() } : {}),
       });
