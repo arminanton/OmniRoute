@@ -80,7 +80,7 @@ const source = (value: Uint8Array) =>
     },
   });
 
-test("originalparsedJSON outgoingserializer and >11MiB decodederror remain exact beyond preview bounds", async () => {
+test("original client and >11MiB decoded 429 body remain exact beyond preview bounds", async () => {
   const originalFetch = globalThis.fetch;
   const text =
     "BEGIN_ORIGINAL_" +
@@ -105,7 +105,7 @@ test("originalparsedJSON outgoingserializer and >11MiB decodederror remain exact
     import("../../open-sse/utils/requestLogger.ts").RequestPipelinePayloads | null = null;
   const responseJSON = JSON.stringify({
     error: {
-      code: 400,
+      code: 429,
       message: text,
       details: [{ reason: "SYNTHETIC_FAILURE", sentinel: "LAST_ERROR_DETAIL" }],
     },
@@ -114,7 +114,7 @@ test("originalparsedJSON outgoingserializer and >11MiB decodederror remain exact
     globalThis.fetch = async (_url, init) => {
       wireJSON = String(init?.body);
       return new Response(source(encoder.encode(responseJSON)), {
-        status: 400,
+        status: 429,
         headers: { "content-type": "application/json", "x-request-id": "synthetic-native-id" },
       });
     };
@@ -153,19 +153,19 @@ test("originalparsedJSON outgoingserializer and >11MiB decodederror remain exact
       );
       const preview = await readAntigravityErrorBody(response);
       assert.ok(preview.length <= 256 * 1024);
-      log.logProviderResponse(400, "Bad Request", response.headers, preview);
-      log.logError(new Error("synthetic native HTTP400 failure"));
+      log.logProviderResponse(429, "Too Many Requests", response.headers, preview);
+      log.logError(new Error("synthetic native HTTP429 failure"));
       capturedPipeline = log.getPipelinePayloads();
-      return { response: new Response(preview, { status: 400 }) };
+      return { response: new Response(preview, { status: 429 }) };
     });
-    assert.equal(result.response.status, 400);
+    assert.equal(result.response.status, 429);
     await result.response.text();
     const manifest = await readDiagnosticOverflowManifest(traceId);
     assert.ok(manifest);
     assert.equal(manifest.state, "complete");
     assert.equal(manifest.attempts.length, 1);
     const attempt = manifest.attempts[0];
-    assert.equal(attempt.status, 400);
+    assert.equal(attempt.status, 429);
     assert.equal(attempt.response.complete, true);
     assert.ok(!JSON.stringify(manifest).includes("SECRET_HEADER_NEVER_STORED"));
     assert.equal(hash(await decoded(traceId, traceId, "client-request")), hash(originalJSON));
@@ -179,7 +179,7 @@ test("originalparsedJSON outgoingserializer and >11MiB decodederror remain exact
         timestamp: new Date().toISOString(),
         method: "POST",
         path: "/v1/chat/completions",
-        status: 400,
+        status: 429,
         model: "synthetic",
         requestedModel: null,
         provider: "antigravity",
@@ -204,8 +204,8 @@ test("originalparsedJSON outgoingserializer and >11MiB decodederror remain exact
         comboExecutionKey: null,
       },
       requestBody: JSON.parse(originalJSON),
-      responseBody: { error: "synthetic native HTTP400 failure" },
-      error: "synthetic native HTTP400 failure",
+      responseBody: { error: "synthetic native HTTP429 failure" },
+      error: "synthetic native HTTP429 failure",
       pipeline: capturedPipeline,
     });
     assert.ok(artifact);
