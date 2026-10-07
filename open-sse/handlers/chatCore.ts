@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
+  hasDiagnosticClientJson,
   getDiagnosticClientJson,
   releaseDiagnosticClientJson,
   runWithDiagnosticCaptureLifecycle,
@@ -1320,7 +1321,8 @@ async function handleChatCoreOwned({
 
   const reqLogger = await createRequestLogger(sourceFormat, targetFormat, model, {
     enabled: detailedLoggingEnabled,
-    diagnosticOverflowEligible: detailedLoggingEnabled && !videoBridgeObserved,
+    diagnosticOverflowEligible:
+      detailedLoggingEnabled && !videoBridgeObserved && hasDiagnosticClientJson(clientRawRequest),
     diagnosticClientJson: () => getDiagnosticClientJson(clientRawRequest),
     releaseDiagnosticClientJson: () => releaseDiagnosticClientJson(clientRawRequest),
     diagnosticSignal: clientRawRequest?.signal,

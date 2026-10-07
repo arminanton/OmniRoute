@@ -1693,6 +1693,7 @@ These controls are set by the reviewed deployment controller. Shared admission i
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `OMNI_DIAGNOSTIC_OVERFLOW_ENABLED` | `false` | Opt in to private overflow capture. |
+| `OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES` | `4194304` | Minimum fast estimated client request size (4 MiB) before private trace setup; set to `0` to capture every otherwise eligible request. |
 | `OMNI_DIAGNOSTIC_OVERFLOW_FILE_BYTES` | `67108864` | Maximum raw/decoded bytes per payload file, 64 MiB. |
 | `OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES` | `2147483648` | Aggregate budget, 2 GiB, enforced through atomic SQLite reservations including conservative metadata/compression overhead and database allocation. |
 | `OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS` | `604800000` | Seven-day retention of owned sealed records. Cleanup runs on capture creation or an explicit maintenance invocation; it never evicts a live leased writer. |

@@ -13,6 +13,7 @@ import {
   resolveDispatchClientRawRequest,
 } from "../../src/sse/handlers/chat/clientRawRequest.ts";
 import {
+  hasDiagnosticClientJson,
   getDiagnosticClientJson,
   releaseDiagnosticClientJson,
   runWithDiagnosticCaptureLifecycle,
@@ -37,6 +38,7 @@ import {
 import { writeCallArtifact, readCallArtifact } from "../../src/lib/usage/callLogArtifacts.ts";
 const encoder = new TextEncoder();
 process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = "true";
+process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = "0";
 process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = "10240";
 process.env.CHAT_LOG_TEXT_LIMIT = "262144";
 const hash = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
@@ -65,7 +67,7 @@ async function logger(body: unknown, eligible = true) {
     log: await createRequestLogger(undefined, undefined, undefined, {
       enabled: true,
       provider: "antigravity",
-      diagnosticOverflowEligible: eligible,
+      diagnosticOverflowEligible: eligible && hasDiagnosticClientJson(raw),
       diagnosticClientJson: () => getDiagnosticClientJson(raw),
     }),
   };
@@ -436,6 +438,40 @@ test("noLog/video eligibility false creates no payload files and defaultoff does
     null
   );
   process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = original;
+});
+
+test("private overflow snapshots only client requests above the configured size threshold", async () => {
+  const original = process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
+  process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = "1024";
+  try {
+    const small = { model: "agy/gemini-3.8-flash", messages: [{ role: "user", content: "short" }] };
+    const smallRaw = buildClientRawRequest(
+      new Request("http://synthetic.invalid/v1/chat/completions"),
+      small,
+      true
+    );
+    assert.equal(hasDiagnosticClientJson(smallRaw), false);
+    assert.equal(getDiagnosticClientJson(smallRaw), undefined);
+
+    const large = {
+      model: "agy/gemini-3.8-flash",
+      messages: [{ role: "user", content: "x".repeat(2048) }],
+    };
+    const originalJson = JSON.stringify(large);
+    const largeRaw = buildClientRawRequest(
+      new Request("http://synthetic.invalid/v1/chat/completions"),
+      large,
+      true
+    );
+    assert.equal(hasDiagnosticClientJson(largeRaw), true);
+    large.messages[0].content = "mutated after snapshot";
+    assert.equal(getDiagnosticClientJson(largeRaw), originalJson);
+    releaseDiagnosticClientJson(largeRaw);
+    assert.equal(hasDiagnosticClientJson(largeRaw), false);
+  } finally {
+    if (original === undefined) delete process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
+    else process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = original;
+  }
 });
 
 test("non-Antigravity requests release the overflow snapshot without serializing it", async () => {

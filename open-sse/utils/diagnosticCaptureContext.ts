@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { DiagnosticOverflowTrace } from "@/lib/usage/diagnosticOverflow";
+import { estimateSizeFast } from "./estimateSize.ts";
 const key = Symbol.for("omniroute.diagnosticCaptureContext.v1");
 type ClientJsonSnapshot = { body: unknown; json?: string };
 const runtime = globalThis as typeof globalThis & {
@@ -16,6 +17,14 @@ const { originals, context } = shared;
 
 const MAX_CLIENT_SNAPSHOT_VALUES = 500_000;
 const MAX_CLIENT_SNAPSHOT_DEPTH = 64;
+const DEFAULT_MIN_CLIENT_BYTES = 4 * 1024 * 1024;
+
+function getMinimumClientBytes(): number {
+  const configured = process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
+  if (configured === undefined) return DEFAULT_MIN_CLIENT_BYTES;
+  const parsed = Number(configured);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_MIN_CLIENT_BYTES;
+}
 
 /** Clone JSON structure while sharing immutable string/primitive values. */
 function snapshotJsonBody(value: unknown): unknown {
@@ -60,14 +69,19 @@ function snapshotJsonBody(value: unknown): unknown {
   return visit(value, 0);
 }
 
-/** Preserve a client snapshot cheaply; serialize it only for an eligible AG trace. */
+/** Snapshot only large client requests; ordinary AG requests use bounded call artifacts. */
 export function recordDiagnosticClientJson(envelope: object, body: unknown, eligible: boolean) {
   if (!eligible || process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED !== "true") return;
+  const minClientBytes = getMinimumClientBytes();
+  if (minClientBytes > 0 && estimateSizeFast(body, minClientBytes) <= minClientBytes) return;
   try {
     originals.set(envelope, { body: snapshotJsonBody(body) });
   } catch {
     // Diagnostic capture is best-effort and must never block request routing.
   }
+}
+export function hasDiagnosticClientJson(envelope: unknown): boolean {
+  return !!envelope && typeof envelope === "object" && originals.has(envelope);
 }
 export function inheritDiagnosticClientJson(original: object, copy: object) {
   const snapshot = originals.get(original);

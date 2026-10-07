@@ -20,6 +20,7 @@ CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB=512
 CHAT_DEBUG_FILE=false
 APP_LOG_LEVEL=info
 OMNI_DIAGNOSTIC_OVERFLOW_ENABLED=true
+OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES=4194304
 OMNI_DIAGNOSTIC_OVERFLOW_FILE_BYTES=67108864
 OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES=2147483648
 OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS=604800000
@@ -60,6 +61,7 @@ An independent, default-off private capture can preserve approved payloads beyon
 
 ```dotenv
 OMNI_DIAGNOSTIC_OVERFLOW_ENABLED=true
+OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES=4194304
 OMNI_DIAGNOSTIC_OVERFLOW_FILE_BYTES=67108864
 OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES=2147483648
 OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS=604800000
@@ -67,7 +69,7 @@ OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS=604800000
 
 It requires enabled pipeline logging, an inference key without `noLog`, and no video-retention redaction. Original client data is **parsed JSON reserialized before translation**, not original HTTP framing or whitespace. Each Antigravity generation send, including regional, credits and project-header403 retries, receives a separate file for the exact serialized outgoing body and the bytes read from its transport response. OAuth enrollment/refresh exchanges are not captured, and secret authorization/cookie headers are discarded. Approved payload contents can still contain private data. Full private payloads never enter console logs or enumerable request properties.
 
-Files are private gzip records with byte counts and integrity hashes. The limit is 64 MiB raw per file and 2 GiB of coordinated storage, with seven-day retention. This budget is separate from primary artifacts. Actual retries can create several files and artifacts per logical request; both stores enforce their own bounds. The original client JSON string and provider serialization still briefly occupy memory, so the request admission budget and container memory limit remain authoritative.
+Files are private gzip records with byte counts and integrity hashes. The limit is 64 MiB raw per file and 2 GiB of coordinated storage, with seven-day retention. This budget is separate from primary artifacts. Actual retries can create several files and artifacts per logical request; both stores enforce their own bounds. The original client JSON snapshot and provider serialization briefly occupy memory only for requests above `OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES` (default 4 MiB), so the request admission budget and container memory limit remain authoritative. Below that estimate, bounded call-log artifacts remain the capture path and no private overflow files are written. Set the threshold to `0` only when every eligible request needs private overflow capture.
 
 A file is complete only after actual read EOF and gzip flush/durability. Cancellation, timeout, remaining logical deadline, read/write failure, unsupported consumers and exhausted file/storage budgets seal an explicit incomplete prefix. The small primary artifact retains only a validated trace-ID reference, including after size-limit compaction; manager-authenticated inspection resolves the current private manifest. Capture completion means byte retention completed, not that an HTTP400/403/429 generation succeeded.
 
