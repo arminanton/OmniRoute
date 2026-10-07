@@ -58,6 +58,14 @@ test("truncateChatLogText builds head + marker + tail for over-limit strings", (
   assert.ok(out.includes(`[...truncated ${value.length - limit} chars...]`));
 });
 
+test("truncateChatLogText retains Unicode content in the detached preview", () => {
+  const value = `😀${"x".repeat(getChatLogTextLimit() + 1000)}漢`;
+  const out = truncateChatLogText(value);
+  assert.ok(out.startsWith("😀"));
+  assert.ok(out.endsWith("漢"));
+  assert.equal(Buffer.from(out, "utf16le").toString("utf16le"), out);
+});
+
 test("cloneBoundedChatLogPayload returns null/undefined/primitives as-is", () => {
   assert.equal(cloneBoundedChatLogPayload(null), null);
   assert.equal(cloneBoundedChatLogPayload(undefined), undefined);

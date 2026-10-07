@@ -19,7 +19,10 @@ export function truncateChatLogText(value: string): string {
   if (value.length <= limit) return value;
   const head = value.slice(0, Math.floor(limit / 2));
   const tail = value.slice(-Math.ceil(limit / 2));
-  return `${head}\n[...truncated ${value.length - limit} chars...]\n${tail}`;
+  const preview = `${head}\n[...truncated ${value.length - limit} chars...]\n${tail}`;
+  // Head/tail slices may retain the original large request string in V8.
+  // Store an owned UTF-16 copy so the artifact queue holds only this preview.
+  return Buffer.from(preview, "utf16le").toString("utf16le");
 }
 
 export function cloneBoundedChatLogPayload(value: unknown, depth = 0): unknown {

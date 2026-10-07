@@ -186,7 +186,12 @@ export function truncatePendingPreview(value: unknown, depth = 0): unknown {
   }
 
   if (typeof value === "string") {
-    return value.length > MAX_PREVIEW_STRING ? `${value.slice(0, MAX_PREVIEW_STRING)}...` : value;
+    if (value.length <= MAX_PREVIEW_STRING) return value;
+    // V8 may represent slice/concatenation results as views/cons strings that
+    // keep the full request body alive. Copy the bounded preview into owned
+    // UTF-16 storage before it enters the completed-request cache.
+    const preview = `${value.slice(0, MAX_PREVIEW_STRING)}...`;
+    return Buffer.from(preview, "utf16le").toString("utf16le");
   }
 
   if (Array.isArray(value)) {
