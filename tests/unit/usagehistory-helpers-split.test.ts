@@ -89,6 +89,13 @@ describe("usageHistory/helpers — truncatePendingPreview", () => {
     assert.equal(typeof out, "string");
     assert.ok((out as string).length < 5000, "a 5000-char string must be truncated");
   });
+  it("retains Unicode content in an owned UTF-16 preview", () => {
+    const source = "a😀漢".repeat(1000);
+    const out = truncatePendingPreview(source) as string;
+    assert.equal(out, `${source.slice(0, 1200)}...`);
+    assert.ok(out.includes("😀"));
+    assert.equal(Buffer.from(out, "utf16le").toString("utf16le"), out);
+  });
 });
 
 // ── host public API surface ──────────────────────────────────────────────────

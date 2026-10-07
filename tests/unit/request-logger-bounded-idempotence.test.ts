@@ -63,6 +63,22 @@ test("strings: the bounded result respects the bound, so a second pass is a no-o
   assert.match(once, /\[\.\.\.truncated \d+ chars\.\.\.\]/);
 });
 
+test("truncated previews preserve UTF-16 content", () => {
+  const previousLimit = process.env.CHAT_LOG_TEXT_LIMIT;
+  process.env.CHAT_LOG_TEXT_LIMIT = "512";
+  try {
+    const value = `😀${"x".repeat(20_000)}漢`;
+    const out = cloneBoundedForLog(value) as string;
+    assert.ok(out.startsWith("😀"));
+    assert.ok(out.endsWith("漢"));
+    assert.match(out, /\[\.\.\.truncated \d+ chars\.\.\.\]/);
+    assert.equal(Buffer.from(out, "utf16le").toString("utf16le"), out);
+  } finally {
+    if (previousLimit === undefined) delete process.env.CHAT_LOG_TEXT_LIMIT;
+    else process.env.CHAT_LOG_TEXT_LIMIT = previousLimit;
+  }
+});
+
 test("values already within the bounds are returned unchanged", () => {
   const input = { model: "m", messages: [{ role: "user", content: "hi" }], n: 1, ok: true };
   assert.deepEqual(cloneBoundedForLog(input), input);

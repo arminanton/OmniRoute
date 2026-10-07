@@ -175,7 +175,10 @@ function truncateLogString(value: string, maxLength = getChatLogTextLimit()): st
   const marker = `\n[...truncated ${value.length - maxLength} chars...]\n`;
   if (marker.length >= maxLength) return marker.slice(0, maxLength);
   const keep = Math.max(0, maxLength - marker.length);
-  return `${value.slice(0, Math.floor(keep / 2))}${marker}${value.slice(-Math.ceil(keep / 2))}`;
+  const preview = `${value.slice(0, Math.floor(keep / 2))}${marker}${value.slice(-Math.ceil(keep / 2))}`;
+  // Detach the preview: V8 slice/cons strings can otherwise keep the large
+  // original request string alive while this bounded artifact is queued.
+  return Buffer.from(preview, "utf16le").toString("utf16le");
 }
 
 /**
