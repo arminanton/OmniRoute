@@ -11,36 +11,36 @@ This is a proposed temporary diagnostic profile, not authorization to change a r
 
 Three independent controls must agree: the database setting `call_log_pipeline_enabled` must be true, the selected inference API key must have `noLog=false`, and `CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS=true` must be present to retain stream excerpts. The authenticated dashboard action `POST /api/logs/detail` with `{"enabled":true}` sets the database flag. `GET /api/logs/detail?limit=1` reports the flag without changing it. `ENABLE_REQUEST_LOGS` affects the legacy detailed-log getter; it does not replace the chatCore database gate.
 
-For a controlled cohort of at most two concurrent requests, at most 100 newly written artifacts (including retry/account legs), and at most ten minutes, propose:
+The approved capture controls are global and must be applied through a reviewed deployment profile:
 
 ```dotenv
 CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS=true
 CALL_LOG_PIPELINE_MAX_SIZE_KB=10240
-CHAT_LOG_MAX_BODY_KB=4096
-CHAT_LOG_TEXT_LIMIT=262144
-CHAT_LOG_ARRAY_TAIL_ITEMS=2048
-CHAT_LOG_MAX_OBJECT_KEYS=80
-CHAT_LOG_MAX_DEPTH=20
+CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB=512
 CHAT_DEBUG_FILE=false
 APP_LOG_LEVEL=info
+OMNI_DIAGNOSTIC_OVERFLOW_ENABLED=true
+OMNI_DIAGNOSTIC_OVERFLOW_FILE_BYTES=67108864
+OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES=2147483648
+OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS=604800000
 ```
 
-Apply these process environment values only through an approved candidate deployment. Preserve the prior values and database flag for restoration. Check available memory and reserve at least 1000 MiB for 100 additional artifacts at the 10 MiB artifact cap, plus database, application logs and filesystem overhead. Stop capture when the cohort, time or storage budget is reached. Count artifacts and retry/account legs rather than only logical client requests; one client request can produce several records. Existing retention is unchanged: changing global entry-count or retention settings can delete unrelated historical logs and is a separate operator decision.
+Leave the existing text, array, depth and body preview settings at their defaults unless a separate memory-reviewed profile requires changing them. Preserve the existing database flag and restore it only when capture is no longer needed. The 10 MiB artifact limit is independent of the 512 KiB aggregate in-memory stream excerpt budget. Private Antigravity overflow is separately bounded to64 MiB per file,2 GiB total and seven-day retention. It records an explicit incomplete state when any bound is reached.
 
-The database logging flag and environment controls are global. There is no existing provider-, correlation-ID-, or errors-only capture filter. A diagnostic key does not exclude traffic from other keys that also have `noLog=false`. Use isolation or an agreed quiet window; do not enable enlarged capture for 70–100 simultaneous agents and claim it is selectively scoped.
+The database logging flag and environment controls are global. There is no existing provider-, correlation-ID-, or errors-only capture filter. A diagnostic key does not exclude traffic from other keys that also have `noLog=false`; every eligible request is subject to these bounded captures.
 
 ## What each bound means
 
 | Layer                              | Default              | Proposed profile   | Limitation                                                                                                                                                                                                                                                                                                                           |
 | ---------------------------------- | -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Persisted artifact with a pipeline | 512 KiB              | 10 MiB             | Includes request, response, pipeline snapshots and metadata together. Oversize fallback removes chunks first, then oversized snapshots; a larger cap is not a full-history guarantee.                                                                                                                                                |
-| Request/response summary boundary  | 1 MiB                | 4 MiB              | `truncateForLog` uses an early-exit size estimate. Larger objects become summaries; it is not an exact measurement of original JSON bytes.                                                                                                                                                                                           |
-| Individual logged string           | 65,536 characters    | 262,144 characters | Both logger clones honor `CHAT_LOG_TEXT_LIMIT` in the corrected candidate. Previously the pipeline logger independently hardcapped strings at 64K. Character counts are not UTF-8 byte counts.                                                                                                                                       |
-| History array                      | Last 1,000 items     | Last 2,048 items   | A sentinel records dropped history. The tool-definition array is exempt, so this is not a global object-count or memory limit.                                                                                                                                                                                                       |
-| Object/depth bounds                | 80 keys / 20 levels  | Unchanged          | `CHAT_LOG_MAX_OBJECT_KEYS=0` removes the per-object key cap; avoid it for this bounded profile.                                                                                                                                                                                                                                      |
-| Stream tracks                      | Disabled in chatCore | Enabled            | When enabled, provider, normalized OpenAI and client excerpts share one 512 KiB per-request memory budget (maximum configurable value 1 MiB) and a 1,024-item cap. Accounting includes UTF-16 storage, UTF-8 encoded text bytes and a per-entry allowance. The separate persisted artifact cap uses `CALL_LOG_PIPELINE_MAX_SIZE_KB`. |
+| Request/response summary boundary  | 1 MiB                | Unchanged          | `truncateForLog` uses an early-exit size estimate. Larger objects become summaries; it is not an exact measurement of original JSON bytes.                                                                                                                                                                                           |
+| Individual logged string           | 65,536 characters    | Unchanged          | Both logger clones honor `CHAT_LOG_TEXT_LIMIT`; character counts are not UTF-8 byte counts.                                                                                                                                       |
+| History array                      | Last 1,000 items     | Unchanged          | A sentinel records dropped history. The tool-definition array is exempt, so this is not a global object-count or memory limit.                                                                                                                                                                                                       |
+| Object/depth bounds                | 80 keys / 20 levels  | Unchanged          | `CHAT_LOG_MAX_OBJECT_KEYS=0` removes the per-object key cap; leave the default cap in place.                                                                                                                                                                                                                                      |
+| Stream tracks                      | Disabled in chatCore | Enabled            | Provider, normalized OpenAI and client excerpts share one 512 KiB per-request memory budget (configurable up to 1 MiB), with at most1,024 items. The estimate includes UTF-16 backing, UTF-8 serialization and per-item overhead. The persisted artifact cap is independent. |
 
-At the default, the retained excerpt accounting is bounded to 512 KiB per active request, or 50 MiB across 100 active requests. The append operation may briefly allocate a bounded copy while detaching excerpts from larger source strings; request bodies, transport buffers, pipeline snapshots and serialization have separate memory costs. The artifact worker queue has 128 job slots, not a byte-budget guarantee; under backlog it omits detail rather than making capture reliable. The 10 MiB persisted cap does not bound total process memory.
+At the default, 100 active requests retain at most 50 MiB of aggregate stream excerpts by this estimate. The call-log worker also limits its active plus queued artifact footprint to128 MiB; requests that exceed that detail budget continue inference with the detail omitted. Request parsing, translated bodies and private overflow writes have separate bounded memory costs, so these figures are not a total process memory guarantee.
 
 ## Interpretation and privacy
 
@@ -67,7 +67,7 @@ OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS=604800000
 
 It requires enabled pipeline logging, an inference key without `noLog`, and no video-retention redaction. Original client data is **parsed JSON reserialized before translation**, not original HTTP framing or whitespace. Each Antigravity generation send, including regional, credits and project-header403 retries, receives a separate file for the exact serialized outgoing body and the bytes read from its transport response. OAuth enrollment/refresh exchanges are not captured, and secret authorization/cookie headers are discarded. Approved payload contents can still contain private data. Full private payloads never enter console logs or enumerable request properties.
 
-Files are private gzip records with byte counts and integrity hashes. The limit is 64 MiB raw per file and 2 GiB of coordinated storage, with seven-day retention. This budget is separate from primary artifacts, which need another 1000 MiB for100 artifacts at their cap. Actual retries can create several files and artifacts per logical request. Existing full strings and serialization still consume heap; this is not permission for an unlimited capture cohort.
+Files are private gzip records with byte counts and integrity hashes. The limit is 64 MiB raw per file and 2 GiB of coordinated storage, with seven-day retention. This budget is separate from primary artifacts. Actual retries can create several files and artifacts per logical request; both stores enforce their own bounds. The original client JSON string and provider serialization still briefly occupy memory, so the request admission budget and container memory limit remain authoritative.
 
 A file is complete only after actual read EOF and gzip flush/durability. Cancellation, timeout, remaining logical deadline, read/write failure, unsupported consumers and exhausted file/storage budgets seal an explicit incomplete prefix. The small primary artifact retains only a validated trace-ID reference, including after size-limit compaction; manager-authenticated inspection resolves the current private manifest. Capture completion means byte retention completed, not that an HTTP400/403/429 generation succeeded.
 

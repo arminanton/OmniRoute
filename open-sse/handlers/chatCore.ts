@@ -3457,7 +3457,9 @@ async function handleChatCoreOwned({
               if (stream) {
                 const okStatus = res.response.status >= 200 && res.response.status < 300;
                 // Native body getters can disturb JSON errors before text() parses them.
-                let originalBody = okStatus ? res.response.body : null;
+                let originalBody: ReadableStream<Uint8Array> | null = okStatus
+                  ? res.response.body
+                  : null;
                 const admissionOutcome =
                   originalBody && accountAdmissionRequirement.adaptive
                     ? observeAdmissionStream(
