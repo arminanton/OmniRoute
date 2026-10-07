@@ -50,9 +50,7 @@ test("buildStreamSummaryFromEvents handles single event", () => {
 });
 
 test("buildStreamSummaryFromEvents handles multiple events", () => {
-  const events = [
-    { index: 0, data: { choices: [{ delta: { content: " hello" } }] } },
-  ];
+  const events = [{ index: 0, data: { choices: [{ delta: { content: " hello" } }] } }];
   const result = collector.buildStreamSummaryFromEvents(events);
   assert.ok(result !== null);
   assert.ok(typeof result === "object");
@@ -74,6 +72,18 @@ test("createStructuredSSECollector collector has expected methods", () => {
   assert.ok(c !== null && typeof c === "object");
   const keys = Object.keys(c);
   assert.ok(keys.length > 0);
+});
+
+test("createStructuredSSECollector releases retained events and reducer state", () => {
+  const c = collector.createStructuredSSECollector({ format: "openai" });
+  c.push({ choices: [{ delta: { content: "retained output" } }] });
+  assert.equal(c.getEvents().length, 1);
+
+  c.clear();
+
+  assert.deepEqual(c.getEvents(), []);
+  assert.equal(c.build()._eventCount, 0);
+  assert.equal(c.getSummary(), undefined);
 });
 
 // #6276 — tool_call arguments lost in request/response logs when a continuation

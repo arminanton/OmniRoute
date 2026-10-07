@@ -910,7 +910,7 @@ export function createStructuredSSECollector(options: CollectorOptions = {}) {
   let droppedEvents = 0;
   // Live-updated on every push() regardless of the storage cap above — see
   // the CollectorOptions.format doc comment for why (#9315).
-  const reducer = createSummaryReducer(format, fallbackModel);
+  let reducer = createSummaryReducer(format, fallbackModel);
 
   return {
     push(payload: unknown, explicitEvent?: string) {
@@ -970,6 +970,13 @@ export function createStructuredSSECollector(options: CollectorOptions = {}) {
         ...(includeEvents ? { events } : {}),
         ...(summary === undefined ? {} : { summary: cloneLogPayload(summary) }),
       };
+    },
+
+    clear() {
+      events.length = 0;
+      usedBytes = 0;
+      droppedEvents = 0;
+      reducer = undefined;
     },
   };
 }

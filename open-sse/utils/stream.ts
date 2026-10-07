@@ -639,7 +639,7 @@ const STREAM_MODE = {
  * @param {function} options.onComplete - Callback when stream finishes: ({ status, usage }) => void
  */
 export function createSSEStream(options: StreamOptions = {}) {
-  const {
+  let {
     mode = STREAM_MODE.TRANSLATE,
     targetFormat,
     sourceFormat,
@@ -880,6 +880,39 @@ export function createSSEStream(options: StreamOptions = {}) {
     }
   };
 
+  let abortStreamFailureImplementation: ReturnType<typeof createStreamFailureAborter> | null = null;
+  let terminalReferencesReleased = false;
+  const releaseTerminalReferences = () => {
+    if (terminalReferencesReleased) return;
+    terminalReferencesReleased = true;
+    clearIdleTimer();
+    body = null;
+    onComplete = null;
+    onFailure = null;
+    reqLogger = null;
+    buffer = "";
+    passthroughAccumulatedContent = "";
+    passthroughAccumulatedReasoning = "";
+    passthroughBufferedTextualToolCallContent = "";
+    passthroughToolCalls.clear();
+    passthroughResponsesOutputItems.length = 0;
+    passthroughResponsesPendingFunctionCalls.clear();
+    passthroughResponsesReasoningSummarySeen.clear();
+    passthroughResponsesCommentaryItemIds.clear();
+    passthroughResponsesCommentaryIndexes.clear();
+    state?.toolCalls?.clear();
+    state?.toolSchemas?.clear();
+    if (state) {
+      state.accumulatedContent = "";
+      state.accumulatedReasoning = "";
+      state.upstreamError = undefined;
+    }
+    providerPayloadCollector.clear();
+    clientPayloadCollector.clear();
+    abortStreamFailureImplementation = null;
+    options = {};
+  };
+
   const clearPendingPassthroughEvent = () => {
     passthroughEventPrefix.clear();
   };
@@ -1019,6 +1052,7 @@ export function createSSEStream(options: StreamOptions = {}) {
       clearPendingRequestFromStream();
     }
     controller.error(markPendingRequestCleared(new Error(msg)));
+    releaseTerminalReferences();
   };
 
   const emitTranslatedClientItem = (
@@ -1184,7 +1218,7 @@ export function createSSEStream(options: StreamOptions = {}) {
     }
   };
 
-  const abortStreamFailure = createStreamFailureAborter({
+  abortStreamFailureImplementation = createStreamFailureAborter({
     onFailure,
     onComplete,
     getUsage: () => state?.usage,
@@ -1199,6 +1233,14 @@ export function createSSEStream(options: StreamOptions = {}) {
     markPendingRequestCleared,
     model,
   });
+  const abortStreamFailure = (
+    ...args: Parameters<ReturnType<typeof createStreamFailureAborter>>
+  ): void => {
+    const abort = abortStreamFailureImplementation;
+    if (!abort) return;
+    abort(...args);
+    releaseTerminalReferences();
+  };
 
   const emitTranslatedFailureAndAbort = (
     controller: TransformStreamDefaultController<Uint8Array>,
@@ -1260,6 +1302,7 @@ export function createSSEStream(options: StreamOptions = {}) {
               const timeoutError = new Error(timeoutMsg);
               timeoutError.name = "StreamIdleTimeoutError";
               controller.error(markPendingRequestCleared(timeoutError));
+              releaseTerminalReferences();
             }
           }, 10_000);
         }
@@ -2311,10 +2354,12 @@ export function createSSEStream(options: StreamOptions = {}) {
           clearIdleTimer();
         }
         if (streamTimedOut) {
+          releaseTerminalReferences();
           return;
         }
         if (upstreamErrorForwarded) {
           clearPendingRequestFromStream();
+          releaseTerminalReferences();
           return;
         }
         try {
@@ -2400,6 +2445,7 @@ export function createSSEStream(options: StreamOptions = {}) {
 
             for (const line of normalizedTailLines) {
               if (processBufferedPassthroughLine(line, tailProcessorContext)) {
+                releaseTerminalReferences();
                 return;
               }
             }
@@ -2430,6 +2476,7 @@ export function createSSEStream(options: StreamOptions = {}) {
                   )
                 ) {
                   emitClaudeEmptyStreamErrorAndAbort(controller);
+                  releaseTerminalReferences();
                   return;
                 }
                 if (isClaudeEventPayload(bufferedPayload)) {
@@ -2475,12 +2522,14 @@ export function createSSEStream(options: StreamOptions = {}) {
                   bufferedProjectedFailure.internalFailure,
                   bufferedProjectedFailure.publicMessage
                 );
+                releaseTerminalReferences();
                 return;
               }
             }
 
             if (shouldInjectClaudeEmptyResponseOnFlush(claudeEmptyResponseLifecycle)) {
               emitClaudeEmptyStreamErrorAndAbort(controller);
+              releaseTerminalReferences();
               return;
             } else if (shouldInjectClaudeMissingFinalizersOnFlush(claudeEmptyResponseLifecycle)) {
               emitSyntheticClaudeEmptyResponse(controller, {
@@ -2722,6 +2771,7 @@ export function createSSEStream(options: StreamOptions = {}) {
             } else {
               clearPendingRequestFromStream();
             }
+            releaseTerminalReferences();
             return;
           }
 
@@ -2729,7 +2779,10 @@ export function createSSEStream(options: StreamOptions = {}) {
           if (buffer.trim()) {
             const parsed = parseSSELine(buffer.trim());
             if (parsed && !parsed.done) {
-              if (emitTranslatedFailureAndAbort(controller, parsed)) return;
+              if (emitTranslatedFailureAndAbort(controller, parsed)) {
+                releaseTerminalReferences();
+                return;
+              }
               providerPayloadCollector.push(parsed);
               // Extract usage from remaining buffer — if the usage-bearing event
               // (e.g. response.completed) is the last SSE line, it ends up here
@@ -2797,6 +2850,7 @@ export function createSSEStream(options: StreamOptions = {}) {
             const errorBody = buildErrorBody(err.status, err.message);
             const publicErrorMessage = errorBody.error.message;
             abortStreamFailure(controller, err, publicErrorMessage, { notifyComplete: true });
+            releaseTerminalReferences();
             return;
           }
 
@@ -2818,6 +2872,7 @@ export function createSSEStream(options: StreamOptions = {}) {
             })
           ) {
             controller.error(markPendingRequestCleared(buildEmptyChoicesStreamError()));
+            releaseTerminalReferences();
             return;
           }
 
@@ -2839,6 +2894,7 @@ export function createSSEStream(options: StreamOptions = {}) {
           if (sourceFormat === FORMATS.CLAUDE) {
             if (shouldInjectClaudeEmptyResponseOnFlush(claudeEmptyResponseLifecycle)) {
               emitClaudeEmptyStreamErrorAndAbort(controller);
+              releaseTerminalReferences();
               return;
             } else if (shouldInjectClaudeMissingFinalizersOnFlush(claudeEmptyResponseLifecycle)) {
               emitSyntheticClaudeEmptyResponse(controller, {
@@ -2999,9 +3055,11 @@ export function createSSEStream(options: StreamOptions = {}) {
         } catch (error) {
           console.log(`[STREAM] Error in flush (${model || "unknown"}):`, error.message || error);
         }
+        releaseTerminalReferences();
       },
       cancel(reason) {
         clearIdleTimer();
+        releaseTerminalReferences();
       },
     },
     queueStrategy,
