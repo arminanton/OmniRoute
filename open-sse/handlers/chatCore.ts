@@ -1330,7 +1330,9 @@ async function handleChatCoreOwned({
     connectionId: connectionId || credentials?.connectionId || undefined,
   });
   const pendingScope = { id: pendingRequestId, model, provider, connectionId: pendingConnId };
-  const providerRequestCapture = createPreparedRequestLogger(reqLogger, pendingScope);
+  const providerRequestCapture = createPreparedRequestLogger(reqLogger, pendingScope, {
+    enabled: detailedLoggingEnabled,
+  });
   // 0. Log client raw request (before format conversion) — redacts video transcript
   // cues in the logged copy only; see videoBridgeSnapshotRedaction.ts.
   logClientRawRequestRedacted(reqLogger, clientRawRequest, videoBridgeObserved);
@@ -1351,7 +1353,7 @@ async function handleChatCoreOwned({
   // cache store path runs at Phase 9.1 (non-streaming) / Phase 9.2 (streaming).
   // Without this snapshot, the write-time signature differs from the read-time
   // one, producing 0% hit rate. (#cache-signature-asymmetry)
-  const bodyForCacheWrite = body;
+  let bodyForCacheWrite: typeof body | null = body;
 
   // ── Phase 9.1: Semantic cache check (temp=0, any streaming mode) ──
   const cacheHit = await checkSemanticCache({
@@ -6321,9 +6323,20 @@ async function handleChatCoreOwned({
 
   let streamCompletionRecorded = false;
   let streamFailureCompletionRecorded = false;
+  let streamStateBody: unknown = null;
 
   // Callback to save call log when stream completes (include responseBody when provided by stream)
-  const onStreamComplete = ({
+  const releaseTerminalRequestPayloads = () => {
+    providerRequestCapture.release?.();
+    body = null as typeof body;
+    translatedBody = null as typeof translatedBody;
+    bodyForCacheWrite = null;
+    finalBody = null;
+    streamStateBody = null;
+    clientRawRequest = null as typeof clientRawRequest;
+  };
+
+  const onStreamCompleteCore = ({
     status: streamStatus,
     usage: streamUsage,
     responseBody: streamResponseBody,
@@ -6334,7 +6347,7 @@ async function handleChatCoreOwned({
     ttft,
     itlMs: streamItlMs,
     interrupted: _streamInterrupted,
-  }) => {
+  }: streamFailure.StreamCompletionPayload) => {
     const normalizedStreamStatus = streamStatus || 200;
     if (streamCompletionRecorded) return;
     streamCompletionRecorded = true;
@@ -6571,6 +6584,15 @@ async function handleChatCoreOwned({
     });
   };
 
+  const onStreamComplete = (payload: streamFailure.StreamCompletionPayload) => {
+    if (streamCompletionRecorded) return;
+    try {
+      onStreamCompleteCore(payload);
+    } finally {
+      if (streamCompletionRecorded) queueMicrotask(releaseTerminalRequestPayloads);
+    }
+  };
+
   const streamFailureFinalizers = streamFailure.createStreamFailureFinalizers({
     isFailureCompletionRecorded: () => streamFailureCompletionRecorded,
     isStreamCompletionRecorded: () => streamCompletionRecorded,
@@ -6583,8 +6605,21 @@ async function handleChatCoreOwned({
         }
       : undefined,
   });
-  const handleStreamFailure = streamFailureFinalizers.handleStreamFailure;
-  onPipelineStreamError = streamFailureFinalizers.onPipelineStreamError;
+  const handleStreamFailure: typeof streamFailureFinalizers.handleStreamFailure = (failure) => {
+    try {
+      return streamFailureFinalizers.handleStreamFailure(failure);
+    } finally {
+      releaseTerminalRequestPayloads();
+    }
+  };
+  const handlePipelineStreamError = streamFailureFinalizers.onPipelineStreamError;
+  onPipelineStreamError = (event) => {
+    try {
+      return handlePipelineStreamError(event);
+    } finally {
+      releaseTerminalRequestPayloads();
+    }
+  };
   // #9653: gives a genuine, race-delayed completion a chance to land (see
   // createClientDisconnectGraceHandler's doc comment) before persisting a false
   // 499/0-tokens for a request that actually delivered its full response.
@@ -6607,7 +6642,7 @@ async function handleChatCoreOwned({
     clientResponseFormat === FORMATS.OPENAI &&
     !isResponsesEndpoint &&
     !isDroidCLI;
-  const streamStateBody = finalBody || body;
+  streamStateBody = finalBody || body;
 
   if (needsResponsesTranslation) {
     // Provider returns openai-responses, translate to openai (Chat Completions) that clients expect

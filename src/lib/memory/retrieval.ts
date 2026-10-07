@@ -13,6 +13,7 @@ import type { MemoryEngineStatus } from "@/shared/schemas/memory";
 import { supportsFts5 } from "../db/migrationRunner";
 import type { SqliteAdapter } from "../db/adapters/types";
 import {
+  boundMemoryRetrievalQuery,
   estimateTokens,
   parseMetadata,
   rowToMemory,
@@ -251,6 +252,11 @@ async function retrieveMemoriesInternal(
   config: RetrievalOptions = {}
 ): Promise<Memory[]> {
   log.info("memory.retrieval.start", { apiKeyId, strategy: config.retrievalStrategy });
+
+  const boundedQuery = boundMemoryRetrievalQuery(config.query);
+  if (boundedQuery !== config.query) {
+    config = { ...config, query: boundedQuery || undefined };
+  }
 
   // Validate and normalize config
   const normalizedConfig = MemoryConfigSchema.parse({

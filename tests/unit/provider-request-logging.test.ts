@@ -2,10 +2,89 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  createPreparedRequestLogger,
   runWithCapture,
   type Capture,
   type ProviderRequestPrepared,
 } from "../../open-sse/utils/providerRequestLogging.ts";
+import {
+  boundMemoryRetrievalQuery,
+  MAX_MEMORY_RETRIEVAL_QUERY_CHARS,
+  MAX_MEMORY_RETRIEVAL_QUERY_TERMS,
+  sanitizeFts5Query,
+} from "../../src/lib/memory/retrieval/scoring.ts";
+
+test("disabled prepared-request capture keeps large provider bodies out of the capture context", async () => {
+  let loggedRequests = 0;
+  const fallback = {
+    model: "gpt-6.1-sol",
+    messages: [{ role: "user", content: "fallback" }],
+  };
+  const capture = createPreparedRequestLogger(
+    { logTargetRequest: () => loggedRequests++ },
+    { id: null, model: "gpt-6.1-sol", provider: "codex", connectionId: null },
+    { enabled: false }
+  );
+
+  await capture.capture({
+    url: "https://provider.example/v1/responses",
+    headers: {},
+    body: { model: "gpt-6.1-sol", messages: [{ role: "user", content: "large" }] },
+    bodyString: JSON.stringify({
+      model: "gpt-6.1-sol",
+      messages: [{ role: "user", content: "large" }],
+    }),
+  });
+
+  assert.equal(loggedRequests, 0);
+  assert.equal(capture.latest?.() ?? null, null);
+  assert.strictEqual(capture.body(fallback), fallback);
+});
+
+test("disabled capture bypasses the fetch observer without parsing provider bodies", async () => {
+  const originalFetch = globalThis.fetch;
+  let captureCalls = 0;
+  const capture: Capture = {
+    enabled: false,
+    capture() {
+      captureCalls++;
+    },
+    body(fallback) {
+      return fallback;
+    },
+  };
+
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+  try {
+    await runWithCapture(capture, () =>
+      fetch("https://provider.example/v1/responses", {
+        method: "POST",
+        body: JSON.stringify({
+          model: "gpt-6.1-sol",
+          input: [{ role: "user", content: "large synthetic request" }],
+        }),
+      })
+    );
+    assert.equal(captureCalls, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("memory retrieval bounds a huge prompt before sanitizing it for FTS", () => {
+  const prompt = "memory-word ".repeat(150_000);
+  const bounded = boundMemoryRetrievalQuery(prompt);
+  const ftsQuery = sanitizeFts5Query(prompt);
+
+  assert.ok(bounded.length <= MAX_MEMORY_RETRIEVAL_QUERY_CHARS);
+  assert.ok(ftsQuery.split(/\s+/).filter(Boolean).length <= MAX_MEMORY_RETRIEVAL_QUERY_TERMS);
+  assert.ok(ftsQuery.length < 32);
+});
 
 test("runWithCapture captures the actual JSON provider fetch body", async () => {
   const originalFetch = globalThis.fetch;

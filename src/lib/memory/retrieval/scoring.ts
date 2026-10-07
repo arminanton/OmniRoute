@@ -1,5 +1,17 @@
 import { Memory, MemoryType } from "../types";
 
+export const MAX_MEMORY_RETRIEVAL_QUERY_CHARS = 8192;
+export const MAX_MEMORY_RETRIEVAL_QUERY_TERMS = 256;
+
+/** Bound untrusted conversation text before FTS tokenization or embedding. */
+export function boundMemoryRetrievalQuery(query?: string): string {
+  if (!query) return "";
+  if (query.length <= MAX_MEMORY_RETRIEVAL_QUERY_CHARS) return query.trim();
+
+  const edgeChars = MAX_MEMORY_RETRIEVAL_QUERY_CHARS / 2;
+  return `${query.slice(0, edgeChars)} ${query.slice(-edgeChars)}`.trim();
+}
+
 export interface MemoryRow {
   id: string;
   api_key_id?: string;
@@ -33,10 +45,14 @@ export function estimateTokens(text: string): number {
  * Strips FTS control operators and wraps individual terms in double quotes.
  */
 export function sanitizeFts5Query(query?: string): string {
-  if (!query) return "";
-  const cleaned = query.replace(/[^\w\s\u00C0-\u024F\u1E00-\u1EFF]/g, " ").trim();
+  const boundedQuery = boundMemoryRetrievalQuery(query);
+  if (!boundedQuery) return "";
+  const cleaned = boundedQuery.replace(/[^\w\s\u00C0-\u024F\u1E00-\u1EFF]/g, " ").trim();
   if (!cleaned) return "";
-  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  const tokens = [...new Set(cleaned.split(/\s+/).filter(Boolean))].slice(
+    0,
+    MAX_MEMORY_RETRIEVAL_QUERY_TERMS
+  );
   if (tokens.length === 0) return "";
   return tokens.map((t) => `"${t}"`).join(" ");
 }
@@ -78,7 +94,7 @@ export function rowToMemory(row: MemoryRow): Memory {
  * so there is no ReDoS risk — no user input is passed to RegExp().
  */
 export function getRelevanceScore(memory: Memory, query: string): number {
-  const normalizedQuery = query.trim().toLowerCase();
+  const normalizedQuery = boundMemoryRetrievalQuery(query).toLowerCase();
   if (!normalizedQuery) return 0;
 
   const haystacks = [
@@ -86,7 +102,10 @@ export function getRelevanceScore(memory: Memory, query: string): number {
     memory.key.toLowerCase(),
     JSON.stringify(memory.metadata).toLowerCase(),
   ];
-  const tokens = normalizedQuery.split(/\s+/).filter(Boolean);
+  const tokens = normalizedQuery
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, MAX_MEMORY_RETRIEVAL_QUERY_TERMS);
 
   let score = 0;
   for (const haystack of haystacks) {

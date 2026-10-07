@@ -11,10 +11,14 @@ export type ProviderRequestPrepared = {
 };
 
 export type Capture = {
+  /** Skip observing serialized provider bodies when detailed request logging is disabled. */
+  enabled?: boolean;
   diagnosticTrace?: DiagnosticOverflowTrace | null;
   capture: (request: ProviderRequestPrepared) => Promise<void> | void;
   body: (fallback: unknown) => unknown;
   latest?: () => ProviderRequestPrepared | null;
+  /** Drop any retained prepared request after its terminal log has been written. */
+  release?: () => void;
 };
 
 type RequestLoggerLike = {
@@ -90,7 +94,7 @@ async function capturePreparedRequest(
   bodyString: string,
   log?: WarnLog | null
 ) {
-  if (!requestCapture) return;
+  if (!requestCapture || requestCapture.enabled === false) return;
   const latest = requestCapture.latest?.();
   if (latest?.url === url && latest.bodyString === bodyString) return;
 
@@ -131,6 +135,7 @@ export function captureCurrentProviderBody(
 }
 
 export function runWithCapture<T>(requestCapture: Capture, fn: () => Promise<T>): Promise<T> {
+  if (requestCapture.enabled === false) return fn();
   installFetchCapture();
   return captureState.context.run(requestCapture, fn);
 }
@@ -223,12 +228,16 @@ function looksLikeProviderRequestBody(body: unknown) {
 
 export function createPreparedRequestLogger(
   reqLogger: RequestLoggerLike,
-  scope: PendingRequestScope
+  scope: PendingRequestScope,
+  options: { enabled?: boolean } = {}
 ): Capture {
   let latest: ProviderRequestPrepared | null = null;
+  const enabled = options.enabled !== false;
   return {
-    diagnosticTrace: reqLogger.getDiagnosticOverflowTrace?.(),
+    enabled,
+    diagnosticTrace: enabled ? reqLogger.getDiagnosticOverflowTrace?.() : null,
     capture(request) {
+      if (!enabled) return;
       latest = request;
       reqLogger.logTargetRequest(request.url, request.headers, request.body);
       updatePendingScope(scope, {
@@ -238,6 +247,7 @@ export function createPreparedRequestLogger(
       });
     },
     body(fallback) {
+      if (!enabled) return fallback;
       const resolved = latest?.body ?? fallback;
       // #4091: the captured body is rebuilt from the serialized upstream payload
       // (the fetch-capture does `JSON.parse(JSON.stringify(...))`), which drops
@@ -271,6 +281,9 @@ export function createPreparedRequestLogger(
     },
     latest() {
       return latest;
+    },
+    release() {
+      latest = null;
     },
   };
 }
