@@ -4,12 +4,12 @@
  * #3120: "Import Models" never refreshes the Copilot model list because the
  *        `github` (Copilot) provider had a STATIC hardcoded catalog and no live
  *        discovery source.
- * #3121: That static catalog advertised models (e.g. gemini previews) that the
- *        account is not entitled to, so testing them returned upstream 400s.
+ * #3121: The static catalog and the model rows returned in requests did not
+ *        consistently match; some attempted model requests returned upstream 400s.
  *
- * Fix: discover the catalog live from https://api.githubcopilot.com/models using
- * the Copilot bearer + Copilot chat headers, parse `data[].id` into managed
- * models, and fall back to the static catalog only when the live fetch fails.
+ * Fix: request model rows from https://api.githubcopilot.com/models using the
+ * Copilot bearer + Copilot chat headers, normalize the response, and use the
+ * static catalog only when credentials or live discovery are unavailable.
  *
  * Discovery cases use injected fetch; the final routing contract uses an isolated DB.
  */
@@ -46,7 +46,7 @@ const {
 
 // A representative slice of a real Copilot /models response. The upstream list
 // includes selectable chat models plus utility/legacy models; discovery now
-// keeps every entitled CHAT model (capability-driven) and drops only non-chat
+// keeps every routable CHAT row in the supplied fixture (capability-driven) and drops only non-chat
 // rows (embeddings / completion).
 const MOCK_COPILOT_MODELS_RESPONSE = {
   data: [
@@ -78,7 +78,7 @@ const MOCK_COPILOT_MODELS_RESPONSE = {
       capabilities: { type: "chat" },
     },
     {
-      // Newly-entitled model NOT in any hardcoded list — must still be kept now
+      // New model row not tied to an ID allowlist — must still be kept here
       // that discovery is capability-driven (this is the whole point of the fix).
       id: "grok-4.6",
       name: "Grok 4.6",
@@ -101,11 +101,11 @@ const MOCK_COPILOT_MODELS_RESPONSE = {
   ],
 };
 
-test("#3120 parseGitHubCopilotModels keeps every entitled CHAT model (capability-driven)", () => {
+test("#3120 parseGitHubCopilotModels keeps every routable CHAT row in the response", () => {
   const models = parseGitHubCopilotModels(MOCK_COPILOT_MODELS_RESPONSE);
   const ids = models.map((m) => m.id);
   // grok-4.6 is kept even though it is in no hardcoded allowlist — it's an
-  // entitled chat model in the live response.
+  // chat-capable row present in the mocked response.
   assert.deepEqual(ids, ["gpt-5.4", "claude-sonnet-4.5", "grok-4.6"]);
   const gpt = models.find((m) => m.id === "gpt-5.4");
   assert.ok(gpt, "gpt-5.4 entry present");
@@ -193,13 +193,13 @@ test("Copilot endpoint metadata survives synced-model import normalization", asy
   assert.equal(imported.get("chat-and-responses")?.targetFormat, undefined);
 });
 
-test("#3121 a model NOT in the live response is not advertised (entitlement filtering)", () => {
+test("#3121 a model absent from the live response is not advertised", () => {
   const models = parseGitHubCopilotModels(MOCK_COPILOT_MODELS_RESPONSE);
   const ids = models.map((m) => m.id);
-  // gemini-3.1-pro-preview is not entitled here (absent from the live response).
+  // gemini-3.1-pro-preview is absent from this mocked response.
   assert.ok(
     !ids.includes("gemini-3.1-pro-preview"),
-    "non-entitled gemini preview must NOT be advertised"
+    "a model absent from the response must NOT be advertised"
   );
 });
 
@@ -247,11 +247,9 @@ test("fetch treats a successful empty Copilot catalog as authoritative", async (
   assert.deepEqual(result.models, []);
 });
 
-test("fetch treats a malformed successful payload with no parsed models as authoritative empty", async () => {
+test("fetch treats a successful empty models list as authoritative", async () => {
   const fakeFetch = (async () =>
-    new Response(JSON.stringify({ unexpected: "shape" }), {
-      status: 200,
-    })) as unknown as typeof fetch;
+    new Response(JSON.stringify({ models: [] }), { status: 200 })) as unknown as typeof fetch;
   const result = await fetchGitHubCopilotModels({
     token: "copilot-tok-abc",
     fetchImpl: fakeFetch,
@@ -260,6 +258,24 @@ test("fetch treats a malformed successful payload with no parsed models as autho
 
   assert.equal(result.source, "api");
   assert.deepEqual(result.models, []);
+});
+
+test("fetch falls back on missing or malformed model collections", async () => {
+  for (const payload of [{}, { data: "not-an-array" }, { models: "not-an-array" }]) {
+    const fakeFetch = (async () =>
+      new Response(JSON.stringify(payload), { status: 200 })) as unknown as typeof fetch;
+    const result = await fetchGitHubCopilotModels({
+      token: "copilot-tok-abc",
+      fetchImpl: fakeFetch,
+      fallbackModels: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+    });
+
+    assert.equal(result.source, "fallback");
+    assert.deepEqual(
+      result.models.map((model) => model.id),
+      ["gpt-5.4"]
+    );
+  }
 });
 
 test("fetch falls back on malformed JSON or network errors", async () => {
@@ -306,11 +322,11 @@ test("#3120/#3121 fetch falls back to static catalog when the live fetch fails",
   );
 });
 
-test("static fallback catalog is the alias of the allowlist and covers the approved chat ids", () => {
+test("static fallback catalog is the alias of the local fallback set", () => {
   // Back-compat: the old name still points at the fallback catalog.
   assert.equal(GITHUB_COPILOT_MODEL_ALLOWLIST, GITHUB_COPILOT_STATIC_FALLBACK_MODELS);
   const set = new Set<string>(GITHUB_COPILOT_STATIC_FALLBACK_MODELS);
-  // The fallback must include the newly-entitled families so an offline import
+  // The fallback fixture includes these additional model families for offline import
   // (which can only draw from this static list) still surfaces them.
   for (const id of [
     "claude-fable-5",
@@ -332,7 +348,7 @@ test("static fallback catalog is the alias of the allowlist and covers the appro
   assert.ok(!set.has("gpt-41-copilot"));
 });
 
-test("newly approved Copilot models survive live and fallback discovery", async () => {
+test("additional Copilot model rows survive live and fallback discovery", async () => {
   const expected = ["claude-opus-5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"];
   const live = parseGitHubCopilotModels({ data: expected.map((id) => ({ id, name: id })) });
   assert.deepEqual(

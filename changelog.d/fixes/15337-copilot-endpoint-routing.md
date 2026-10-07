@@ -1,4 +1,1 @@
-Preserve GitHub Copilot endpoint metadata so Responses-only models route to
-`/responses`. Honor Responses-target models on custom-base connections. Treat a
-successful empty model discovery as authoritative; static fallback applies only
-to missing credentials or discovery errors.
+Preserve normalized GitHub Copilot endpoint metadata so catalog-driven request routing can select an advertised Responses target. Treat successful empty `data: []` or `models: []` discovery as authoritative; use static fallback only for missing credentials, request failures, non-success responses, or invalid collection shapes. This change does not claim live account entitlement or endpoint acceptance.

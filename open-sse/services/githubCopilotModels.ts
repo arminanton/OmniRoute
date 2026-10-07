@@ -1,32 +1,24 @@
 /**
  * GitHub Copilot live model discovery (#3120, #3121).
  *
- * The `github` (Copilot) provider previously shipped a STATIC hardcoded model
- * catalog in `providerRegistry.ts` and had no discovery source, so "Import
- * Models" could never refresh the list (#3120) and advertised models the
- * account is not entitled to (e.g. gemini previews), which fail upstream with
- * `400 ... not supported` when tested (#3121).
+ * The `github` provider previously relied on a static catalog and had no live
+ * discovery source, so Import Models could not refresh its displayed rows.
+ * This service requests the Copilot models endpoint with the configured bearer
+ * token and standard chat headers. The parser accepts only explicitly handled
+ * model-list shapes and filters rows using their capability/policy fields; it
+ * does not infer account entitlements from model names or the fallback list.
  *
- * Copilot exposes its per-account catalog at `https://api.githubcopilot.com/models`,
- * authenticated with the Copilot bearer token + the standard Copilot chat
- * headers. The response shape is `{ data: [{ id, name, model_picker_enabled,
- * policy, capabilities, ... }] }`. We map `data[].id` into managed models. Only
- * entitled models appear in the live response, so parsing it directly gives the
- * entitlement filtering #3121 needs.
- *
- * A safe fallback to the existing static catalog is preserved for
- * offline/unauthed/failed refresh so the import flow never breaks.
+ * The curated static fallback is used only when live discovery is unavailable
+ * (missing credentials, request failure, non-success status, or invalid data).
+ * A successful response containing an explicit empty model list stays empty.
  */
 import { getGitHubCopilotChatHeaders } from "../config/providerHeaderProfiles.ts";
 
 export const GITHUB_COPILOT_MODELS_URL = "https://api.githubcopilot.com/models";
 
-// Static fallback catalog. Used ONLY when live discovery is unavailable
-// (offline / unauthed / upstream error): the account's real entitlements can't
-// be read, so we fall back to this curated set of known-good chat ids. It is
-// NOT used to gate the LIVE response — see parseGitHubCopilotModels, which keeps
-// every entitled chat model the catalog returns (so newly-entitled models like
-// grok-4.6 / mai-code-1.1-flash / gemini-3.6-flash appear without a code edit).
+// Static fallback catalog. Used only when live discovery is unavailable
+// (offline / unauthed / upstream error). It is a curated set of model IDs for
+// fallback display; it is not merged into or used to gate a successful live response.
 export const GITHUB_COPILOT_STATIC_FALLBACK_MODELS = [
   "claude-fable-5",
   "claude-opus-5",
@@ -128,12 +120,9 @@ function getEndpointMetadata(item: RawRecord, modelId: string): Partial<GitHubCo
 }
 
 // Decide whether a live /models row is a routable chat model. Capability-driven
-// (rename-robust) rather than an id allowlist: any model the account is entitled
-// to whose capabilities.type is "chat" (or that carries a chat-shaped
-// supported_endpoints) is kept, so a newly-entitled model shows up with no code
-// change. Also filters out rows when policy.state is set and != "enabled", or
-// when model_picker_enabled=false. Explicitly non-chat rows (embeddings /
-// completion) are dropped as well.
+// rather than an ID allowlist: keep rows marked as chat or carrying a chat-shaped
+// supported_endpoints; filter rows with a disabled policy/model-picker flag and
+// rows explicitly marked as non-chat (embeddings/completion).
 function isRoutableChatModel(item: RawRecord): boolean {
   const policy = asRecord(item.policy);
   const policyState = toNonEmptyString(policy.state);
@@ -169,20 +158,17 @@ function isRoutableChatModel(item: RawRecord): boolean {
 }
 
 /**
- * Parse a Copilot `/models` response into managed chat-model rows. Keeps every
- * entitled CHAT model in the live response (capability-driven filtering) and
- * drops only non-chat rows (embeddings / completion). Because only entitled
- * models appear in the live response, this is exactly the entitlement filter
- * #3121 needs — WITHOUT the old hardcoded id allowlist that silently dropped
- * newly-entitled models (grok-4.6, mai-code-1.1-flash, gemini-3.6-flash, …).
+ * Parse a Copilot `/models` response into managed chat-model rows. Keeps rows
+ * in the response that match the supported chat capability/policy shape and
+ * drops only rows explicitly identified as non-chat or disabled. No static IDs
+ * are merged into or used to gate a successful live response.
  */
 export function parseGitHubCopilotModels(data: unknown): GitHubCopilotModel[] {
   const payload = asRecord(data);
-  const items = Array.isArray(payload.data)
-    ? (payload.data as unknown[])
-    : Array.isArray(payload.models)
-      ? (payload.models as unknown[])
-      : [];
+  const items = payload.data === undefined ? payload.models : payload.data;
+  if (!Array.isArray(items)) {
+    throw new Error("Invalid GitHub Copilot models response");
+  }
 
   const seen = new Set<string>();
   const models: GitHubCopilotModel[] = [];
@@ -259,7 +245,7 @@ export async function fetchGitHubCopilotModels(
     const models = parseGitHubCopilotModels(data);
     return { models, source: "api" };
   } catch {
-    // Network/parse failure — never break the import flow.
+    // Network/parse/schema failure — never break the import flow.
     return toFallbackResult(fallbackModels);
   }
 }
