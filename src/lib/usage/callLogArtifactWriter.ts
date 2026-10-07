@@ -4,8 +4,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 
 import type { CallLogArtifact, CallLogArtifactWriteResult } from "./callLogArtifacts.ts";
+import { projectDiagnosticOverflowReference } from "./diagnosticOverflowTypes";
 
 const MAX_QUEUED_JOBS = 128;
+const MAX_QUEUED_DIAGNOSTIC_STUBS = 128;
+const MAX_QUEUED_DIAGNOSTIC_STUB_BYTES = 1024 * 1024;
 // The estimate reserves for the retained source value, its worker clone, and
 // worst-case JSON escaping while the active artifact is serialized. It is a
 // peak-footprint budget for the active write plus all waiting writes.
@@ -26,6 +29,8 @@ type QueueItem = {
   id: number;
   artifact: CallLogArtifact;
   estimatedFootprintBytes: number;
+  reservationClass: "normal" | "diagnostic_stub";
+  preparationReservation?: CallLogArtifactReservation;
   reservationReleased: boolean;
   environment: {
     pipelineMaxSizeKb?: string;
@@ -38,12 +43,21 @@ type QueueItem = {
 let worker: Worker | null = null;
 let active: QueueItem | null = null;
 const queue: QueueItem[] = [];
+const diagnosticStubQueue: QueueItem[] = [];
 let nextId = 1;
 let idleTimer: NodeJS.Timeout | null = null;
 let closing = false;
 let closeWaiters: Array<() => void> = [];
 const lastWarningAt = new Map<string, number>();
 let reservedArtifactFootprintBytes = 0;
+let reservedDiagnosticStubBytes = 0;
+
+export type CallLogArtifactReservation = { readonly estimatedBytes: number };
+type ReservationState = {
+  estimatedBytes: number;
+  state: "reserved" | "transferred" | "released";
+};
+const reservationStates = new WeakMap<CallLogArtifactReservation, ReservationState>();
 
 export type CallLogArtifactFootprintEstimate = {
   estimatedBytes: number;
@@ -170,13 +184,240 @@ export function estimateCallLogArtifactFootprint(value: unknown): CallLogArtifac
   return { estimatedBytes };
 }
 
+/** Reserve before call-log payload protection clones the request/response. */
+export function reserveCallLogArtifactPreparation(
+  rawPayloads: unknown
+): CallLogArtifactReservation | null {
+  const estimate = estimateCallLogArtifactFootprint(rawPayloads);
+  if (estimate.reason) return null;
+
+  // The base estimate covers source, a worker clone, and JSON output. Double it
+  // to cover the protection projection made before the artifact reaches worker
+  // admission, plus a fixed envelope allowance for summary/pipeline metadata.
+  const estimatedBytes = estimate.estimatedBytes * 2 + 64 * 1024;
+  if (
+    !Number.isSafeInteger(estimatedBytes) ||
+    estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES ||
+    reservedArtifactFootprintBytes + estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
+  )
+    return null;
+
+  const reservation: CallLogArtifactReservation = { estimatedBytes };
+  reservationStates.set(reservation, { estimatedBytes, state: "reserved" });
+  reservedArtifactFootprintBytes += estimatedBytes;
+  return reservation;
+}
+
+export function releaseCallLogArtifactPreparation(
+  reservation: CallLogArtifactReservation | null | undefined
+): void {
+  if (!reservation) return;
+  const state = reservationStates.get(reservation);
+  if (!state || state.state !== "reserved") return;
+  state.state = "released";
+  reservedArtifactFootprintBytes = Math.max(
+    0,
+    reservedArtifactFootprintBytes - state.estimatedBytes
+  );
+}
+
 function releaseReservation(item: QueueItem): void {
   if (item.reservationReleased) return;
   item.reservationReleased = true;
-  reservedArtifactFootprintBytes = Math.max(
-    0,
-    reservedArtifactFootprintBytes - item.estimatedFootprintBytes
+  if (item.preparationReservation) {
+    const state = reservationStates.get(item.preparationReservation);
+    if (state && state.state !== "released") {
+      state.state = "released";
+      reservedArtifactFootprintBytes = Math.max(
+        0,
+        reservedArtifactFootprintBytes - state.estimatedBytes
+      );
+    }
+    return;
+  }
+  if (item.reservationClass === "diagnostic_stub") {
+    reservedDiagnosticStubBytes = Math.max(
+      0,
+      reservedDiagnosticStubBytes - item.estimatedFootprintBytes
+    );
+  } else {
+    reservedArtifactFootprintBytes = Math.max(
+      0,
+      reservedArtifactFootprintBytes - item.estimatedFootprintBytes
+    );
+  }
+}
+
+function safeSummaryLabel(value: string | null, fallback = "-", maxLength = 256): string {
+  if (typeof value !== "string") return fallback;
+  const safe = value
+    .slice(0, maxLength)
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .trim();
+  return safe || fallback;
+}
+
+function safeRequestPath(value: string): string {
+  const bounded = value.slice(0, 513);
+  const delimiter = bounded.search(/[?#]/);
+  const pathOnly = (delimiter < 0 ? bounded.slice(0, 512) : bounded.slice(0, delimiter)).trim();
+  if (!pathOnly.startsWith("/") || /[\u0000-\u001f\u007f]/.test(pathOnly)) return "/[redacted]";
+  return pathOnly.slice(0, 512);
+}
+
+function safeCorrelationId(value: string | null | undefined): string | null {
+  return typeof value === "string" && value.length <= 256 && /^[A-Za-z0-9._:-]+$/.test(value)
+    ? value
+    : null;
+}
+
+function buildDiagnosticOverflowStub(
+  summary: CallLogArtifact["summary"],
+  rawReference: unknown
+): CallLogArtifact | null {
+  const reference = projectDiagnosticOverflowReference(rawReference);
+  if (!reference || reference.persisted === false) return null;
+
+  return {
+    schemaVersion: 5,
+    summary: {
+      id: safeSummaryLabel(summary.id, "unknown", 128),
+      timestamp: safeSummaryLabel(summary.timestamp, "unknown", 64),
+      method: safeSummaryLabel(summary.method, "POST", 16).toUpperCase(),
+      path: safeRequestPath(summary.path),
+      model: safeSummaryLabel(summary.model),
+      requestedModel:
+        summary.requestedModel === null ? null : safeSummaryLabel(summary.requestedModel),
+      provider: safeSummaryLabel(summary.provider),
+      status: Number.isSafeInteger(summary.status) ? summary.status : 0,
+      duration: Number.isFinite(summary.duration) && summary.duration >= 0 ? summary.duration : 0,
+      requestType:
+        summary.requestType === null ? null : safeSummaryLabel(summary.requestType, "unknown", 64),
+      sourceFormat:
+        summary.sourceFormat === null
+          ? null
+          : safeSummaryLabel(summary.sourceFormat, "unknown", 64),
+      targetFormat:
+        summary.targetFormat === null
+          ? null
+          : safeSummaryLabel(summary.targetFormat, "unknown", 64),
+      account: "-",
+      connectionId: null,
+      apiKeyId: null,
+      apiKeyName: null,
+      correlationId: safeCorrelationId(summary.correlationId),
+      tokens: {
+        in: Number.isFinite(summary.tokens.in) && summary.tokens.in >= 0 ? summary.tokens.in : 0,
+        out:
+          Number.isFinite(summary.tokens.out) && summary.tokens.out >= 0 ? summary.tokens.out : 0,
+        cacheRead:
+          summary.tokens.cacheRead === null ||
+          (Number.isFinite(summary.tokens.cacheRead) && summary.tokens.cacheRead >= 0)
+            ? summary.tokens.cacheRead
+            : null,
+        cacheWrite:
+          summary.tokens.cacheWrite === null ||
+          (Number.isFinite(summary.tokens.cacheWrite) && summary.tokens.cacheWrite >= 0)
+            ? summary.tokens.cacheWrite
+            : null,
+        reasoning:
+          summary.tokens.reasoning === null ||
+          (Number.isFinite(summary.tokens.reasoning) && summary.tokens.reasoning >= 0)
+            ? summary.tokens.reasoning
+            : null,
+        compressed:
+          summary.tokens.compressed === null ||
+          (Number.isFinite(summary.tokens.compressed) && summary.tokens.compressed >= 0)
+            ? summary.tokens.compressed
+            : null,
+      },
+      comboName: null,
+      comboStepId: null,
+      comboExecutionKey: null,
+    },
+    requestBody: "[omitted: artifact queue memory budget exceeded]",
+    responseBody: "[omitted: artifact queue memory budget exceeded]",
+    error: "Detailed call-log payload omitted; private diagnostic capture is available.",
+    pipeline: {
+      error: {
+        _omniroute_truncated: true,
+        reason: "call_log_artifact_queue_memory_budget_exceeded",
+      },
+      diagnosticOverflow: reference,
+    },
+  };
+}
+
+function enqueueArtifact(
+  artifact: CallLogArtifact,
+  estimatedFootprintBytes: number,
+  reservationClass: QueueItem["reservationClass"],
+  preparationReservation?: CallLogArtifactReservation
+): Promise<CallLogArtifactWriteResult | null> {
+  const state = preparationReservation ? reservationStates.get(preparationReservation) : undefined;
+  if (preparationReservation && (!state || state.state !== "reserved"))
+    return Promise.resolve(null);
+
+  const reservedBytes = state?.estimatedBytes ?? estimatedFootprintBytes;
+  if (state) state.state = "transferred";
+
+  return new Promise((resolve) => {
+    const item: QueueItem = {
+      id: nextId++,
+      artifact,
+      estimatedFootprintBytes: reservedBytes,
+      reservationClass,
+      ...(preparationReservation ? { preparationReservation } : {}),
+      reservationReleased: false,
+      environment: {
+        pipelineMaxSizeKb: process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB,
+        chatDebugFile: process.env.CHAT_DEBUG_FILE,
+        appLogLevel: process.env.APP_LOG_LEVEL,
+      },
+      resolve,
+    };
+
+    if (reservationClass === "diagnostic_stub") {
+      reservedDiagnosticStubBytes += reservedBytes;
+      diagnosticStubQueue.push(item);
+    } else if (!preparationReservation) {
+      reservedArtifactFootprintBytes += reservedBytes;
+      queue.push(item);
+    } else {
+      queue.push(item);
+    }
+    pump();
+  });
+}
+
+function enqueueDiagnosticOverflowStub(
+  summary: CallLogArtifact["summary"],
+  reference: unknown
+): Promise<CallLogArtifactWriteResult | null> | null {
+  const stub = buildDiagnosticOverflowStub(summary, reference);
+  if (!stub) return null;
+
+  const estimate = estimateCallLogArtifactFootprint(stub);
+  if (
+    estimate.reason ||
+    diagnosticStubQueue.length >= MAX_QUEUED_DIAGNOSTIC_STUBS ||
+    reservedDiagnosticStubBytes + estimate.estimatedBytes > MAX_QUEUED_DIAGNOSTIC_STUB_BYTES
+  )
+    return null;
+
+  warnRateLimited(
+    "[callLogs] Full call-log artifact omitted; preserving private diagnostic reference only."
   );
+  return enqueueArtifact(stub, estimate.estimatedBytes, "diagnostic_stub");
+}
+
+export function writeDiagnosticOverflowStubAsync(
+  summary: CallLogArtifact["summary"],
+  reference: unknown
+): Promise<CallLogArtifactWriteResult | null> {
+  if (closing) return Promise.resolve(null);
+  const queued = enqueueDiagnosticOverflowStub(summary, reference);
+  return queued ?? Promise.resolve(null);
 }
 
 function fileExistsAtRuntime(candidate: string): boolean {
@@ -240,7 +481,7 @@ function terminateWorker(): void {
 }
 
 function notifyCloseWaiters(): void {
-  if (active || queue.length > 0) return;
+  if (active || queue.length > 0 || diagnosticStubQueue.length > 0) return;
   const waiters = closeWaiters;
   closeWaiters = [];
   for (const resolve of waiters) resolve();
@@ -248,7 +489,7 @@ function notifyCloseWaiters(): void {
 
 function scheduleIdleTermination(): void {
   clearIdleTimer();
-  if (!worker || active || queue.length > 0) return;
+  if (!worker || active || queue.length > 0 || diagnosticStubQueue.length > 0) return;
   idleTimer = setTimeout(terminateWorker, IDLE_TIMEOUT_MS);
   idleTimer.unref?.();
 }
@@ -262,9 +503,12 @@ function warnRateLimited(message: string): void {
 
 function failOpen(warn = false): void {
   if (warn) warnRateLimited("[callLogs] Call-log artifact worker failed; detail omitted.");
-  const failed = active ? [active, ...queue] : [...queue];
+  const failed = active
+    ? [active, ...queue, ...diagnosticStubQueue]
+    : [...queue, ...diagnosticStubQueue];
   active = null;
   queue.length = 0;
+  diagnosticStubQueue.length = 0;
   for (const item of failed) releaseReservation(item);
   terminateWorker();
   for (const item of failed) item.resolve(null);
@@ -284,7 +528,11 @@ function ensureWorker(): Worker {
     const completed = active;
     active = null;
     releaseReservation(completed);
-    completed.resolve(reply.result);
+    completed.resolve(
+      reply.result && completed.reservationClass === "diagnostic_stub"
+        ? { ...reply.result, diagnosticOverflowStub: true }
+        : reply.result
+    );
     pump();
   });
   created.on("error", () => failOpen(true));
@@ -299,7 +547,7 @@ function ensureWorker(): Worker {
 
 function pump(): void {
   if (active) return;
-  const next = queue.shift();
+  const next = diagnosticStubQueue.shift() ?? queue.shift();
   if (!next) {
     notifyCloseWaiters();
     scheduleIdleTermination();
@@ -320,45 +568,65 @@ function pump(): void {
 }
 
 export function writeCallArtifactAsync(
-  artifact: CallLogArtifact
+  artifact: CallLogArtifact,
+  preparationReservation?: CallLogArtifactReservation | null
 ): Promise<CallLogArtifactWriteResult | null> {
-  if (closing || queue.length >= MAX_QUEUED_JOBS) {
+  if (closing) {
+    releaseCallLogArtifactPreparation(preparationReservation);
+    warnRateLimited("[callLogs] Call-log artifact queue unavailable; detail omitted.");
+    return Promise.resolve(null);
+  }
+
+  if (queue.length >= MAX_QUEUED_JOBS) {
+    releaseCallLogArtifactPreparation(preparationReservation);
+    const stub = enqueueDiagnosticOverflowStub(
+      artifact.summary,
+      artifact.pipeline?.diagnosticOverflow
+    );
+    if (stub) return stub;
     warnRateLimited("[callLogs] Call-log artifact queue unavailable; detail omitted.");
     return Promise.resolve(null);
   }
 
   const estimate = estimateCallLogArtifactFootprint(artifact);
+  const reservationState = preparationReservation
+    ? reservationStates.get(preparationReservation)
+    : undefined;
+  if (preparationReservation && (!reservationState || reservationState.state !== "reserved")) {
+    warnRateLimited(
+      "[callLogs] Call-log artifact preparation reservation is unavailable; detail omitted."
+    );
+    return Promise.resolve(null);
+  }
   if (
     estimate.reason ||
     estimate.estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES ||
-    reservedArtifactFootprintBytes + estimate.estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
+    (preparationReservation
+      ? estimate.estimatedBytes > (reservationState?.estimatedBytes ?? 0)
+      : reservedArtifactFootprintBytes + estimate.estimatedBytes >
+        MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES)
   ) {
+    releaseCallLogArtifactPreparation(preparationReservation);
+    const stub = enqueueDiagnosticOverflowStub(
+      artifact.summary,
+      artifact.pipeline?.diagnosticOverflow
+    );
+    if (stub) return stub;
     warnRateLimited("[callLogs] Call-log artifact memory budget exceeded; detail omitted.");
     return Promise.resolve(null);
   }
 
-  return new Promise((resolve) => {
-    const item = {
-      id: nextId++,
-      artifact,
-      estimatedFootprintBytes: estimate.estimatedBytes,
-      reservationReleased: false,
-      environment: {
-        pipelineMaxSizeKb: process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB,
-        chatDebugFile: process.env.CHAT_DEBUG_FILE,
-        appLogLevel: process.env.APP_LOG_LEVEL,
-      },
-      resolve,
-    };
-    reservedArtifactFootprintBytes += estimate.estimatedBytes;
-    queue.push(item);
-    pump();
-  });
+  return enqueueArtifact(
+    artifact,
+    reservationState?.estimatedBytes ?? estimate.estimatedBytes,
+    "normal",
+    preparationReservation ?? undefined
+  );
 }
 
 export async function closeCallLogArtifactWriter(timeoutMs = CLOSE_TIMEOUT_MS): Promise<void> {
   closing = true;
-  if (!active && queue.length === 0) {
+  if (!active && queue.length === 0 && diagnosticStubQueue.length === 0) {
     terminateWorker();
     return;
   }
@@ -378,6 +646,6 @@ export async function closeCallLogArtifactWriter(timeoutMs = CLOSE_TIMEOUT_MS): 
     }),
   ]);
   if (timeout) clearTimeout(timeout);
-  if (active || queue.length > 0) failOpen();
+  if (active || queue.length > 0 || diagnosticStubQueue.length > 0) failOpen();
   terminateWorker();
 }
