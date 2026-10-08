@@ -523,8 +523,11 @@ graph. Node spent about 3 minutes at 1.5–1.6 CPU cores and hit its default 4 G
 there was no build artifact or typecheck result. This is separate from the earlier 5 GiB Next build
 failures. A narrower follow-up that excluded `chat.ts` and included only the pressure/artifact modules
 and their focused tests still reached a 3 GiB V8 heap limit and exited after about 74 seconds without
-a result. Neither attempt reported a source diagnostic. A valid typecheck still needs a truly smaller
-dependency boundary or a builder with a larger, explicitly budgeted heap.
+a result. Neither attempt reported a source diagnostic. The repository target
+`npm run typecheck:core` has since passed after the call-log changes. The broad no-emit failures
+still show that a full-project check needs a smaller dependency boundary or a builder with a larger,
+explicitly budgeted heap; this target does not prove that the full Next application build fits the
+current builder.
 
 ## Remaining acceptance checks
 
@@ -540,9 +543,9 @@ dependency boundary or a builder with a larger, explicitly budgeted heap.
   snapshot or controlled recovery result exists yet.
 - Repeat full Next builds on a dedicated builder with enough memory to complete; record wall time,
   peak cgroup memory, output size, and health/model-catalog smoke tests.
-- Typecheck the changed source with a bounded project graph or a larger, explicitly budgeted builder;
-  the broad no-emit check exhausted 4 GiB, and the follow-up excluding `chat.ts` exhausted 3 GiB before
-  either could report source errors.
+- Keep the passing `typecheck:core` target in the validation set. If a broader whole-app typecheck is
+  required, first build a smaller project graph or use a builder with an explicit memory budget; the
+  earlier broad no-emit attempts exhausted 4 GiB and 3 GiB without reporting source diagnostics.
 - Run the Bun application build with a locked dependency graph and on both 1.4.0 and 1.4.2; record
   native-module, database, streaming, and shutdown differences.
 - Exercise the full OmniRoute app with mock provider credentials at 70 and 100 active sessions,
@@ -554,6 +557,7 @@ dependency boundary or a builder with a larger, explicitly budgeted heap.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 189 operations with success-response content; the
-  path/method/security-tier inventory is complete, but the remaining response schemas and auth
-  behavior have not all been source-verified.
+- Continue the OpenAPI handler audit beyond the 195 operations with success-response content; 823
+  operations still lack explicit success-body schemas. The path/method/security-tier inventory is
+  complete, but remaining response schemas and conditional auth behavior have not all been
+  source-verified.
