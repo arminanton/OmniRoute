@@ -5,7 +5,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 64
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 74
 component schemas. The API route inventory checker now verifies that source files and the spec agree
 on every path, exported method, and path parameter; it reports 705/705 routes and the documented
 public copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -26,14 +26,17 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: only 120 operations have
-response content schemas and 121 declare operation-level security. The next contract pass must
-compare authentication and request/response schemas with each handler before calling the entire
-OpenAPI document semantically complete. For routes with confirmed
-configuration-dependent access, the spec now includes anonymous alternatives where the handler
-allows them, including model discovery, combo/routing metadata, and the API Explorer endpoints.
-All 98 operations previously missing `x-loopback-only` under routeGuard's local-only prefixes are
-now annotated; the route-guard checker and unit test enforce those markers.
+contract is still stronger on route coverage than schema completeness: 131 operations have
+response content schemas and 121 declare operation-level security. The OpenAI chat, Anthropic
+Messages, OpenAI Responses, token-count, embedding, and image-generation paths now describe their
+principal request/response shapes and streaming media. The remaining contract pass must compare
+authentication and request/response schemas with each handler before calling the entire OpenAPI
+document semantically complete. The core inference paths also list the accepted bearer/API-key
+headers, dashboard session cookie, and anonymous mode when `REQUIRE_API_KEY` is disabled. For other
+routes with confirmed configuration-dependent access, the spec includes anonymous alternatives
+where the handler allows them, including model discovery, combo/routing metadata, and API Explorer
+endpoints. All 98 operations previously missing `x-loopback-only` under routeGuard's local-only
+prefixes are now annotated; the route-guard checker and unit test enforce those markers.
 
 ## Resource-pressure 503 path
 

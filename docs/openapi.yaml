@@ -1577,9 +1577,17 @@ paths:
       operationId: postApiV1ChatCompletions
       tags: [Chat]
       summary: Create chat completion
-      description: OpenAI-compatible chat completions endpoint. Routes to configured providers.
+      description: >-
+        OpenAI-compatible chat completions endpoint. Routes to configured providers.
+        Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous
+        requests are accepted. Client API-key headers and an authenticated dashboard
+        session are also accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1699,9 +1707,15 @@ paths:
       operationId: postApiV1ProvidersByProviderChatCompletions
       tags: [Chat]
       summary: Create chat completion (provider-specific)
-      description: Routes to a specific provider by name.
+      description: >-
+        Routes to a specific provider by name. Authentication is required when
+        REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: provider
           in: path
@@ -1716,7 +1730,18 @@ paths:
               $ref: "#/components/schemas/ChatCompletionRequest"
       responses:
         "200":
-          description: Chat completion response
+          description: Chat completion response (or SSE stream)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+            text/event-stream:
+              schema:
+                type: string
+          headers:
+            X-OmniRoute-Request-Id:
+              schema: { type: string }
+              description: Request correlation ID when available.
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -1725,9 +1750,16 @@ paths:
       operationId: postApiV1ApiChat
       tags: [Chat]
       summary: Ollama-compatible chat endpoint
-      description: Provides compatibility with Ollama's /api/chat format.
+      description: >-
+        Provides compatibility with Ollama's /api/chat format. Authentication is
+        required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are
+        accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1736,16 +1768,36 @@ paths:
               type: object
       responses:
         "200":
-          description: Chat response (JSON or streaming)
+          description: >-
+            Non-streaming JSON response or newline-delimited JSON records when the
+            underlying chat response is streamed. Streaming records use the Ollama
+            chat shape; non-streaming responses preserve the delegated chat handler's
+            JSON representation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/OllamaChatResponse"
+                  - $ref: "#/components/schemas/ChatCompletionResponse"
+            application/x-ndjson:
+              schema:
+                $ref: "#/components/schemas/OllamaChatResponse"
 
   /api/v1/messages:
     post:
       operationId: postApiV1Messages
       tags: [Messages]
       summary: Create message (Anthropic-compatible)
-      description: Anthropic Messages API endpoint. Routes to Claude providers.
+      description: >-
+        Anthropic Messages API endpoint. Routes to configured providers.
+        Authentication is required when REQUIRE_API_KEY is enabled; otherwise
+        anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1759,6 +1811,13 @@ paths:
             carry the `X-OmniRoute-*` cost-telemetry headers (see
             `POST /api/v1/chat/completions`), including `X-OmniRoute-Request-Id`
             and `X-OmniRoute-Version`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagesResponse"
+            text/event-stream:
+              schema:
+                type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -1767,32 +1826,50 @@ paths:
       operationId: postApiV1MessagesCountTokens
       tags: [Messages]
       summary: Count tokens for a message
+      description: >-
+        Uses provider-side token counting when available and falls back to a local
+        estimate. Authentication is required when REQUIRE_API_KEY is enabled;
+        otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/CountTokensRequest"
       responses:
         "200":
           description: Token count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CountTokensResponse"
 
   /api/v1/responses:
     post:
       operationId: postApiV1Responses
       tags: [Responses]
       summary: Create response (OpenAI Responses API)
-      description: OpenAI Responses API endpoint.
+      description: >-
+        OpenAI Responses API endpoint. Authentication is required when REQUIRE_API_KEY
+        is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/ResponsesRequest"
       responses:
         "200":
           description: >-
@@ -1800,6 +1877,13 @@ paths:
             the `X-OmniRoute-*` cost-telemetry headers (see
             `POST /api/v1/chat/completions`), including `X-OmniRoute-Request-Id`
             and `X-OmniRoute-Version`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponsesResponse"
+            text/event-stream:
+              schema:
+                type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
 
@@ -1808,28 +1892,36 @@ paths:
       operationId: getApiV1Embeddings
       tags: [Embeddings]
       summary: List embedding models
-      description: Returns the OpenAI-compatible model list filtered to embedding models.
+      description: >-
+        Returns the OpenAI-compatible model list filtered to embedding models.
+        Authentication follows the configured model-catalog access policy: anonymous
+        access is available only when the catalog policy permits it; otherwise a valid
+        API key or authenticated dashboard session is required.
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Embedding model list
           content:
             application/json:
               schema:
-                type: object
-                required: [object, data]
-                properties:
-                  object: { type: string, const: list }
-                  data:
-                    type: array
-                    items: { $ref: "#/components/schemas/Model" }
+                $ref: "#/components/schemas/ModelListResponse"
     post:
       operationId: postApiV1Embeddings
       tags: [Embeddings]
       summary: Create embeddings
+      description: >-
+        Creates embeddings using a configured provider or combo. Authentication is
+        required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are
+        accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1889,6 +1981,10 @@ paths:
             cost-telemetry headers (see `POST /api/v1/chat/completions`); media
             cost is computed per modality when pricing is available, otherwise
             `0` (fail-open).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingResponse"
 
   /api/v1/multimodal-embeddings:
     post:
@@ -1898,9 +1994,14 @@ paths:
       description: >-
         Same handler as `POST /api/v1/embeddings`. Provided so Jina-compatible
         clients that call `/v1/multimodal-embeddings` do not receive HTTP 404
-        `unknown_route`.
+        `unknown_route`. Authentication is required when REQUIRE_API_KEY is enabled;
+        otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1912,25 +2013,43 @@ paths:
       responses:
         "200":
           description: Embedding vectors (same contract as POST /api/v1/embeddings).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
     get:
       operationId: getApiV1MultimodalEmbeddings
       tags: [Embeddings]
       summary: List embedding models (Jina multimodal-embeddings alias)
+      description: Authentication follows REQUIRE_API_KEY; anonymous requests are accepted when it is disabled.
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Embedding model catalog (same as GET /api/v1/embeddings).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelListResponse"
 
   /api/v1/providers/{provider}/embeddings:
     post:
       operationId: postApiV1ProvidersByProviderEmbeddings
       tags: [Embeddings]
       summary: Create embeddings (provider-specific)
+      description: >-
+        Creates embeddings through the named provider. Authentication is required
+        when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: provider
           in: path
@@ -1946,34 +2065,46 @@ paths:
       responses:
         "200":
           description: Embedding vectors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingResponse"
 
   /api/v1/images/generations:
     get:
       operationId: getApiV1ImagesGenerations
       tags: [Images]
       summary: List image-generation models
-      description: Returns the OpenAI-compatible model list filtered to image models.
+      description: >-
+        Returns the OpenAI-compatible model list filtered to image models.
+        Authentication follows the configured model-catalog access policy: anonymous
+        access is available only when the catalog policy permits it; otherwise a valid
+        API key or authenticated dashboard session is required.
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Image-generation model list
           content:
             application/json:
               schema:
-                type: object
-                required: [object, data]
-                properties:
-                  object: { type: string, const: list }
-                  data:
-                    type: array
-                    items: { $ref: "#/components/schemas/Model" }
+                $ref: "#/components/schemas/ModelListResponse"
     post:
       operationId: postApiV1ImagesGenerations
       tags: [Images]
       summary: Generate images
+      description: >-
+        Generates images using a configured provider or combo. Authentication is
+        required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are
+        accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1999,14 +2130,25 @@ paths:
             cost-telemetry headers (see `POST /api/v1/chat/completions`); image
             cost is computed per image when pricing is available, otherwise `0`
             (fail-open).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGenerationResponse"
 
   /api/v1/providers/{provider}/images/generations:
     post:
       operationId: postApiV1ProvidersByProviderImagesGenerations
       tags: [Images]
       summary: Generate images (provider-specific)
+      description: >-
+        Generates images through the named provider. Authentication is required when
+        REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: provider
           in: path
@@ -2022,15 +2164,26 @@ paths:
       responses:
         "200":
           description: Generated images
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGenerationResponse"
 
   /api/v1/audio/speech:
     post:
       operationId: postApiV1AudioSpeech
       tags: [Audio]
       summary: Generate speech audio
-      description: Text-to-speech endpoint. Routes to configured TTS providers.
+      description: >-
+        Text-to-speech endpoint. Routes to configured TTS providers. Authentication
+        is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests
+        are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -2058,9 +2211,15 @@ paths:
       operationId: postApiV1AudioTranscriptions
       tags: [Audio]
       summary: Transcribe audio
-      description: Audio-to-text transcription endpoint.
+      description: >-
+        Audio-to-text transcription endpoint. Authentication is required when
+        REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -15940,6 +16099,16 @@ components:
       in: cookie
       name: auth_token
       description: Dashboard management session cookie (auth_token) for protected management routes. Distinct from Bearer Access Tokens and API keys. See docs/guides/MANAGEMENT-AUTH.md.
+    ClientApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: Client API key header accepted by the client API auth policy.
+    GoogleApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-goog-api-key
+      description: Google client SDK API key header accepted by the client API auth policy.
 
   parameters:
     ResourceId:
@@ -17276,6 +17445,7 @@ components:
                   - type: array
                     items:
                       type: object
+                      additionalProperties: true
                   - type: "null"
               name:
                 type: string
@@ -17349,21 +17519,45 @@ components:
         parallel_tool_calls:
           type: boolean
           default: true
+        reasoning_effort:
+          type: string
+          description: Provider-supported reasoning effort; accepted values vary by provider/model.
+        reasoning:
+          type: object
+          description: Provider-specific reasoning configuration.
+          additionalProperties: true
+        max_completion_tokens:
+          type: integer
+          minimum: 1
+        logit_bias:
+          type: object
+          additionalProperties:
+            type: number
+        stream_options:
+          type: object
+          additionalProperties: true
         service_tier:
           type: string
           example: auto
         user:
           type: string
           description: Stable end-user identifier for abuse monitoring.
+      additionalProperties: true
 
     ChatCompletionResponse:
       type: object
+      description: OpenAI-compatible non-streaming chat completion. Provider-specific extensions may also be returned.
       properties:
         id:
           type: string
         object:
           type: string
           example: chat.completion
+        created:
+          type: integer
+          description: Unix timestamp in seconds.
+        model:
+          type: string
         choices:
           type: array
           items:
@@ -17377,9 +17571,29 @@ components:
                   role:
                     type: string
                   content:
-                    type: string
+                    oneOf:
+                      - type: string
+                      - type: "null"
+                  refusal:
+                    type: [string, "null"]
+                  tool_calls:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ChatCompletionToolCall"
+                  function_call:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      arguments: { type: string }
+                    additionalProperties: true
+                additionalProperties: true
+              logprobs:
+                oneOf:
+                  - type: object
+                  - type: "null"
               finish_reason:
-                type: string
+                type: [string, "null"]
+            additionalProperties: true
         usage:
           type: object
           properties:
@@ -17389,6 +17603,31 @@ components:
               type: integer
             total_tokens:
               type: integer
+            prompt_tokens_details:
+              type: object
+              additionalProperties: true
+            completion_tokens_details:
+              type: object
+              additionalProperties: true
+          additionalProperties: true
+        system_fingerprint:
+          type: string
+        service_tier:
+          type: string
+      additionalProperties: true
+
+    ChatCompletionToolCall:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string, example: function }
+        function:
+          type: object
+          properties:
+            name: { type: string }
+            arguments: { type: string }
+          additionalProperties: true
+      additionalProperties: true
 
     MessagesRequest:
       type: object
@@ -17407,14 +17646,312 @@ components:
                 type: string
                 enum: [user, assistant]
               content:
-                type: string
+                oneOf:
+                  - type: string
+                  - type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      description: Anthropic-compatible text, image, tool, or reasoning content block.
+                      properties:
+                        type: { type: string }
+                      additionalProperties: true
         max_tokens:
           type: integer
+          minimum: 1
         stream:
           type: boolean
           default: false
         system:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                properties:
+                  type: { type: string, const: text }
+                  text: { type: string }
+                additionalProperties: true
+        tools:
+          type: array
+          items:
+            type: object
+            required: [name, input_schema]
+            properties:
+              name: { type: string }
+              description: { type: string }
+              input_schema: { type: object, additionalProperties: true }
+            additionalProperties: true
+        tool_choice:
+          oneOf:
+            - type: string
+            - type: object
+              additionalProperties: true
+        stop_sequences:
+          type: array
+          items: { type: string }
+        temperature:
+          type: number
+        top_p:
+          type: number
+        top_k:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+        thinking:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    MessagesResponse:
+      type: object
+      description: Anthropic-compatible message response. Additional provider fields are preserved when present.
+      properties:
+        id: { type: string }
+        type: { type: string, const: message }
+        role: { type: string, const: assistant }
+        model: { type: string }
+        content:
+          type: array
+          items:
+            type: object
+            description: Text, tool-use, thinking, or provider-specific output block.
+            properties:
+              type: { type: string }
+              text: { type: string }
+              id: { type: string }
+              name: { type: string }
+              input: {}
+              thinking: { type: string }
+            additionalProperties: true
+        stop_reason:
+          oneOf:
+            - type: string
+            - type: "null"
+        stop_sequence:
+          oneOf:
+            - type: string
+            - type: "null"
+        usage:
+          type: object
+          properties:
+            input_tokens: { type: integer, minimum: 0 }
+            output_tokens: { type: integer, minimum: 0 }
+            cache_creation_input_tokens: { type: integer, minimum: 0 }
+            cache_read_input_tokens: { type: integer, minimum: 0 }
+          additionalProperties: true
+      additionalProperties: true
+
+    CountTokensRequest:
+      type: object
+      required: [messages]
+      properties:
+        model:
           type: string
+          description: Optional model used for provider-side counting and local tokenization.
+        messages:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [content]
+            properties:
+              role: { type: string }
+              content:
+                oneOf:
+                  - type: string
+                  - type: array
+                    minItems: 1
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string }
+                        text: { type: string }
+                      additionalProperties: true
+            additionalProperties: true
+        system:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: object
+                properties:
+                  type: { type: string }
+                  text: { type: string }
+                additionalProperties: true
+      additionalProperties: true
+
+    CountTokensResponse:
+      type: object
+      required: [input_tokens, source]
+      properties:
+        input_tokens: { type: integer, minimum: 0 }
+        model: { type: string }
+        provider: { type: string }
+        source:
+          type: string
+          enum: [local, provider]
+      additionalProperties: true
+
+    ResponsesRequest:
+      type: object
+      description: OpenAI Responses-compatible input with provider-specific fields passed through.
+      properties:
+        model: { type: string }
+        input:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                oneOf:
+                  - type: string
+                  - type: object
+                    additionalProperties: true
+        instructions:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: object, additionalProperties: true }
+        previous_response_id: { type: string }
+        stream: { type: boolean }
+        max_output_tokens: { type: integer, minimum: 1 }
+        temperature: { type: number }
+        top_p: { type: number }
+        tools:
+          type: array
+          items: { type: object, additionalProperties: true }
+        tool_choice:
+          oneOf:
+            - type: string
+            - type: object
+              additionalProperties: true
+        reasoning:
+          type: object
+          additionalProperties: true
+        text:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    ResponsesResponse:
+      type: object
+      description: OpenAI Responses-compatible response object; provider-specific fields may be preserved.
+      properties:
+        id: { type: string }
+        object: { type: string, const: response }
+        created_at: { type: integer }
+        status:
+          type: string
+          enum: [completed, failed, in_progress, cancelled, queued, incomplete]
+        model: { type: string }
+        output:
+          type: array
+          items:
+            type: object
+            description: Message, reasoning, function-call, or provider-specific output item.
+            properties:
+              id: { type: string }
+              type: { type: string }
+              role: { type: string }
+              status: { type: string }
+              content:
+                type: array
+                items: { type: object, additionalProperties: true }
+            additionalProperties: true
+        error:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        incomplete_details:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        usage:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    OllamaChatResponse:
+      type: object
+      description: One Ollama-compatible chat record; streamed records are newline-delimited JSON.
+      properties:
+        model: { type: string }
+        created_at: { type: string, format: date-time }
+        message:
+          type: object
+          properties:
+            role: { type: string }
+            content: { type: string }
+            thinking: { type: string }
+            tool_calls:
+              type: array
+              items: { type: object, additionalProperties: true }
+          additionalProperties: true
+        done: { type: boolean }
+        done_reason: { type: string }
+        total_duration: { type: integer }
+        load_duration: { type: integer }
+        prompt_eval_count: { type: integer }
+        prompt_eval_duration: { type: integer }
+        eval_count: { type: integer }
+        eval_duration: { type: integer }
+      additionalProperties: true
+
+    EmbeddingResponse:
+      type: object
+      description: OpenAI-compatible embedding response normalized by OmniRoute; provider-specific data fields are retained.
+      properties:
+        object: { type: string, const: list }
+        data:
+          oneOf:
+            - type: array
+              items:
+                type: object
+                properties:
+                  object: { type: string }
+                  index: { type: integer, minimum: 0 }
+                  embedding:
+                    oneOf:
+                      - type: array
+                        items: { type: number }
+                      - type: string
+                additionalProperties: true
+            - type: object
+              additionalProperties: true
+        model: { type: string }
+        usage:
+          type: object
+          properties:
+            prompt_tokens: { type: integer, minimum: 0 }
+            total_tokens: { type: integer, minimum: 0 }
+          additionalProperties: true
+      additionalProperties: true
+
+    ImageGenerationResponse:
+      type: object
+      description: OpenAI-compatible generated-image result returned by OmniRoute.
+      properties:
+        created: { type: integer, minimum: 0 }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+                format: uri-reference
+              b64_json:
+                type: string
+                description: Base64-encoded image bytes when response_format is b64_json.
+              revised_prompt: { type: string }
+            additionalProperties: true
+      additionalProperties: true
 
     Model:
       type: object
@@ -17426,6 +17963,19 @@ components:
           example: model
         owned_by:
           type: string
+      additionalProperties: true
+
+    ModelListResponse:
+      type: object
+      required: [object, data]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Model"
+        has_more: { type: boolean }
+      additionalProperties: true
 
     ProxySubscription:
       type: object
