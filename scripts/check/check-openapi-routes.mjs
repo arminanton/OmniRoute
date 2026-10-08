@@ -87,7 +87,9 @@ export function findRouteMethodMismatches(paths, routeDefinitions) {
     const specPath = specByNormalizedPath.get(normalizeParams(routePath));
     if (!specPath) continue;
     const operationMethods = new Set(
-      Object.keys(paths[specPath] || {}).filter((method) => HTTP_METHODS.has(method.toLowerCase()))
+      Object.keys(paths[specPath] || {})
+        .filter((method) => HTTP_METHODS.has(method.toLowerCase()))
+        .map((method) => method.toUpperCase())
     );
     const expectedMethods = new Set(routeMethods);
     const missing = [...expectedMethods].filter((method) => !operationMethods.has(method));
