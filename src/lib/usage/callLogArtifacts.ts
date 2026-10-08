@@ -62,7 +62,7 @@ function preserveErrorForSizeLimit(error: unknown): unknown {
 export type CallLogDetailState = "none" | "ready" | "missing" | "corrupt" | "legacy-inline";
 
 export type CallLogArtifact = {
-  schemaVersion: 5 | 6 | 7;
+  schemaVersion: 5 | 6 | 7 | 8;
   summary: {
     id: string;
     timestamp: string;
@@ -388,26 +388,26 @@ function compactDuplicatePayloadReferences(artifact: CallLogArtifact): CallLogAr
   const canonicalRequest = requestBodies[0];
   const canonicalResponse = responseBodies[0];
   const duplicateRequestBodies = canonicalRequest
-    ? requestBodies.slice(1).filter(({ entry }) =>
-        isDeepStrictEqual(canonicalRequest.entry.body, entry.body)
-      )
+    ? requestBodies
+        .slice(1)
+        .filter(({ entry }) => isDeepStrictEqual(canonicalRequest.entry.body, entry.body))
     : [];
   const duplicateResponseBodies = canonicalResponse
-    ? responseBodies.slice(1).filter(({ entry }) =>
-        isDeepStrictEqual(canonicalResponse.entry.body, entry.body)
-      )
+    ? responseBodies
+        .slice(1)
+        .filter(({ entry }) => isDeepStrictEqual(canonicalResponse.entry.body, entry.body))
     : [];
   const requestMatches = Boolean(
     canonicalRequest &&
-      artifact.requestBody !== null &&
-      artifact.requestBody !== undefined &&
-      isDeepStrictEqual(artifact.requestBody, canonicalRequest.entry.body)
+    artifact.requestBody !== null &&
+    artifact.requestBody !== undefined &&
+    isDeepStrictEqual(artifact.requestBody, canonicalRequest.entry.body)
   );
   const responseMatches = Boolean(
     canonicalResponse &&
-      artifact.responseBody !== null &&
-      artifact.responseBody !== undefined &&
-      isDeepStrictEqual(artifact.responseBody, canonicalResponse.entry.body)
+    artifact.responseBody !== null &&
+    artifact.responseBody !== undefined &&
+    isDeepStrictEqual(artifact.responseBody, canonicalResponse.entry.body)
   );
   if (
     duplicateRequestBodies.length === 0 &&
@@ -457,14 +457,156 @@ const CALL_LOG_BODY_REFERENCES = new Set([
   "pipeline.providerResponse.body",
 ]);
 
+const STREAM_CHUNK_TEXT_ENCODING = "omni-stream-chunk-text-table/v1";
+const STREAM_CHUNK_CHANNELS = ["provider", "openai", "client"] as const;
+const STREAM_CHUNK_CHANNEL_SET = new Set<string>(STREAM_CHUNK_CHANNELS);
+
+function jsonArrayByteLength(itemBytes: readonly number[]): number {
+  return (
+    2 + itemBytes.reduce((total, bytes) => total + bytes, 0) + Math.max(0, itemBytes.length - 1)
+  );
+}
+
+function jsonStringByteLength(value: string): number {
+  return Buffer.byteLength(JSON.stringify(value) ?? '""');
+}
+
+function jsonObjectByteLength(entries: readonly (readonly [string, number])[]): number {
+  return (
+    2 +
+    entries.reduce(
+      (total, [key, valueBytes], index) =>
+        total + (index > 0 ? 1 : 0) + jsonStringByteLength(key) + 1 + valueBytes,
+      0
+    )
+  );
+}
+
+/**
+ * Persist repeated exact stream-frame text once per artifact. This only changes
+ * the private on-disk representation; readCallArtifact expands it before any
+ * API, UI, continuation, or export consumer sees the payload.
+ */
+export function compactCallLogStreamChunkText(artifact: CallLogArtifact): CallLogArtifact {
+  const streamChunks = artifact.pipeline?.streamChunks as
+    | (Record<string, unknown> & { provider?: unknown; openai?: unknown; client?: unknown })
+    | undefined;
+  if (!streamChunks || streamChunks.encoding === STREAM_CHUNK_TEXT_ENCODING) return artifact;
+  if (Object.keys(streamChunks).some((key) => !STREAM_CHUNK_CHANNEL_SET.has(key))) {
+    return artifact;
+  }
+
+  const channels: Partial<Record<(typeof STREAM_CHUNK_CHANNELS)[number], string[]>> = {};
+  const occurrences = new Map<string, number>();
+  const serializedTextBytes = new Map<string, number>();
+  let totalChunks = 0;
+  for (const channel of STREAM_CHUNK_CHANNELS) {
+    const chunks = streamChunks[channel];
+    if (chunks === undefined) continue;
+    if (!Array.isArray(chunks) || chunks.some((chunk) => typeof chunk !== "string"))
+      return artifact;
+    channels[channel] = chunks as string[];
+    for (const chunk of chunks as string[]) {
+      totalChunks++;
+      occurrences.set(chunk, (occurrences.get(chunk) ?? 0) + 1);
+      if (!serializedTextBytes.has(chunk)) {
+        serializedTextBytes.set(chunk, jsonStringByteLength(chunk));
+      }
+    }
+  }
+
+  if (totalChunks < 2 || occurrences.size === totalChunks) return artifact;
+
+  const dictionary = [...occurrences.keys()];
+  const indexes = new Map(dictionary.map((chunk, index) => [chunk, index]));
+  const encoded: Record<string, unknown> = {
+    encoding: STREAM_CHUNK_TEXT_ENCODING,
+    dictionary,
+  };
+  for (const channel of STREAM_CHUNK_CHANNELS) {
+    const chunks = channels[channel];
+    if (chunks !== undefined) encoded[channel] = chunks.map((chunk) => indexes.get(chunk)!);
+  }
+
+  // Avoid paying the table metadata cost when duplicates are too short to
+  // offset the integer references. Count JSON bytes directly so the hot path
+  // does not stringify two additional copies of the captured stream text.
+  const rawBytes = jsonObjectByteLength(
+    Object.entries(channels).map(
+      ([channel, chunks]) =>
+        [
+          channel,
+          jsonArrayByteLength(chunks.map((chunk) => serializedTextBytes.get(chunk)!)),
+        ] as const
+    )
+  );
+  const encodedEntries: Array<readonly [string, number]> = [
+    ["encoding", jsonStringByteLength(STREAM_CHUNK_TEXT_ENCODING)],
+    ["dictionary", jsonArrayByteLength(dictionary.map((chunk) => serializedTextBytes.get(chunk)!))],
+  ];
+  for (const channel of STREAM_CHUNK_CHANNELS) {
+    const chunks = channels[channel];
+    if (chunks !== undefined) {
+      encodedEntries.push([
+        channel,
+        jsonArrayByteLength(chunks.map((chunk) => String(indexes.get(chunk)).length)),
+      ]);
+    }
+  }
+  const encodedBytes = jsonObjectByteLength(encodedEntries);
+  if (encodedBytes >= rawBytes) return artifact;
+
+  return {
+    ...artifact,
+    schemaVersion: 8,
+    pipeline: {
+      ...artifact.pipeline,
+      streamChunks: encoded as unknown as RequestPipelinePayloads["streamChunks"],
+    },
+  };
+}
+
+function expandCallLogStreamChunkText(artifact: CallLogArtifact): CallLogArtifact {
+  const streamChunks = artifact.pipeline?.streamChunks as
+    | (Record<string, unknown> & { provider?: unknown; openai?: unknown; client?: unknown })
+    | undefined;
+  if (!streamChunks || streamChunks.encoding !== STREAM_CHUNK_TEXT_ENCODING) return artifact;
+
+  const dictionary = streamChunks.dictionary;
+  if (!Array.isArray(dictionary) || dictionary.some((chunk) => typeof chunk !== "string")) {
+    throw new Error("Invalid call-log stream chunk dictionary");
+  }
+  const expanded: Record<string, string[]> = {};
+  for (const channel of STREAM_CHUNK_CHANNELS) {
+    const references = streamChunks[channel];
+    if (references === undefined) continue;
+    if (!Array.isArray(references)) throw new Error("Invalid call-log stream chunk references");
+    expanded[channel] = references.map((reference) => {
+      if (
+        !Number.isSafeInteger(reference) ||
+        Number(reference) < 0 ||
+        Number(reference) >= dictionary.length
+      ) {
+        throw new Error("Invalid call-log stream chunk reference");
+      }
+      return dictionary[Number(reference)] as string;
+    });
+  }
+
+  artifact.pipeline = {
+    ...artifact.pipeline,
+    streamChunks: expanded as RequestPipelinePayloads["streamChunks"],
+  };
+  return artifact;
+}
+
 function resolveArtifactBodyReference(artifact: CallLogArtifact, reference: unknown): unknown {
   if (typeof reference !== "string" || !CALL_LOG_BODY_REFERENCES.has(reference)) {
     throw new Error("Unsupported call-log pipeline body reference");
   }
   const [, payloadName] = reference.split(".");
   const entry = artifact.pipeline?.[payloadName as keyof RequestPipelinePayloads] as
-    | Record<string, unknown>
-    | undefined;
+    Record<string, unknown> | undefined;
   if (!entry || !Object.hasOwn(entry, "body")) {
     throw new Error("Call-log pipeline body reference target is missing");
   }
@@ -563,7 +705,7 @@ function serializeArtifactForStorage(artifact: CallLogArtifact): string {
   // JSON.parse (readCallArtifact), so pretty-printing only doubled the bytes and CPU of
   // serializing large request/response bodies on every request — a contributor to the
   // CPU-runaway. The debug path above keeps pretty output for human inspection.
-  const compacted = compactDuplicatePayloadReferences(artifact);
+  const compacted = compactCallLogStreamChunkText(compactDuplicatePayloadReferences(artifact));
   const serialized = JSON.stringify(compacted);
   if (Buffer.byteLength(serialized) <= maxBytes) {
     return serialized;
@@ -642,7 +784,10 @@ export function readCallArtifact(relativePath: string | null): {
       return { artifact: null, state: "missing" };
     }
     const artifact = JSON.parse(fs.readFileSync(absPath, "utf8")) as CallLogArtifact;
-    return { artifact: expandDuplicatePayloadReferences(artifact), state: "ready" };
+    return {
+      artifact: expandCallLogStreamChunkText(expandDuplicatePayloadReferences(artifact)),
+      state: "ready",
+    };
   } catch (error) {
     console.error("[callLogs] Failed to read request artifact:", (error as Error).message);
     return { artifact: null, state: "corrupt" };

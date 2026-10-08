@@ -217,7 +217,7 @@ test("pending request detail shape remains available internally", () => {
 
   const pending = usageHistory.getPendingRequests();
   const entries = Object.entries(pending.details).flatMap(([connectionId, models]) =>
-    Object.entries(models).flatMap(([modelKey, details]) =>
+    Object.entries(models).flatMap(([, details]) =>
       details.map((detail) => ({
         id: detail.id,
         model: detail.model,
@@ -696,6 +696,67 @@ test("createRequestLogger disabled logger other methods are no-ops", async () =>
   logger.appendConvertedChunk("test");
 
   assert.equal(logger.getPipelinePayloads(), null);
+});
+
+test("request logger shares identical bounded body snapshots across stages", async () => {
+  const { createRequestLogger } = await import("../../open-sse/utils/requestLogger.ts");
+  const logger = await createRequestLogger("openai", "openai", "gpt-6.1-sol", {
+    enabled: true,
+    captureStreamChunks: false,
+  });
+  const requestBody = {
+    model: "gpt-6.1-sol",
+    input: [{ role: "user", content: "shared request content ".repeat(6_000) }],
+  };
+  const responseBody = {
+    id: "resp_shared",
+    output: [{ type: "message", content: [{ type: "output_text", text: "shared response" }] }],
+  };
+
+  logger.logClientRawRequest("/v1/responses", requestBody);
+  logger.logOpenAIRequest(requestBody);
+  logger.logTargetRequest("https://api.example.test/v1/responses", {}, requestBody);
+  logger.logProviderResponse(200, "OK", {}, responseBody);
+  logger.logConvertedResponse(responseBody);
+
+  const payloads = logger.getPipelinePayloads();
+  assert.ok(payloads);
+  assert.strictEqual(payloads.clientRawRequest?.body, payloads.openaiRequest?.body);
+  assert.strictEqual(payloads.openaiRequest?.body, payloads.providerRequest?.body);
+  assert.strictEqual(payloads.providerResponse?.body, payloads.clientResponse?.body);
+  assert.notStrictEqual(payloads.clientRawRequest?.body, requestBody);
+});
+
+test("call-log protection reuses shared body snapshots without changing their contents", async () => {
+  const { protectPipelinePayloads } = await import("../../src/lib/usage/callLogs/format.ts");
+  const requestBody = {
+    model: "gpt-6.1-sol",
+    input: [{ role: "user", content: "shared captured body" }],
+  };
+  const responseBody = { output: [{ type: "output_text", text: "shared output" }] };
+  const protectedPipeline = protectPipelinePayloads({
+    clientRawRequest: { endpoint: "/v1/responses", body: requestBody },
+    openaiRequest: { body: requestBody },
+    providerRequest: { body: requestBody },
+    providerResponse: { status: 200, body: responseBody },
+    clientResponse: { status: 200, body: responseBody },
+  });
+
+  assert.ok(protectedPipeline);
+  assert.strictEqual(
+    protectedPipeline.clientRawRequest?.body,
+    protectedPipeline.openaiRequest?.body
+  );
+  assert.strictEqual(
+    protectedPipeline.openaiRequest?.body,
+    protectedPipeline.providerRequest?.body
+  );
+  assert.strictEqual(
+    protectedPipeline.providerResponse?.body,
+    protectedPipeline.clientResponse?.body
+  );
+  assert.deepEqual(protectedPipeline.clientRawRequest?.body, requestBody);
+  assert.deepEqual(protectedPipeline.providerResponse?.body, responseBody);
 });
 
 test("request logging never persists a raw hard-lease owner", async () => {

@@ -3,7 +3,11 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 
-import type { CallLogArtifact, CallLogArtifactWriteResult } from "./callLogArtifacts.ts";
+import {
+  compactCallLogStreamChunkText,
+  type CallLogArtifact,
+  type CallLogArtifactWriteResult,
+} from "./callLogArtifacts.ts";
 import { projectDiagnosticOverflowReference } from "./diagnosticOverflowTypes";
 
 const MAX_QUEUED_JOBS = 128;
@@ -52,6 +56,64 @@ let closeWaiters: Array<() => void> = [];
 const lastWarningAt = new Map<string, number>();
 let reservedArtifactFootprintBytes = 0;
 let reservedDiagnosticStubBytes = 0;
+
+function compactArtifactForFootprint(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const source = value as Record<string, unknown>;
+  if (!source.pipeline || typeof source.pipeline !== "object" || Array.isArray(source.pipeline)) {
+    return value;
+  }
+  const canCompactDuplicateBodies =
+    typeof source.schemaVersion !== "number" || source.schemaVersion >= 6;
+
+  const pipeline = { ...(source.pipeline as Record<string, unknown>) };
+  let compacted = false;
+  const canonicalBody = (names: readonly string[]) => {
+    let canonicalName: string | null = null;
+    let canonicalValue: unknown;
+    for (const name of names) {
+      const entry = pipeline[name];
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const record = entry as Record<string, unknown>;
+      if (!Object.hasOwn(record, "body") || record.body === undefined) continue;
+      if (canonicalName === null) {
+        canonicalName = name;
+        canonicalValue = record.body;
+      } else if (record.body === canonicalValue) {
+        pipeline[name] = {
+          ...record,
+          body: undefined,
+          bodyRef: `pipeline.${canonicalName}.body`,
+        };
+        compacted = true;
+      }
+    }
+    return canonicalName === null ? null : { name: canonicalName, value: canonicalValue };
+  };
+
+  const request = canCompactDuplicateBodies
+    ? canonicalBody(["clientRawRequest", "openaiRequest", "providerRequest"])
+    : null;
+  const response = canCompactDuplicateBodies
+    ? canonicalBody(["clientResponse", "providerResponse"])
+    : null;
+  const estimate: Record<string, unknown> = { ...source, pipeline };
+  if (request && source.requestBody !== null && source.requestBody !== undefined) {
+    if (source.requestBody === request.value) {
+      estimate.requestBody = undefined;
+      estimate.requestBodyRef = `pipeline.${request.name}.body`;
+      compacted = true;
+    }
+  }
+  if (response && source.responseBody !== null && source.responseBody !== undefined) {
+    if (source.responseBody === response.value) {
+      estimate.responseBody = undefined;
+      estimate.responseBodyRef = `pipeline.${response.name}.body`;
+      compacted = true;
+    }
+  }
+  return compactCallLogStreamChunkText((compacted ? estimate : value) as CallLogArtifact);
+}
 
 export type CallLogArtifactReservation = { readonly estimatedBytes: number };
 type ReservationState = {
@@ -123,9 +185,9 @@ export function estimateCallLogArtifactFootprint(value: unknown): CallLogArtifac
     }
 
     const objectValue = current as object;
+    if (ancestors.has(objectValue)) return { estimatedBytes, reason: "cycle" };
     objectsVisited++;
     if (objectsVisited > MAX_ESTIMATED_OBJECTS) return { estimatedBytes, reason: "object_limit" };
-    if (ancestors.has(objectValue)) return { estimatedBytes, reason: "cycle" };
 
     try {
       if (Array.isArray(objectValue)) {
@@ -189,7 +251,7 @@ export function estimateCallLogArtifactFootprint(value: unknown): CallLogArtifac
 export function reserveCallLogArtifactPreparation(
   rawPayloads: unknown
 ): CallLogArtifactReservation | null {
-  const estimate = estimateCallLogArtifactFootprint(rawPayloads);
+  const estimate = estimateCallLogArtifactFootprint(compactArtifactForFootprint(rawPayloads));
   if (estimate.reason) {
     warnRateLimited(
       `[callLogs] Call-log detail preparation refused (reason=${estimate.reason}, estimateMiB=${(estimate.estimatedBytes / (1024 * 1024)).toFixed(1)}, reservedMiB=${(reservedArtifactFootprintBytes / (1024 * 1024)).toFixed(1)}).`,
@@ -653,7 +715,7 @@ export function writeCallArtifactAsync(
     return Promise.resolve(null);
   }
 
-  const estimate = estimateCallLogArtifactFootprint(artifact);
+  const estimate = estimateCallLogArtifactFootprint(compactArtifactForFootprint(artifact));
   const reservationState = preparationReservation
     ? reservationStates.get(preparationReservation)
     : undefined;

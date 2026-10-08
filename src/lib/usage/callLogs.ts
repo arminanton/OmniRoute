@@ -282,6 +282,42 @@ function buildArtifact(
   };
 }
 
+/** Share exact stage-body objects before reservation/protection adds more copies. */
+function shareDuplicatePipelineBodyReferences(payloads: unknown): unknown {
+  if (!payloads || typeof payloads !== "object" || Array.isArray(payloads)) return payloads;
+  const source = payloads as Record<string, unknown>;
+  const shared = { ...source };
+  const groups = [
+    ["clientRawRequest", "openaiRequest", "providerRequest"],
+    ["clientResponse", "providerResponse"],
+  ] as const;
+
+  for (const names of groups) {
+    const canonical: Array<{ name: (typeof names)[number]; body: unknown }> = [];
+    for (const name of names) {
+      const stage = source[name];
+      if (!stage || typeof stage !== "object" || Array.isArray(stage)) continue;
+      const record = stage as Record<string, unknown>;
+      if (!Object.hasOwn(record, "body") || record.body === undefined) continue;
+      let duplicate: (typeof canonical)[number] | undefined;
+      for (const candidate of canonical) {
+        try {
+          if (candidate.body === record.body || isDeepStrictEqual(candidate.body, record.body)) {
+            duplicate = candidate;
+            break;
+          }
+        } catch {
+          // Keep unusual/non-JSON bodies separate; the bounded estimator fails closed later.
+        }
+      }
+      if (duplicate) shared[name] = { ...record, body: duplicate.body };
+      else canonical.push({ name, body: record.body });
+    }
+  }
+
+  return shared;
+}
+
 // #6187: extract the assistant message from a chat-completion-shaped response
 // body so we can inspect its reasoning_content / <think> content.
 function extractAssistantMessage(responseBody: unknown): unknown {
@@ -517,14 +553,22 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       rawPipelinePayloads = null;
       rawError = null;
       rawPipelineRecord = null;
+    } else {
+      rawPipelinePayloads = shareDuplicatePipelineBodyReferences(rawPipelinePayloads);
+      rawPipelineRecord =
+        rawPipelinePayloads &&
+        typeof rawPipelinePayloads === "object" &&
+        !Array.isArray(rawPipelinePayloads)
+          ? (rawPipelinePayloads as Record<string, unknown>)
+          : null;
     }
-    const rawClientRequest =
+    let rawClientRequest =
       rawPipelineRecord?.clientRawRequest &&
       typeof rawPipelineRecord.clientRawRequest === "object" &&
       !Array.isArray(rawPipelineRecord.clientRawRequest)
         ? (rawPipelineRecord.clientRawRequest as Record<string, unknown>)
         : null;
-    const rawClientResponse =
+    let rawClientResponse =
       rawPipelineRecord?.clientResponse &&
       typeof rawPipelineRecord.clientResponse === "object" &&
       !Array.isArray(rawPipelineRecord.clientResponse)
@@ -549,47 +593,15 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       rawClientResponse !== null &&
       Object.hasOwn(rawClientResponse, "body") &&
       isDeepStrictEqual(rawResponseBody, rawClientResponse.body);
-    rawPipelineRecord = null;
-    if (rawDetailExpected && !artifactWorkerUnavailable) {
-      preparationReservation = reserveCallLogArtifactPreparation({
-        // Keep estimating every source snapshot: the parsed client body and
-        // pipeline snapshot are both still live here. The persisted/protected
-        // copies below will use a shared reference, but the reservation remains
-        // conservative about the source values that already occupy memory.
-        requestBody: rawRequestBody,
-        responseBody: rawResponseBody,
-        pipeline: rawPipelinePayloads,
-        error: rawError,
-      });
-    }
-    const preparationRefused =
-      rawDetailExpected && (!preparationReservation || artifactWorkerUnavailable);
-
-    let protectedRequestBody: unknown =
-      noLogEnabled || preparationRefused || requestBodyMatchesPipeline
-        ? null
-        : protectPayloadForLog(rawRequestBody);
-    let protectedResponseBody: unknown =
-      noLogEnabled || preparationRefused || responseBodyMatchesPipeline
-        ? null
-        : failedResponse
-          ? protectErrorPayloadForLog(rawResponseBody)
-          : protectPayloadForLog(rawResponseBody);
-    let protectedPipelinePayloads: RequestPipelinePayloads | null =
-      noLogEnabled || preparationRefused
-        ? null
-        : protectPipelinePayloads(rawPipelinePayloads, failedResponse ? responseStatus : undefined);
-    let protectedError: unknown =
-      noLogEnabled || preparationRefused ? null : sanitizeErrorForLog(rawError);
-
+    let rawResponseForReasoning = responseBodyMatchesPipeline
+      ? rawClientResponse?.body
+      : rawResponseBody;
     const rawRequestedModel: string | null = entry.requestedModel || null;
     const connectionId = entry.connectionId || null;
     const tokensReasoning = getReasoningTokensOrNull(entry.tokens);
-    const reasoningObservation = preparationRefused
-      ? { source: null, chars: null }
-      : resolveReasoningObservation(tokensReasoning, rawResponseBody);
-    // Keep only summary scalars while asynchronous account/provider lookups run.
-    // The original entry may still reference large request and response bodies.
+    // Drop the large original log-entry object before reservation and awaits.
+    // Any top-level copy that is represented by a pipeline body is no longer
+    // needed; the bounded pipeline snapshot remains the canonical source.
     entry = {
       id: entry.id,
       timestamp: entry.timestamp,
@@ -618,6 +630,47 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       responseId: entry.responseId,
       videoContentRemoved: entry.videoContentRemoved,
     };
+    if (requestBodyMatchesPipeline) rawRequestBody = null;
+    if (responseBodyMatchesPipeline) rawResponseBody = null;
+    rawClientRequest = null;
+    rawClientResponse = null;
+    rawPipelineRecord = null;
+    if (rawDetailExpected && !artifactWorkerUnavailable) {
+      preparationReservation = reserveCallLogArtifactPreparation({
+        // Keep estimating every source snapshot: the parsed client body and
+        // pipeline snapshot are both still live here. The persisted/protected
+        // copies below will use a shared reference, but the reservation remains
+        // conservative about the source values that already occupy memory.
+        requestBody: rawRequestBody,
+        responseBody: rawResponseBody,
+        pipeline: rawPipelinePayloads,
+        error: rawError,
+      });
+    }
+    const preparationRefused =
+      rawDetailExpected && (!preparationReservation || artifactWorkerUnavailable);
+    const reasoningObservation = preparationRefused
+      ? { source: null, chars: null }
+      : resolveReasoningObservation(tokensReasoning, rawResponseForReasoning);
+    rawResponseForReasoning = null;
+
+    let protectedRequestBody: unknown =
+      noLogEnabled || preparationRefused || requestBodyMatchesPipeline
+        ? null
+        : protectPayloadForLog(rawRequestBody);
+    let protectedResponseBody: unknown =
+      noLogEnabled || preparationRefused || responseBodyMatchesPipeline
+        ? null
+        : failedResponse
+          ? protectErrorPayloadForLog(rawResponseBody)
+          : protectPayloadForLog(rawResponseBody);
+    let protectedPipelinePayloads: RequestPipelinePayloads | null =
+      noLogEnabled || preparationRefused
+        ? null
+        : protectPipelinePayloads(rawPipelinePayloads, failedResponse ? responseStatus : undefined);
+    let protectedError: unknown =
+      noLogEnabled || preparationRefused ? null : sanitizeErrorForLog(rawError);
+
     rawRequestBody = null;
     rawResponseBody = null;
     rawPipelinePayloads = null;

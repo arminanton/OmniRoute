@@ -95,6 +95,39 @@ export function protectPipelinePayloads(
   if (!payloads || typeof payloads !== "object") return null;
 
   const protectedPayloads: RequestPipelinePayloads = {};
+  const protectedBodySnapshots = new Map<unknown, Map<"payload" | "error", unknown>>();
+  const protectStageWithBody = (value: unknown, errorBody: boolean): unknown => {
+    const source = asRecord(value);
+    if (!Object.hasOwn(source, "body") || (source.body === undefined && !errorBody)) {
+      return protectPayloadForLog(value);
+    }
+
+    const mode = errorBody ? "error" : "payload";
+    let modes = protectedBodySnapshots.get(source.body);
+    if (!modes) {
+      modes = new Map();
+      protectedBodySnapshots.set(source.body, modes);
+    }
+    if (!modes.has(mode)) {
+      const projectedBody = errorBody
+        ? protectPayloadForLog(protectErrorPayloadForLog(source.body))
+        : protectPayloadForLog(source.body);
+      modes.set(mode, projectedBody);
+    }
+
+    const metadata = { ...source };
+    delete metadata.body;
+    const protectedMetadata = protectPayloadForLog(metadata);
+    const result =
+      protectedMetadata &&
+      typeof protectedMetadata === "object" &&
+      !Array.isArray(protectedMetadata)
+        ? { ...(protectedMetadata as JsonRecord) }
+        : {};
+    result.body = modes.get(mode);
+    return result;
+  };
+
   for (const [key, value] of Object.entries(payloads as JsonRecord)) {
     if (value === null || value === undefined) continue;
 
@@ -122,15 +155,28 @@ export function protectPipelinePayloads(
       const response = asRecord(value);
       const status = Number(response.status ?? responseStatus);
       if (Number.isFinite(status) && status >= 400 && status <= 599) {
-        const projectedResponse =
-          "body" in response
-            ? { ...response, body: protectErrorPayloadForLog(response.body) }
-            : protectErrorPayloadForLog(value);
-        protectedPayloads[key as "providerResponse" | "clientResponse"] = protectPayloadForLog(
-          projectedResponse
-        ) as RequestPipelinePayloads["providerResponse"];
+        if ("body" in response) {
+          protectedPayloads[key as "providerResponse" | "clientResponse"] = protectStageWithBody(
+            value,
+            true
+          ) as RequestPipelinePayloads["providerResponse"];
+        } else {
+          protectedPayloads[key as "providerResponse" | "clientResponse"] = protectPayloadForLog(
+            protectErrorPayloadForLog(value)
+          ) as RequestPipelinePayloads["providerResponse"];
+        }
         continue;
       }
+    }
+
+    if (key === "clientRawRequest" || key === "openaiRequest" || key === "providerRequest") {
+      protectedPayloads[key] = protectStageWithBody(value, false) as never;
+      continue;
+    }
+
+    if (key === "clientResponse" || key === "providerResponse") {
+      protectedPayloads[key] = protectStageWithBody(value, false) as never;
+      continue;
     }
 
     protectedPayloads[key as keyof RequestPipelinePayloads] = protectPayloadForLog(value) as never;

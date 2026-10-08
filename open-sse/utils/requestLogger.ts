@@ -292,7 +292,8 @@ export function cloneClientRawRequestPayloadForLog(
   const identicalInputBeforeSnapshot =
     Array.isArray(bodyInput) &&
     Array.isArray(effectiveInput) &&
-    (bodyInput === effectiveInput || (sameTextLimit && isDeepStrictEqual(bodyInput, effectiveInput)));
+    (bodyInput === effectiveInput ||
+      (sameTextLimit && isDeepStrictEqual(bodyInput, effectiveInput)));
   const bodySnapshot = cloneBoundedForLog(body, 0, null, getChatLogClientTextLimit());
   if (effectiveInput === undefined) return { body: bodySnapshot };
 
@@ -314,6 +315,21 @@ export function cloneClientRawRequestPayloadForLog(
   }
 
   return { body: bodySnapshot, effectiveInput: effectiveInputSnapshot };
+}
+
+/** Reuse a bounded body snapshot when another pipeline stage captured identical content. */
+function reuseEqualBodySnapshot(snapshot: unknown, candidates: unknown[]): unknown {
+  if (snapshot === null || snapshot === undefined) return snapshot;
+  for (const candidate of candidates) {
+    if (candidate !== null && candidate !== undefined && isDeepStrictEqual(snapshot, candidate)) {
+      return candidate;
+    }
+  }
+  return snapshot;
+}
+
+function bodySnapshot(stage: JsonRecord | undefined): unknown {
+  return stage && Object.hasOwn(stage, "body") ? stage.body : undefined;
 }
 
 type AggregateStreamChunkBudget = {
@@ -632,11 +648,16 @@ export async function createRequestLogger(
     sessionPath: null,
 
     logClientRawRequest(endpoint, body, headers = {}, effectiveInput) {
+      const cloned = cloneClientRawRequestPayloadForLog(body, effectiveInput);
+      cloned.body = reuseEqualBodySnapshot(cloned.body, [
+        bodySnapshot(payloads.openaiRequest),
+        bodySnapshot(payloads.providerRequest),
+      ]);
       payloads.clientRawRequest = {
         timestamp: new Date().toISOString(),
         endpoint,
         headers: maskSensitiveHeaders(headers),
-        ...cloneClientRawRequestPayloadForLog(body, effectiveInput),
+        ...cloned,
       };
     },
 
@@ -645,28 +666,37 @@ export async function createRequestLogger(
     },
 
     logOpenAIRequest(body) {
+      const clonedBody = cloneBoundedForLog(body);
       payloads.openaiRequest = {
         timestamp: new Date().toISOString(),
-        body: cloneBoundedForLog(body),
+        body: reuseEqualBodySnapshot(clonedBody, [
+          bodySnapshot(payloads.clientRawRequest),
+          bodySnapshot(payloads.providerRequest),
+        ]),
       };
     },
 
     logTargetRequest(url, headers, body) {
+      const clonedBody = cloneBoundedForLog(body);
       payloads.providerRequest = {
         timestamp: new Date().toISOString(),
         url,
         headers: maskSensitiveHeaders(headers),
-        body: cloneBoundedForLog(body),
+        body: reuseEqualBodySnapshot(clonedBody, [
+          bodySnapshot(payloads.clientRawRequest),
+          bodySnapshot(payloads.openaiRequest),
+        ]),
       };
     },
 
     logProviderResponse(status, statusText, headers, body) {
+      const clonedBody = cloneBoundedForLog(body);
       payloads.providerResponse = {
         timestamp: new Date().toISOString(),
         status,
         statusText,
         headers: maskSensitiveHeaders(headers),
-        body: cloneBoundedForLog(body),
+        body: reuseEqualBodySnapshot(clonedBody, [bodySnapshot(payloads.clientResponse)]),
       };
     },
 
@@ -687,9 +717,10 @@ export async function createRequestLogger(
     appendProviderChunk: chunkMethods.appendProviderChunk,
     appendOpenAIChunk: chunkMethods.appendOpenAIChunk,
     logConvertedResponse(body) {
+      const clonedBody = cloneBoundedForLog(body);
       payloads.clientResponse = {
         timestamp: new Date().toISOString(),
-        body: cloneBoundedForLog(body),
+        body: reuseEqualBodySnapshot(clonedBody, [bodySnapshot(payloads.providerResponse)]),
       };
     },
     appendConvertedChunk: chunkMethods.appendConvertedChunk,
@@ -703,7 +734,11 @@ export async function createRequestLogger(
         ...(nativeError ? { nativeError: cloneBoundedForLog(nativeError) } : {}),
         timestamp: new Date().toISOString(),
         error: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-        requestBody: cloneBoundedForLog(requestBody),
+        requestBody: reuseEqualBodySnapshot(cloneBoundedForLog(requestBody), [
+          bodySnapshot(payloads.clientRawRequest),
+          bodySnapshot(payloads.openaiRequest),
+          bodySnapshot(payloads.providerRequest),
+        ]),
       };
     },
 

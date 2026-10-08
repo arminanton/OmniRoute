@@ -150,6 +150,74 @@ test("identical client, OpenAI, provider, and response payloads share one stored
   assert.ok(savedBytes > 300_000, `expected at least 300 KB saved, got ${savedBytes} bytes`);
 });
 
+test("repeated exact stream chunk text is stored once and expanded for log consumers", () => {
+  const chunkText = `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "x".repeat(8_000) })}\n\n`;
+  const input = artifact({ input: "request" }, { output: "response" });
+  Object.assign(input.pipeline, {
+    streamChunks: {
+      provider: [chunkText, "data: [DONE]\n\n"],
+      openai: [chunkText, "data: [DONE]\n\n"],
+      client: [chunkText, "data: [DONE]\n\n"],
+    },
+  });
+
+  const { storedJson, artifact: roundTripped, sizeBytes } = writeAndRead(input);
+  const storedPipeline = storedJson.pipeline as Record<string, Record<string, unknown>>;
+  const encoded = storedPipeline.streamChunks;
+  assert.equal(storedJson.schemaVersion, 8);
+  assert.equal(encoded.encoding, "omni-stream-chunk-text-table/v1");
+  assert.deepEqual(encoded.dictionary, [chunkText, "data: [DONE]\n\n"]);
+  assert.deepEqual(encoded.provider, [0, 1]);
+  assert.deepEqual(encoded.openai, [0, 1]);
+  assert.deepEqual(encoded.client, [0, 1]);
+  assert.deepEqual(roundTripped.pipeline?.streamChunks, {
+    provider: [chunkText, "data: [DONE]\n\n"],
+    openai: [chunkText, "data: [DONE]\n\n"],
+    client: [chunkText, "data: [DONE]\n\n"],
+  });
+
+  const legacyBytes = Buffer.byteLength(JSON.stringify(input));
+  assert.ok(legacyBytes - sizeBytes > 16_000, "repeated chunk text should be stored once");
+});
+
+test("short repeated stream chunks stay inline when a dictionary would increase storage", () => {
+  const input = artifact({ input: "request" }, { output: "response" });
+  Object.assign(input.pipeline, {
+    streamChunks: { provider: ["x"], client: ["x"] },
+  });
+
+  const { storedJson, artifact: roundTripped } = writeAndRead(input);
+  const storedPipeline = storedJson.pipeline as Record<string, Record<string, unknown>>;
+  assert.equal(storedJson.schemaVersion, 6);
+  assert.deepEqual(storedPipeline.streamChunks, { provider: ["x"], client: ["x"] });
+  assert.deepEqual(roundTripped.pipeline?.streamChunks, {
+    provider: ["x"],
+    client: ["x"],
+  });
+});
+
+test("stream chunk extension channels are preserved without table conversion", () => {
+  const chunkText = `data: ${"x".repeat(2_000)}\n\n`;
+  const input = artifact({ input: "request" }, { output: "response" });
+  Object.assign(input.pipeline, {
+    streamChunks: {
+      provider: [chunkText],
+      client: [chunkText],
+      extension: ["opaque extension frame"],
+    },
+  });
+
+  const { storedJson, artifact: roundTripped } = writeAndRead(input);
+  const storedPipeline = storedJson.pipeline as Record<string, unknown>;
+  assert.equal(storedJson.schemaVersion, 6);
+  assert.deepEqual(storedPipeline.streamChunks, {
+    provider: [chunkText],
+    client: [chunkText],
+    extension: ["opaque extension frame"],
+  });
+  assert.deepEqual(roundTripped.pipeline?.streamChunks, storedPipeline.streamChunks);
+});
+
 test("size-limit fallback clears payload references when it removes their pipeline targets", () => {
   const previousLimit = process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB;
   process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = "1";

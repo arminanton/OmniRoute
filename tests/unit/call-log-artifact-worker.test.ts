@@ -219,6 +219,42 @@ test("artifact preparation refusal logs a bounded reason and never the payload",
   }
 });
 
+test("preparation reservation counts exact shared stage bodies once", () => {
+  const sharedBody = { input: [{ role: "user", content: "x".repeat(100_000) }] };
+  const sharedReservation = reserveCallLogArtifactPreparation({
+    requestBody: null,
+    responseBody: null,
+    error: null,
+    pipeline: {
+      clientRawRequest: { body: sharedBody },
+      openaiRequest: { body: sharedBody },
+      providerRequest: { body: sharedBody },
+    },
+  });
+  assert.ok(sharedReservation);
+  const sharedBytes = sharedReservation.estimatedBytes;
+  releaseCallLogArtifactPreparation(sharedReservation);
+
+  const distinctReservation = reserveCallLogArtifactPreparation({
+    requestBody: null,
+    responseBody: null,
+    error: null,
+    pipeline: {
+      clientRawRequest: { body: structuredClone(sharedBody) },
+      openaiRequest: { body: structuredClone(sharedBody) },
+      providerRequest: { body: structuredClone(sharedBody) },
+    },
+  });
+  assert.ok(distinctReservation);
+  const distinctBytes = distinctReservation.estimatedBytes;
+  releaseCallLogArtifactPreparation(distinctReservation);
+
+  assert.ok(
+    sharedBytes < distinctBytes,
+    `shared body reservations should be smaller (${sharedBytes} < ${distinctBytes})`
+  );
+});
+
 test("aggregate artifact budget includes active writes and releases reservations on completion", async () => {
   const largePayload = "x".repeat(2_000_000);
   const writes = Array.from({ length: 7 }, (_, index) => {

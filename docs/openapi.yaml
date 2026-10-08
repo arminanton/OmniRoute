@@ -3309,9 +3309,33 @@ paths:
       operationId: getApiProviderModels
       tags: [Providers]
       summary: List provider models
+      description: >-
+        With `provider`, returns that provider's custom model array and compatibility overrides.
+        Without it, `models` is keyed by provider ID and `modelCompatOverrides` is empty. The
+        hidden-model map includes hidden IDs for all providers.
+      parameters:
+        - name: provider
+          in: query
+          schema: { type: string }
       responses:
         "200":
           description: Provider model list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderModelsResponse"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Provider model list could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     post:
       operationId: postApiProviderModels
       tags: [Providers]
@@ -5132,10 +5156,23 @@ paths:
       operationId: getApiPricingModels
       tags: [Pricing]
       summary: Get pricing per model
-      description: Returns pricing information organized by model.
+      description: >-
+        Returns the model catalog grouped by provider. Each provider entry combines registry,
+        synchronized, custom, and pricing-only model IDs; pricing values themselves remain in the
+        separate pricing settings response.
       responses:
         "200":
-          description: Per-model pricing data
+          description: Model catalog grouped by provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PricingModelCatalogResponse"
+        "500":
+          description: Model catalog could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   # ─── Translator ────────────────────────────────────────────────
 
@@ -11355,12 +11392,42 @@ paths:
   /api/conversations:
     get:
       operationId: getApiConversations
-      tags:
-        - Conversations
-      summary: "GET conversations"
+      tags: [Conversations]
+      summary: List multi-turn conversations
+      description: >-
+        Returns management-visible conversations that contain at least two turn nodes, with fresh
+        request-activity and continuation annotations. `apiKeyId` is included for management
+        clients; internal artifact paths and the last-call key ID are omitted.
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of conversation rows to return.
+          schema: { type: number, default: 50 }
+        - name: offset
+          in: query
+          description: Number of conversation rows to skip.
+          schema: { type: number, default: 0 }
       responses:
         "200":
-          description: OK
+          description: Conversation rows and total number of matching conversations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationListResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential is invalid or lacks the required scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Conversation list could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/conversations/{id}/tree:
     parameters:
       - name: id
@@ -11370,12 +11437,54 @@ paths:
           type: string
     get:
       operationId: getApiConversationsByIdTree
-      tags:
-        - Conversations
-      summary: "GET conversations › <id> › tree"
+      tags: [Conversations]
+      summary: Get a chronological page of conversation turns
+      description: >-
+        Returns a flat chronological page, not a branching tree. Display text, tool-use/result
+        kind, and tool name are resolved from the associated call-log artifact when available;
+        turns whose artifacts are missing return an empty text preview. With `afterSeq`, all newer
+        rows are returned without a page cap; otherwise `limit` is capped at 500 and `hasMore`
+        indicates older rows remain.
+      parameters:
+        - name: limit
+          in: query
+          description: Page size, clamped by the server to the range 1–500 (default 20).
+          schema: { type: number, default: 20, minimum: 1, maximum: 500 }
+        - name: beforeSeq
+          in: query
+          description: Return the page immediately before this sequence number.
+          schema: { type: number }
+        - name: afterSeq
+          in: query
+          description: Return every turn with a greater sequence number; this polling mode is uncapped.
+          schema: { type: number }
       responses:
         "200":
-          description: OK
+          description: Chronological page of conversation turns
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationTurnPage"
+        "400":
+          description: Conversation ID is missing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential is invalid or lacks the required scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Conversation turns could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/copilot/chat:
     post:
       operationId: postApiCopilotChat
@@ -11614,7 +11723,19 @@ paths:
       summary: "GET free models"
       responses:
         "200":
-          description: OK
+          description: Curated free-model quota catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreeModelCatalogResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential is invalid or lacks the required scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/free-provider-rankings:
     get:
       operationId: getApiFreeProviderRankings
@@ -12128,12 +12249,47 @@ paths:
           type: string
     get:
       operationId: getApiLogsById
-      tags:
-        - Logs
-      summary: "GET logs › <id>"
+      tags: [Logs]
+      summary: Get live or persisted request details
+      description: >-
+        Returns in-flight request state first, then recently completed in-memory detail, then the
+        persisted call-log artifact. A response can therefore be partial while a stream is active;
+        the management pipeline payload is returned in its expanded shape. Conversation and tool
+        display details may be absent when capture was disabled, omitted by a size/memory limit, or
+        the artifact was removed.
       responses:
         "200":
-          description: OK
+          description: In-flight, in-memory completed, or persisted request detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagementLogDetailResponse"
+        "400":
+          description: Request ID is missing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential is invalid or lacks the required scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Request log was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Request detail could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/logs/console:
     get:
       operationId: getApiLogsConsole
@@ -16901,8 +17057,9 @@ paths:
       summary: Get one conversation summary
       description: >-
         Returns refreshed summary fields for the conversation modal, including active-request and
-        genuine-continuation annotations. Requires management authentication when login policy is
-        enabled.
+        genuine-continuation annotations. The management response includes `apiKeyId`, while
+        internal artifact paths and the last-call key ID are omitted. Requires management
+        authentication when login policy is enabled.
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
@@ -16915,9 +17072,7 @@ paths:
                 required: [conversation]
                 properties:
                   conversation:
-                    type: object
-                    description: Conversation summary; internal artifact paths and key IDs are omitted.
-                    additionalProperties: true
+                    $ref: "#/components/schemas/ConversationSummary"
         "400": { description: Missing conversation ID }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "404": { description: Conversation not found }
@@ -21488,6 +21643,151 @@ components:
         completedAt: { type: [string, "null"], format: date-time }
       additionalProperties: true
 
+    ProviderModelsResponse:
+      type: object
+      required: [models, modelCompatOverrides, hiddenModelsByProvider]
+      properties:
+        models:
+          oneOf:
+            - type: array
+              items:
+                type: object
+                additionalProperties: true
+            - type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        modelCompatOverrides:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        hiddenModelsByProvider:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+      additionalProperties: false
+
+    PricingModelCatalogResponse:
+      type: object
+      description: Provider IDs or aliases map to their model catalog entry.
+      additionalProperties:
+        type: object
+        required: [id, alias, name, authType, format, models, modelCount]
+        properties:
+          id: { type: string }
+          alias: { type: string }
+          name: { type: string }
+          authType: { type: string }
+          format: { type: string }
+          displayPrefix: { type: string }
+          modelOverrideEligible: { type: boolean }
+          pricingKey: { type: string }
+          modelCount: { type: integer, minimum: 0 }
+          models:
+            type: array
+            items:
+              type: object
+              required: [id, name, custom]
+              properties:
+                id: { type: string }
+                name: { type: string }
+                custom: { type: boolean }
+              additionalProperties: false
+        additionalProperties: false
+
+    FreeModelCatalogResponse:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            type: object
+            required:
+              [provider, modelId, displayName, monthlyTokens, creditTokens, freeType, poolKey, tos]
+            properties:
+              provider: { type: string }
+              modelId: { type: string }
+              displayName: { type: string }
+              monthlyTokens: { type: number, minimum: 0 }
+              creditTokens: { type: number, minimum: 0 }
+              freeType:
+                type: string
+                enum:
+                  - recurring-daily
+                  - recurring-monthly
+                  - recurring-credit
+                  - recurring-uncapped
+                  - one-time-initial
+                  - keyless
+                  - discontinued
+              poolKey: { type: [string, "null"] }
+              tos:
+                type: string
+                enum: [ok, caution, ambiguous, avoid, unknown]
+            additionalProperties: false
+      additionalProperties: false
+
+    ConversationSummary:
+      type: object
+      required:
+        [id, apiKeyId, fingerprintHash, turnCount, firstSeenAt, lastSeenAt, lastCallLogId, lastModel, lastProvider, lastStatus, isActive, activeCallLogId, isGenuineContinuation]
+      properties:
+        id: { type: string }
+        apiKeyId: { type: [string, "null"] }
+        fingerprintHash: { type: string }
+        turnCount: { type: integer, minimum: 1 }
+        firstSeenAt: { type: string, format: date-time }
+        lastSeenAt: { type: string, format: date-time }
+        lastCallLogId: { type: [string, "null"] }
+        lastModel: { type: [string, "null"] }
+        lastProvider: { type: [string, "null"] }
+        lastStatus: { type: [integer, "null"] }
+        isActive: { type: boolean }
+        activeCallLogId: { type: [string, "null"] }
+        isGenuineContinuation: { type: boolean }
+      additionalProperties: false
+
+    ConversationListResponse:
+      type: object
+      required: [conversations, total]
+      properties:
+        conversations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationSummary"
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ConversationTurnPage:
+      type: object
+      required: [nodes, hasMore]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConversationTurnNode"
+        hasMore: { type: boolean }
+      additionalProperties: false
+
+    ConversationTurnNode:
+      type: object
+      required: [seq, id, parentId, role, textPreview, blockKind, toolName, firstSeenAt]
+      properties:
+        seq: { type: integer, minimum: 1 }
+        id: { type: string }
+        parentId: { type: [string, "null"] }
+        role: { type: string }
+        textPreview: { type: string }
+        blockKind: { type: string, enum: [text, tool_use, tool_result] }
+        toolName: { type: [string, "null"] }
+        firstSeenAt: { type: string, format: date-time }
+      additionalProperties: false
+
     CallLogListResponse:
       type: array
       items:
@@ -21505,7 +21805,62 @@ components:
             pipelinePayloads:
               type: object
               additionalProperties: true
+            previousResponseId: { type: [string, "null"] }
+            parentLogId: { type: [string, "null"] }
           additionalProperties: true
+
+    ManagementLogDetailResponse:
+      oneOf:
+        - $ref: "#/components/schemas/CallLogDetailResponse"
+        - $ref: "#/components/schemas/InFlightLogDetailResponse"
+        - $ref: "#/components/schemas/InMemoryLogDetailResponse"
+
+    InFlightLogDetailResponse:
+      type: object
+      required:
+        [id, timestamp, method, path, status, model, provider, connectionId, duration, detailState, active, pipelinePayloads, hasPipelineDetails, partialAssistantText]
+      properties:
+        id: { type: string }
+        timestamp: { type: string, format: date-time }
+        method: { type: string }
+        path: { type: string }
+        status: { type: integer }
+        model: { type: string }
+        provider: { type: string }
+        connectionId: { type: [string, "null"] }
+        duration: { type: number, minimum: 0 }
+        detailState: { type: string, const: in-flight }
+        active: { type: boolean, const: true }
+        pipelinePayloads:
+          type: object
+          additionalProperties: true
+        hasPipelineDetails: { type: boolean, const: true }
+        partialAssistantText: { type: string }
+      additionalProperties: true
+
+    InMemoryLogDetailResponse:
+      type: object
+      required:
+        [id, timestamp, path, status, model, provider, connectionId, duration, detailState, active, pipelinePayloads, hasPipelineDetails]
+      properties:
+        id: { type: string }
+        timestamp: { type: string, format: date-time }
+        path: { type: string }
+        status: { type: integer }
+        model: { type: string }
+        provider: { type: string }
+        connectionId: { type: [string, "null"] }
+        duration: { type: number, minimum: 0 }
+        detailState: { type: string, const: in-memory }
+        active: { type: boolean, const: false }
+        error:
+          description: Sanitized error summary when the in-memory request failed.
+          nullable: true
+        pipelinePayloads:
+          type: object
+          additionalProperties: true
+        hasPipelineDetails: { type: boolean, const: true }
+      additionalProperties: true
 
     UsageAnalyticsResponse:
       type: object

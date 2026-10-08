@@ -32,10 +32,15 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 189 operations have
-success response content schemas and 145 declare operation-level security. Another 826 operations
+contract is still stronger on route coverage than schema completeness: 195 operations have
+success response content schemas and 145 declare operation-level security. Another 823 operations
 still lack an explicit success-body schema after excluding intentional `204` responses; 11 of those
-have no declared `2xx` status. Those remaining operations use redirects, WebSocket `101`, or
+have no declared `2xx` status. This pass added concrete schemas for provider-model lookup, pricing
+model catalogs, free-model budgets, conversation summaries, paginated conversation turns, and the
+management log-detail route's in-flight, in-memory, and persisted response variants. The conversation
+response documents that turn text/tool display fields are recovered from call-log artifacts and can
+be empty after details are unavailable. The remaining operations use redirects,
+WebSocket `101`, or
 intentional `404`/`405` HEAD/catch-all behavior and are being reviewed separately from JSON success
 schemas. The OpenAI chat, Anthropic
 Messages, OpenAI Responses, token-count, embedding, image-generation, audio, moderation, rerank,
@@ -59,7 +64,7 @@ analytics/history/budget, and call-log summary/detail endpoints. It also types t
 provider suggestions/plugin manifest, and quota preflight. The OpenAI single-model response now
 describes provider context/input/output limits and capabilities. The Gemini v1beta model-list and
 generation routes also describe native request/response formats. The provider-client response now
-masks primary and rotating API keys and omits OAuth tokens. The spec has 162 component
+masks primary and rotating API keys and omits OAuth tokens. The spec has 172 component
 schemas. All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -69,14 +74,14 @@ and unit test enforce those markers.
 The public URL surface is still a single Next.js/Node process. `open-sse` is a library inside
 that process, not an independently scheduled service. An inference request crosses these layers:
 
-| Responsibility | Current implementation | Data-plane consequence |
-| --- | --- | --- |
-| HTTP entry and caller identity | `src/app/api/v1/*/route.ts`, `src/proxy.ts`, `src/server/authz/policies/clientApi.ts` | Next route dispatch and authz run for every request; API keys, dashboard sessions, and keyless-local policy meet here. |
-| Chat protocol and request preparation | `src/sse/handlers/chat.ts`, `open-sse/handlers/chatCore.ts`, `open-sse/translator/*` | Body normalization, guardrails, compression, reasoning, protocol conversion, account selection, retries, and usage hooks share the Node event loop. |
-| Provider routing and transport | `open-sse/services/combo.ts`, `open-sse/config/providerRegistry.ts`, `open-sse/executors/*`, `open-sse/utils/proxyFetch.ts` | Provider and account selection, fallback, quotas, upstream HTTP/WebSocket behavior, streaming, and cancellation are coupled to the same process state. |
-| Admission and response lifetime | `src/shared/middleware/chatBodyAdmission.ts`, `src/shared/middleware/ingestByteAdmission.ts`, `open-sse/utils/earlyStreamKeepalive.ts` | Process-local count/byte queues bound request bodies and stream leases; a Rust service would need equivalent per-key fairness, pressure, and cancellation semantics. |
-| Persistent usage and continuation | `src/lib/usage/callLogs.ts`, `src/lib/usage/callLogArtifacts.ts`, `src/lib/db/responsesContinuationStore.ts`, `src/lib/db/*` | SQLite rows, artifact files, quota bookkeeping, and Responses continuation history are updated across the request lifecycle; this persistence boundary must be designed before moving traffic between processes. |
-| Control plane and tools | `src/app/dashboard/*`, `src/app/api/settings/*`, `src/app/api/a2a/*`, `open-sse/mcp-server/*` | Dashboard configuration, model/provider credentials, API-key scopes, quotas, MCP/A2A, and conversation inspection must remain available if inference moves. |
+| Responsibility                        | Current implementation                                                                                                                 | Data-plane consequence                                                                                                                                                                                           |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP entry and caller identity        | `src/app/api/v1/*/route.ts`, `src/proxy.ts`, `src/server/authz/policies/clientApi.ts`                                                  | Next route dispatch and authz run for every request; API keys, dashboard sessions, and keyless-local policy meet here.                                                                                           |
+| Chat protocol and request preparation | `src/sse/handlers/chat.ts`, `open-sse/handlers/chatCore.ts`, `open-sse/translator/*`                                                   | Body normalization, guardrails, compression, reasoning, protocol conversion, account selection, retries, and usage hooks share the Node event loop.                                                              |
+| Provider routing and transport        | `open-sse/services/combo.ts`, `open-sse/config/providerRegistry.ts`, `open-sse/executors/*`, `open-sse/utils/proxyFetch.ts`            | Provider and account selection, fallback, quotas, upstream HTTP/WebSocket behavior, streaming, and cancellation are coupled to the same process state.                                                           |
+| Admission and response lifetime       | `src/shared/middleware/chatBodyAdmission.ts`, `src/shared/middleware/ingestByteAdmission.ts`, `open-sse/utils/earlyStreamKeepalive.ts` | Process-local count/byte queues bound request bodies and stream leases; a Rust service would need equivalent per-key fairness, pressure, and cancellation semantics.                                             |
+| Persistent usage and continuation     | `src/lib/usage/callLogs.ts`, `src/lib/usage/callLogArtifacts.ts`, `src/lib/db/responsesContinuationStore.ts`, `src/lib/db/*`           | SQLite rows, artifact files, quota bookkeeping, and Responses continuation history are updated across the request lifecycle; this persistence boundary must be designed before moving traffic between processes. |
+| Control plane and tools               | `src/app/dashboard/*`, `src/app/api/settings/*`, `src/app/api/a2a/*`, `open-sse/mcp-server/*`                                          | Dashboard configuration, model/provider credentials, API-key scopes, quotas, MCP/A2A, and conversation inspection must remain available if inference moves.                                                      |
 
 The initial split should keep the dashboard and admin API in Next.js, then let a Rust inference
 service own direct HTTP ingress for a deliberately small endpoint set. It must not synchronously
@@ -133,8 +138,7 @@ image label points to commit `6c6e6b16539e7cf43398fba5dc9b2e5bf4a7eed3`; it star
 19:46 UTC with a 4 GiB memory cap, two CPU quota, and `NODE_OPTIONS=--max-old-space-size=2048`.
 The call-log profile is `full-capture-v1`: stream-chunk capture is enabled, the pipeline artifact
 limit is 10 MiB, per-stream retention is 256 KiB, and client text retention is 4 MiB. At 2026-10-08
-12:17:30 UTC its log recorded V8 `heapUsed=1,869 MiB` above the `1,822 MiB` threshold and returned
-503. An earlier cluster at 04:56–05:00 recorded 1,826–1,911 MiB against the same threshold.
+12:17:30 UTC its log recorded V8 `heapUsed=1,869 MiB` above the `1,822 MiB` threshold and returned 503. An earlier cluster at 04:56–05:00 recorded 1,826–1,911 MiB against the same threshold.
 
 A five-minute host/cgroup sample from 12:19:25–12:24:20, starting about two minutes after the later
 guard trip, measured Node-process RSS at 3,318–3,335 MiB, high-water RSS at 3,841 MiB, and process
@@ -204,12 +208,12 @@ CPUs 2–3. Node used the production base image's Node 26.10.0 digest; Bun used 
 MiB limit. These proxy-only runs exclude Next.js, OmniRoute policy/auth/account routing, provider
 SDKs, tool-call loops, and real provider quotas.
 
-| Runtime | Trials | Completed | First body p50 / p95 | Completion p50 / p95 | Gateway peak RSS | CPU seconds |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Node 26.10.0 | 3 | 100/100 each | 144 / 218 ms | 2,228 / 2,297 ms | 87.5 MiB | 0.82 |
-| Bun 1.4.0 | 3 | 100/100 each | 133 / 138 ms | 2,203 / 2,210 ms | 41.1 MiB | 0.44 |
-| Bun 1.4.2 | 3 | 100/100 each | 60 / 65 ms | 2,130 / 2,135 ms | 38.8 MiB | 0.34 |
-| Rust/Axum/Reqwest | 3 | 100/100 each | 108 / 110 ms | 2,164 / 2,167 ms | 8.1 MiB | 0.21 |
+| Runtime           | Trials |    Completed | First body p50 / p95 | Completion p50 / p95 | Gateway peak RSS | CPU seconds |
+| ----------------- | -----: | -----------: | -------------------: | -------------------: | ---------------: | ----------: |
+| Node 26.10.0      |      3 | 100/100 each |         144 / 218 ms |     2,228 / 2,297 ms |         87.5 MiB |        0.82 |
+| Bun 1.4.0         |      3 | 100/100 each |         133 / 138 ms |     2,203 / 2,210 ms |         41.1 MiB |        0.44 |
+| Bun 1.4.2         |      3 | 100/100 each |           60 / 65 ms |     2,130 / 2,135 ms |         38.8 MiB |        0.34 |
+| Rust/Axum/Reqwest |      3 | 100/100 each |         108 / 110 ms |     2,164 / 2,167 ms |          8.1 MiB |        0.21 |
 
 In this transport-only workload, Bun 1.4.2 had the lowest first-byte latency, Rust the lowest
 process footprint, and Node the highest footprint and latency. Bun 1.4.2's first-byte median was
@@ -240,11 +244,11 @@ At 70 sessions, all three runtimes completed 350/350 requests in one trial each.
 each runtime completed 500/500 requests in all three trials. The table shows the median across
 those three 100-session trials; completion time includes the mock stream delay.
 
-| Runtime | Successful sessions / requests | First body p50 / p95 | Completion p50 / p95 | Peak RSS | CPU seconds |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Node 26.10.0 | 100 / 500, each trial | 34.1 / 202.2 ms | 584.8 / 754.4 ms | 112.4 MiB | 1.82 |
-| Bun 1.4.2 | 100 / 500, each trial | 23.3 / 51.3 ms | 541.2 / 579.7 ms | 63.1 MiB | 0.65 |
-| Rust/Axum/Reqwest | 100 / 500, each trial | 21.5 / 102.0 ms | 535.6 / 624.9 ms | 43.3 MiB | 0.39 |
+| Runtime           | Successful sessions / requests | First body p50 / p95 | Completion p50 / p95 |  Peak RSS | CPU seconds |
+| ----------------- | -----------------------------: | -------------------: | -------------------: | --------: | ----------: |
+| Node 26.10.0      |          100 / 500, each trial |      34.1 / 202.2 ms |     584.8 / 754.4 ms | 112.4 MiB |        1.82 |
+| Bun 1.4.2         |          100 / 500, each trial |       23.3 / 51.3 ms |     541.2 / 579.7 ms |  63.1 MiB |        0.65 |
+| Rust/Axum/Reqwest |          100 / 500, each trial |      21.5 / 102.0 ms |     535.6 / 624.9 ms |  43.3 MiB |        0.39 |
 
 In this scenario, Rust had the smallest measured gateway footprint and CPU use; Bun had the lowest
 first-body p95 and slightly higher aggregate request throughput; Node used more memory and CPU.
@@ -273,11 +277,11 @@ MiB memory cap; because rootless Podman has no delegated cpuset controller, the 
 container's host PID with `taskset`. The table reports medians from three sequential trials. Every
 runtime completed 1,000/1,000 in all three trials.
 
-| Runtime | First body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput median (range) |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Rust/Axum/Reqwest | 541 ms | 1,112 ms | 35.7 MiB | 0.40 s | 526 req/s (523–532) |
-| Node 25.8.1 | 913 ms | 1,429 ms | 207.6 MiB | 1.95 s | 440 req/s (431–461) |
-| Bun 1.4.0 | 2,060 ms | 2,583 ms | 65.3 MiB | 0.79 s | 360 req/s (355–360) |
+| Runtime           | First body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput median (range) |
+| ----------------- | -------------: | -------------: | ---------------: | ----------: | ------------------------: |
+| Rust/Axum/Reqwest |         541 ms |       1,112 ms |         35.7 MiB |      0.40 s |       526 req/s (523–532) |
+| Node 25.8.1       |         913 ms |       1,429 ms |        207.6 MiB |      1.95 s |       440 req/s (431–461) |
+| Bun 1.4.0         |       2,060 ms |       2,583 ms |         65.3 MiB |      0.79 s |       360 req/s (355–360) |
 
 For this bounded synthetic transport test, Rust used about one-sixth the Node gateway RSS and one-
 fifth of its CPU; Bun used more RSS than Rust and less than Node. Rust had the lowest first-body
@@ -296,10 +300,10 @@ With the same Rust mock upstream and load generator sharing the unpinned eight-C
 proxy was exercised at 5,000 and 10,000 simultaneous sessions. Each sent one 16,525-byte JSON body
 and received 20 mock SSE chunks at 25 ms intervals. Both single trials completed every request.
 
-| Sessions / requests | First body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 5,000 / 5,000 | 1,529 ms | 1,968 ms | 173.5 MiB | 1.96 s | 1,846 req/s |
-| 10,000 / 10,000 | 1,820 ms | 2,108 ms | 335.4 MiB | 3.80 s | 2,486 req/s |
+| Sessions / requests | First body p95 | Completion p95 | Gateway peak RSS | Gateway CPU |  Throughput |
+| ------------------- | -------------: | -------------: | ---------------: | ----------: | ----------: |
+| 5,000 / 5,000       |       1,529 ms |       1,968 ms |        173.5 MiB |      1.96 s | 1,846 req/s |
+| 10,000 / 10,000     |       1,820 ms |       2,108 ms |        335.4 MiB |      3.80 s | 2,486 req/s |
 
 An earlier 10,000-client run against the Node mock returned 1,375 `502 mock upstream unavailable`
 responses. The bounded error-body preview identified the Node mock as the failing upstream; switching
@@ -327,11 +331,11 @@ user text per turn, bodies up to 1,311,987 bytes, and 100 SSE chunks spaced 10 m
 sessions, Node, Bun, and Rust each completed 350/350 requests in one trial. At 100 sessions, each
 runtime completed 500/500 requests in all three trials.
 
-| Runtime | Trials at 100 sessions | First-body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Node 25.8.1 | 3/3 passed | 167 ms | 1,299 ms | 291.2 MiB | 3.41 s | 82.3 req/s |
-| Bun 1.4.0 | 3/3 passed | 59 ms | 1,162 ms | 70.8 MiB | 1.89 s | 84.0 req/s |
-| Rust/Axum/Reqwest 1.94 | 3/3 passed | 68 ms | 1,174 ms | 65.0 MiB | 0.86 s | 83.1 req/s |
+| Runtime                | Trials at 100 sessions | First-body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput |
+| ---------------------- | ---------------------: | -------------: | -------------: | ---------------: | ----------: | ---------: |
+| Node 25.8.1            |             3/3 passed |         167 ms |       1,299 ms |        291.2 MiB |      3.41 s | 82.3 req/s |
+| Bun 1.4.0              |             3/3 passed |          59 ms |       1,162 ms |         70.8 MiB |      1.89 s | 84.0 req/s |
+| Rust/Axum/Reqwest 1.94 |             3/3 passed |          68 ms |       1,174 ms |         65.0 MiB |      0.86 s | 83.1 req/s |
 
 The gateway, local Rust mock, and Python client were pinned to CPUs 0–3; Bun ran in its official
 512 MiB container with its host PID pinned after startup. For this synthetic transport workload,
@@ -407,10 +411,9 @@ request body exactly equals `pipeline.clientRawRequest.body`, or the top-level r
 data, so log detail and Responses continuation consumers keep their existing shape; distinct
 payloads and older schema-5 artifacts remain unchanged. A synthetic 500,000-character request
 round-tripped with the default 512 KiB artifact cap while omitting more than 450 KiB of duplicated
-JSON. The logger now skips a second protection clone when the client snapshot exactly matches the
-top-level request/response field; the conservative preparation reservation still accounts for
-both source snapshots that are already live. This reduces a later transient copy and stored bytes,
-but it does not eliminate the original parsed request plus the logger's bounded snapshot.
+JSON. The save path now drops its own top-level request/response reference when the bounded client
+snapshot is exactly equal, before queue reservation and protection; the original parsed request and
+the logger's bounded snapshot can still be live elsewhere in the request handler.
 
 Schema 7 extends that exact-value compaction to repeated `pipeline.openaiRequest.body`,
 `pipeline.providerRequest.body`, and `pipeline.providerResponse.body` values. The on-disk file keeps
@@ -419,6 +422,37 @@ original object layout. No substring, approximate, or lossy text deduplication o
 100 KiB request and 30 KiB response duplicated across client/OpenAI/provider stages saved more than
 300 KiB, and a separate cap test confirms that fallback artifacts do not retain references after
 their body-bearing pipeline is omitted. The focused artifact-cap/worker/drain suites passed 28/28.
+
+The request logger reuses identical bounded body snapshots across client/OpenAI/provider request
+stages and provider/client response stages. Schema 8 stores repeated exact stream-chunk text once in a
+per-artifact dictionary with integer references; `readCallArtifact()` expands it before returning
+data, so the UI, API, exports, and continuation logic still receive the original string arrays. The
+reservation estimator uses this compact representation too. This is lossless text deduplication; it
+does not remove distinct prompt or response text.
+
+The writer-capacity harness exercises production `saveCallLog()` and the artifact worker against a
+temporary SQLite database: 100 simultaneous saves, 100 synthetic chunks on each of three stream
+tracks, and a 10 MiB per-artifact cap. Reproduce with
+`node --import tsx/esm scripts/perf/bench-call-log-artifact-capacity.mjs 100 262144` or
+`bun scripts/perf/bench-call-log-artifact-capacity.mjs 100 262144`; replace `262144` with `1311987`
+for the larger-request case. Each configuration ran three times. Values below are medians; RSS is
+the process high-water mark reported by the operating system.
+
+| Runtime      | Target request bytes | Detailed artifacts ready | Summary rows retained | Median save time | Median peak RSS | Artifact bytes written |
+| ------------ | -------------------: | -----------------------: | --------------------: | ---------------: | --------------: | ---------------------: |
+| Node 24.21.0 |              262,144 |                   23/100 |               100/100 |           746 ms |       253.3 MiB |                6.52 MB |
+| Bun 1.4.0    |              262,144 |                   23/100 |               100/100 |           427 ms |       153.4 MiB |                6.52 MB |
+| Node 24.21.0 |            1,311,987 |                    5/100 |               100/100 |           641 ms |       478.7 MiB |                6.67 MB |
+| Bun 1.4.0    |            1,311,987 |                    5/100 |               100/100 |           489 ms |       185.4 MiB |                6.67 MB |
+
+The chunk-text dictionary increased successful detail capture from 20 to 23 per 100 at 262 KiB,
+and from 4 to 5 per 100 at 1.31 MiB, compared with the same harness before text compaction. All
+summary rows remained. The other details were refused by the existing 128 MiB aggregate reservation
+guard, so this still does **not** validate full capture for 70–100 large concurrent requests. Node
+uses `better-sqlite3`; Bun uses `bun:sqlite`, so the writer timings compare both runtime and SQLite
+driver. This excludes Next routes, authentication, account routing, provider execution, and tool
+cycles. The Bun result is not evidence that the full Next app is ready to run on Bun; the production
+image runs Node 26.10.0 and this harness uses Node 24.21.0.
 
 ## Build/runtime evaluation
 
@@ -435,14 +469,15 @@ direct parity tests before a Bun runtime can be considered for the full applicat
 [Bun Node.js compatibility](https://bun.sh/docs/runtime/nodejs-compat), and
 [Bun Workers](https://bun.sh/docs/runtime/workers).
 
-A focused compatibility smoke on the installed Bun 1.4.0 ran the existing transport-telemetry and
-call-log-artifact-worker suites: 23/23 tests passed, including SSE cancellation, redacted transport
-observations, a real worker write, and 100 concurrent artifact preparations under the shared
-reservation budget. A direct `AsyncLocalStorage.snapshot()` context probe also passed under Bun.
-This is useful evidence for the exercised libraries; it does not cover the full Next server, Bun
-heap-guard semantics under the deployed container limits, account routing, SQLite-backed usage,
-provider tools, or production traffic. Bun's `node:test` implementation is also documented as
-partial, so these focused runs are a compatibility probe rather than an alternate CI test runner.
+A focused compatibility smoke on the installed Bun 1.4.0 ran four existing suites individually:
+transport telemetry (13), request-logger endpoints (41), call-log payload deduplication (7), and
+artifact-worker/queue behavior (11), for 72/72 passing tests. This exercises SSE cancellation,
+redacted transport observations, shared body snapshots, SQLite-backed summary rows, a real worker
+write, and 100 concurrent artifact preparations. A direct `AsyncLocalStorage.snapshot()` context
+probe also passed under Bun. These results do not cover the full Next server, Bun heap-guard
+semantics under deployed container limits, account routing, provider tools, or production traffic.
+Bun's `node:test` implementation is documented as partial, so these focused runs are a compatibility
+probe rather than an alternate CI test runner.
 
 The production Node image's exact base digest (`node:26.10.0-trixie-slim`) passed native dependency
 validation after `npm ci --include=optional --ignore-scripts` installed 2,529 packages in about 40
