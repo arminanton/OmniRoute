@@ -38,6 +38,29 @@ where the handler allows them, including model discovery, combo/routing metadata
 endpoints. All 98 operations previously missing `x-loopback-only` under routeGuard's local-only
 prefixes are now annotated; the route-guard checker and unit test enforce those markers.
 
+## Request path through the current monolith
+
+The public URL surface is still a single Next.js/Node process. `open-sse` is a library inside
+that process, not an independently scheduled service. An inference request crosses these layers:
+
+| Responsibility | Current implementation | Data-plane consequence |
+| --- | --- | --- |
+| HTTP entry and caller identity | `src/app/api/v1/*/route.ts`, `src/proxy.ts`, `src/server/authz/policies/clientApi.ts` | Next route dispatch and authz run for every request; API keys, dashboard sessions, and keyless-local policy meet here. |
+| Chat protocol and request preparation | `src/sse/handlers/chat.ts`, `open-sse/handlers/chatCore.ts`, `open-sse/translator/*` | Body normalization, guardrails, compression, reasoning, protocol conversion, account selection, retries, and usage hooks share the Node event loop. |
+| Provider routing and transport | `open-sse/services/combo.ts`, `open-sse/config/providerRegistry.ts`, `open-sse/executors/*`, `open-sse/utils/proxyFetch.ts` | Provider and account selection, fallback, quotas, upstream HTTP/WebSocket behavior, streaming, and cancellation are coupled to the same process state. |
+| Admission and response lifetime | `src/shared/middleware/chatBodyAdmission.ts`, `src/shared/middleware/ingestByteAdmission.ts`, `open-sse/utils/earlyStreamKeepalive.ts` | Process-local count/byte queues bound request bodies and stream leases; a Rust service would need equivalent per-key fairness, pressure, and cancellation semantics. |
+| Persistent usage and continuation | `src/lib/usage/callLogs.ts`, `src/lib/usage/callLogArtifacts.ts`, `src/lib/db/responsesContinuationStore.ts`, `src/lib/db/*` | SQLite rows, artifact files, quota bookkeeping, and Responses continuation history are updated across the request lifecycle; this persistence boundary must be designed before moving traffic between processes. |
+| Control plane and tools | `src/app/dashboard/*`, `src/app/api/settings/*`, `src/app/api/a2a/*`, `open-sse/mcp-server/*` | Dashboard configuration, model/provider credentials, API-key scopes, quotas, MCP/A2A, and conversation inspection must remain available if inference moves. |
+
+The initial split should keep the dashboard and admin API in Next.js, then let a Rust inference
+service own direct HTTP ingress for a deliberately small endpoint set. It must not synchronously
+call Next.js on each token. The service needs a versioned configuration/policy cache and explicit
+key-revocation behavior; it cannot treat the current process-local caches or SQLite writes as
+automatically shared state. PostgreSQL/Valkey are possible later tools, not requirements for the
+transport prototype. The first migration gate is one OpenAI-compatible chat route with auth,
+streaming, tool calls, cancellation, quota/account policy, and call-log parity, followed by a
+controlled comparison under identical mock upstreams.
+
 ## Resource-pressure 503 path
 
 The observed `resource_pressure` response is generated locally before provider dispatch. `chatCore`
@@ -210,8 +233,9 @@ larger than the entire byte budget still fail immediately, and the active in-fli
 separate. Focused admission/resource tests pass 111/111.
 
 The post-fix long-stream run used a 100-chunk SSE response at 10 ms per chunk and five sequential
-requests per session. Each request carried 262,144 bytes of synthetic text in a JSON body up to
-1,311,987 bytes. At 70 sessions, 350/350 requests completed in 6.58 seconds; first-body p95 was
+requests per session. Each request carried 262,144 bytes of synthetic user text plus prior
+synthetic function-call and tool-result history in a JSON body up to 1,311,987 bytes. At 70
+sessions, 350/350 requests completed in 6.58 seconds; first-body p95 was
 102.1 ms, completion p95 was 1,174.9 ms, and gateway peak RSS was 265.1 MiB. At 100 sessions, all
 three trials completed 500/500 requests with no failures in 7.84–7.95 seconds. Across those trials,
 median throughput was 63.7 requests/s, first-body p95 was 1,004 ms, completion p95 was 2,047 ms,
