@@ -28,7 +28,45 @@ the Go sidecar is exposed through the relay endpoints.
 Route coverage is stronger than schema completeness. All 1,029 operations still lack explicit
 `operationId` values, only 120 have response content schemas, and only 120 declare operation-level
 security. The next contract pass must compare authentication and request/response schemas with each
-handler before calling the entire OpenAPI document semantically complete.
+handler before calling the entire OpenAPI document semantically complete. For routes with confirmed
+configuration-dependent access, the spec now includes anonymous alternatives where the handler
+allows them, including model discovery, combo/routing metadata, and the API Explorer endpoints.
+
+## Resource-pressure 503 path
+
+The observed `resource_pressure` response is generated locally before provider dispatch. `chatCore`
+calls `checkResourcePressureGuard()` at request setup; the chat-body admission layer uses the same
+guard before reading large request bodies. The immediate check compares `process.memoryUsage().heapUsed`
+with `HEAP_PRESSURE_THRESHOLD_MB`, calculated as 85% of `v8.heap_size_limit` with a 400 MiB floor
+unless an explicit environment override is set. It returns 503 with `Retry-After: 5` when crossed.
+The 2026-10-08 04:51–05:00 warnings recorded 1,823–1,935 MiB against 1,822 MiB. That threshold
+matches the 85%-of-heap rule for the configured 2 GiB old-space limit. The 503 therefore confirms
+that the local JavaScript heap guard fired; it does not identify what raised heap use.
+
+The same guard files are byte-identical in the current blue and green checkouts, so this feature
+branch did not introduce the absolute threshold. The guard also runs an asynchronous sample about
+once per second for V8 heap, process RSS/external/array-buffer bytes, cgroup current/high/max/events,
+and memory PSI. It enters sampled critical state after two elevated samples and recovers after one
+sample where tracked ratios are below 75% and PSI is below 15. A cached critical state is reused
+while its sample is at most 30 seconds old; stale state fails open. PSI is read from host
+`/proc/pressure/memory`, not the app's cgroup pressure file, so it can reflect unrelated host work.
+
+The history snapshot at 05:11 recorded a 4 GiB app cgroup at 3.56 GiB, zero OOM counters, and
+`NODE_OPTIONS=--max-old-space-size=2048`, while detailed capture was enabled. This is consistent
+with a process nearing its configured V8 heap ceiling while the cgroup still had some headroom; it
+does not prove logging caused the heap rise. The immediate-heap warning records heap use and the
+threshold but not a request correlation ID or a same-instant RSS/cgroup sample, so the exact object
+growth and triggering request remain unknown. The current shell has no listener on port 20128 or
+OmniRoute app container to sample live now; the host-level snapshots below are not substituted for
+process-level measurements.
+
+The full-capture path does bounded synchronous work before handing an artifact to a worker. The
+writer's weighted queue is capped at 128 MiB and serializes one artifact at a time; `reserveCallLogArtifactPreparation`
+walks the raw payload synchronously before projecting it and posting a structured clone to that
+worker. A large artifact can therefore spend main-thread time on request snapshots and the size
+estimate even though JSON serialization and disk writes are off-thread. Treat capture load as a
+plausible contributor to latency and peak heap until matched process telemetry proves or rules it
+out.
 
 ## Isolated streaming proxy results
 
@@ -110,6 +148,15 @@ pipeline changed from 6.008 MiB to 3.058 MiB, saving 2.95 MiB per captured call.
 heap run, the modeled retained snapshots were 344.2 MiB before dedup and 339.8 MiB after dedup. Most
 of the direct benefit is reduced artifact size; the measured retained-object reduction is smaller
 because strings are immutable and bounded logging retains a limited array tail.
+
+The same 729-message/86-tool artifact shape was passed through the production queue estimator. Its
+estimated artifact footprint fell from 96.2 MB to 65.1 MB, and the synchronous estimate took a median
+3.83 ms before dedup versus 2.51 ms after. The writer reserves twice that estimate plus 64 KiB:
+192.5 MB before dedup exceeds its 128 MiB total queue budget, while 130.3 MB after dedup fits by
+about 3.7 MiB for an otherwise empty queue. This is one synthetic, single-artifact reservation;
+other in-flight reservations consume the same budget. It shows the existing reference-based dedup
+reduces queue pressure as well as serialized bytes, without removing distinct reconstructed
+continuation inputs. This estimator run used Node 25.8.1 on the devvm, pinned to CPUs 2–3.
 
 ## Build/runtime evaluation
 
