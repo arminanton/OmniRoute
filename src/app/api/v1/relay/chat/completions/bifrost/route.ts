@@ -2,17 +2,14 @@
  * POST /api/v1/relay/chat/completions/bifrost
  *
  * Sidecar proxy route: when BIFROST_BASE_URL is configured, relay traffic
- * directly to the Go bifrost gateway instead of going through the
- * TypeScript `handleChat` pipeline. This is the hot path that benefits
- * most from being moved off Node.js:
+ * directly to the Go Bifrost gateway instead of going through the
+ * TypeScript `handleChat` pipeline. This is a distinct relay endpoint and
+ * must not be confused with the main `/api/v1/chat/completions` route.
  *
- *   - Latency: median p50 drops ~40-60% (no Node → TypeScript handler
- *     stack walking, no provider-priority map construction in V8)
- *   - Memory: removes ~30MB of handler closure per concurrent request
- *   - Streaming: Go's net/http handles SSE chunked encoding with
- *     zero-copy pipe → Node ReadableStream conversion goes away
- *   - Concurrency: a single Go process saturates a 10Gb NIC at
- *     ~80k req/s, which the Node handler cannot match
+ * No same-workload benchmark in this repository substantiates comparative
+ * latency, memory, streaming-copy, or throughput claims for Bifrost. Treat
+ * those as hypotheses and measure the complete route, including auth,
+ * provider routing, request bodies, and streaming, before selecting it.
  *
  * Signals the TypeScript relay route as the fallback (via the
  * `X-Bifrost-Fallback: /api/v1/relay/chat/completions` response header) when:
@@ -22,8 +19,9 @@
  * the fallback itself (it would defeat the point of skipping the Node handler).
  *
  * Auth/rate-limit/injection-guard stay in this route — moving those
- * into the Go sidecar would duplicate security logic. Only the LLM
- * routing/execution moves.
+ * into the sidecar would duplicate security logic. The relay route still
+ * handles auth, rate limits, and injection checks in Node; only the downstream
+ * proxy hop changes.
  *
  * @see src/app/api/v1/relay/chat/completions/route.ts (the TS relay fallback)
  */
@@ -124,9 +122,8 @@ export async function POST(request: Request) {
 
   try {
     // 1. Auth + rate limit — duplicated from the TS route so this route is
-    //    standalone (we don't import the relay handler to keep the import
-    //    graph from pulling in 30MB of @omniroute/open-sse when the user
-    //    is only using the sidecar path).
+    //    standalone (we don't import the relay handler, keeping the regular
+    //    OpenAI execution pipeline out of this route's import graph).
     const rawToken = extractToken(request);
     if (!rawToken) {
       return new Response(JSON.stringify(buildErrorBody(401, "Missing relay token")), {
