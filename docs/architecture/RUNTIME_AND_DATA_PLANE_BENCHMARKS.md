@@ -11,10 +11,10 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 162
-component schemas. The API route inventory checker now verifies that source files and the spec agree
-on every path, exported method, and path parameter; it reports 705/705 routes and the documented
-public copy at `public/openapi.yaml` is byte-identical to the canonical spec.
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 189
+component schemas. The API route inventory checker verifies that source files and the spec agree on
+every path, exported method, and path parameter; it reports 705/705 routes and the documented public
+copy at `public/openapi.yaml` is byte-identical to the canonical spec.
 
 The contract has two broad surfaces. The `/api/v1/` prefix contains 98 route templates and 135
 operations, including inference-compatible chat, Responses, Messages, embeddings, image, audio,
@@ -32,10 +32,10 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 196 operations have
-success response content schemas and 146 declare operation-level security. Another 822 operations
-still lack an explicit success-body schema after excluding intentional `204` responses; 11 of those
-have no declared `2xx` status. This pass added concrete schemas for provider-model lookup, pricing
+contract is still stronger on route coverage than schema completeness: 199 operations have success
+response content schemas and 149 declare operation-level security. Of 1,004 operations with a
+non-`204` success status, 805 still lack an explicit success-body schema; 11 operations have no
+declared `2xx` status, and 14 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
 liveness versus authenticated system/pressure snapshot responses. The health snapshot includes the
@@ -66,7 +66,7 @@ analytics/history/budget, and call-log summary/detail endpoints. It also types t
 provider suggestions/plugin manifest, and quota preflight. The OpenAI single-model response now
 describes provider context/input/output limits and capabilities. The Gemini v1beta model-list and
 generation routes also describe native request/response formats. The provider-client response now
-masks primary and rotating API keys and omits OAuth tokens. The spec has 177 component
+masks primary and rotating API keys and omits OAuth tokens. The spec has 189 component
 schemas. All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -93,6 +93,16 @@ automatically shared state. PostgreSQL/Valkey are possible later tools, not requ
 transport prototype. The first migration gate is one OpenAI-compatible chat route with auth,
 streaming, tool calls, cancellation, quota/account policy, and call-log parity, followed by a
 controlled comparison under identical mock upstreams.
+
+Rust is the preferred first data-plane implementation for this project; Go/Bifrost remains an
+optional comparison. Rust does not use a tracing garbage collector: its ownership and borrowing
+rules let the compiler check memory lifetimes ([Rust ownership guide](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html)).
+This can avoid GC work and pauses, but it does not make the service immune to retained state,
+unbounded queues, or allocator growth, so those remain explicit benchmark measurements. Bun is a
+separate JavaScript runtime experiment: it uses JavaScriptCore's garbage collector, and its
+[`--smol` mode](https://bun.sh/docs/runtime#bun-run---smol) trades throughput for more frequent
+collection. Neither language nor runtime gets a performance win by assumption; the measured request
+path and RSS decide.
 
 ## Resource-pressure 503 path
 
@@ -515,7 +525,7 @@ The route-level harness now runs the synthetic client and mock provider in separ
 The test gateway streams the incoming HTTP body directly into `route.POST()` and counts bytes as
 they pass, so it does not parse and reserialize a second request copy. With
 `ANTIGRAVITY_CAPTURE_CONTEXT_BYTES=262144`, each request carries five user-context strings and
-reaches 1,311,987 bytes. The four phases send 402 chat requests across 1, 30, 70, and 100 sessions;
+is about 1.31 MiB. The four phases send 402 chat requests across 1, 30, 70, and 100 sessions;
 each session performs a tool-call and tool-result round trip.
 
 With ordinary detailed call-log artifacts only, all 402 summary rows were saved and every response
@@ -545,6 +555,18 @@ was 2,674,104 KiB with a 2 GiB V8 heap limit. The isolated run generated 1,910,1
 writes, then removed its temporary data directory; free root disk remained about 20 GiB. Full
 private capture can create substantial write traffic, so scope it to the diagnostic window and keep
 the configured aggregate-size budget and retention policy in view.
+
+Three verification reruns after the schema-9 text-dedup change passed all 402 requests and finalized
+402/402 traces each. All ordinary artifacts were metadata-only (`full=0`, `privateOnly=402`); the
+private traces held the request and response bytes. Each run measured a 1,311,796-byte maximum
+request and completed in 83.22–83.24 seconds wall time, with peak RSS ranging from 2,624,508 to
+2,811,080 KiB and filesystem output ranging from 1,910,192 to 1,911,176 KiB before cleanup. The
+text-table scan optimizations did not materially change end-to-end wall time or RSS in this route
+test; that points to request parsing, private gzip capture, and disk writes dominating its cost. This
+corpus uses high-entropy random context, five 256 KiB user messages per session, and 1.31 MiB
+requests; its timing should not be compared directly with the earlier 22–24 second low-context
+runs. It validates the 100-session route/capture path, not sustained production throughput or a real
+provider.
 
 The Logs detail modal reads the trace manifest and exposes downloads for the compressed client
 request and each provider request/response, including partial-state labels. This makes the private
@@ -623,6 +645,28 @@ per-artifact dictionary with integer references; `readCallArtifact()` expands it
 data, so the UI, API, exports, and continuation logic still receive the original string arrays. The
 reservation estimator uses this compact representation too. This is lossless text deduplication; it
 does not remove distinct prompt or response text.
+
+Schema 9 interns repeated exact string values from 256 to 65,536 UTF-16 code units across request,
+response, and pipeline payloads in a nonce-protected per-artifact dictionary. Longer strings are
+left alone so unique high-context prompt values do not need to be hashed. It compacts the ordinary
+call-log JSON artifact only; private overflow files continue storing their exact bytes under the
+separate gzip and aggregate-budget controls. The writer keeps the original representation unless the
+complete serialized JSON becomes smaller, and the reader expands the table before any call-log API
+or UI consumer sees it. Stream chunks continue to use their own encoding, and no table is shared
+across API keys or requests. On 100 synthetic artifacts already
+compacted for duplicate stage bodies, the extra text table reduced serialized size from 13,063,780
+bytes to 1,782,080 bytes (86.36%); the transform median was 0.177 ms and p95 was 0.478 ms per
+artifact on this host. A separate 100-artifact check with five unique 256 KiB context strings per
+artifact made no representation changes; its median scan was 0.022 ms and p95 was 0.045 ms. Re-run
+with `npm run bench:call-log-text-dedup`. These are sequential synthetic microbenchmarks. They
+measure disk representation and the dedup scan, not request heap reduction or real-prompt
+compression. A separate complete `writeCallArtifact()` sweep of 100 synthetic artifacts stored
+1,847,880 bytes instead of 50,537,450 bytes (96.34%); median write time was 0.755 ms and p95 was
+1.864 ms. That comparison includes the
+existing request/response stage references as well as the new text table, so it must not be
+attributed to the new table alone. The dictionaries are local to each artifact: cross-request blob
+sharing remains unimplemented, avoiding shared ownership, retention-reference, and cross-key
+deduplication concerns.
 
 The writer-capacity harness exercises production `saveCallLog()` and the artifact worker against a
 temporary SQLite database: 100 simultaneous saves, 100 synthetic chunks on each of three stream
@@ -896,7 +940,8 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 196 operations with success-response content; 822
-  operations still lack explicit success-body schemas. The path/method/security-tier inventory is
+- Continue the OpenAPI handler audit beyond the 199 operations with success-response content; 805
+  of 1,004 non-`204` success operations still lack explicit success-body schemas. The
+  path/method/security-tier inventory is
   complete, but remaining response schemas and conditional auth behavior have not all been
   source-verified.

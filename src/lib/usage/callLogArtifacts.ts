@@ -4,6 +4,7 @@ import {
   projectErrorHeaders,
 } from "@omniroute/open-sse/utils/googleErrorDiagnostics.ts";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/errorSanitization.ts";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -62,7 +63,7 @@ function preserveErrorForSizeLimit(error: unknown): unknown {
 export type CallLogDetailState = "none" | "ready" | "missing" | "corrupt" | "legacy-inline";
 
 export type CallLogArtifact = {
-  schemaVersion: 5 | 6 | 7 | 8;
+  schemaVersion: 5 | 6 | 7 | 8 | 9;
   summary: {
     id: string;
     timestamp: string;
@@ -102,6 +103,12 @@ export type CallLogArtifact = {
   responseBodyRef?: "pipeline.clientResponse.body" | "pipeline.providerResponse.body";
   error: unknown;
   pipeline?: RequestPipelinePayloads;
+  /** Storage-only lossless text table. Removed before returning artifacts to callers. */
+  textDedupTable?: {
+    encoding: "omni-exact-text-table/v1";
+    token: string;
+    dictionary: string[];
+  };
 };
 
 export type CallLogArtifactWriteResult = {
@@ -460,6 +467,13 @@ const CALL_LOG_BODY_REFERENCES = new Set([
 const STREAM_CHUNK_TEXT_ENCODING = "omni-stream-chunk-text-table/v1";
 const STREAM_CHUNK_CHANNELS = ["provider", "openai", "client"] as const;
 const STREAM_CHUNK_CHANNEL_SET = new Set<string>(STREAM_CHUNK_CHANNELS);
+const EXACT_TEXT_TABLE_ENCODING = "omni-exact-text-table/v1" as const;
+const EXACT_TEXT_REF_KEY = "__omniroute_exact_text_ref_v1";
+const MIN_DEDUP_TEXT_CODE_UNITS = 256;
+const MAX_DEDUP_TEXT_CODE_UNITS = 64 * 1024;
+const MAX_DEDUP_TEXT_VALUES = 4096;
+const MAX_DEDUP_TRAVERSED_VALUES = 100_000;
+const MAX_DEDUP_DEPTH = 64;
 
 function jsonArrayByteLength(itemBytes: readonly number[]): number {
   return (
@@ -564,6 +578,235 @@ export function compactCallLogStreamChunkText(artifact: CallLogArtifact): CallLo
       streamChunks: encoded as unknown as RequestPipelinePayloads["streamChunks"],
     },
   };
+}
+
+/**
+ * Store each repeated long text value once inside a call-log artifact. The table is
+ * private to one artifact and only rewrites exact string duplicates in request,
+ * response, and pipeline payloads. Readers expand it before exposing the detail API,
+ * so log UI, exports, and continuation code retain their original values.
+ *
+ * The short-lived nonce prevents a caller-supplied JSON object from being mistaken for
+ * one of these references. We only encode when the complete JSON representation gets
+ * smaller; pathological object graphs fail open and use the existing storage path.
+ */
+export function compactCallLogRepeatedText(artifact: CallLogArtifact): CallLogArtifact {
+  if (
+    artifact.textDedupTable ||
+    (!artifact.requestBody && !artifact.responseBody && !artifact.pipeline)
+  ) {
+    return artifact;
+  }
+
+  const counts = new Map<string, { count: number; jsonBytes?: number }>();
+  const ancestors = new WeakSet<object>();
+  let visited = 0;
+  let unsupported = false;
+
+  const collect = (value: unknown, depth: number): void => {
+    if (unsupported || ++visited > MAX_DEDUP_TRAVERSED_VALUES || depth > MAX_DEDUP_DEPTH) {
+      unsupported = true;
+      return;
+    }
+    if (typeof value === "string") {
+      // UTF-8 byte length is never smaller than JS UTF-16 code-unit length. This
+      // bounded candidate window avoids hashing megabyte unique prompts; exact
+      // escaped JSON bytes are computed only after a duplicate is found.
+      if (value.length < MIN_DEDUP_TEXT_CODE_UNITS || value.length > MAX_DEDUP_TEXT_CODE_UNITS)
+        return;
+      const prior = counts.get(value);
+      if (prior) {
+        prior.count++;
+        prior.jsonBytes ??= jsonStringByteLength(value);
+      } else {
+        if (counts.size >= MAX_DEDUP_TEXT_VALUES) {
+          unsupported = true;
+          return;
+        }
+        counts.set(value, { count: 1 });
+      }
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    if (ancestors.has(value)) {
+      unsupported = true;
+      return;
+    }
+    let prototype: object | null;
+    try {
+      prototype = Object.getPrototypeOf(value);
+      if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return;
+      const ownToJson = Object.getOwnPropertyDescriptor(value, "toJSON");
+      const inheritedToJson = prototype
+        ? Object.getOwnPropertyDescriptor(prototype, "toJSON")
+        : undefined;
+      const hasCallableOrAccessor = (descriptor: PropertyDescriptor | undefined) =>
+        descriptor !== undefined &&
+        (!Object.hasOwn(descriptor, "value") || typeof descriptor.value === "function");
+      if (hasCallableOrAccessor(ownToJson) || hasCallableOrAccessor(inheritedToJson)) {
+        unsupported = true;
+        return;
+      }
+    } catch {
+      unsupported = true;
+      return;
+    }
+
+    ancestors.add(value);
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor) continue;
+        if (!("value" in descriptor)) {
+          unsupported = true;
+          break;
+        }
+        collect(descriptor.value, depth + 1);
+      }
+    } else {
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      for (const descriptor of Object.values(descriptors)) {
+        if (!descriptor.enumerable) continue;
+        if (!Object.hasOwn(descriptor, "value")) {
+          unsupported = true;
+          break;
+        }
+        collect(descriptor.value, depth + 1);
+      }
+    }
+    ancestors.delete(value);
+  };
+
+  // Summary strings are high-cardinality identifiers/metadata and are not user text.
+  collect(artifact.requestBody, 0);
+  collect(artifact.responseBody, 0);
+  if (artifact.pipeline) {
+    const pipelineWithoutChunks = Object.fromEntries(
+      Object.entries(artifact.pipeline).filter(([key]) => key !== "streamChunks")
+    );
+    collect(pipelineWithoutChunks, 0);
+  }
+  if (unsupported) return artifact;
+
+  const repeated = [...counts.entries()].filter(([, entry]) => entry.count > 1);
+  if (repeated.length === 0) return artifact;
+
+  const token = randomUUID();
+  const dictionary = repeated.map(([value]) => value);
+  const indexes = new Map(dictionary.map((value, index) => [value, index]));
+  const referenceBytes = (index: number) =>
+    Buffer.byteLength(JSON.stringify({ [EXACT_TEXT_REF_KEY]: { token, index } }), "utf8");
+  const tableBytes = Buffer.byteLength(
+    JSON.stringify({ encoding: EXACT_TEXT_TABLE_ENCODING, token, dictionary }),
+    "utf8"
+  );
+  const tablePropertyBytes = jsonStringByteLength("textDedupTable") + 2 + tableBytes;
+  const originalTextBytes = repeated.reduce(
+    (total, [, entry]) => total + entry.count * entry.jsonBytes!,
+    0
+  );
+  const referenceTextBytes = repeated.reduce(
+    (total, [value]) => total + counts.get(value)!.count * referenceBytes(indexes.get(value)!),
+    0
+  );
+  if (originalTextBytes <= tablePropertyBytes + referenceTextBytes) return artifact;
+
+  const transform = (value: unknown, depth: number): unknown => {
+    if (typeof value === "string") {
+      const index = indexes.get(value);
+      return index === undefined ? value : { [EXACT_TEXT_REF_KEY]: { token, index } };
+    }
+    if (!value || typeof value !== "object") return value;
+    if (!Array.isArray(value)) {
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) return value;
+    }
+    if (depth > MAX_DEDUP_DEPTH) return value;
+    if (Array.isArray(value)) return value.map((item) => transform(item, depth + 1));
+    return Object.fromEntries(
+      Object.entries(Object.getOwnPropertyDescriptors(value))
+        .filter(([, descriptor]) => descriptor.enumerable && Object.hasOwn(descriptor, "value"))
+        .map(([key, descriptor]) => [key, transform(descriptor.value, depth + 1)])
+    );
+  };
+
+  return {
+    ...artifact,
+    schemaVersion: 9,
+    requestBody: transform(artifact.requestBody, 0),
+    responseBody: transform(artifact.responseBody, 0),
+    ...(artifact.pipeline
+      ? {
+          pipeline: Object.fromEntries(
+            Object.entries(artifact.pipeline).map(([key, value]) => [
+              key,
+              key === "streamChunks" ? value : transform(value, 0),
+            ])
+          ) as RequestPipelinePayloads,
+        }
+      : {}),
+    textDedupTable: {
+      encoding: EXACT_TEXT_TABLE_ENCODING,
+      token,
+      dictionary,
+    },
+  };
+}
+
+function expandCallLogRepeatedText(artifact: CallLogArtifact): CallLogArtifact {
+  const table = artifact.textDedupTable;
+  if (!table) return artifact;
+  if (
+    table.encoding !== EXACT_TEXT_TABLE_ENCODING ||
+    typeof table.token !== "string" ||
+    !Array.isArray(table.dictionary) ||
+    table.dictionary.some((value) => typeof value !== "string") ||
+    table.dictionary.length > MAX_DEDUP_TEXT_VALUES
+  ) {
+    throw new Error("Invalid call-log exact-text dictionary");
+  }
+
+  const expand = (value: unknown, depth: number): unknown => {
+    if (!value || typeof value !== "object") return value;
+    if (Array.isArray(value)) {
+      if (depth > MAX_DEDUP_DEPTH) throw new Error("Call-log exact-text nesting is too deep");
+      return value.map((item) => expand(item, depth + 1));
+    }
+    const record = value as Record<string, unknown>;
+    const reference = record[EXACT_TEXT_REF_KEY];
+    if (
+      Object.keys(record).length === 1 &&
+      reference &&
+      typeof reference === "object" &&
+      !Array.isArray(reference) &&
+      (reference as Record<string, unknown>).token === table.token
+    ) {
+      const index = (reference as Record<string, unknown>).index;
+      if (
+        !Number.isSafeInteger(index) ||
+        Number(index) < 0 ||
+        Number(index) >= table.dictionary.length
+      ) {
+        throw new Error("Invalid call-log exact-text reference");
+      }
+      return table.dictionary[Number(index)];
+    }
+    if (depth > MAX_DEDUP_DEPTH) throw new Error("Call-log exact-text nesting is too deep");
+    return Object.fromEntries(
+      Object.entries(record).map(([key, item]) => [key, expand(item, depth + 1)])
+    );
+  };
+
+  const expanded: CallLogArtifact = {
+    ...artifact,
+    requestBody: expand(artifact.requestBody, 0),
+    responseBody: expand(artifact.responseBody, 0),
+    ...(artifact.pipeline
+      ? { pipeline: expand(artifact.pipeline, 0) as RequestPipelinePayloads }
+      : {}),
+  };
+  delete expanded.textDedupTable;
+  return expanded;
 }
 
 function expandCallLogStreamChunkText(artifact: CallLogArtifact): CallLogArtifact {
@@ -705,7 +948,9 @@ function serializeArtifactForStorage(artifact: CallLogArtifact): string {
   // JSON.parse (readCallArtifact), so pretty-printing only doubled the bytes and CPU of
   // serializing large request/response bodies on every request — a contributor to the
   // CPU-runaway. The debug path above keeps pretty output for human inspection.
-  const compacted = compactCallLogStreamChunkText(compactDuplicatePayloadReferences(artifact));
+  const compacted = compactCallLogRepeatedText(
+    compactCallLogStreamChunkText(compactDuplicatePayloadReferences(artifact))
+  );
   const serialized = JSON.stringify(compacted);
   if (Buffer.byteLength(serialized) <= maxBytes) {
     return serialized;
@@ -785,7 +1030,9 @@ export function readCallArtifact(relativePath: string | null): {
     }
     const artifact = JSON.parse(fs.readFileSync(absPath, "utf8")) as CallLogArtifact;
     return {
-      artifact: expandCallLogStreamChunkText(expandDuplicatePayloadReferences(artifact)),
+      artifact: expandCallLogStreamChunkText(
+        expandDuplicatePayloadReferences(expandCallLogRepeatedText(artifact))
+      ),
       state: "ready",
     };
   } catch (error) {

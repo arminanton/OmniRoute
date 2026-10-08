@@ -10,7 +10,7 @@ const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-call-log-
 process.env.DATA_DIR = TEST_DATA_DIR;
 const ORIGINAL_PIPELINE_MAX_KB = process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB;
 
-const { CALL_LOGS_DIR, readCallArtifact, writeCallArtifact } =
+const { CALL_LOGS_DIR, compactCallLogRepeatedText, readCallArtifact, writeCallArtifact } =
   await import("../../src/lib/usage/callLogArtifacts.ts");
 const callLogs = await import("../../src/lib/usage/callLogs.ts");
 const { resetDbInstance } = await import("../../src/lib/db/core.ts");
@@ -178,6 +178,69 @@ test("repeated exact stream chunk text is stored once and expanded for log consu
 
   const legacyBytes = Buffer.byteLength(JSON.stringify(input));
   assert.ok(legacyBytes - sizeBytes > 16_000, "repeated chunk text should be stored once");
+});
+
+test("repeated long request and response text is stored once and expanded on read", () => {
+  const repeatedText = `Shared system policy and tool instructions for this session. ${"Keep the result exact. ".repeat(1800)}`;
+  const requestBody = {
+    model: "codex/gpt-6.1-sol",
+    input: [
+      { role: "system", content: repeatedText },
+      { role: "developer", content: repeatedText },
+      { role: "user", content: "Please inspect this change." },
+    ],
+    opaqueUserObject: {
+      __omniroute_exact_text_ref_v1: { token: "caller-supplied", index: 0 },
+    },
+  };
+  const responseBody = { output: [{ type: "message", content: repeatedText }] };
+  const input = artifact(requestBody, responseBody);
+
+  const { storedJson, artifact: roundTripped, sizeBytes } = writeAndRead(input);
+  assert.equal(storedJson.schemaVersion, 9);
+  assert.equal(
+    (storedJson.textDedupTable as Record<string, unknown>).encoding,
+    "omni-exact-text-table/v1"
+  );
+  assert.equal((storedJson.textDedupTable as { dictionary: string[] }).dictionary.length, 1);
+  assert.equal(JSON.stringify(storedJson).split(repeatedText).length - 1, 1);
+  assert.deepEqual(roundTripped.requestBody, requestBody);
+  assert.deepEqual(roundTripped.responseBody, responseBody);
+  assert.deepEqual(
+    (roundTripped.pipeline?.clientRawRequest as Record<string, unknown>).body,
+    requestBody
+  );
+  assert.equal(Object.hasOwn(roundTripped, "textDedupTable"), false);
+
+  const originalBytes = Buffer.byteLength(JSON.stringify(input));
+  assert.ok(
+    originalBytes - sizeBytes > 50_000,
+    `the artifact should save duplicate prompt/output text (saved ${originalBytes - sizeBytes} bytes)`
+  );
+});
+
+test("exact-text compaction fails open on accessors without evaluating them", () => {
+  let getterCalls = 0;
+  const requestBody = Object.defineProperty({ content: "ordinary user content" }, "computed", {
+    enumerable: true,
+    get() {
+      getterCalls++;
+      return "x".repeat(1_000);
+    },
+  });
+  const input = artifact(requestBody, { output: "x".repeat(1_000) });
+
+  assert.equal(compactCallLogRepeatedText(input as never), input);
+  assert.equal(getterCalls, 0);
+});
+
+test("exact-text compaction leaves very large strings out of its hash table", () => {
+  const largeText = "x".repeat(128 * 1024);
+  const input = artifact({ input: largeText }, { output: largeText });
+  input.pipeline = undefined;
+
+  assert.equal(compactCallLogRepeatedText(input as never), input);
+  assert.equal(Object.hasOwn(input, "textDedupTable"), false);
 });
 
 test("short repeated stream chunks stay inline when a dictionary would increase storage", () => {

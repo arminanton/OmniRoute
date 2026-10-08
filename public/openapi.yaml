@@ -22208,6 +22208,11 @@ components:
 
     CallLogPipelinePayloads:
       type: object
+      description: >-
+        Optional diagnostic stages captured for a request. Persisted artifacts may compact
+        repeated payloads internally; the detail API expands those references and returns the
+        original JSON bodies and stream frame text. Large bodies may instead be referenced by a
+        private diagnostic-overflow trace when capture is enabled for the provider.
       properties:
         diagnosticOverflow:
           $ref: "#/components/schemas/DiagnosticOverflowReference"
@@ -22216,8 +22221,51 @@ components:
           description: >-
             True when large request and response bodies are stored in private diagnostic-overflow
             files and the call-log artifact retains metadata and bounded stream excerpts instead.
+        transportTelemetry:
+          $ref: "#/components/schemas/TransportTelemetry"
+        routeDecision:
+          type: object
+          description: Sanitized model, provider, account, and routing decision metadata.
+          additionalProperties: true
+        clientRawRequest:
+          $ref: "#/components/schemas/CallLogClientRequestStage"
+        openaiRequest:
+          $ref: "#/components/schemas/CallLogBodyStage"
+        providerRequest:
+          $ref: "#/components/schemas/CallLogProviderRequestStage"
+        providerResponse:
+          $ref: "#/components/schemas/CallLogProviderResponseStage"
+        clientResponse:
+          $ref: "#/components/schemas/CallLogBodyStage"
+        providerAttemptDiagnostics:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        providerAttemptDiagnosticsDropped:
+          type: integer
+          minimum: 1
+          description: Number of provider-attempt diagnostics omitted after the bounded capture limit.
+        error:
+          type: object
+          description: Sanitized error and retry details; may include a bounded request preview.
+          additionalProperties: true
+        toolLoop:
+          type: object
+          required: [legs]
+          properties:
+            legs:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+          additionalProperties: false
         streamChunks:
           type: object
+          description: >-
+            Bounded, timestamp-prefixed SSE frame text grouped by capture stage. An omitted
+            channel means that no frame was retained for that stage. The storage-only text table
+            encoding is expanded before this API response is returned.
           properties:
             provider:
               type: array
@@ -22229,6 +22277,113 @@ components:
               type: array
               items: { type: string }
           additionalProperties: false
+      additionalProperties: true
+
+    CallLogClientRequestStage:
+      type: object
+      description: Sanitized original client request metadata and, when retained, its bounded body.
+      properties:
+        timestamp: { type: string, format: date-time }
+        endpoint: { type: string }
+        headers:
+          type: object
+          description: Sensitive credential headers are masked before persistence.
+          additionalProperties: true
+        body: {}
+        effectiveInput: {}
+      additionalProperties: true
+
+    CallLogBodyStage:
+      type: object
+      properties:
+        timestamp: { type: string, format: date-time }
+        body: {}
+      additionalProperties: true
+
+    CallLogProviderRequestStage:
+      type: object
+      properties:
+        timestamp: { type: string, format: date-time }
+        url: { type: string }
+        headers:
+          type: object
+          description: Sensitive credential headers are masked before persistence.
+          additionalProperties: true
+        body: {}
+      additionalProperties: true
+
+    CallLogProviderResponseStage:
+      type: object
+      properties:
+        timestamp: { type: string, format: date-time }
+        status: { type: integer, minimum: 100, maximum: 599 }
+        statusText: { type: string }
+        headers:
+          type: object
+          description: Sensitive credential headers are masked before persistence.
+          additionalProperties: true
+        body: {}
+      additionalProperties: true
+
+    TransportTelemetryClosure:
+      anyOf:
+        - type: string
+          enum: [eof, cancel, error, no_body]
+        - type: "null"
+
+    TransportAttemptTelemetry:
+      type: object
+      required: [transport]
+      properties:
+        transport: { type: string, enum: [http, websocket] }
+        invokedMs: { type: number, minimum: 0 }
+        queuedMs: { type: [number, "null"], minimum: 0 }
+        dispatchedMs: { type: [number, "null"], minimum: 0 }
+        headersMs: { type: [number, "null"], minimum: 0 }
+        connectedMs: { type: [number, "null"], minimum: 0 }
+        reused: { type: [boolean, "null"] }
+        firstByteMs: { type: [number, "null"], minimum: 0 }
+        firstEventMs: { type: [number, "null"], minimum: 0 }
+        bytes: { type: integer, minimum: 0 }
+        chunks: { type: integer, minimum: 0 }
+        maxObservedIdleMs: { type: number, minimum: 0 }
+        terminalObservedIdleMs: { type: [number, "null"], minimum: 0 }
+        status: { type: [integer, "null"], minimum: 100, maximum: 599 }
+        closedMs: { type: [number, "null"], minimum: 0 }
+        closure:
+          $ref: "#/components/schemas/TransportTelemetryClosure"
+        dnsMs: { type: [number, "null"], minimum: 0 }
+        tcpMs: { type: [number, "null"], minimum: 0 }
+        tlsMs: { type: [number, "null"], minimum: 0 }
+        uploadMs: { type: [number, "null"], minimum: 0 }
+        requestSentMs: { type: [number, "null"], minimum: 0 }
+        observedUploadBytes: { type: integer, minimum: 0 }
+      additionalProperties: true
+
+    TransportTelemetry:
+      type: object
+      required: [schema, id, elapsedMs, attempts]
+      properties:
+        schema: { type: string, const: omni-transport-telemetry/v1 }
+        id: { type: string, format: uuid }
+        elapsedMs: { type: number, minimum: 0 }
+        transportAdmissionWaitMs: { type: number, minimum: 0 }
+        transportAdmissionCount: { type: integer, minimum: 0 }
+        admissionWaitMs: { type: number, minimum: 0 }
+        admissionCount: { type: integer, minimum: 0 }
+        backoffMs: { type: number, minimum: 0 }
+        backoffCount: { type: integer, minimum: 0 }
+        forwardedBytes: { type: integer, minimum: 0 }
+        closure:
+          $ref: "#/components/schemas/TransportTelemetryClosure"
+        droppedAttempts: { type: integer, minimum: 0 }
+        retainedAttempts: { type: integer, minimum: 0 }
+        omittedAttempts: { type: integer, minimum: 0 }
+        attempts:
+          type: array
+          maxItems: 24
+          items:
+            $ref: "#/components/schemas/TransportAttemptTelemetry"
       additionalProperties: true
 
     ProviderModelsResponse:
