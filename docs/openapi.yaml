@@ -8321,10 +8321,40 @@ paths:
       operationId: getApiTelemetrySummary
       tags: [Telemetry]
       summary: Get telemetry summary
-      description: Returns aggregated telemetry data including request metrics and performance stats.
+      description: >-
+        Returns bounded aggregate request latency, active-session counts, quota-monitor counts,
+        process uptime, and Node memory usage for the selected window. Access follows management
+        policy. Anonymous access may be allowed when management login is disabled or for permitted
+        loopback bootstrap requests; otherwise use a dashboard session or a management Bearer
+        credential (including a manage-scoped API key).
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: windowMs
+          in: query
+          description: Lookback window in milliseconds (default 300,000).
+          schema: { type: integer, default: 300000 }
       responses:
         "200":
-          description: Telemetry summary data
+          description: Aggregated request, session, quota, and process telemetry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelemetrySummaryResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: Telemetry summary could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/token-health:
     get:
@@ -17792,6 +17822,89 @@ components:
         - $ref: "#/components/schemas/AuthenticatedSystemHealthResponse"
         - $ref: "#/components/schemas/PublicHealthResponse"
         - $ref: "#/components/schemas/DegradedHealthResponse"
+    TelemetrySummaryResponse:
+      type: object
+      required:
+        - count
+        - avg
+        - p50
+        - p95
+        - p99
+        - phaseBreakdown
+        - totalRequests
+        - avgLatencyMs
+        - sessions
+        - quotaMonitor
+        - uptime
+        - memoryUsage
+        - activeConnections
+        - errorRate
+      properties:
+        count: { type: integer, minimum: 0, description: Number of recorded requests in the window. }
+        avg: { type: number, minimum: 0, description: Mean total request duration in milliseconds. }
+        p50: { type: number, minimum: 0, description: Median total request duration in milliseconds. }
+        p95: { type: number, minimum: 0, description: 95th percentile total request duration in milliseconds. }
+        p99: { type: number, minimum: 0, description: 99th percentile total request duration in milliseconds. }
+        phaseBreakdown:
+          type: object
+          description: Per-phase timing summaries keyed by request phase name.
+          additionalProperties:
+            type: object
+            required: [count, p50, p95, avg]
+            properties:
+              count: { type: integer, minimum: 0 }
+              p50: { type: number, minimum: 0, description: Median phase duration in milliseconds. }
+              p95: { type: number, minimum: 0, description: 95th percentile phase duration in milliseconds. }
+              avg: { type: number, minimum: 0, description: Mean phase duration in milliseconds. }
+            additionalProperties: false
+        totalRequests: { type: integer, minimum: 0 }
+        avgLatencyMs: { type: number, minimum: 0 }
+        sessions:
+          type: object
+          required: [activeCount, stickyBoundCount]
+          properties:
+            activeCount: { type: integer, minimum: 0 }
+            stickyBoundCount: { type: integer, minimum: 0 }
+          additionalProperties: false
+        quotaMonitor:
+          type: object
+          required: [active, alerting, exhausted, errors, statusCounts]
+          properties:
+            active: { type: integer, minimum: 0 }
+            alerting: { type: integer, minimum: 0 }
+            exhausted: { type: integer, minimum: 0 }
+            errors: { type: integer, minimum: 0 }
+            statusCounts:
+              type: object
+              required: [starting, idle, healthy, warning, exhausted, error]
+              properties:
+                starting: { type: integer, minimum: 0 }
+                idle: { type: integer, minimum: 0 }
+                healthy: { type: integer, minimum: 0 }
+                warning: { type: integer, minimum: 0 }
+                exhausted: { type: integer, minimum: 0 }
+                error: { type: integer, minimum: 0 }
+              additionalProperties: false
+          additionalProperties: false
+        uptime: { type: number, minimum: 0, description: Process uptime in seconds. }
+        memoryUsage:
+          type: object
+          required: [rss, heapTotal, heapUsed, external, arrayBuffers]
+          properties:
+            rss: { type: integer, minimum: 0, description: Resident set size in bytes. }
+            heapTotal: { type: integer, minimum: 0, description: V8 heap capacity in bytes. }
+            heapUsed: { type: integer, minimum: 0, description: V8 heap currently used in bytes. }
+            external: { type: integer, minimum: 0, description: Native memory associated with JavaScript objects, in bytes. }
+            arrayBuffers: { type: integer, minimum: 0, description: ArrayBuffer and SharedArrayBuffer memory in bytes. }
+          additionalProperties: true
+        activeConnections: { type: integer, minimum: 0, description: Number of currently active provider sessions. }
+        errorRate:
+          type: number
+          minimum: 0
+          description: >-
+            Quota-monitor error states divided by recorded telemetry requests, expressed as a
+            percentage. This is not a general inference request failure rate.
+      additionalProperties: true
     AuthenticatedSystemHealthResponse:
       type: object
       required: [status, timestamp, system]
