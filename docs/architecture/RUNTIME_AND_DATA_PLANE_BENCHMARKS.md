@@ -193,11 +193,13 @@ out.
 
 The blue branch now checks that the resolved artifact-worker file exists before it compares,
 estimates, protects, or clones request/response bodies. If the worker is absent, it skips the
-unwritable payload, retains the scalar call-log row and bounded error summary, and marks detail
-missing. A regression test uses a payload proxy that counts property traversal; it remains untouched
-when the worker path is absent. The Node and Bun 1.4.0 focused call-log suites pass this case. This
-reduces wasted preparation and heap pressure in a broken image, but it cannot provide detailed logs;
-the external candidate image recipe still needs to include and verify the worker.
+unwritable payload and retains the scalar call-log row and bounded error summary. When a valid
+persisted private-overflow reference exists, it now writes only a tiny sanitized pointer artifact
+synchronously, with reason `call_log_artifact_worker_missing`; the request/response payload remains
+untraversed. Without such a reference, detail stays missing. Node and Bun tests confirm both paths.
+This lets an existing overflow capture remain reachable in the log UI even in a broken image, but
+it cannot repair old rows or capture providers without an overflow trace. The external candidate
+image recipe still needs to include and verify the worker.
 
 ## Isolated streaming proxy results
 
@@ -593,7 +595,8 @@ current builder.
 - Fix the external candidate-image assembly so the artifact worker is present, then verify that
   pipeline artifacts are written and readable. The current image lost 118 detailed artifacts and
   no artifact file is newer than the image start; do not treat the `full-capture-v1` label as proof
-  that capture works.
+  that capture works. The new tiny-stub fallback only links a private-overflow trace that was
+  already captured; it cannot restore those missing historical artifacts.
 - Reproduce heap growth from a clean start with capture on/off and optional subsystems isolated;
   test that the local pressure guard recovers without restarting after pressure clears. No heap
   snapshot or controlled recovery result exists yet.

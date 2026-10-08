@@ -350,6 +350,15 @@ test("saveCallLog skips payload traversal when the artifact worker is missing", 
       responseBody: { output: "response" },
       pipelinePayloads: {
         clientRawRequest: { endpoint: "/v1/responses", headers: {}, body: requestBody },
+        ...(index === 0
+          ? {
+              diagnosticOverflow: {
+                schema: "omni-diagnostic-overflow/v1" as const,
+                traceId: "11111111-1111-4111-8111-111111111111",
+                state: "complete" as const,
+              },
+            }
+          : {}),
       },
     };
   });
@@ -376,11 +385,25 @@ test("saveCallLog skips payload traversal when the artifact worker is missing", 
     entries.map((entry) => callLogs.getCallLogById(String(entry.id)))
   );
   assert.equal(details.length, 100);
-  for (const detail of details) {
-    assert.equal(detail?.detailState, "missing");
-    assert.equal(detail?.artifactRelPath, null);
+  for (const [index, detail] of details.entries()) {
     assert.equal(detail?.hasRequestBody, true);
     assert.equal(detail?.hasPipelineDetails, true);
+    if (index === 0) {
+      assert.equal(detail?.detailState, "ready");
+      assert.ok(detail?.artifactRelPath);
+      assert.equal(detail?.requestBody, "[omitted: call log artifact worker unavailable]");
+      assert.equal(
+        (detail?.pipelinePayloads?.error as Record<string, unknown>)?.reason,
+        "call_log_artifact_worker_missing"
+      );
+      assert.equal(
+        detail?.pipelinePayloads?.diagnosticOverflow?.traceId,
+        "11111111-1111-4111-8111-111111111111"
+      );
+    } else {
+      assert.equal(detail?.detailState, "missing");
+      assert.equal(detail?.artifactRelPath, null);
+    }
   }
 });
 

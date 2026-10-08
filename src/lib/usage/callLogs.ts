@@ -53,6 +53,7 @@ import {
   reserveCallLogArtifactPreparation,
   writeCallArtifactAsync,
   writeDiagnosticOverflowStubAsync,
+  writeDiagnosticOverflowStubSync,
   type CallLogArtifactReservation,
 } from "./callLogArtifactWriter";
 import { projectDiagnosticOverflowReference } from "./diagnosticOverflowTypes";
@@ -766,12 +767,11 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       let artifactResult: Awaited<ReturnType<typeof writeCallArtifactAsync>>;
       if (preparationRefused) {
         requestSummary = null;
-        if (diagnosticOverflowReference && !artifactWorkerUnavailable) {
+        if (diagnosticOverflowReference) {
           const stubSummary = buildArtifact(logEntry, null, null, null, null).summary;
-          artifactResult = await writeDiagnosticOverflowStubAsync(
-            stubSummary,
-            diagnosticOverflowReference
-          );
+          artifactResult = artifactWorkerUnavailable
+            ? writeDiagnosticOverflowStubSync(stubSummary, diagnosticOverflowReference)
+            : await writeDiagnosticOverflowStubAsync(stubSummary, diagnosticOverflowReference);
         } else {
           artifactResult = null;
         }

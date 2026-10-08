@@ -5,6 +5,7 @@ import { Worker } from "node:worker_threads";
 
 import {
   compactCallLogStreamChunkText,
+  writeCallArtifact,
   type CallLogArtifact,
   type CallLogArtifactWriteResult,
 } from "./callLogArtifacts.ts";
@@ -351,10 +352,17 @@ function safeCorrelationId(value: string | null | undefined): string | null {
 
 function buildDiagnosticOverflowStub(
   summary: CallLogArtifact["summary"],
-  rawReference: unknown
+  rawReference: unknown,
+  reason:
+    | "call_log_artifact_queue_memory_budget_exceeded"
+    | "call_log_artifact_worker_missing" = "call_log_artifact_queue_memory_budget_exceeded"
 ): CallLogArtifact | null {
   const reference = projectDiagnosticOverflowReference(rawReference);
   if (!reference || reference.persisted === false) return null;
+  const omissionMarker =
+    reason === "call_log_artifact_worker_missing"
+      ? "[omitted: call log artifact worker unavailable]"
+      : "[omitted: artifact queue memory budget exceeded]";
 
   return {
     schemaVersion: 5,
@@ -413,13 +421,13 @@ function buildDiagnosticOverflowStub(
       comboStepId: null,
       comboExecutionKey: null,
     },
-    requestBody: "[omitted: artifact queue memory budget exceeded]",
-    responseBody: "[omitted: artifact queue memory budget exceeded]",
+    requestBody: omissionMarker,
+    responseBody: omissionMarker,
     error: "Detailed call-log payload omitted; private diagnostic capture is available.",
     pipeline: {
       error: {
         _omniroute_truncated: true,
-        reason: "call_log_artifact_queue_memory_budget_exceeded",
+        reason,
       },
       diagnosticOverflow: reference,
     },
@@ -496,6 +504,27 @@ export function writeDiagnosticOverflowStubAsync(
   if (closing) return Promise.resolve(null);
   const queued = enqueueDiagnosticOverflowStub(summary, reference);
   return queued ?? Promise.resolve(null);
+}
+
+/**
+ * A missing worker means the normal detail artifact cannot be written, but a
+ * persisted private-overflow reference is still valuable. Write only its tiny,
+ * sanitized pointer artifact synchronously; never traverse or serialize the
+ * large request/response payload that the worker would have handled.
+ */
+export function writeDiagnosticOverflowStubSync(
+  summary: CallLogArtifact["summary"],
+  reference: unknown
+): CallLogArtifactWriteResult | null {
+  const stub = buildDiagnosticOverflowStub(summary, reference, "call_log_artifact_worker_missing");
+  if (!stub) return null;
+
+  warnRateLimited(
+    "[callLogs] Artifact worker is missing; synchronously preserving the private diagnostic reference.",
+    "sync_diagnostic_stub_worker_missing"
+  );
+  const result = writeCallArtifact(stub);
+  return result ? { ...result, diagnosticOverflowStub: true } : null;
 }
 
 function fileExistsAtRuntime(candidate: string): boolean {
