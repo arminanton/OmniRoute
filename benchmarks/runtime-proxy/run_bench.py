@@ -9,6 +9,7 @@ import pathlib
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -47,7 +48,7 @@ async def wait_for_server(url, process, timeout=20):
     raise TimeoutError(f"server did not become ready: {url}")
 
 
-async def sample_metrics(pid, stop):
+def sample_metrics(pid, stop):
     peak_rss = 0
     cpu_start = None
     cpu_end = None
@@ -59,7 +60,7 @@ async def sample_metrics(pid, stop):
         if ticks is not None:
             cpu_start = ticks if cpu_start is None else cpu_start
             cpu_end = ticks
-        await asyncio.sleep(0.025)
+        time.sleep(0.025)
     rss, ticks = read_process_metrics(pid)
     if rss is not None:
         peak_rss = max(peak_rss, rss)
@@ -141,8 +142,13 @@ async def main():
         )
         await wait_for_server(f"http://127.0.0.1:{args.gateway_port}/health", gateway)
 
-        stop = asyncio.Event()
-        metrics_task = asyncio.ensure_future(sample_metrics(gateway.pid, stop))
+        stop = threading.Event()
+        metrics = {}
+        sampler = threading.Thread(
+            target=lambda: metrics.update(sample_metrics(gateway.pid, stop)),
+            daemon=True,
+        )
+        sampler.start()
         loader = subprocess.run(
             [
                 sys.executable,
@@ -162,7 +168,7 @@ async def main():
             check=False,
         )
         stop.set()
-        metrics = await metrics_task
+        sampler.join(timeout=2)
         if loader.returncode != 0:
             raise RuntimeError(f"load generator failed: {loader.stderr[-1000:]}")
         result = json.loads(loader.stdout)
