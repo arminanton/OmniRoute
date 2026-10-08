@@ -142,6 +142,36 @@ model comes from compile-checked ownership and borrowing. The benchmark demonstr
 process, not a safe replacement for OmniRoute's provider, quota, security, cache, and tool-execution
 behavior.
 
+## Production admission middleware with long-lived streams
+
+The `omni-admission-node` adapter also exercises OmniRoute's actual TypeScript
+`withChatAdmission` / `admitChatRequest` code, including the byte-budget queue and release at the end
+of an SSE stream. On 2026-10-08, the prior implementation failed a 100-session test with 1.31 MiB
+requests and one-second streams: 55/100 sessions finished and 417/500 requests succeeded. The
+normal-pressure byte wait stopped at about 250 ms even though the configured queue window was 30
+seconds, so requests shed with `inflight_bytes_budget` before stream completion freed capacity.
+
+The fix makes byte waiters use the configured, bounded queue window and charges known-length queued
+bodies against a shared 64 MiB queued-byte cap. Critical pressure still sheds immediately, bodies
+larger than the entire byte budget still fail immediately, and the active in-flight budget remains
+separate. Focused admission/resource tests pass 111/111.
+
+The post-fix long-stream run used a 100-chunk SSE response at 10 ms per chunk and five sequential
+requests per session. Each request carried 262,144 bytes of synthetic text in a JSON body up to
+1,311,987 bytes. At 70 sessions, 350/350 requests completed in 6.58 seconds; first-body p95 was
+102.1 ms, completion p95 was 1,174.9 ms, and gateway peak RSS was 265.1 MiB. At 100 sessions, all
+three trials completed 500/500 requests with no failures in 7.84–7.95 seconds. Across those trials,
+median throughput was 63.7 requests/s, first-body p95 was 1,004 ms, completion p95 was 2,047 ms,
+gateway peak RSS was 343.1 MiB, and gateway CPU was 3.0 seconds. Peak in-flight byte charges were
+73.21 MiB against the 70 MiB (73,400,320-byte) limit; peak queued reservations were 19.92 MiB against
+the separate 64 MiB limit. Queue counters returned to zero after each run.
+
+This confirms the admission queue waits and drains under this local workload; it is not 100 full
+agent sessions and does not include actual provider routing, tool execution, account scheduling,
+database activity, or persistent call-log artifact writes. It also does not claim that 63.7 requests/s
+is a production ceiling or that an upstream provider will accept the same burst. Those full-server
+and real-provider checks remain necessary before treating 70–100 agents as validated capacity.
+
 ## Repeated request-log payload
 
 The call-log path stores both the client request body and a reconstructed `effectiveInput`. For an

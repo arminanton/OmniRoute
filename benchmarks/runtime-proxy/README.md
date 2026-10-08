@@ -79,3 +79,16 @@ database account selection, persistent artifact capture, and model/tool executio
 this harness. The reported health snapshot includes the effective byte budget and peak admission
 occupancy. Run the Node suite on an isolated builder with the same heap and cgroup limits as the
 target deployment.
+
+Use a longer synthetic stream to verify that byte-budget waiters stay queued until capacity is
+released instead of receiving an early 503:
+
+```bash
+python3 benchmarks/runtime-proxy/run_bench.py --runtime omni-admission-node --clients 70 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10
+python3 benchmarks/runtime-proxy/run_bench.py --runtime omni-admission-node --clients 100 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10
+```
+
+On 2026-10-08 the 70-session run completed 350/350 requests and three 100-session runs completed
+1,500/1,500. Requests were up to 1,311,987 bytes; peak in-flight byte charges stayed below 70 MiB
+and queued reservations below 64 MiB. This is a local admission-plus-mock-stream check, not a claim
+about 70–100 real provider sessions.
