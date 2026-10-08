@@ -14782,10 +14782,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/JinaClassifyResponse"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/JinaClassifyResponse"
   /api/v1/combos:
     get:
       operationId: getApiV1Combos
@@ -15337,10 +15333,6 @@ paths:
       responses:
         "200":
           description: Jina segmentation and token-count result.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/JinaSegmentResponse"
           content:
             application/json:
               schema:
@@ -18366,6 +18358,10 @@ components:
         response_format:
           type: string
           enum: [url, b64_json]
+      anyOf:
+        - required: [image]
+        - required: [image_url]
+        - required: [image_urls]
       additionalProperties: true
 
     AudioTranscriptionResponse:
