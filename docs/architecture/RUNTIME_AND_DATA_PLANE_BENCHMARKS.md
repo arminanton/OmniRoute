@@ -361,6 +361,36 @@ and CPU. All three had similar throughput and no failed requests. These runs omi
 database policy, account scheduling, provider SDKs, persistent call-log capture, tool execution,
 and real upstream quotas; they do not establish production capacity.
 
+### Maria host rerun
+
+On 2026-10-08 the same workload ran on the current Maria host: Ubuntu 24.04.4, four vCPUs, and
+24 GiB RAM. Node 26.10.0 and Bun 1.4.0 ran in official rootless-Podman containers limited to
+512 MiB; Rust 1.94.1/Axum 0.8.9/Reqwest 0.12.28 was compiled in the official Rust container and
+ran as a host process, so its RSS is not under the same cgroup cap. The gateway, local Node mock
+upstream, and Python load client shared CPUs 0–3. Every session made five sequential requests with
+262,144 bytes of synthetic user text per turn; the largest JSON body was 1,311,987 bytes and each
+response carried 100 SSE chunks at 10 ms intervals. This includes synthetic function-call/result
+history in later turns, but does not execute tools.
+
+All three gateways passed 350/350 requests at 70 sessions in one trial and 500/500 in each of three
+trials at 100 sessions. The table gives the single 70-session result and the median of the three
+100-session runs; latency values are p95. Peak RSS and CPU are for the gateway process only.
+
+| Runtime           | Sessions | Trials | First-body p95 | Completion p95 |  Peak RSS |    CPU | Throughput |
+| ----------------- | -------: | -----: | -------------: | -------------: | --------: | -----: | ---------: |
+| Node 26.10.0      |       70 |      1 |         224 ms |       1,247 ms | 124.2 MiB | 5.41 s | 58.2 req/s |
+| Bun 1.4.0         |       70 |      1 |          72 ms |       1,106 ms |  75.9 MiB | 2.62 s | 60.5 req/s |
+| Rust/Axum/Reqwest |       70 |      1 |          73 ms |       1,131 ms |  52.0 MiB | 1.41 s | 60.1 req/s |
+| Node 26.10.0      |      100 |      3 |         299 ms |       1,326 ms | 138.9 MiB | 6.69 s | 80.0 req/s |
+| Bun 1.4.0         |      100 |      3 |         101 ms |       1,135 ms |  74.6 MiB | 3.51 s | 83.4 req/s |
+| Rust/Axum/Reqwest |      100 |      3 |          99 ms |       1,141 ms |  70.2 MiB | 1.93 s | 83.5 req/s |
+
+This host reproduced the earlier pattern: similar throughput, substantially less gateway CPU for Rust,
+and lower RSS for Bun and Rust than Node. In this run Bun had the lowest 100-session completion p95;
+Rust and Bun were close. This is still a local mock-transport result. It excludes the Next.js auth
+and route stack, provider/account selection, actual model quotas, tool execution, and persistent call
+log artifacts. The reported 70–100 sessions are not a full-agent acceptance result.
+
 ## Production admission middleware with long-lived streams
 
 The `omni-admission-node` adapter also exercises OmniRoute's actual TypeScript
@@ -383,15 +413,32 @@ sessions, 350/350 requests completed in 6.58 seconds; first-body p95 was
 three trials completed 500/500 requests with no failures in 7.84–7.95 seconds. Across those trials,
 median throughput was 63.7 requests/s, first-body p95 was 1,004 ms, completion p95 was 2,047 ms,
 gateway peak RSS was 343.1 MiB, and gateway CPU was 3.0 seconds. Peak in-flight byte charges were
-73.21 MiB against the 70 MiB (73,400,320-byte) limit; peak queued reservations were 19.92 MiB against
-the separate 64 MiB limit. Queue counters returned to zero after each run.
+73.21 MB (69.82 MiB) against the 70 MiB (73,400,320-byte) limit; peak queued reservations were
+19.92 MB (18.99 MiB) against the separate 64 MiB limit. Queue counters returned to zero after each
+run.
+
+The same production-admission adapter was rerun on Maria on 2026-10-08 using host Node 24.21.0,
+four shared CPUs, five turns per session, 1.31 MiB maximum request bodies, and 100 synthetic SSE
+chunks per response. It passed 350/350 at 70 sessions and 500/500 in each of three 100-session
+trials. The 100-session table shows medians across those trials; the byte figures are peak values.
+
+| Sessions | Trials | First-body p95 | Completion p95 | Throughput | Peak process RSS | Peak in-flight bytes | Peak queued bytes |
+| -------: | -----: | -------------: | -------------: | ---------: | ---------------: | -------------------: | ----------------: |
+|       70 |      1 |         131 ms |       1,296 ms | 49.1 req/s |        263.5 MiB |             69.8 MiB |           7.0 MiB |
+|      100 |      3 |         987 ms |       2,129 ms | 57.1 req/s |        299.7 MiB |             69.8 MiB |          20.0 MiB |
+
+All four runs ended with zero active admission leases, queued bytes, waiting requests, and in-flight
+byte charges. This confirms that the current admission wrapper drains on the Maria host at this
+synthetic request size and stream duration. The adapter does not run Next auth, call-log artifact
+writes, provider routing, real tools, or external quotas, and so is not full Prime-agent E2E.
 
 A slower single trial used 300 chunks per response (3 seconds of streamed body time) at 100
 sessions, with the same 1.31 MiB maximum request and five turns per session. It completed 500/500
 requests without errors in 22.4 seconds. First-body p95 was 3.07 seconds and completion p95 was
 6.22 seconds because waiters joined as stream leases became available. Peak in-flight charge was
-73.21 MiB, queued reservations peaked at 19.92 MiB, and all counters returned to zero. This is one
-trial; it shows queue drainage for this stream duration, not a sustained throughput guarantee.
+73.21 MB (69.82 MiB), queued reservations peaked at 19.92 MB (18.99 MiB), and all counters returned
+to zero. This is one trial; it shows queue drainage for this stream duration, not a sustained
+throughput guarantee.
 
 This confirms the admission queue waits and drains under this local workload; it is not 100 full
 agent sessions and does not include actual provider routing, tool execution, account scheduling,
@@ -632,6 +679,41 @@ Bun build resolves package ranges independently from the npm lock. Add a Bun loc
 its resolved graph before considering that image reproducible. Bun 1.4.2's stream-proxy microbench
 was close to 1.4.0; a full Bun 1.4.2 application build was not run.
 
+### Maria host build comparison
+
+The current 4-vCPU/24-GiB Maria host was tested on 2026-10-08 with Node 26.10.0, Bun 1.4.0, and
+Next.js 16.3.8. Each build container was limited to two CPUs and 14 GiB RAM, with swap disabled;
+the host retained at least 7.8 GiB available RAM. The checked-out Node dependency tree was reused
+(4.1 GiB); these were build-path measurements, not clean Docker image builds or `npm ci` timings.
+
+The full Node/Turbopack build reached the optimized compile but the kernel killed its Next build
+child after 7m29s at the 14-GiB cgroup limit. Kernel logs identify a memory-cgroup OOM kill; host
+PSI remained low and host memory recovered after the container exited. The Next worker-count setting
+was not applied on that direct invocation, but the process was killed during optimized compilation,
+before page-data collection. The Bun 1.4.0/Turbopack run used the same npm-locked dependencies and
+was stopped after 7m19s at 14.4 GB container usage when host-available memory crossed the 8-GiB
+safety floor. It had not completed optimized compilation and had not emitted a Bun runtime error.
+This isolates Bun execution from dependency resolution; it does not validate the separate
+`Dockerfile.bun` install graph, which still lacks a checked-in Bun lockfile.
+
+Webpack completed under the same 14-GiB/two-CPU ceiling. An initial direct build completed with three
+page-data workers in 12m12s; a follow-up used `npm run build`, `CIRCLE_NODE_TOTAL=2` (one page-data
+worker), Python/make/g++ for TPROXY, and the normal prebuild/postbuild hooks. On that warm-cache run,
+Next reported a 4.3-minute successful compile, generated all 598 static pages with one worker, traced
+the server, colocated the artifact and compression workers, and built the TPROXY addon. The complete
+command took 7m45s including the container's apt install. The standalone output was 996 MiB, while
+the complete `.build/next` tree was 7.0 GiB because it also retained a 5.8-GiB compiler cache; the
+Node Dockerfile copies only `standalone`, not that cache. A temporary Node 26.10.0 runtime started
+the bundle and returned HTTP 200 from `/api/health/ping`. Arena/OpenRouter/pricing/model syncs were
+disabled for this smoke; it did not contact model providers.
+
+This points to Turbopack's compile-time memory as a concrete limit on this host, rather than a
+general inability to build the app. It does not yet establish that Webpack should replace Turbopack:
+the Webpack success reused a warm cache, while the two Turbopack runs did not share the same cache
+state, and a production image was not assembled or deployed. The Dockerfile's
+`OMNIROUTE_BUILD_WORKERS=2` is translated to `CIRCLE_NODE_TOTAL=2`; direct local invocations must
+set `CIRCLE_NODE_TOTAL` explicitly to match that worker budget.
+
 A no-emit TypeScript check limited to the changed files still pulled in the broad `chat.ts` import
 graph. Node spent about 3 minutes at 1.5–1.6 CPU cores and hit its default 4 GiB V8 heap limit;
 there was no build artifact or typecheck result. This is separate from the earlier 5 GiB Next build
@@ -662,13 +744,19 @@ no-auth catalog filter with the optional model ID shape.
 - Reproduce heap growth from a clean start with capture on/off and optional subsystems isolated;
   test that the local pressure guard recovers without restarting after pressure clears. No heap
   snapshot or controlled recovery result exists yet.
-- Repeat full Next builds on a dedicated builder with enough memory to complete; record wall time,
-  peak cgroup memory, output size, and health/model-catalog smoke tests.
+- Build and smoke the production OCI image on a dedicated builder with enough memory and native
+  overlay; Maria completed and smoke-tested the Node/Webpack standalone path, but no OCI image was
+  assembled. Preserve `memory.peak`, `memory.events`, wall time, and output size for each next build;
+  the full Turbopack runs on Maria did not complete under 14 GiB.
+- Find out whether OmniRoute's TPROXY addon has an official prebuilt arm64 package. The successful
+  Maria Webpack build compiled `transparent.node` from source after Python/make/g++ were installed.
 - Keep the passing `typecheck:core` target in the validation set. If a broader whole-app typecheck is
   required, first build a smaller project graph or use a builder with an explicit memory budget; the
   earlier broad no-emit attempts exhausted 4 GiB and 3 GiB without reporting source diagnostics.
-- Run the Bun application build with a locked dependency graph and on both 1.4.0 and 1.4.2; record
-  native-module, database, streaming, and shutdown differences.
+- Complete the `Dockerfile.bun` application build with a locked Bun dependency graph and on both
+  1.4.0 and 1.4.2; the Maria Bun/Turbopack runtime isolation run reused npm `node_modules` and was
+  stopped at the host-memory safety floor before compilation completed. Record native-module,
+  database, streaming, and shutdown differences.
 - Exercise the full OmniRoute app with mock provider credentials at 70 and 100 active sessions,
   including actual tool-call cycles, authentication, account-level limits, and verified artifact
   capture. The current long-stream test covers only the production admission middleware plus mock
