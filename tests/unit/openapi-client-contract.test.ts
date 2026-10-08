@@ -280,6 +280,7 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/providers/{id}/test", "post", "ProviderConnectionTestResult"],
     ["/api/providers/{id}/models", "get", "ProviderConnectionModelDiscoveryResponse"],
     ["/api/providers/health-matrix", "get", "ProviderHealthMatrixResponse"],
+    ["/api/providers/health-autopilot", "get", "ProviderHealthAutopilotReport"],
     ["/api/providers/expiration", "get", "ProviderExpirationResponse"],
     ["/api/providers/cursor/agent-availability", "get", "CursorAgentAvailabilityResponse"],
     ["/api/providers/quota-windows", "get", "ProviderQuotaWindowsResponse"],
@@ -440,6 +441,28 @@ test("model, provider, key, and combo management responses match their route pay
   assert.ok(healthMatrixSecurity.some((requirement) => Object.keys(requirement).length === 0));
   assert.ok(schemas?.ProviderHealthMatrixResponse?.required?.includes("providers"));
   assert.ok(schemas?.ProviderHealthMatrixResponse?.required?.includes("webSessionPools"));
+  const healthAutopilot = operation("/api/providers/health-autopilot", "get");
+  const healthAutopilotSecurity = healthAutopilot.security ?? [];
+  assert.ok(healthAutopilotSecurity.some((requirement) => "BearerAuth" in requirement));
+  assert.ok(healthAutopilotSecurity.some((requirement) => "ManagementSessionAuth" in requirement));
+  assert.ok(healthAutopilotSecurity.some((requirement) => Object.keys(requirement).length === 0));
+  assert.ok(schemas?.ProviderHealthAutopilotReport?.required?.includes("providers"));
+  assert.ok(
+    schemas?.ProviderHealthAutopilotAction?.required?.includes("requiresConfirmation")
+  );
+  const healthAutopilotParameters = healthAutopilot.parameters ?? [];
+  for (const parameterName of ["provider", "includeHealthy", "includeActions"]) {
+    assert.ok(
+      healthAutopilotParameters.some(
+        (parameter) =>
+          parameter &&
+          typeof parameter === "object" &&
+          "name" in parameter &&
+          parameter.name === parameterName
+      ),
+      `provider health autopilot query parameter ${parameterName}`
+    );
+  }
   assert.ok(schemas?.ProviderExpirationResponse?.required?.includes("summary"));
   assert.ok(schemas?.ProviderExpirationResponse?.required?.includes("list"));
   const healthMatrixParameters = healthMatrix.parameters ?? [];

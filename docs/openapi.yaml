@@ -13084,10 +13084,54 @@ paths:
       operationId: getApiProvidersHealthAutopilot
       tags:
         - Providers
-      summary: "GET providers › health autopilot"
+      summary: Get provider health autopilot report
+      description: >-
+        Reports provider health issues and recommended guarded actions. includeHealthy defaults
+        false; includeActions defaults true. Action requests require confirmation and a current
+        preconditions hash when executing a state change.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string }
+          description: Restrict the report to one provider.
+        - name: includeHealthy
+          in: query
+          required: false
+          schema: { type: string, default: "false" }
+          description: "Set to true or 1 to include healthy providers; other supplied values are false."
+        - name: includeActions
+          in: query
+          required: false
+          schema: { type: string, default: "true" }
+          description: "Set to true or 1 to include recommended actions; other supplied values are false."
       responses:
         "200":
-          description: OK
+          description: Provider health issues, scores, and recommended actions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderHealthAutopilotReport"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to build provider health autopilot report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/providers/health-autopilot/actions:
     post:
       operationId: postApiProvidersHealthAutopilotActions
@@ -20675,6 +20719,130 @@ components:
               items:
                 $ref: "#/components/schemas/ProviderHealthMatrixWebSessionPool"
           additionalProperties: false
+      additionalProperties: false
+
+    ProviderHealthAutopilotTarget:
+      type: object
+      required: [provider]
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        model: { type: string }
+      additionalProperties: false
+
+    ProviderHealthAutopilotAction:
+      type: object
+      required: [type, label, risk, requiresConfirmation, target, preconditionsHash]
+      properties:
+        type:
+          type: string
+          enum:
+            - clear_provider_breaker
+            - clear_connection_cooldown
+            - clear_stale_connection_error
+            - clear_model_lockout
+            - reactivate_connection
+            - deactivate_connection
+        label: { type: string }
+        risk: { type: string, enum: [low, medium, high] }
+        requiresConfirmation: { type: boolean }
+        target:
+          $ref: "#/components/schemas/ProviderHealthAutopilotTarget"
+        preconditionsHash:
+          type: string
+          minLength: 16
+          maxLength: 16
+          pattern: "^[0-9a-f]{16}$"
+      additionalProperties: false
+
+    ProviderHealthAutopilotIssue:
+      type: object
+      required: [id, severity, kind, title, recommendation, target, evidence, actions]
+      properties:
+        id: { type: string }
+        severity: { type: string, enum: [info, warning, critical] }
+        kind:
+          type: string
+          enum:
+            - provider_circuit_open
+            - provider_circuit_half_open
+            - connection_cooldown
+            - stale_connection_error
+            - terminal_connection_error
+            - inactive_connection
+            - model_lockout
+            - quota_monitor_warning
+        title: { type: string }
+        recommendation: { type: string }
+        target:
+          $ref: "#/components/schemas/ProviderHealthAutopilotTarget"
+        evidence:
+          type: object
+          additionalProperties: true
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderHealthAutopilotAction"
+      additionalProperties: false
+
+    ProviderHealthAutopilotProvider:
+      type: object
+      required: [provider, state, score, signals, issues]
+      properties:
+        provider: { type: string }
+        state: { type: string, enum: [healthy, degraded, down] }
+        score: { type: number, minimum: 0, maximum: 1 }
+        signals:
+          type: object
+          required: [circuitBreaker, connections, modelLockouts, quotaMonitor]
+          properties:
+            circuitBreaker:
+              oneOf:
+                - { type: object, additionalProperties: true }
+                - { type: "null" }
+            connections:
+              type: object
+              required: [total, active, inactive, cooldown, terminal, staleErrors]
+              properties:
+                total: { type: integer, minimum: 0 }
+                active: { type: integer, minimum: 0 }
+                inactive: { type: integer, minimum: 0 }
+                cooldown: { type: integer, minimum: 0 }
+                terminal: { type: integer, minimum: 0 }
+                staleErrors: { type: integer, minimum: 0 }
+              additionalProperties: false
+            modelLockouts: { type: integer, minimum: 0 }
+            quotaMonitor:
+              oneOf:
+                - { type: object, additionalProperties: true }
+                - { type: "null" }
+          additionalProperties: false
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderHealthAutopilotIssue"
+      additionalProperties: false
+
+    ProviderHealthAutopilotReport:
+      type: object
+      required: [status, checkedAt, summary, providers]
+      properties:
+        status: { type: string, enum: [healthy, warning, critical] }
+        checkedAt: { type: string, format: date-time }
+        summary:
+          type: object
+          required: [providerCount, connectionCount, healthyCount, issueCount, actionableCount]
+          properties:
+            providerCount: { type: integer, minimum: 0 }
+            connectionCount: { type: integer, minimum: 0 }
+            healthyCount: { type: integer, minimum: 0 }
+            issueCount: { type: integer, minimum: 0 }
+            actionableCount: { type: integer, minimum: 0 }
+          additionalProperties: false
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderHealthAutopilotProvider"
       additionalProperties: false
 
     ProviderExpirationRecord:
