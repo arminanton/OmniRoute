@@ -5,21 +5,38 @@ import path from "node:path";
 import * as yaml from "js-yaml";
 
 const specPath = path.join(process.cwd(), "docs", "openapi.yaml");
-const spec = yaml.load(fs.readFileSync(specPath, "utf8")) as any;
+type OpenApiMedia = { schema: Record<string, unknown>; [key: string]: unknown };
+type OpenApiResponse = { content?: Record<string, OpenApiMedia> };
+type OpenApiOperation = {
+  responses?: Record<string, OpenApiResponse>;
+  requestBody?: { content?: Record<string, OpenApiMedia> };
+  security?: Array<Record<string, unknown>>;
+};
+type OpenApiSpec = {
+  paths?: Record<string, Record<string, unknown>>;
+  components?: Record<string, unknown>;
+};
+const spec = yaml.load(fs.readFileSync(specPath, "utf8")) as OpenApiSpec;
 
-function operation(pathname: string, method: string): any {
-  const result = spec.paths?.[pathname]?.[method.toLowerCase()];
+function operation(pathname: string, method: string): OpenApiOperation {
+  const result = spec.paths?.[pathname]?.[method.toLowerCase()] as OpenApiOperation | undefined;
   assert.ok(result, `missing ${method.toUpperCase()} ${pathname}`);
   return result;
 }
 
-function successContent(op: any, mediaType: string): any {
+function successContent(op: OpenApiOperation, mediaType: string): OpenApiMedia {
   const response = Object.entries(op.responses ?? {}).find(([status]) =>
     String(status).startsWith("2")
-  )?.[1] as any;
+  )?.[1];
   assert.ok(response, "operation has no success response");
   const content = response.content?.[mediaType];
   assert.ok(content, `success response is missing ${mediaType}`);
+  return content;
+}
+
+function requestContent(op: OpenApiOperation, mediaType: string): OpenApiMedia {
+  const content = op.requestBody?.content?.[mediaType];
+  assert.ok(content, `request body is missing ${mediaType}`);
   return content;
 }
 
@@ -48,9 +65,8 @@ test("primary inference operations describe their JSON and streaming wire format
     "#/components/schemas/ResponsesResponse"
   );
   assert.equal(
-    operation("/api/v1/messages/count_tokens", "post").requestBody.content[
-      "application/json"
-    ].schema.$ref,
+    requestContent(operation("/api/v1/messages/count_tokens", "post"), "application/json").schema
+      .$ref,
     "#/components/schemas/CountTokensRequest"
   );
   assert.equal(
@@ -119,13 +135,12 @@ test("primary inference operations describe their JSON and streaming wire format
     "#/components/schemas/ResponsesResponse"
   );
   assert.deepEqual(
-    operation("/api/v1/audio/speech", "post").requestBody.content["application/json"].schema
-      .required,
+    requestContent(operation("/api/v1/audio/speech", "post"), "application/json").schema.required,
     ["model", "input"]
   );
   assert.equal(
-    operation("/api/v1/images/generations", "post").requestBody.content["application/json"]
-      .schema.$ref,
+    requestContent(operation("/api/v1/images/generations", "post"), "application/json").schema
+      .$ref,
     "#/components/schemas/ImageGenerationRequest"
   );
   assert.equal(
@@ -163,7 +178,10 @@ test("client inference auth reflects key, session, and configured anonymous acce
       "GoogleApiKeyAuth",
       "ManagementSessionAuth",
     ]) {
-      assert.ok(requirements.some((requirement: any) => scheme in requirement), `${pathname}: ${scheme}`);
+      assert.ok(
+        requirements.some((requirement) => scheme in requirement),
+        `${pathname}: ${scheme}`
+      );
     }
   }
 });
@@ -184,10 +202,14 @@ test("all local OpenAPI references resolve", () => {
   const missing: string[] = [];
   for (const ref of refs) {
     if (!ref.startsWith("#/")) continue;
-    let target: any = spec;
+    let target: unknown = spec;
     try {
       for (const part of ref.slice(2).split("/")) {
-        target = target[part.replace(/~1/g, "/").replace(/~0/g, "~")];
+        if (!target || typeof target !== "object" || Array.isArray(target)) {
+          target = undefined;
+          break;
+        }
+        target = (target as Record<string, unknown>)[part.replace(/~1/g, "/").replace(/~0/g, "~")];
       }
     } catch {
       target = undefined;
