@@ -3,6 +3,7 @@ import type {
   DiagnosticOverflowTrace,
 } from "@/lib/usage/diagnosticOverflow";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 
 import { updatePendingScope, type PendingRequestScope } from "@/lib/usage/pendingRequestScope";
 
@@ -11,6 +12,8 @@ export type ProviderRequestPrepared = {
   headers: Record<string, string>;
   body: unknown;
   bodyString: string;
+  /** Hash used to match private-overflow requests without retaining their serialized body. */
+  bodyFingerprint?: string;
 };
 
 export type Capture = {
@@ -95,20 +98,35 @@ export function parseBody(bodyString: string): unknown {
   }
 }
 
+function fingerprintProviderBody(bodyString: string): string {
+  return createHash("sha256").update(bodyString).digest("hex");
+}
+
 async function capturePreparedRequest(
   requestCapture: Capture | null | undefined,
   url: string,
   headers: Record<string, string>,
   body: unknown,
   bodyString: string,
-  log?: WarnLog | null
+  log?: WarnLog | null,
+  bodyFingerprint?: string
 ) {
   if (!requestCapture || requestCapture.enabled === false) return;
   const latest = requestCapture.latest?.();
-  if (latest?.url === url && latest.bodyString === bodyString) return;
+  const sameBody =
+    bodyString === "private-overflow"
+      ? Boolean(bodyFingerprint && latest?.bodyFingerprint === bodyFingerprint)
+      : latest?.bodyString === bodyString;
+  if (latest?.url === url && sameBody) return;
 
   try {
-    await requestCapture.capture({ url, headers, body, bodyString });
+    await requestCapture.capture({
+      url,
+      headers,
+      body,
+      bodyString,
+      ...(bodyFingerprint ? { bodyFingerprint } : {}),
+    });
   } catch (error) {
     log?.warn?.(
       "REQUEST_LOG",
@@ -142,7 +160,15 @@ export function captureCurrentProviderBody(
 ) {
   const requestCapture = captureState.context.getStore();
   if (requestCapture?.diagnosticOverflowOnly) {
-    return capturePreparedRequest(requestCapture, url, headers, null, "private-overflow", log);
+    return capturePreparedRequest(
+      requestCapture,
+      url,
+      headers,
+      null,
+      "private-overflow",
+      log,
+      fingerprintProviderBody(bodyString)
+    );
   }
   return captureCurrentProviderRequest(url, headers, parseBody(bodyString), bodyString, log);
 }
@@ -204,12 +230,19 @@ async function captureFetchRequest(
   const bodyString = bodyToString(init?.body);
   if (!bodyString) return null;
 
-  const body = parseBody(bodyString);
-  if (!looksLikeProviderRequestBody(body)) return null;
-
   const url = getFetchUrl(input);
   const headers = getFetchHeaders(input, init);
-  await capturePreparedRequest(requestCapture, url, headers, body, bodyString);
+  const latest = requestCapture.latest?.();
+  const alreadyPrepared =
+    latest?.url === url &&
+    (latest.bodyString === bodyString ||
+      (latest.bodyString === "private-overflow" &&
+        latest.bodyFingerprint === fingerprintProviderBody(bodyString)));
+  if (!alreadyPrepared) {
+    const body = parseBody(bodyString);
+    if (!looksLikeProviderRequestBody(body)) return null;
+    await capturePreparedRequest(requestCapture, url, headers, body, bodyString);
+  }
 
   const trace = requestCapture.diagnosticTrace;
   if (!trace || !isCodexProvider(requestCapture.diagnosticProvider)) return null;
@@ -395,14 +428,21 @@ export function createPreparedRequestLogger(
     },
     capture(request) {
       if (!enabled) return;
-      latest = request;
       if (diagnosticOverflowOnly) {
+        latest = {
+          url: request.url,
+          headers: {},
+          body: null,
+          bodyString: "private-overflow",
+          bodyFingerprint: request.bodyFingerprint ?? fingerprintProviderBody(request.bodyString),
+        };
         reqLogger.logTargetRequest(request.url, request.headers, null);
         updatePendingScope(scope, {
           providerUrl: request.url,
           stage: "sending_to_provider",
         });
       } else {
+        latest = request;
         reqLogger.logTargetRequest(request.url, request.headers, request.body);
         updatePendingScope(scope, {
           providerRequest: request.body,

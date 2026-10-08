@@ -599,6 +599,24 @@ process `VmHWM`/`resourceUsage.maxRSS` supplies the process-wide high-water, whi
 sampled rather than exact allocation maxima. This profile narrows the memory mix but does not identify
 retained object types; a heap allocation profile remains necessary.
 
+An allocation-profile A/B with the same 402-request, private-capture workload found two redundant
+body copies. Before the fix, V8's sampled allocation profile attributed 507,618,872 bytes to
+`payloadRules.cloneValue()`/`structuredClone()` and 274,261,024 bytes to
+`providerRequestLogging.parseBody()` on bodies already prepared by the executor. The rules config in
+this harness is empty; the fast path also skips cloning when configured rules do not match the
+current model/protocol. The provider body had already been logged by the Antigravity executor. After
+the fix, both stacks were absent from the profile: empty or nonmatching payload rules return the
+input to the immutable target-sanitization boundary, and the fetch observer recognizes a prepared
+private-overflow body by its SHA-256 fingerprint before parsing it again. The profile's total sampled
+self-allocation fell from 1,747,920,736 bytes to 681,827,696 bytes (61.0%); the undici client-body
+`parseJSONFromBytes` stack remained about 525 MB, as the gateway still must parse each incoming JSON
+request once. Sampled V8 heap peak fell from 1,852.5 MiB to 868.3 MiB; process max RSS fell from
+2,678,464 KiB to 1,717,500 KiB. Both A/B runs passed all 402 requests and finalized 402 private
+traces. Their wall times were 84.59s and 83.11s, so the measured gain is lower allocation and memory,
+not a material latency change. Heap-prof sampling totals are allocation volume, not retained heap;
+the matched flags and request corpus make the before/after comparison more useful than a language
+benchmark, but this is still a local mock-provider route test.
+
 The Logs detail modal reads the trace manifest and exposes downloads for the compressed client
 request and each provider request/response, including partial-state labels. This makes the private
 payloads reachable from the call-log row while keeping them out of the ordinary artifact.

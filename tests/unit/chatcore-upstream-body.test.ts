@@ -18,6 +18,8 @@ const { translateRequest } = await import("../../open-sse/translator/index.ts");
 const { FORMATS } = await import("../../open-sse/translator/formats.ts");
 const { setParamFilterConfig, deleteParamFilterConfig } =
   await import("../../src/lib/db/paramFilters.ts");
+const { clearPayloadRulesConfigOverride, setPayloadRulesConfig } =
+  await import("../../open-sse/services/payloadRules.ts");
 
 before(async () => {
   await coreDb.ensureDbInitialized();
@@ -48,6 +50,37 @@ test("leaves the model untouched when it already matches", async () => {
     credentials: null,
   });
   assert.equal(out.model, "model-a");
+});
+
+test("empty payload rules avoid a deep prompt clone while preserving a fresh outbound root", async () => {
+  const translatedBody = {
+    model: "model-a",
+    messages: [{ role: "user", content: "x".repeat(262_144) }],
+  };
+  const originalMessages = translatedBody.messages;
+  setPayloadRulesConfig({});
+  try {
+    const out = await prepareUpstreamBody({
+      translatedBody,
+      modelToCall: "model-a",
+      provider: "some-provider",
+      targetFormat: "claude",
+      credentials: null,
+    });
+    assert.notEqual(out, translatedBody, "target sanitation still returns a fresh top-level body");
+    assert.equal(
+      out.messages,
+      originalMessages,
+      "the no-op rule stage should not deep-clone messages"
+    );
+    assert.deepEqual(
+      translatedBody.messages,
+      originalMessages,
+      "upstream preparation must not mutate input"
+    );
+  } finally {
+    clearPayloadRulesConfigOverride();
+  }
 });
 
 test("defaults OpenAI image inputs to high detail for OpenCode clients without overriding explicit detail", async () => {

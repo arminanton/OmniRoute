@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  captureCurrentProviderBody,
   createPreparedRequestLogger,
   runWithCapture,
   type Capture,
@@ -214,6 +215,64 @@ test("runWithCapture does not duplicate an already prepared identical fetch", as
 
     assert.equal(prepared.length, 1);
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("private-overflow prepared bodies skip the duplicate provider-fetch JSON parse", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalParse = JSON.parse;
+  const bodyString = JSON.stringify({
+    model: "antigravity/gemini-3.8-flash-high",
+    request: { contents: [{ role: "user", parts: [{ text: "x".repeat(262_144) }] }] },
+  });
+  const url = "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent";
+  const scope = {
+    id: null,
+    model: "gemini-3.8-flash-high",
+    provider: "antigravity",
+    connectionId: null,
+  };
+  let loggedBody: unknown = "not-called";
+  let bodyParseCalls = 0;
+  const capture = createPreparedRequestLogger(
+    {
+      diagnosticOverflowOnly: true,
+      getDiagnosticOverflowTrace: () => null,
+      logTargetRequest: (_url, _headers, body) => {
+        loggedBody = body;
+      },
+    },
+    scope,
+    { provider: "antigravity" }
+  );
+
+  globalThis.fetch = async () => new Response("ok");
+  JSON.parse = ((
+    text: string,
+    reviver?: (this: unknown, key: string, value: unknown) => unknown
+  ) => {
+    if (text === bodyString) bodyParseCalls++;
+    return originalParse(text, reviver);
+  }) as typeof JSON.parse;
+
+  try {
+    await runWithCapture(capture, async () => {
+      await captureCurrentProviderBody(url, { "content-type": "application/json" }, bodyString);
+      const response = await fetch(url, { method: "POST", body: bodyString });
+      assert.equal(await response.text(), "ok");
+    });
+
+    assert.equal(bodyParseCalls, 0);
+    assert.equal(
+      loggedBody,
+      null,
+      "private overflow must leave the full request body out of the ordinary log"
+    );
+    assert.equal(capture.latest?.()?.bodyString, "private-overflow");
+    assert.equal(capture.latest?.()?.bodyFingerprint?.length, 64);
+  } finally {
+    JSON.parse = originalParse;
     globalThis.fetch = originalFetch;
   }
 });

@@ -460,6 +460,18 @@ export async function applyConfiguredPayloadRules(
   protocol: string | string[]
 ) {
   const rules = await getPayloadRulesConfig();
+  const protocols = toPayloadRuleProtocols(protocol);
+  const hasMatchingRule =
+    rules.default.some((rule) => matchesRule(model, protocols, rule.models)) ||
+    rules.defaultRaw.some((rule) => matchesRule(model, protocols, rule.models)) ||
+    rules.override.some((rule) => matchesRule(model, protocols, rule.models)) ||
+    rules.filter.some((rule) => matchesRule(model, protocols, rule.models));
+  // The common no-applicable-rule path must not structuredClone a large prompt
+  // only to return it unchanged. `prepareUpstreamBody` subsequently creates a
+  // fresh top-level object before its provider-specific sanitation steps.
+  if (!hasMatchingRule) {
+    return { payload, applied: [] as AppliedPayloadRule[] };
+  }
   return applyPayloadRules(payload, model, protocol, rules);
 }
 

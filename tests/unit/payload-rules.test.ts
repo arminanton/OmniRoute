@@ -4,8 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const { applyPayloadRules, getPayloadRulesConfig, resetPayloadRulesConfigForTests } =
-  await import("../../open-sse/services/payloadRules.ts");
+const {
+  applyConfiguredPayloadRules,
+  applyPayloadRules,
+  getPayloadRulesConfig,
+  resetPayloadRulesConfigForTests,
+  setPayloadRulesConfig,
+} = await import("../../open-sse/services/payloadRules.ts");
 
 const ORIGINAL_PAYLOAD_RULES_PATH = process.env.OMNIROUTE_PAYLOAD_RULES_PATH;
 const ORIGINAL_PAYLOAD_RULES_RELOAD_MS = process.env.OMNIROUTE_PAYLOAD_RULES_RELOAD_MS;
@@ -23,6 +28,46 @@ test.afterEach(() => {
     delete process.env.OMNIROUTE_PAYLOAD_RULES_RELOAD_MS;
   } else {
     process.env.OMNIROUTE_PAYLOAD_RULES_RELOAD_MS = ORIGINAL_PAYLOAD_RULES_RELOAD_MS;
+  }
+});
+
+test("empty configured rules do not deep-clone a large request body", async () => {
+  const payload = {
+    model: "gpt-6.1-sol",
+    messages: [{ role: "user", content: "x".repeat(262_144) }],
+  };
+  setPayloadRulesConfig({});
+  try {
+    const result = await applyConfiguredPayloadRules(payload, "gpt-6.1-sol", "openai");
+    assert.equal(result.payload, payload, "no configured mutation should reuse the input object");
+    assert.deepEqual(result.applied, []);
+  } finally {
+    resetPayloadRulesConfigForTests();
+  }
+});
+
+test("rules for another model and protocol do not deep-clone the request body", async () => {
+  const payload = {
+    model: "antigravity/gemini-3.8-flash-high",
+    messages: [{ role: "user", content: "x".repeat(262_144) }],
+  };
+  setPayloadRulesConfig({
+    default: [
+      {
+        models: [{ name: "codex/*", protocol: "openai-codex" }],
+        params: { service_tier: "priority" },
+      },
+    ],
+  });
+  try {
+    const result = await applyConfiguredPayloadRules(payload, payload.model, [
+      "antigravity",
+      "gemini",
+    ]);
+    assert.equal(result.payload, payload);
+    assert.deepEqual(result.applied, []);
+  } finally {
+    resetPayloadRulesConfigForTests();
   }
 });
 
