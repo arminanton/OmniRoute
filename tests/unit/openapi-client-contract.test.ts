@@ -280,6 +280,7 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/providers/cursor/agent-availability", "get", "CursorAgentAvailabilityResponse"],
     ["/api/providers/quota-windows", "get", "ProviderQuotaWindowsResponse"],
     ["/api/providers/web-session-contract", "get", "WebSessionContract"],
+    ["/api/providers/test-batch", "post", "ProviderBatchTestResponse"],
     ["/api/keys", "get", "ApiKeyListResponse"],
     ["/api/keys", "post", "ApiKeyCreateResponse"],
     ["/api/combos", "get", "ComboListResponse"],
@@ -364,6 +365,17 @@ test("model, provider, key, and combo management responses match their route pay
   assert.ok(cursorAvailability?.cursorAgentAvailable);
   assert.ok(schemas?.ProviderQuotaWindowsResponse?.required?.includes("defaults"));
   assert.ok(schemas?.WebSessionContract?.required?.includes("providers"));
+  const batchTestRequest = requestContent(
+    operation("/api/providers/test-batch", "post"),
+    "application/json"
+  ).schema;
+  assert.equal(batchTestRequest.$ref, "#/components/schemas/ProviderBatchTestRequest");
+  assert.ok(schemas?.ProviderBatchTestRequest?.required?.includes("mode"));
+  assert.ok(schemas?.ProviderBatchTestResponse?.required?.includes("summary"));
+  const batchTestSecurity = operation("/api/providers/test-batch", "post").security ?? [];
+  assert.ok(batchTestSecurity.some((requirement) => "BearerAuth" in requirement));
+  assert.ok(batchTestSecurity.some((requirement) => "ManagementSessionAuth" in requirement));
+  assert.ok(batchTestSecurity.some((requirement) => Object.keys(requirement).length === 0));
   assert.ok(schemas?.ApiKeyListResponse?.required?.includes("allowKeyReveal"));
   assert.ok(schemas?.ApiKeyCreateResponse?.required?.includes("key"));
   assert.equal(

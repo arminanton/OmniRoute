@@ -2932,9 +2932,48 @@ paths:
       operationId: postApiProvidersTestBatch
       tags: [Providers]
       summary: Test multiple providers at once
+      description: >-
+        Tests matching connections in batches of at most five concurrent probes. The selected mode
+        may include inactive connections only when explicit connection IDs are provided.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderBatchTestRequest"
       responses:
         "200":
-          description: Batch test results
+          description: Per-connection results and aggregate counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderBatchTestResponse"
+        "400":
+          description: Invalid JSON or batch-test parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Batch test failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/providers/validate:
     post:
@@ -19959,6 +19998,95 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/WebSessionContractProvider"
+      additionalProperties: false
+
+    ProviderBatchTestRequest:
+      type: object
+      required: [mode]
+      description: >-
+        providerId is required when mode is provider. connectionIds is required and non-empty
+        when mode is selected. Null is accepted for either optional field when its mode does not
+        use it.
+      properties:
+        mode:
+          type: string
+          enum:
+            - provider
+            - oauth
+            - free
+            - no-auth
+            - apikey
+            - compatible
+            - all
+            - web-cookie
+            - search
+            - audio
+            - local
+            - upstream-proxy
+            - cloud-agent
+            - ide
+            - selected
+        providerId:
+          type: [string, "null"]
+          minLength: 1
+        connectionIds:
+          oneOf:
+            - type: array
+              minItems: 1
+              maxItems: 100
+              items: { type: string, minLength: 1 }
+            - { type: "null" }
+      additionalProperties: true
+
+    ProviderBatchTestResult:
+      type: object
+      required:
+        - provider
+        - connectionId
+        - connectionName
+        - authType
+        - valid
+        - latencyMs
+        - error
+        - diagnosis
+        - statusCode
+        - testedAt
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        connectionName: { type: string }
+        authType: { type: string }
+        valid: { type: boolean }
+        latencyMs: { type: number, minimum: 0 }
+        error: { type: [string, "null"] }
+        diagnosis:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - { type: "null" }
+        statusCode: { type: [integer, "null"], minimum: 100, maximum: 599 }
+        testedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ProviderBatchTestResponse:
+      type: object
+      required: [mode, providerId, results, testedAt, summary]
+      properties:
+        mode: { type: string }
+        providerId: { type: [string, "null"] }
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderBatchTestResult"
+        testedAt: { type: string, format: date-time }
+        summary:
+          type: object
+          required: [total, passed, failed]
+          properties:
+            total: { type: integer, minimum: 0 }
+            passed: { type: integer, minimum: 0 }
+            failed: { type: integer, minimum: 0 }
+          additionalProperties: false
       additionalProperties: false
 
     ApiKey:
