@@ -2875,11 +2875,67 @@ paths:
       operationId: postApiProvidersByIdTest
       tags: [Providers]
       summary: Test provider connection
+      description: >-
+        Runs a provider-specific health/credential probe and may refresh OAuth credentials. A
+        skipped or unsupported probe is represented in the JSON result and is not necessarily an
+        upstream authentication failure.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderConnectionTestRequest"
       responses:
         "200":
-          description: Test result
+          description: Connection probe result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionTestResult"
+        "400":
+          description: Invalid optional test settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied the probe
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "404":
+          description: Provider connection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "410":
+          description: Provider is retired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "500":
+          description: Connection test failed unexpectedly
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "503":
+          description: Management authentication or provider service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
 
   /api/providers/{id}/models:
     get:
@@ -20210,6 +20266,59 @@ components:
         valid: { type: boolean }
         unsupported: { type: boolean }
         skipped: { type: boolean }
+        inconclusive: { type: boolean }
+        unverified: { type: boolean }
+        code: { type: string }
+      additionalProperties: true
+
+    ProviderConnectionTestRequest:
+      type: object
+      properties:
+        validationModelId: { type: string, maxLength: 500 }
+      additionalProperties: true
+
+    ProviderConnectionTestDiagnosis:
+      type: object
+      properties:
+        type: { type: string }
+        source: { type: string }
+        message: { type: [string, "null"] }
+        code: { type: [string, "null"] }
+      additionalProperties: true
+
+    ProviderConnectionTestResult:
+      type: object
+      required: [valid]
+      properties:
+        valid: { type: boolean }
+        error: { type: string }
+        warning: { type: [string, "null"] }
+        refreshed: { type: boolean }
+        diagnosis:
+          oneOf:
+            - $ref: "#/components/schemas/ProviderConnectionTestDiagnosis"
+            - { type: "null" }
+        latencyMs: { type: number, minimum: 0 }
+        statusCode: { type: [integer, "null"], minimum: 100, maximum: 599 }
+        runtime:
+          oneOf:
+            - type: object
+              properties:
+                installed: { type: boolean }
+                runnable: { type: boolean }
+                requiresBinary: { type: boolean }
+                reason: { type: string, maxLength: 512 }
+                runtimeMode: { type: string, maxLength: 512 }
+                version: { type: string, maxLength: 512 }
+                command: { type: string, maxLength: 512 }
+              additionalProperties: false
+            - { type: "null" }
+        testedAt:
+          oneOf:
+            - { type: string, format: date-time }
+            - { type: "null" }
+        skipped: { type: boolean }
+        unsupported: { type: boolean }
         inconclusive: { type: boolean }
         unverified: { type: boolean }
         code: { type: string }

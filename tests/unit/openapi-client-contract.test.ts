@@ -277,6 +277,7 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/providers/{id}", "patch", "ProviderConnectionEnvelope"],
     ["/api/providers/{id}", "put", "ProviderConnectionEnvelope"],
     ["/api/providers/{id}", "delete", "ProviderConnectionDeleteResponse"],
+    ["/api/providers/{id}/test", "post", "ProviderConnectionTestResult"],
     ["/api/providers/cursor/agent-availability", "get", "CursorAgentAvailabilityResponse"],
     ["/api/providers/quota-windows", "get", "ProviderQuotaWindowsResponse"],
     ["/api/providers/web-session-contract", "get", "WebSessionContract"],
@@ -393,6 +394,21 @@ test("model, provider, key, and combo management responses match their route pay
   assert.ok(validationResponses?.["401"]);
   assert.ok(validationResponses?.["403"]);
   assert.ok(validationResponses?.default);
+  const connectionTestRequest = requestContent(
+    operation("/api/providers/{id}/test", "post"),
+    "application/json"
+  ).schema;
+  assert.equal(
+    connectionTestRequest.$ref,
+    "#/components/schemas/ProviderConnectionTestRequest"
+  );
+  const connectionTest = operation("/api/providers/{id}/test", "post");
+  const connectionTestSecurity = connectionTest.security ?? [];
+  assert.ok(connectionTestSecurity.some((requirement) => "BearerAuth" in requirement));
+  assert.ok(connectionTestSecurity.some((requirement) => "ManagementSessionAuth" in requirement));
+  assert.ok(connectionTestSecurity.some((requirement) => Object.keys(requirement).length === 0));
+  assert.ok(connectionTest.responses?.["404"]);
+  assert.ok(connectionTest.responses?.["410"]);
   assert.ok(schemas?.ApiKeyListResponse?.required?.includes("allowKeyReveal"));
   assert.ok(schemas?.ApiKeyCreateResponse?.required?.includes("key"));
   assert.equal(
