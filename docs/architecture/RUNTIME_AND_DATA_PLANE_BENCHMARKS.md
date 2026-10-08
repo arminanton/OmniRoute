@@ -64,6 +64,33 @@ Bun `--smol` was tested once as an exploratory mode: RSS fell by only a few MiB 
 latency rose substantially. It is excluded from the repeated comparison table because that trial's
 load generator was not pinned identically.
 
+## Multi-turn, persistent-session transport run
+
+The harness now replays five sequential streamed requests for each independent agent session over a
+reused HTTP/1.1 client connection. Later requests contain earlier user turns plus synthetic
+`function_call` and `function_call_output` history. Each user turn adds 64 KiB of synthetic text;
+the largest JSON body is 328,947 bytes. The mock upstream emits 50 SSE chunks at 10 ms intervals.
+This models repeated requests and growing conversation bodies, but it does not run a real model,
+execute a tool, or match 64 KiB to a token count.
+
+At 70 sessions, all three runtimes completed 350/350 requests in one trial each. At 100 sessions,
+each runtime completed 500/500 requests in all three trials. The table shows the median across
+those three 100-session trials; completion time includes the mock stream delay.
+
+| Runtime | Successful sessions / requests | First body p50 / p95 | Completion p50 / p95 | Peak RSS | CPU seconds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Node 26.10.0 | 100 / 500, each trial | 34.1 / 202.2 ms | 584.8 / 754.4 ms | 112.4 MiB | 1.82 |
+| Bun 1.4.2 | 100 / 500, each trial | 23.3 / 51.3 ms | 541.2 / 579.7 ms | 63.1 MiB | 0.65 |
+| Rust/Axum/Reqwest | 100 / 500, each trial | 21.5 / 102.0 ms | 535.6 / 624.9 ms | 43.3 MiB | 0.39 |
+
+In this scenario, Rust had the smallest measured gateway footprint and CPU use; Bun had the lowest
+first-body p95 and slightly higher aggregate request throughput; Node used more memory and CPU.
+The first-byte p95 spread varied between trials, especially for Node and Rust. This validates that
+the prototype transports can carry 70–100 concurrent persistent client sessions through repeated
+requests without failure. It does not demonstrate 70–100 full OmniRoute agent workloads: database
+lookups, tenant limits, account scheduling, production logging, provider adapters, actual tool
+execution, and provider quotas are outside this harness.
+
 The Rust prototype streams both request and response bodies and holds its bounded semaphore permit
 until the response finishes or is cancelled. Rust does not use a garbage collector; its memory-safety
 model comes from compile-checked ownership and borrowing. The benchmark demonstrates a small proxy
@@ -119,8 +146,8 @@ was close to 1.4.0; a full Bun 1.4.2 application build was not run.
   peak cgroup memory, output size, and health/model-catalog smoke tests.
 - Run the Bun application build with a locked dependency graph and on both 1.4.0 and 1.4.2; record
   native-module, database, streaming, and shutdown differences.
-- Exercise the full Next app with mock provider credentials at 70 and 100 active streams, including
-  real multi-turn tool-call cycles and account-level limits.
+- Exercise the full OmniRoute app with mock provider credentials at 70 and 100 active sessions,
+  including actual tool-call cycles, authentication, call-log capture, and account-level limits.
 - Compare the current TypeScript route, Rust proxy, and Bifrost only with identical provider mocks
   and request policy; no language-wide performance conclusion follows from the current harness.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
