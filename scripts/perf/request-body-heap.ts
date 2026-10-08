@@ -25,6 +25,7 @@
  *   npm run bench:heap-body -- --messages 800 --tools 120
  *   npm run bench:heap-body -- --concurrency 16      # simulate overlapping requests
  *   npm run bench:heap-body -- --json                # machine-readable
+ *   npm run bench:heap-body -- --pipeline-mode legacy # compare pre-dedup retention
  *   npm run bench:heap-body -- --max-retained-mib 64 # non-zero exit if exceeded (regression gate)
  */
 import os from "node:os";
@@ -68,6 +69,14 @@ const TARGETS = numArg("--targets", 3); // combo targets -> shallow attemptBody 
 const CONCURRENCY = numArg("--concurrency", 8);
 const MAX_RETAINED = numArg("--max-retained-mib", 0); // 0 = report only
 const AS_JSON = HAS("--json");
+const PIPELINE_MODE = (() => {
+  const index = process.argv.indexOf("--pipeline-mode");
+  const value = index < 0 ? "dedup" : process.argv[index + 1];
+  if (value !== "legacy" && value !== "dedup") {
+    throw new Error("--pipeline-mode must be legacy or dedup");
+  }
+  return value;
+})();
 
 const MIB = 1024 * 1024;
 const fmt = (bytes: number) => (bytes / MIB).toFixed(2);
@@ -178,7 +187,13 @@ async function main(): Promise<void> {
     Array.from({ length: CONCURRENCY }, () => {
       const parsedBody = structuredClone(body);
       const pendingSnapshot = cloneBoundedForLog(parsedBody, 0, null, clientTextLimit);
-      const pipeline = cloneClientRawRequestPayloadForLog(pendingSnapshot, parsedBody.input);
+      const pipeline =
+        PIPELINE_MODE === "legacy"
+          ? {
+              body: cloneBoundedForLog(pendingSnapshot, 0, null, clientTextLimit),
+              effectiveInput: cloneBoundedForLog(parsedBody.input),
+            }
+          : cloneClientRawRequestPayloadForLog(pendingSnapshot, parsedBody.input);
       return { parsedBody, pendingSnapshot, pipeline };
     })
   );
@@ -191,6 +206,7 @@ async function main(): Promise<void> {
       JSON.stringify(
         {
           runtime: process.version,
+          pipelineMode: PIPELINE_MODE,
           shape: {
             endpoint: "/v1/responses (synthetic, incident-derived payload)",
             messages: MESSAGES,
@@ -216,7 +232,7 @@ async function main(): Promise<void> {
   } else {
     console.log(`# Request-body retained-state benchmark (#7847)\n`);
     console.log(
-      `Runtime: **${process.version}** · synthetic Responses payload: ${MESSAGES} messages · ${TOOLS} tools · wire size **${fmt(wireBytes)} MiB**` +
+      `Runtime: **${process.version}** · ${PIPELINE_MODE} pipeline · synthetic Responses payload: ${MESSAGES} messages · ${TOOLS} tools · wire size **${fmt(wireBytes)} MiB**` +
         ` · ${TARGETS} combo targets · JSON stringify ${jsonSerializationMs.toFixed(1)} ms\n`
     );
     console.log("| mechanism | call site | retained | x wire |");
