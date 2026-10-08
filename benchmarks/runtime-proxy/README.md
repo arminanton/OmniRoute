@@ -100,11 +100,29 @@ than giving the gateway four exclusive cores; the mock is still local and no rea
 capacity is involved:
 
 ```bash
-python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --upstream-runtime rust --clients 70 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10 --max-inflight 128 --gateway-cpus 0-3 --upstream-cpus 0-3 --load-cpus 0-3
-python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --upstream-runtime rust --clients 100 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10 --max-inflight 128 --gateway-cpus 0-3 --upstream-cpus 0-3 --load-cpus 0-3
+run_target() {
+  python3 benchmarks/runtime-proxy/run_bench.py \
+    --runtime "$1" --upstream-runtime rust --clients "$2" --rounds 5 \
+    --context-bytes 262144 --chunks 100 --chunk-delay-ms 10 --max-inflight 128 \
+    --upstream-port "$3" --gateway-port "$4" \
+    --gateway-cpus 0-3 --upstream-cpus 0-3 --load-cpus 0-3 --allow-non2xx
+}
+run_target node 70 64120 64121
+run_target bun140-container 70 64122 64123
+run_target rust 70 64124 64125
+run_target node 100 64126 64127
+run_target bun140-container 100 64128 64129
+run_target rust 100 64130 64131
 ```
 
-The four-CPU co-located 5,000/10,000 sweep had intermittent 502s. A 10,000-session diagnostic retry
+The 70-session runs completed 350/350 once for each runtime. Three 100-session trials per runtime
+completed 500/500 requests each; results and limitations are in
+`docs/architecture/RUNTIME_AND_DATA_PLANE_BENCHMARKS.md`. Change the port pairs on each rerun so
+previous local socket state cannot interfere. For repeated 100-session runs, invoke the three
+100-client rows two more times with fresh port pairs; inspect the `failed` count in each JSON result
+because `--allow-non2xx` lets the sweep continue after a failed trial. The four-CPU co-located
+5,000/10,000 sweep had
+intermittent 502s. A 10,000-session diagnostic retry
 captured `Connection reset by peer (os error 104)` from the local mock connection; repeated runs
 varied substantially, so treat that as a mock-path saturation signal rather than a gateway or real
 provider limit. Keep it separate from the successful isolated-gateway comparison.

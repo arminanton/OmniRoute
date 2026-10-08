@@ -301,15 +301,26 @@ peer (os error 104)` while sending to the local mock; prior repeated 10,000 runs
 429 failures. This points to the constrained, co-located loopback mock connection path, but the
 specific close behavior is not isolated. The stress results are not evidence of OmniRoute or a real
 provider failing. Gateway peak RSS was 174.8 MiB at 5,000 and 389.6 MiB at 10,000 in the earlier
-failed trials. The separate 70–100 long-lived-session probe on the same four-CPU set is more
-representative of the requested agent count. With five sequential turns per
-session, 262,144 bytes of synthetic user text per turn, bodies up to 1,311,987 bytes, and 100 SSE
-chunks spaced 10 ms apart, the 70-session run completed 350/350 requests. Three 100-session trials
-each completed 500/500 requests; median first-body p95 was 66.8 ms, completion p95 1,184.8 ms,
-gateway peak RSS 61.3 MiB, and gateway CPU 0.85 seconds. This supports the transport prototype at
-70–100 synthetic active sessions on a shared four-CPU set. It does not include OmniRoute auth,
-routing/account policy, database work, provider SDKs, persistent call-log capture, tool execution,
-or real upstream quotas, so it is not yet a production-capacity claim.
+failed trials.
+
+A separate 70–100-session workload on the same shared four-CPU set is more representative of the
+requested agent count. Each session made five sequential requests with 262,144 bytes of synthetic
+user text per turn, bodies up to 1,311,987 bytes, and 100 SSE chunks spaced 10 ms apart. At 70
+sessions, Node, Bun, and Rust each completed 350/350 requests in one trial. At 100 sessions, each
+runtime completed 500/500 requests in all three trials.
+
+| Runtime | Trials at 100 sessions | First-body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Node 25.8.1 | 3/3 passed | 167 ms | 1,299 ms | 291.2 MiB | 3.41 s | 82.3 req/s |
+| Bun 1.4.0 | 3/3 passed | 59 ms | 1,162 ms | 70.8 MiB | 1.89 s | 84.0 req/s |
+| Rust/Axum/Reqwest 1.94 | 3/3 passed | 68 ms | 1,174 ms | 65.0 MiB | 0.86 s | 83.1 req/s |
+
+The gateway, local Rust mock, and Python client were pinned to CPUs 0–3; Bun ran in its official
+512 MiB container with its host PID pinned after startup. For this synthetic transport workload,
+Bun had the lowest first-body p95, Rust the lowest measured RSS and CPU, and Node the highest RSS
+and CPU. All three had similar throughput and no failed requests. These runs omit OmniRoute auth,
+database policy, account scheduling, provider SDKs, persistent call-log capture, tool execution,
+and real upstream quotas; they do not establish production capacity.
 
 ## Production admission middleware with long-lived streams
 
