@@ -104,7 +104,14 @@ export function projectResourcePressureObservation(
   if (!observation || typeof observation !== "object") return null;
   const signals = observation.signals;
   return {
-    state: { ...observation.state },
+    state: {
+      severity: observation.state.severity,
+      reason: observation.state.reason,
+      elevatedStreak: observation.state.elevatedStreak,
+      recoveryStreak: observation.state.recoveryStreak,
+      lastTransitionAtMs: observation.state.lastTransitionAtMs,
+      observedAtMs: observation.state.observedAtMs,
+    },
     sampleAgeMs:
       signals && Number.isFinite(signals.observedAtMs)
         ? Math.max(0, Math.round(nowMs - signals.observedAtMs))
@@ -112,16 +119,42 @@ export function projectResourcePressureObservation(
     signals: signals
       ? {
           observedAtMs: signals.observedAtMs,
-          v8: { ...signals.v8 },
-          process: { ...signals.process },
+          v8: {
+            heapUsedBytes: signals.v8.heapUsedBytes,
+            heapLimitBytes: signals.v8.heapLimitBytes,
+          },
+          process: {
+            rssBytes: signals.process.rssBytes,
+            externalBytes: signals.process.externalBytes,
+            arrayBuffersBytes: signals.process.arrayBuffersBytes,
+            availableBytes: signals.process.availableBytes,
+            constrainedBytes: signals.process.constrainedBytes,
+          },
           cgroup: {
             currentBytes: signals.cgroup.currentBytes,
             maxBytes: signals.cgroup.maxBytes,
             highBytes: signals.cgroup.highBytes,
             fileBytes: signals.cgroup.fileBytes,
-            events: signals.cgroup.events ? { ...signals.cgroup.events } : null,
+            events: signals.cgroup.events
+              ? {
+                  low: signals.cgroup.events.low,
+                  high: signals.cgroup.events.high,
+                  max: signals.cgroup.events.max,
+                  oom: signals.cgroup.events.oom,
+                  oom_kill: signals.cgroup.events.oom_kill,
+                }
+              : null,
           },
-          psi: signals.psi ? { ...signals.psi } : null,
+          psi: signals.psi
+            ? {
+                someAvg10: signals.psi.someAvg10,
+                someAvg60: signals.psi.someAvg60,
+                someAvg300: signals.psi.someAvg300,
+                fullAvg10: signals.psi.fullAvg10,
+                fullAvg60: signals.psi.fullAvg60,
+                fullAvg300: signals.psi.fullAvg300,
+              }
+            : null,
         }
       : null,
   };
