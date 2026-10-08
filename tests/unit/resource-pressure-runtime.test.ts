@@ -61,6 +61,65 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
     runtime.dispose();
   });
 
+  it("logs bounded numeric memory context when the immediate heap guard sheds", async () => {
+    let now = 0;
+    let liveHeapMb = 100;
+    const sampled = signals(0, 100);
+    sampled.cgroup = {
+      currentBytes: 700 * MiB,
+      maxBytes: 1_000 * MiB,
+      highBytes: 800 * MiB,
+      fileBytes: 100 * MiB,
+      events: { low: 0, high: 2, max: 0, oom: 0, oom_kill: 0 },
+    };
+    sampled.psi = {
+      someAvg10: 12.3,
+      someAvg60: 8,
+      someAvg300: 4,
+      fullAvg10: 0,
+      fullAvg60: 0,
+      fullAvg300: 0,
+    };
+    const runtime = createResourcePressureRuntime({
+      nowMs: () => now,
+      heapThresholdMb: 200,
+      immediateHeapUsedMb: () => liveHeapMb,
+      sample: async () => sampled,
+    });
+
+    runtime.check();
+    await settleRefresh(runtime);
+    now = 1;
+    liveHeapMb = 201;
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      const guard = runtime.check();
+      assert.ok(guard);
+      assert.equal(guard.status, 503);
+      const diagnostic = warnings.find((warning) => warning.includes("[resourcePressure]"));
+      assert.ok(diagnostic);
+      assert.match(diagnostic, /immediateHeapUsedMb=201/);
+      assert.match(diagnostic, /thresholdMb=200/);
+      assert.match(diagnostic, /sampleRssMb=200/);
+      assert.match(diagnostic, /sampleExternalMb=10/);
+      assert.match(diagnostic, /cgroupCurrentMb=700/);
+      assert.match(diagnostic, /cgroupOomKillEvents=0/);
+      assert.match(diagnostic, /psiSomeAvg10=12\.3/);
+      assert.match(diagnostic, /sampleAgeMs=1/);
+      assert.match(diagnostic, /pid=\d+/);
+      assert.match(diagnostic, /loggedAt=/);
+
+      const payload = await guard.response.json();
+      assert.equal(payload.error.code, "resource_pressure");
+      assert.equal(JSON.stringify(payload).includes("cgroupCurrentMb"), false);
+    } finally {
+      console.warn = originalWarn;
+      runtime.dispose();
+    }
+  });
+
   it("serves a fresh cached sample without scheduling another refresh", async () => {
     let now = 0;
     let calls = 0;

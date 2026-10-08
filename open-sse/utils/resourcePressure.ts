@@ -81,6 +81,41 @@ function formatPressureDetail(detail: Record<string, number | string | null | un
     .join(" ");
 }
 
+function megabytes(bytes: number | null | undefined): number | null {
+  return typeof bytes === "number" && Number.isFinite(bytes) && bytes >= 0
+    ? Math.round(bytes / MB)
+    : null;
+}
+
+function pressureSampleDetail(
+  signals: ResourceSignals | null,
+  sampleAgeMs: number
+): Record<string, number | string | null> {
+  const psi = signals?.psi;
+  const events = signals?.cgroup.events;
+  return {
+    sampleAgeMs: Number.isFinite(sampleAgeMs) ? Math.max(0, Math.round(sampleAgeMs)) : null,
+    sampleObservedAtMs: signals?.observedAtMs ?? null,
+    sampleHeapUsedMb: megabytes(signals?.v8.heapUsedBytes),
+    sampleHeapLimitMb: megabytes(signals?.v8.heapLimitBytes),
+    sampleRssMb: megabytes(signals?.process.rssBytes),
+    sampleExternalMb: megabytes(signals?.process.externalBytes),
+    sampleArrayBuffersMb: megabytes(signals?.process.arrayBuffersBytes),
+    sampleAvailableMb: megabytes(signals?.process.availableBytes),
+    sampleConstrainedMb: megabytes(signals?.process.constrainedBytes),
+    cgroupCurrentMb: megabytes(signals?.cgroup.currentBytes),
+    cgroupMaxMb: megabytes(signals?.cgroup.maxBytes),
+    cgroupHighMb: megabytes(signals?.cgroup.highBytes),
+    cgroupFileMb: megabytes(signals?.cgroup.fileBytes),
+    cgroupHighEvents: events?.high ?? null,
+    cgroupMaxEvents: events?.max ?? null,
+    cgroupOomEvents: events?.oom ?? null,
+    cgroupOomKillEvents: events?.oom_kill ?? null,
+    psiSomeAvg10: psi?.someAvg10 ?? null,
+    psiFullAvg10: psi?.fullAvg10 ?? null,
+  };
+}
+
 /** Builds buildCriticalGuard's detail object for the cached-critical-state
  * reuse path in check() -- pulled out of check() itself so that function's
  * own cyclomatic complexity stays under the ratchet, not because this needs
@@ -90,14 +125,9 @@ function describeCachedPressure(params: {
   recoveryStreak: number;
   cacheAgeMs: number;
 }): Record<string, number | string | null> {
-  const cgroup = params.signals?.cgroup;
   return {
-    psiSomeAvg10: params.signals?.psi?.someAvg10 ?? null,
-    psiFullAvg10: params.signals?.psi?.fullAvg10 ?? null,
-    cgroupCurrentMb: cgroup?.currentBytes ? Math.round(cgroup.currentBytes / MB) : null,
-    cgroupMaxMb: cgroup?.maxBytes ? Math.round(cgroup.maxBytes / MB) : null,
+    ...pressureSampleDetail(params.signals, params.cacheAgeMs),
     recoveryStreak: params.recoveryStreak,
-    sampleAgeMs: params.cacheAgeMs,
   };
 }
 
@@ -107,7 +137,7 @@ function buildCriticalGuard(
 ): ResourcePressureGuardResult {
   const detailText = formatPressureDetail(detail);
   console.warn(
-    `[resourcePressure] critical pressure guard tripped (reason=${reason}${detailText ? " " + detailText : ""}); returning 503`
+    `[resourcePressure] critical pressure guard tripped (reason=${reason} pid=${process.pid} loggedAt=${new Date().toISOString()}${detailText ? " " + detailText : ""}); returning 503`
   );
   return {
     success: false,
@@ -130,14 +160,17 @@ function buildCriticalGuard(
 
 function immediateHeapGuard(
   heapUsedMb: number,
-  thresholdMb: number | null
+  thresholdMb: number | null,
+  signals: ResourceSignals | null,
+  sampleAgeMs: number
 ): ResourcePressureGuardResult | null {
   if (thresholdMb == null) return null;
   const guard = checkHeapPressureGuard(heapUsedMb, thresholdMb);
   if (!guard) return null;
   return buildCriticalGuard("v8_heap_absolute", {
-    heapUsedMb: Math.round(heapUsedMb),
+    immediateHeapUsedMb: Math.round(heapUsedMb),
     thresholdMb: Math.round(thresholdMb),
+    ...pressureSampleDetail(signals, sampleAgeMs),
   });
 }
 
@@ -218,8 +251,9 @@ export function createResourcePressureRuntime(
       } catch {
         heapUsedMb = 0;
       }
-      const immediate = immediateHeapGuard(heapUsedMb, heapThresholdMb);
       const now = nowMs();
+      const cacheAge = lastSignals ? Math.max(0, now - lastRefreshAtMs) : Number.POSITIVE_INFINITY;
+      const immediate = immediateHeapGuard(heapUsedMb, heapThresholdMb, lastSignals, cacheAge);
       if (now >= nextRefreshAtMs) scheduleRefresh();
       if (immediate) {
         state = {
@@ -232,7 +266,6 @@ export function createResourcePressureRuntime(
         };
         return immediate;
       }
-      const cacheAge = lastSignals ? Math.max(0, now - lastRefreshAtMs) : Number.POSITIVE_INFINITY;
       if (cacheAge > maxStaleMs || state.severity !== "critical") {
         return null;
       }
