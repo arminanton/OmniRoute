@@ -169,6 +169,13 @@ gateway peak RSS was 343.1 MiB, and gateway CPU was 3.0 seconds. Peak in-flight 
 73.21 MiB against the 70 MiB (73,400,320-byte) limit; peak queued reservations were 19.92 MiB against
 the separate 64 MiB limit. Queue counters returned to zero after each run.
 
+A slower single trial used 300 chunks per response (3 seconds of streamed body time) at 100
+sessions, with the same 1.31 MiB maximum request and five turns per session. It completed 500/500
+requests without errors in 22.4 seconds. First-body p95 was 3.07 seconds and completion p95 was
+6.22 seconds because waiters joined as stream leases became available. Peak in-flight charge was
+73.21 MiB, queued reservations peaked at 19.92 MiB, and all counters returned to zero. This is one
+trial; it shows queue drainage for this stream duration, not a sustained throughput guarantee.
+
 This confirms the admission queue waits and drains under this local workload; it is not 100 full
 agent sessions and does not include actual provider routing, tool execution, account scheduling,
 database activity, or persistent call-log artifact writes. It also does not claim that 63.7 requests/s

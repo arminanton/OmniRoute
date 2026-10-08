@@ -86,9 +86,13 @@ released instead of receiving an early 503:
 ```bash
 python3 benchmarks/runtime-proxy/run_bench.py --runtime omni-admission-node --clients 70 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10
 python3 benchmarks/runtime-proxy/run_bench.py --runtime omni-admission-node --clients 100 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10
+# Three-second streamed responses to test lease turnover under slower upstreams.
+python3 benchmarks/runtime-proxy/run_bench.py --runtime omni-admission-node --clients 100 --rounds 5 --context-bytes 262144 --chunks 300 --chunk-delay-ms 10
 ```
 
 On 2026-10-08 the 70-session run completed 350/350 requests and three 100-session runs completed
 1,500/1,500. Requests were up to 1,311,987 bytes; peak in-flight byte charges stayed below 70 MiB
 and queued reservations below 64 MiB. This is a local admission-plus-mock-stream check, not a claim
 about 70–100 real provider sessions.
+One slower 100-session trial at 300 chunks per response also completed 500/500 requests in 22.4s;
+first-body p95 was 3.07s and completion p95 was 6.22s while the admission queues drained.
