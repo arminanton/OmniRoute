@@ -56,11 +56,13 @@ while its sample is at most 30 seconds old; stale state fails open. PSI is read 
 The history snapshot at 05:11 recorded a 4 GiB app cgroup at 3.56 GiB, zero OOM counters, and
 `NODE_OPTIONS=--max-old-space-size=2048`, while detailed capture was enabled. This is consistent
 with a process nearing its configured V8 heap ceiling while the cgroup still had some headroom; it
-does not prove logging caused the heap rise. The immediate-heap warning records heap use and the
-threshold but not a request correlation ID or a same-instant RSS/cgroup sample, so the exact object
-growth and triggering request remain unknown. The current shell has no listener on port 20128 or
-OmniRoute app container to sample live now; the host-level snapshots below are not substituted for
-process-level measurements.
+does not prove logging caused the heap rise. The heap-shed warning now records PID/time, immediate
+heap/threshold, and the most recent numeric V8/RSS/external/array-buffer/cgroup/PSI sample with its
+age. If no sample exists on a first-request trip, those sample fields are explicitly `null`. It
+still has no request correlation ID, and cached cgroup/PSI values can be up to one second old, so
+the exact object growth and triggering request remain unknown. The current shell has no listener on
+port 20128 or OmniRoute app container to sample live now; the host-level snapshots below are not
+substituted for process-level measurements.
 
 The full-capture path does bounded synchronous work before handing an artifact to a worker. The
 writer's weighted queue is capped at 128 MiB and serializes one artifact at a time; `reserveCallLogArtifactPreparation`
