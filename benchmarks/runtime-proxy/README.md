@@ -56,6 +56,21 @@ turns, tool calls, and tool results. The per-turn context is repeated 64 KiB tex
 transport stress case, not a token-equivalent prompt or real provider/tool execution. Results
 separate completed sessions, completed rounds, and request throughput.
 
+For a one-request, 1,000-simultaneous-session transport stress run, use the same body and chunk
+shape for each adapter:
+
+```bash
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --clients 1000 --rounds 1 --context-bytes 65536 --chunks 40 --chunk-delay-ms 25 --max-inflight 1024
+python3 benchmarks/runtime-proxy/run_bench.py --runtime node --clients 1000 --rounds 1 --context-bytes 65536 --chunks 40 --chunk-delay-ms 25 --max-inflight 1024
+python3 benchmarks/runtime-proxy/run_bench.py --runtime bun140-container --clients 1000 --rounds 1 --context-bytes 65536 --chunks 40 --chunk-delay-ms 25 --max-inflight 1024
+```
+
+On 2026-10-08, each runtime completed 1,000/1,000 requests in three sequential trials on the
+aarch64 devvm. Node 25.8.1 and Rust 1.94.0 ran on the host; Bun 1.4.0 ran in the cached official
+container with a 512 MiB cap. The recorded p95/RSS/CPU table and limitations are in
+`docs/architecture/RUNTIME_AND_DATA_PLANE_BENCHMARKS.md`. The load uses one synthetic request per
+session; it does not execute tools or exercise real provider/account policies.
+
 Sweep `--clients 1,15,30,70,100` and repeat each point at least three times. The result reports
 header and first-body-byte latency, completion latency, successful streams, throughput, peak
 gateway RSS, and CPU time. Tune `--chunks`, `--chunk-delay-ms`, and `--chunk-bytes` to test other

@@ -2480,6 +2480,10 @@ paths:
       responses:
         "200":
           description: Internal model list with aliases
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ManagementModelListResponse"
     put:
       operationId: putApiModels
       tags: [Models]
@@ -2498,6 +2502,10 @@ paths:
       responses:
         "200":
           description: Model alias saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelAliasMutationResponse"
         "400":
           description: Invalid model or alias
 
@@ -2513,6 +2521,10 @@ paths:
       responses:
         "200":
           description: Alias map or resolution for the requested alias
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelAliasLookupResponse"
         "400":
           description: Alias could not be resolved
     put:
@@ -2532,6 +2544,10 @@ paths:
       responses:
         "200":
           description: Alias created/updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelAliasMutationResponse"
         "400":
           description: Model or alias is invalid
     delete:
@@ -2546,6 +2562,10 @@ paths:
       responses:
         "200":
           description: Alias deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelAliasDeleteResponse"
         "400":
           description: Alias query parameter is required
 
@@ -2557,6 +2577,10 @@ paths:
       responses:
         "200":
           description: Complete catalog with all providers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GroupedModelCatalogResponse"
 
   # ─── Management Endpoints ──────────────────────────────────────
 
@@ -2571,12 +2595,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  connections:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/ProviderConnection"
+                $ref: "#/components/schemas/ProviderConnectionListResponse"
     post:
       operationId: postApiProviders
       tags: [Providers]
@@ -2590,6 +2609,10 @@ paths:
       responses:
         "201":
           description: Created provider connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionEnvelope"
     patch:
       operationId: patchApiProviders
       tags: [Providers]
@@ -2947,12 +2970,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  keys:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/ApiKey"
+                $ref: "#/components/schemas/ApiKeyListResponse"
         "401":
           description: Authentication required
     post:
@@ -2965,13 +2983,42 @@ paths:
           application/json:
             schema:
               type: object
-              required: [label]
+              required: [name]
               properties:
-                label:
+                name: { type: string, minLength: 1, maxLength: 200 }
+                modelAccessMode:
                   type: string
+                  enum: [all, restricted]
+                allowedModels:
+                  type: array
+                  maxItems: 1000
+                  items: { type: string, minLength: 1 }
+                allowedCombos:
+                  type: array
+                  maxItems: 500
+                  items: { type: string, minLength: 1, maxLength: 200 }
+                noLog: { type: boolean }
+                allowUsageCommand: { type: boolean }
+                usageLimitEnabled: { type: boolean }
+                dailyUsageLimitUsd: { type: [number, "null"], minimum: 0 }
+                weeklyUsageLimitUsd: { type: [number, "null"], minimum: 0 }
+                chaosModeEnabled: { type: boolean }
+                scopes:
+                  type: array
+                  maxItems: 32
+                  items: { type: string, minLength: 1, maxLength: 64 }
+                allowedConnections:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: { type: string, format: uuid }
       responses:
         "201":
           description: Created API key (includes full key value)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyCreateResponse"
         "401":
           description: Authentication required
 
@@ -3033,6 +3080,10 @@ paths:
       responses:
         "200":
           description: Combo list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComboListResponse"
     post:
       operationId: postApiCombos
       tags: [Combos]
@@ -18653,6 +18704,111 @@ components:
         has_more: { type: boolean }
       additionalProperties: true
 
+    ManagementModelListResponse:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            type: object
+            required: [provider, model, fullModel, alias, available, supportsVision]
+            properties:
+              provider: { type: string }
+              model: { type: string }
+              name: { type: string }
+              fullModel: { type: string }
+              alias: { type: string }
+              available: { type: boolean }
+              supportsVision: { type: boolean }
+            additionalProperties: true
+      additionalProperties: false
+
+    ModelAliasMutationResponse:
+      type: object
+      required: [success, model, alias]
+      properties:
+        success: { type: boolean, const: true }
+        model: { type: string }
+        alias: { type: string }
+      additionalProperties: false
+
+    ModelAliasDeleteResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+      additionalProperties: false
+
+    ModelAliasLookupResponse:
+      oneOf:
+        - type: object
+          required: [aliases]
+          properties:
+            aliases:
+              type: object
+              additionalProperties: { type: string }
+            catalogVersion: { type: [string, "null"] }
+          additionalProperties: false
+        - type: object
+          required: [alias, resolved]
+          properties:
+            alias: { type: string }
+            resolved:
+              type: object
+              required: [provider, providerAlias, model, qualifiedId, source, target, metadata]
+              properties:
+                provider: { type: string }
+                providerAlias: { type: string }
+                model: { type: string }
+                qualifiedId: { type: string }
+                source:
+                  type: string
+                  enum: [stored_alias, direct_model, catalog_match]
+                target: { type: string }
+                metadata: { type: object, additionalProperties: true }
+              additionalProperties: false
+            catalogVersion: { type: [string, "null"] }
+          additionalProperties: false
+
+    ModelCatalogEntry:
+      type: object
+      required: [id, name, type, custom]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string }
+        subtype: { type: string }
+        custom: { type: boolean }
+        free: { type: boolean }
+        capabilities: { type: object, additionalProperties: true }
+        context_length: { type: integer, minimum: 0 }
+        max_output_tokens: { type: integer, minimum: 0 }
+        input_modalities: { type: array, items: { type: string } }
+        output_modalities: { type: array, items: { type: string } }
+        supported_endpoints: { type: array, items: { type: string } }
+      additionalProperties: false
+
+    GroupedModelCatalogResponse:
+      type: object
+      required: [catalog, catalogVersion]
+      properties:
+        catalog:
+          type: object
+          additionalProperties:
+            type: object
+            required: [provider, active, models]
+            properties:
+              provider: { type: string }
+              active: { type: boolean }
+              models:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ModelCatalogEntry"
+            additionalProperties: false
+        catalogVersion: { type: [string, "null"] }
+      additionalProperties: false
+
     ProxySubscription:
       type: object
       description: >-
@@ -18721,11 +18877,35 @@ components:
         provider:
           type: string
         name:
-          type: string
+          type: [string, "null"]
+        displayName:
+          type: [string, "null"]
+        email:
+          type: [string, "null"]
         url:
           type: string
+        authType:
+          type: [string, "null"]
         isActive:
           type: boolean
+        apiKey:
+          type: [string, "null"]
+          description: >-
+            Masked by default; raw values are returned only when API-key reveal is enabled.
+        defaultModel:
+          type: [string, "null"]
+        providerSpecificData:
+          type: object
+          additionalProperties: true
+        rateLimitedUntil:
+          type: [string, "null"]
+          format: date-time
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+        consecutiveUseCount:
+          type: integer
+          minimum: 0
         maxConcurrent:
           type: integer
           nullable: true
@@ -18733,11 +18913,57 @@ components:
         priority:
           type: integer
         testStatus:
-          type: string
-          enum: [active, error, untested]
+          type: [string, "null"]
+        lastError:
+          type: [string, "null"]
+        lastErrorType:
+          type: [string, "null"]
+        lastErrorSource:
+          type: [string, "null"]
+        errorCode:
+          oneOf:
+            - type: string
+            - type: integer
+            - type: "null"
+        backoffLevel:
+          type: integer
+          minimum: 0
+        quotaWindowThresholds:
+          type: [object, "null"]
+          additionalProperties: { type: number }
         createdAt:
           type: string
           format: date-time
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        tokenExpiresAt:
+          type: [string, "null"]
+          format: date-time
+        projectId:
+          type: [string, "null"]
+        globalPriority:
+          type: [integer, "null"]
+      additionalProperties: true
+
+    ProviderConnectionListResponse:
+      type: object
+      required: [connections, total]
+      properties:
+        connections:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderConnection"
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ProviderConnectionEnvelope:
+      type: object
+      required: [connection]
+      properties:
+        connection:
+          $ref: "#/components/schemas/ProviderConnection"
+      additionalProperties: false
 
     ProviderConnectionCreate:
       type: object
@@ -18765,16 +18991,134 @@ components:
       properties:
         id:
           type: string
-        label:
+        name:
           type: string
-        keyPreview:
+        key:
           type: string
-          description: Last 4 characters of the key
+          description: Masked key preview; the raw key is not returned by the list route.
+        machineId:
+          type: [string, "null"]
+        modelAccessMode:
+          type: string
+          enum: [all, restricted]
+        allowedModels:
+          type: array
+          items: { type: string }
+        blockedModels:
+          type: array
+          items: { type: string }
+        allowedCombos:
+          type: array
+          items: { type: string }
+        allowedConnections:
+          type: array
+          items: { type: string }
+        allowedQuotas:
+          type: array
+          items: { type: string }
+        noLog: { type: boolean }
+        autoResolve: { type: boolean }
         isActive:
           type: boolean
+        accessSchedule:
+          type: [object, "null"]
+          additionalProperties: true
+        throttleDelayMs:
+          type: [integer, "null"]
+        rateLimits:
+          type: [array, "null"]
+          items: { type: object, additionalProperties: true }
+        scopes:
+          type: array
+          items: { type: string }
+        isBanned: { type: boolean }
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        allowedEndpoints:
+          type: array
+          items: { type: string }
+        streamDefaultMode:
+          type: string
+          enum: [legacy, json]
+        cacheDefaultMode:
+          type: string
+          enum: [legacy, bypass]
+        disableNonPublicModels: { type: boolean }
+        allowUsageCommand: { type: boolean }
+        usageLimitEnabled: { type: boolean }
+        dailyUsageLimitUsd:
+          type: [number, "null"]
+        weeklyUsageLimitUsd:
+          type: [number, "null"]
+        chaosModeEnabled: { type: boolean }
+        compressionEnabled: { type: boolean }
         createdAt:
           type: string
           format: date-time
+      additionalProperties: true
+
+    ApiKeyListResponse:
+      type: object
+      required: [keys, total, allowKeyReveal]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiKey"
+        total: { type: integer, minimum: 0 }
+        allowKeyReveal: { type: boolean }
+      additionalProperties: false
+
+    ApiKeyCreateResponse:
+      type: object
+      required:
+        - key
+        - name
+        - id
+        - machineId
+        - modelAccessMode
+        - allowedModels
+        - allowedCombos
+        - allowedConnections
+        - noLog
+        - allowUsageCommand
+        - usageLimitEnabled
+        - dailyUsageLimitUsd
+        - weeklyUsageLimitUsd
+        - chaosModeEnabled
+        - streamDefaultMode
+        - compressionEnabled
+        - cacheDefaultMode
+      properties:
+        key:
+          type: string
+          description: Full newly-created key value; store securely because it is returned once.
+        name: { type: string }
+        id: { type: string }
+        machineId: { type: [string, "null"] }
+        modelAccessMode:
+          type: string
+          enum: [all, restricted]
+        allowedModels:
+          type: array
+          items: { type: string }
+        allowedCombos:
+          type: array
+          items: { type: string }
+        allowedConnections:
+          type: array
+          items: { type: string }
+        noLog: { type: boolean }
+        allowUsageCommand: { type: boolean }
+        usageLimitEnabled: { type: boolean }
+        dailyUsageLimitUsd: { type: [number, "null"] }
+        weeklyUsageLimitUsd: { type: [number, "null"] }
+        chaosModeEnabled: { type: boolean }
+        streamDefaultMode: { type: string, const: legacy }
+        compressionEnabled: { type: boolean }
+        cacheDefaultMode: { type: string, const: legacy }
+      additionalProperties: false
 
     ComboCreate:
       type: object
@@ -18813,3 +19157,27 @@ components:
             - context-optimized
             - fusion
           default: priority
+
+    ComboListResponse:
+      type: object
+      required: [combos, total]
+      properties:
+        combos:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              name: { type: string }
+              strategy: { type: string }
+              models:
+                type: array
+                items:
+                  oneOf:
+                    - type: string
+                    - type: object
+                      additionalProperties: true
+              computed_context_length: { type: integer, minimum: 0 }
+            additionalProperties: true
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false

@@ -231,6 +231,45 @@ test("chat routes document local pressure errors, retry timing, and correlation"
   assert.ok(errorShape.properties?.reason);
 });
 
+test("model, provider, key, and combo management responses match their route payloads", () => {
+  const responseRefs = [
+    ["/api/models", "get", "ManagementModelListResponse"],
+    ["/api/models/alias", "get", "ModelAliasLookupResponse"],
+    ["/api/models/catalog", "get", "GroupedModelCatalogResponse"],
+    ["/api/providers", "get", "ProviderConnectionListResponse"],
+    ["/api/providers", "post", "ProviderConnectionEnvelope"],
+    ["/api/keys", "get", "ApiKeyListResponse"],
+    ["/api/keys", "post", "ApiKeyCreateResponse"],
+    ["/api/combos", "get", "ComboListResponse"],
+  ] as const;
+  for (const [pathname, method, schema] of responseRefs) {
+    const status = method === "post" && pathname === "/api/providers" ? "201" :
+      method === "post" && pathname === "/api/keys" ? "201" : "200";
+    const response = operation(pathname, method).responses?.[status] as
+      | { content?: Record<string, { schema?: Record<string, unknown> }> }
+      | undefined;
+    assert.equal(
+      response?.content?.["application/json"]?.schema?.$ref,
+      `#/components/schemas/${schema}`,
+      `${method.toUpperCase()} ${pathname}`
+    );
+  }
+
+  const createKeyRequest = requestContent(operation("/api/keys", "post"), "application/json")
+    .schema;
+  assert.deepEqual(createKeyRequest.required, ["name"]);
+  const createKeyProperties = createKeyRequest.properties as Record<string, unknown>;
+  assert.ok("allowedModels" in createKeyProperties);
+  assert.equal("label" in createKeyProperties, false);
+
+  const schemas = spec.components?.schemas as
+    | Record<string, { required?: string[]; properties?: Record<string, unknown> }>
+    | undefined;
+  assert.ok(schemas?.ProviderConnectionListResponse?.required?.includes("total"));
+  assert.ok(schemas?.ApiKeyListResponse?.required?.includes("allowKeyReveal"));
+  assert.ok(schemas?.ApiKeyCreateResponse?.required?.includes("key"));
+});
+
 test("all local OpenAPI references resolve", () => {
   const refs: string[] = [];
   const walk = (value: unknown): void => {

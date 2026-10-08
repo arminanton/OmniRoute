@@ -26,8 +26,10 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 148 operations have
-response content schemas and 121 declare operation-level security. The OpenAI chat, Anthropic
+contract is still stronger on route coverage than schema completeness: 157 operations have
+success response content schemas and 121 declare operation-level security. Another 858 operations
+still lack an explicit success-body schema after excluding intentional `204` responses; 14 of those
+have no declared `2xx` status and need route-by-route status review. The OpenAI chat, Anthropic
 Messages, OpenAI Responses, token-count, embedding, image-generation, audio, moderation, rerank,
 OCR, Jina classify/segment, legacy completions, and WebSocket-handshake paths now describe their
 principal request/response shapes and streaming media. The remaining contract pass must compare
@@ -39,7 +41,9 @@ where the handler allows them, including model discovery, combo/routing metadata
 endpoints. This pass also documents the local pressure/admission 503 body and its `Retry-After` and
 `x-request-id` headers on the seven chat routes that share the admission path; `ApiErrorResponse`
 now includes the `code` and `reason` fields emitted by the handler. The contract test checks those
-routes and headers against the implementation. All 98 operations previously missing
+routes and headers against the implementation. It adds typed management responses for the model
+picker/alias/catalog APIs, provider connection list/create, API key list/create, and combo list.
+The spec now has 96 component schemas. All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
 
@@ -230,6 +234,30 @@ until the response finishes or is cancelled. Rust does not use a garbage collect
 model comes from compile-checked ownership and borrowing. The benchmark demonstrates a small proxy
 process, not a safe replacement for OmniRoute's provider, quota, security, cache, and tool-execution
 behavior.
+
+## One thousand simultaneous transport sessions
+
+The benchmark harness was extended to 1,000 simultaneous independent sessions on the aarch64 devvm.
+Each session sent one 65,676-byte JSON request, then consumed a local mock SSE stream of 40 chunks at
+25 ms intervals. The gateway admission cap was 1,024. The devvm reported eight logical CPUs and
+14 GiB total memory; it is not the 4-vCPU/24-GiB Maria target. Runs were sequential and the table
+reports the median of three trials. Node and
+Rust ran directly on the host (Node 25.8.1, rustc 1.94.0); Bun ran in the cached official 1.4.0
+container with a 512 MiB memory cap. The proxy-process RSS and CPU columns exclude the Python client
+and mock server. No provider, account selection, tool execution, database, or call-log capture ran.
+
+| Runtime | Sessions / requests | First body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput median (range) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Rust/Axum/Reqwest | 1,000 / 1,000 in all trials | 193 ms | 1,241 ms | 58.8 MiB | 0.80 s | 416 req/s (242–420) |
+| Node 25.8.1 | 1,000 / 1,000 in all trials | 1,412 ms | 2,429 ms | 288.0 MiB | 3.01 s | 270 req/s (269–277) |
+| Bun 1.4.0 | 1,000 / 1,000 in all trials | 3,147 ms | 4,160 ms | 108.6 MiB | 1.80 s | 224 req/s (222–225) |
+
+All three adapters completed without request failures. On this one-loopback workload, Rust used about
+one-fifth the Node proxy RSS and one-quarter the CPU; its first-body p95 was much lower. Bun stayed
+below its 512 MiB cap but had the highest first-byte and completion latency in these trials. Rust's
+first trial had lower reported throughput than its next two while its latency and RSS remained
+similar, so its throughput range is included and should not be treated as a stable capacity number.
+This transport result does not predict full OmniRoute behavior or real-provider quotas.
 
 ## Production admission middleware with long-lived streams
 
