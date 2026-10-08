@@ -477,6 +477,73 @@ database activity, or persistent call-log artifact writes. It also does not clai
 is a production ceiling or that an upstream provider will accept the same burst. Those full-server
 and real-provider checks remain necessary before treating 70–100 agents as validated capacity.
 
+### High-context request capture at 100 sessions
+
+The route-level harness now runs the synthetic client and mock provider in separate Node processes.
+The test gateway streams the incoming HTTP body directly into `route.POST()` and counts bytes as
+they pass, so it does not parse and reserialize a second request copy. With
+`ANTIGRAVITY_CAPTURE_CONTEXT_BYTES=262144`, each request carries five user-context strings and
+reaches 1,311,987 bytes. The four phases send 402 chat requests across 1, 30, 70, and 100 sessions;
+each session performs a tool-call and tool-result round trip.
+
+With ordinary detailed call-log artifacts only, all 402 summary rows were saved and every response
+succeeded, but only 115/402 detailed artifacts were retained. The writer logged
+`aggregate_reservation_budget` refusals after reserving 125.9 MiB of its 128 MiB cap; each preparation
+was conservatively estimated at 31.5 MiB. The test process did not receive a pressure 503 in that
+run. This is a measured diagnostic-detail loss under large concurrent calls, despite successful
+inference.
+
+Capturing those full artifacts alongside private overflow traces crossed the test process's local
+V8 heap guard at about 1,908 MiB used against a 1,904 MiB threshold. Host memory remained available
+and PSI was zero. That run duplicated large client/provider bodies in the ordinary artifact pipeline
+while also writing private traces.
+
+The `diagnosticOverflowOnly` Antigravity path now keeps bounded stream chunks, transport telemetry,
+and safe request metadata in the call-log artifact while leaving full bodies in the private trace.
+It passes the admitted client bytes directly into the private writer and avoids reparsing the
+serialized Antigravity provider request into another retained JSON object. If the private trace
+cannot be persisted, the logger falls back to ordinary detailed capture. Codex and other providers
+continue using their existing call-log pipeline.
+
+With private overflow enabled, the 100-session, 1.31 MiB run passed all 402 requests, retained
+402/402 call-log artifacts, and finalized 402/402 private traces with complete client request,
+provider request, and provider response files. A sample trace contained 1,311,457 client bytes and
+a 326-byte provider response. The run produced no `resource_pressure` rejection; reported maximum RSS
+was 2,674,104 KiB with a 2 GiB V8 heap limit. The isolated run generated 1,910,136 KiB of filesystem
+writes, then removed its temporary data directory; free root disk remained about 20 GiB. Full
+private capture can create substantial write traffic, so scope it to the diagnostic window and keep
+the configured aggregate-size budget and retention policy in view.
+
+The Logs detail modal reads the trace manifest and exposes downloads for the compressed client
+request and each provider request/response, including partial-state labels. This makes the private
+payloads reachable from the call-log row while keeping them out of the ordinary artifact.
+
+The private-capture test sets `OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES` to 1 MiB for this
+1.31 MiB request corpus. Its normal production default is 4 MiB, so an operator investigating
+requests of this size must lower the threshold and enable private overflow. The diagnostic store
+defaults to a 2 GiB aggregate budget and seven-day retention; do not interpret the 10 MiB call-artifact
+limit as that private-store budget.
+
+Reproduce this specific capture check with:
+
+```bash
+RUN_ANTIGRAVITY_CAPTURE_BENCH=1 \
+ANTIGRAVITY_CAPTURE_OVERFLOW_BENCH=1 \
+ANTIGRAVITY_CAPTURE_CONTEXT_BYTES=262144 \
+ANTIGRAVITY_CAPTURE_REQUEST_TIMEOUT_MS=120000 \
+DISABLE_SQLITE_AUTO_BACKUP=true \
+node --max-old-space-size=2048 --import tsx/esm \
+  --import ./open-sse/utils/setupPolyfill.ts \
+  --import ./tests/_setup/isolateDataDir.ts \
+  --test --test-concurrency=1 \
+  tests/integration/antigravity-parallel-tool-roundtrip-http.test.ts
+```
+
+The test enables private overflow in its isolated `DATA_DIR` and removes that directory during
+teardown. It uses a fake Antigravity upstream, separate CLI/IDE connection profiles, and one
+synthetic tool round trip. It does not run Next middleware/standalone image code, execute a real
+tool, or verify real provider quota behavior; it is not a production 100-agent capacity claim.
+
 ## Repeated request-log payload
 
 The call-log path stores both the client request body and a reconstructed `effectiveInput`. For an

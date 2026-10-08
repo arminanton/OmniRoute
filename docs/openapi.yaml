@@ -18292,6 +18292,33 @@ components:
         compressedBytes: { type: integer, minimum: 0 }
         sha256: { type: string }
         gzipSha256: { type: string }
+    DiagnosticOverflowReference:
+      type: object
+      required: [schema, traceId, state]
+      properties:
+        schema: { type: string, const: omni-diagnostic-overflow/v1 }
+        traceId: { type: string, format: uuid }
+        state: { type: string, enum: [capturing, complete, incomplete] }
+        reason:
+          type: string
+          enum:
+            - aggregate_budget
+            - capture_error
+            - write_error
+            - lease_lost
+            - size_limit
+            - attempt_limit
+            - backpressure_overflow
+            - abort
+            - client_unavailable
+            - deadline
+            - timeout
+            - cancel
+            - read_error
+            - upstream_error
+            - missing_eof
+            - unsupported_reader
+        persisted: { type: boolean, const: false }
     DiagnosticOverflowManifest:
       type: object
       required: [schema, traceId, provider, createdAt, state, reasons, attempts]
@@ -22179,6 +22206,31 @@ components:
         completedAt: { type: [string, "null"], format: date-time }
       additionalProperties: true
 
+    CallLogPipelinePayloads:
+      type: object
+      properties:
+        diagnosticOverflow:
+          $ref: "#/components/schemas/DiagnosticOverflowReference"
+        diagnosticOverflowOnly:
+          type: boolean
+          description: >-
+            True when large request and response bodies are stored in private diagnostic-overflow
+            files and the call-log artifact retains metadata and bounded stream excerpts instead.
+        streamChunks:
+          type: object
+          properties:
+            provider:
+              type: array
+              items: { type: string }
+            openai:
+              type: array
+              items: { type: string }
+            client:
+              type: array
+              items: { type: string }
+          additionalProperties: false
+      additionalProperties: true
+
     ProviderModelsResponse:
       type: object
       required: [models, modelCompatOverrides, hiddenModelsByProvider]
@@ -22339,8 +22391,7 @@ components:
             responseBody:
               description: Raw response payload when detail capture is available.
             pipelinePayloads:
-              type: object
-              additionalProperties: true
+              $ref: "#/components/schemas/CallLogPipelinePayloads"
             previousResponseId: { type: [string, "null"] }
             parentLogId: { type: [string, "null"] }
           additionalProperties: true
@@ -22368,8 +22419,7 @@ components:
         detailState: { type: string, const: in-flight }
         active: { type: boolean, const: true }
         pipelinePayloads:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/CallLogPipelinePayloads"
         hasPipelineDetails: { type: boolean, const: true }
         partialAssistantText: { type: string }
       additionalProperties: true
@@ -22393,8 +22443,7 @@ components:
           description: Sanitized error summary when the in-memory request failed.
           nullable: true
         pipelinePayloads:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/CallLogPipelinePayloads"
         hasPipelineDetails: { type: boolean, const: true }
       additionalProperties: true
 
