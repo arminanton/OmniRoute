@@ -11,8 +11,12 @@ info:
     - **Local**: `http://localhost:20128`
 
     ## Authentication
-    All proxy endpoints require a Bearer token (API key managed via the dashboard).
-    Management endpoints are protected when `requireLogin` is enabled.
+    Authentication is route- and configuration-specific. Most inference/proxy endpoints
+    use Bearer API keys. Model discovery can be anonymous when `requireAuthForModels`
+    is disabled; when protected, it accepts a valid API key or dashboard session.
+    Management endpoints use the mechanisms stated on each operation and may depend on
+    `requireLogin`; some routes are also restricted to loopback access. Missing
+    operation-level `security` metadata is not a promise that a route is anonymous.
   contact:
     name: OmniRoute
   license:
@@ -2116,9 +2120,15 @@ paths:
     get:
       tags: [Models]
       summary: List available models
-      description: Returns all models available across configured providers.
+      description: >-
+        Returns all models available across configured providers. Authentication follows
+        `requireAuthForModels`: when false, the request may be anonymous; when enabled,
+        a valid Bearer API key or authenticated dashboard session is required. A supplied
+        invalid API key is rejected even when anonymous access is enabled.
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Model list
@@ -2134,14 +2144,23 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Model"
+        "401":
+          description: Authentication is required but missing or invalid
 
   /api/v1/providers/{provider}/models:
     get:
       tags: [Models]
       summary: List models for a specific provider
-      description: Returns only models for the selected provider with provider prefix removed from each model id.
+      description: >-
+        Returns only models for the selected provider with provider prefixes removed.
+        Registry-backed provider catalogs follow `requireAuthForModels`: when false,
+        access may be anonymous; when enabled, a valid Bearer API key or authenticated
+        dashboard session is required. Service-backend plugin IDs use their configured
+        service catalog branch and do not pass through that API-key gate.
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - in: path
           name: provider
@@ -2166,6 +2185,8 @@ paths:
                       $ref: "#/components/schemas/Model"
         "400":
           description: Unknown provider
+        "401":
+          description: Authentication is required but missing or invalid for the selected catalog path
 
   /api/models:
     get:
