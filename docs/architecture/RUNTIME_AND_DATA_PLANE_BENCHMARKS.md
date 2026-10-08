@@ -531,9 +531,11 @@ current builder.
 
 ## Remaining acceptance checks
 
-- Obtain a management-scoped credential for the candidate or add a safe internal V8 snapshot
-  endpoint, then sample the actual app PID's `heapUsed`, `external`, `arrayBuffers`, RSS, and cgroup
-  data together. The current host sampler cannot identify the retained V8 objects.
+- Obtain a candidate-scoped management credential or add a safe internal V8 snapshot endpoint, then
+  sample the actual app PID's `heapUsed`, `external`, `arrayBuffers`, RSS, and cgroup data together.
+  The current `~/.omni-mg` credential receives 403 `Invalid management token` from
+  `/api/usage/call-logs`; `/api/monitoring/health` intentionally returns only public liveness after
+  failed authentication. The host sampler cannot identify retained V8 objects.
 - Fix the external candidate-image assembly so the artifact worker is present, then verify that
   pipeline artifacts are written and readable. The current image lost 118 detailed artifacts and
   no artifact file is newer than the image start; do not treat the `full-capture-v1` label as proof
