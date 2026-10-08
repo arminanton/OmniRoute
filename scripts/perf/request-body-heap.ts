@@ -106,7 +106,16 @@ async function main(): Promise<void> {
     return;
   }
 
-  const body = buildAgentPayload(MESSAGES, TOOLS, CONTENT_WORDS);
+  const chatBody = buildAgentPayload(MESSAGES, TOOLS, CONTENT_WORDS);
+  // The input corpus models the same serialized context under the Responses
+  // API shape because only Responses requests carry the duplicated
+  // `body.input`/`effectiveInput` logger fields measured by this benchmark.
+  const body = {
+    model: chatBody.model,
+    input: chatBody.messages,
+    tools: chatBody.tools,
+    stream: true,
+  };
   const serializationStarted = performance.now();
   const wireJson = JSON.stringify(body);
   const jsonSerializationMs = performance.now() - serializationStarted;
@@ -182,13 +191,21 @@ async function main(): Promise<void> {
       JSON.stringify(
         {
           runtime: process.version,
-          shape: { messages: MESSAGES, tools: TOOLS, targets: TARGETS, concurrency: CONCURRENCY },
+          shape: {
+            endpoint: "/v1/responses (synthetic, incident-derived payload)",
+            messages: MESSAGES,
+            tools: TOOLS,
+            targets: TARGETS,
+            concurrency: CONCURRENCY,
+          },
           wireBytes,
           jsonSerializationMs,
           mechanisms: rows,
           legacyPipelineBytes,
           deduplicatedPipelineBytes,
           serializedPipelineBytesSaved: Math.max(0, legacyPipelineBytes - deduplicatedPipelineBytes),
+          effectiveInputUsesReference:
+            (deduplicatedPipeline.value as Record<string, unknown>).effectiveInputRef === "body.input",
           oneRequestSnapshotBytes: requestSnapshotBytes,
           concurrentRequestSnapshotBytes: concurrent.bytes,
         },
@@ -199,7 +216,7 @@ async function main(): Promise<void> {
   } else {
     console.log(`# Request-body retained-state benchmark (#7847)\n`);
     console.log(
-      `Runtime: **${process.version}** · shape: ${MESSAGES} messages · ${TOOLS} tools · wire size **${fmt(wireBytes)} MiB**` +
+      `Runtime: **${process.version}** · synthetic Responses payload: ${MESSAGES} messages · ${TOOLS} tools · wire size **${fmt(wireBytes)} MiB**` +
         ` · ${TARGETS} combo targets · JSON stringify ${jsonSerializationMs.toFixed(1)} ms\n`
     );
     console.log("| mechanism | call site | retained | x wire |");
