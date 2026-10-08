@@ -128,7 +128,7 @@ test("scoped layout runs a CJS server.js and an ESM worker.js side by side", () 
   }
 });
 
-test("colocate-standalone bundles the required compression worker", () => {
+test("colocate-standalone bundles the call-log and compression workers", () => {
   const root = mkdtempSync(join(tmpdir(), "colocate-compression-worker-"));
   try {
     writeFileSync(join(root, "server.js"), "module.exports = {};\n");
@@ -137,10 +137,23 @@ test("colocate-standalone bundles the required compression worker", () => {
       env: { ...process.env, OMNIROUTE_STANDALONE_DIR: root },
       stdio: "pipe",
     });
+    const callLogWorker = join(root, "src", "lib", "usage", "callLogArtifactWorker.js");
+    assert.equal(existsSync(callLogWorker), true, "required call-log worker must be colocated");
     const workerDir = join(root, "open-sse", "services", "compression");
     assert.equal(existsSync(join(workerDir, "compressionWorker.js")), true);
     assert.equal(JSON.parse(readFileSync(join(workerDir, "package.json"), "utf8")).type, "module");
   } finally {
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test("Node and Bun runner images require the colocated call-log worker", () => {
+  for (const dockerfile of ["Dockerfile", "Dockerfile.bun"]) {
+    const source = readFileSync(join(process.cwd(), dockerfile), "utf8");
+    assert.match(
+      source,
+      /test -f \/app\/src\/lib\/usage\/callLogArtifactWorker\.js/,
+      `${dockerfile} must reject an image that cannot persist call-log artifacts`
+    );
   }
 });

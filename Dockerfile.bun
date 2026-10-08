@@ -83,6 +83,9 @@ ENV DATA_DIR=/app/data
 RUN mkdir -p /app/data
 
 COPY --from=builder /app/.build/next/standalone ./
+# The artifact writer spawns this worker by a runtime path that Next's trace
+# cannot discover. Fail the image build instead of silently omitting detail.
+RUN test -f /app/src/lib/usage/callLogArtifactWorker.js
 
 ENV OMNIROUTE_MIGRATIONS_DIR=/app/migrations
 

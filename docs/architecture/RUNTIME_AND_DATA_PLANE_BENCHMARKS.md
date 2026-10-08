@@ -61,14 +61,51 @@ while its sample is at most 30 seconds old; stale state fails open. PSI is read 
 The history snapshot at 05:11 recorded a 4 GiB app cgroup at 3.56 GiB, zero OOM counters, and
 `NODE_OPTIONS=--max-old-space-size=2048`, while detailed capture was enabled. This is consistent
 with a process nearing its configured V8 heap ceiling while the cgroup still had some headroom; it
-does not prove logging caused the heap rise. The heap-shed warning now records PID/time, immediate
-heap/threshold, and the most recent numeric V8/RSS/external/array-buffer/cgroup/PSI sample with its
-age. Logs now include a validated UUID correlation ID, and the rejected response returns it in
-`x-request-id`; malformed caller values are replaced with a generated UUID. No prompt, body, header,
-or credential data is added. If no sample exists on a first-request trip, sample fields are
-explicitly `null`; cached cgroup/PSI values can be up to one second old. The exact object growth
-remains unknown. The current shell has no listener on port 20128 or OmniRoute app container to
-sample live now; the host-level snapshots below are not substituted for process-level measurements.
+does not prove logging caused the heap rise. The heap-shed warning in the feature branch now records
+PID/time, immediate heap/threshold, and the most recent numeric V8/RSS/external/array-buffer/cgroup/
+PSI sample with its age. Logs include a validated UUID correlation ID, and the rejected response
+returns it in `x-request-id`; malformed caller values are replaced with a generated UUID. No prompt,
+body, header, or credential data is added. If no sample exists on a first-request trip, sample
+fields are explicitly `null`; cached cgroup/PSI values can be up to one second old.
+
+## Read-only observation of the running candidate
+
+The root-managed `omni-local-next-app` is a candidate-slot container, not a change to `green`. Its
+image label points to commit `6c6e6b16539e7cf43398fba5dc9b2e5bf4a7eed3`; it started at 2026-10-07
+19:46 UTC with a 4 GiB memory cap, two CPU quota, and `NODE_OPTIONS=--max-old-space-size=2048`.
+The call-log profile is `full-capture-v1`: stream-chunk capture is enabled, the pipeline artifact
+limit is 10 MiB, per-stream retention is 256 KiB, and client text retention is 4 MiB. At 2026-10-08
+12:17:30 UTC its log recorded V8 `heapUsed=1,869 MiB` above the `1,822 MiB` threshold and returned
+503. An earlier cluster at 04:56–05:00 recorded 1,826–1,911 MiB against the same threshold.
+
+A five-minute host/cgroup sample from 12:19:25–12:24:20, starting about two minutes after the later
+guard trip, measured Node-process RSS at 3,318–3,335 MiB, high-water RSS at 3,841 MiB, and process
+swap at 499 MiB. Cgroup memory was 4,028–4,044 MiB against 4,096 MiB; its swap was 833 MiB, anon
+memory 3,005–3,021 MiB, file cache 942 MiB, and slab about 27 MiB. The `memory.events` max counter
+was 1,534 but OOM and OOM-kill stayed zero; PSI some/full remained 0.00 during the sample, while
+host available memory was 16.2–16.5 GiB. Podman's 3.149 GB stats reading is about 1 GiB below
+`memory.current`; the cgroup file-cache and kernel figures account for most of that difference.
+These measurements show a near-cap container and a Node process well above the V8 heap alone, but
+the process/cgroup sample does not share an exact timestamp with the 12:17 heap reading.
+
+The container's authenticated health route returned only its public liveness view; the supplied
+`~/.omni-mg` credential received HTTP 403 from `/api/providers`, so its management scope or validity
+does not grant this candidate's management detail endpoint. The call-log database has no row for
+the 12:17 guard event (its latest row is three connection tests at 11:49), and the deployed
+resource-pressure log has no request/correlation ID. This confirms that an early heap rejection is
+currently not joined to a call-log record.
+
+There is also a separate capture gap: 118 rows from 03:22–04:56 show
+`has_pipeline_details=1` but `detail_state=missing`, with no artifact size. The latest file in the
+mounted `call_logs` directory predates this candidate's 19:46 start. Its logs contain one generic
+`Call-log artifact worker failed` warning at 03:36; the running image filesystem has neither
+`/app/src/lib/usage/callLogArtifactWorker.js` nor its `.ts` source, while the current worker resolver
+expects one of those runtime paths. This strongly suggests an image-packaging gap in artifact
+capture; the exact worker failure reason and whether it explains every missing artifact still need
+to be confirmed. The repository's Node and Bun Dockerfiles now fail their image build if the
+colocated worker is absent, and the standalone-bundling unit test covers it. The separate
+`deploy-swap/runtime-profile-v1/Candidate.Containerfile` that produced this running image is outside
+the blue checkout and has not been changed. The live container and its data were observed read-only.
 
 The full-capture path does bounded synchronous work before handing an artifact to a worker. The
 writer's weighted queue is capped at 128 MiB and serializes one artifact at a time; `reserveCallLogArtifactPreparation`

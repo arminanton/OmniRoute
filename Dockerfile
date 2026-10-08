@@ -233,6 +233,10 @@ RUN mkdir -p /app/data /run/codex-appserver /home/node/.codex
 # (build-output-isolation cleanup). See scripts/build/assembleStandalone.mjs
 # (EXTRA_MODULE_ENTRIES) for the single source of truth.
 COPY --from=builder --chown=node:node /app/.build/next/standalone ./
+# The artifact writer uses a runtime-resolved worker_threads entrypoint that
+# Next's file trace cannot discover. Refuse a runnable image if postbuild did
+# not colocate that worker; otherwise detailed call logs silently disappear.
+RUN test -f /app/src/lib/usage/callLogArtifactWorker.js
 # better-sqlite3 is the one exception still copied explicitly: assembleStandalone
 # only syncs its native build/ dir; the JS wrapper (lib/, package.json) is left to
 # Next.js tracing. bootstrap-env requires SQLite BEFORE the standalone server
