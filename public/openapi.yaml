@@ -1668,6 +1668,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "502":
           description: All upstream providers failed
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/v1/ws:
     get:
@@ -1755,6 +1757,8 @@ paths:
               description: Request correlation ID when available.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/v1/api/chat:
     post:
@@ -1793,6 +1797,8 @@ paths:
             application/x-ndjson:
               schema:
                 $ref: "#/components/schemas/OllamaChatResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/v1/messages:
     post:
@@ -1831,6 +1837,8 @@ paths:
                 type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/v1/messages/count_tokens:
     post:
@@ -1897,6 +1905,8 @@ paths:
                 type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/v1/embeddings:
     get:
@@ -14833,6 +14843,8 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/files:
     get:
       operationId: getApiV1Files
@@ -15292,6 +15304,8 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/search/analytics:
     get:
       operationId: getApiV1SearchAnalytics
@@ -16545,6 +16559,24 @@ components:
               message: Internal server error
               type: api_error
             requestId: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
+    ServiceUnavailable:
+      description: >-
+        Service unavailable because a local resource-pressure/admission guard rejected
+        the request or the selected upstream is unavailable. Local pressure responses
+        use an error.code of `resource_pressure` and include Retry-After; they include
+        x-request-id when a correlation ID is available. Other errors may use a different
+        machine-readable code.
+      headers:
+        Retry-After:
+          schema: { type: string }
+          description: Minimum delay before retrying, in seconds.
+        x-request-id:
+          schema: { type: string }
+          description: Correlation ID for this rejected request when available.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
 
   schemas:
     CanaryReadiness:
@@ -17638,13 +17670,19 @@ components:
 
     ApiErrorResponse:
       type: object
+      required: [error]
       properties:
         error:
           type: object
+          required: [message]
           properties:
             message:
               type: string
             type:
+              type: string
+            code:
+              type: string
+            reason:
               type: string
             details:
               description: Optional additional error details

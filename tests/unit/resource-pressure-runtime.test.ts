@@ -61,6 +61,46 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
     runtime.dispose();
   });
 
+  it("logs event-time process and V8 memory when no asynchronous sample exists yet", () => {
+    let memoryReads = 0;
+    const runtime = createResourcePressureRuntime({
+      heapThresholdMb: 200,
+      immediateMemoryUsage: () => {
+        memoryReads++;
+        return {
+          rss: 321 * MiB,
+          heapTotal: 250 * MiB,
+          heapUsed: 201 * MiB,
+          external: 18 * MiB,
+          arrayBuffers: 12 * MiB,
+        };
+      },
+      sample: async () => signals(1),
+    });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      const guard = runtime.check();
+      assert.ok(guard);
+      assert.equal(guard.status, 503);
+      assert.equal(memoryReads, 1, "one existing process-memory read supplies all event metrics");
+      const diagnostic = warnings.find((warning) => warning.includes("[resourcePressure]"));
+      assert.ok(diagnostic);
+      assert.match(diagnostic, /immediateHeapUsedMb=201/);
+      assert.match(diagnostic, /eventHeapTotalMb=250/);
+      assert.match(diagnostic, /eventRssMb=321/);
+      assert.match(diagnostic, /eventExternalMb=18/);
+      assert.match(diagnostic, /eventArrayBuffersMb=12/);
+      assert.match(diagnostic, /eventV8HeapUsedMb=\d+/);
+      assert.match(diagnostic, /eventV8HeapLimitMb=\d+/);
+      assert.match(diagnostic, /sampleHeapUsedMb=null/);
+    } finally {
+      console.warn = originalWarn;
+      runtime.dispose();
+    }
+  });
+
   it("logs bounded numeric memory context when the immediate heap guard sheds", async () => {
     let now = 0;
     let liveHeapMb = 100;

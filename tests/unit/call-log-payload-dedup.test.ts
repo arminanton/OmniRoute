@@ -110,6 +110,88 @@ test("identical top-level and pipeline request/response payloads are stored once
   );
 });
 
+test("identical client, OpenAI, provider, and response payloads share one stored body", () => {
+  const requestBody = { model: "codex/gpt-6.1-sol", input: "x".repeat(100_000) };
+  const responseBody = { output: "y".repeat(30_000) };
+  const input = artifact(requestBody, responseBody);
+  Object.assign(input.pipeline, {
+    openaiRequest: { body: requestBody },
+    providerRequest: { body: requestBody },
+    providerResponse: { body: responseBody },
+  });
+
+  const { storedJson, artifact: roundTripped, sizeBytes } = writeAndRead(input);
+  const storedPipeline = storedJson.pipeline as Record<string, Record<string, unknown>>;
+
+  assert.equal(storedJson.schemaVersion, 7);
+  assert.equal(storedPipeline.openaiRequest.bodyRef, "pipeline.clientRawRequest.body");
+  assert.equal(storedPipeline.providerRequest.bodyRef, "pipeline.clientRawRequest.body");
+  assert.equal(storedPipeline.providerResponse.bodyRef, "pipeline.clientResponse.body");
+  assert.equal(Object.hasOwn(storedPipeline.openaiRequest, "body"), false);
+  assert.equal(Object.hasOwn(storedPipeline.providerRequest, "body"), false);
+  assert.deepEqual(roundTripped.requestBody, requestBody);
+  assert.deepEqual(roundTripped.responseBody, responseBody);
+  assert.deepEqual(
+    (roundTripped.pipeline?.openaiRequest as Record<string, unknown>).body,
+    requestBody
+  );
+  assert.deepEqual(
+    (roundTripped.pipeline?.providerRequest as Record<string, unknown>).body,
+    requestBody
+  );
+  assert.deepEqual(
+    (roundTripped.pipeline?.providerResponse as Record<string, unknown>).body,
+    responseBody
+  );
+  const savedBytes = Buffer.byteLength(JSON.stringify(input)) - sizeBytes;
+  assert.ok(savedBytes > 300_000, `expected at least 300 KB saved, got ${savedBytes} bytes`);
+});
+
+test("size-limit fallback clears payload references when it removes their pipeline targets", () => {
+  const previousLimit = process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB;
+  process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = "1";
+  try {
+    const requestBody = { input: "x".repeat(100_000) };
+    const responseBody = { output: "y".repeat(30_000) };
+    const input = artifact(requestBody, responseBody);
+    Object.assign(input.pipeline, {
+      openaiRequest: { body: requestBody },
+      providerRequest: { body: requestBody },
+      providerResponse: { body: responseBody },
+    });
+
+    const { storedJson, artifact: roundTripped } = writeAndRead(input);
+    assert.equal(Object.hasOwn(storedJson, "requestBodyRef"), false);
+    assert.equal(Object.hasOwn(storedJson, "responseBodyRef"), false);
+    assert.equal(roundTripped.requestBody, "[omitted: call log artifact size limit exceeded]");
+    assert.equal(roundTripped.responseBody, "[omitted: call log artifact size limit exceeded]");
+  } finally {
+    if (previousLimit === undefined) delete process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB;
+    else process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = previousLimit;
+  }
+});
+
+test("undefined stage bodies are not turned into references to omitted JSON properties", () => {
+  const requestBody = { input: "top-level request" };
+  const responseBody = { output: "top-level response" };
+  const input = artifact(requestBody, responseBody);
+  Object.assign(input.pipeline, {
+    clientRawRequest: { body: undefined },
+    openaiRequest: { body: undefined },
+    providerRequest: { body: undefined },
+    clientResponse: { body: undefined },
+    providerResponse: { body: undefined },
+  });
+
+  const { storedJson, artifact: roundTripped } = writeAndRead(input);
+  const storedPipeline = storedJson.pipeline as Record<string, Record<string, unknown>>;
+  assert.equal(Object.hasOwn(storedPipeline.openaiRequest, "bodyRef"), false);
+  assert.equal(Object.hasOwn(storedPipeline.providerRequest, "bodyRef"), false);
+  assert.equal(Object.hasOwn(storedPipeline.providerResponse, "bodyRef"), false);
+  assert.deepEqual(roundTripped.requestBody, requestBody);
+  assert.deepEqual(roundTripped.responseBody, responseBody);
+});
+
 test("different payloads and legacy schema-v5 artifacts retain their original fields", () => {
   const requestBody = { input: "top-level request" };
   const responseBody = { output: "top-level response" };

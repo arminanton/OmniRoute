@@ -62,7 +62,7 @@ function preserveErrorForSizeLimit(error: unknown): unknown {
 export type CallLogDetailState = "none" | "ready" | "missing" | "corrupt" | "legacy-inline";
 
 export type CallLogArtifact = {
-  schemaVersion: 5 | 6;
+  schemaVersion: 5 | 6 | 7;
   summary: {
     id: string;
     timestamp: string;
@@ -95,8 +95,11 @@ export type CallLogArtifact = {
   };
   requestBody: unknown;
   responseBody: unknown;
-  requestBodyRef?: "pipeline.clientRawRequest.body";
-  responseBodyRef?: "pipeline.clientResponse.body";
+  requestBodyRef?:
+    | "pipeline.clientRawRequest.body"
+    | "pipeline.openaiRequest.body"
+    | "pipeline.providerRequest.body";
+  responseBodyRef?: "pipeline.clientResponse.body" | "pipeline.providerResponse.body";
   error: unknown;
   pipeline?: RequestPipelinePayloads;
 };
@@ -337,8 +340,21 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
 function omitOversizedPipeline(artifact: CallLogArtifact): CallLogArtifact {
   if (!artifact.pipeline) return artifact;
 
+  const pipeline = { ...artifact.pipeline };
+  for (const name of [
+    "clientRawRequest",
+    "openaiRequest",
+    "providerRequest",
+    "clientResponse",
+    "providerResponse",
+  ] as const) {
+    const entry = pipeline[name] as Record<string, unknown> | undefined;
+    if (entry) pipeline[name] = { ...entry } as never;
+  }
+  const expanded = expandDuplicatePayloadReferences({ ...artifact, pipeline });
+
   return {
-    ...artifact,
+    ...expanded,
     pipeline: compactErrorPipeline(artifact),
   };
 }
@@ -355,59 +371,128 @@ function getArtifactMaxBytes(artifact: CallLogArtifact): number {
 function compactDuplicatePayloadReferences(artifact: CallLogArtifact): CallLogArtifact {
   if (artifact.schemaVersion < 6 || !artifact.pipeline) return artifact;
 
-  const clientRawRequest = artifact.pipeline.clientRawRequest as
-    | Record<string, unknown>
-    | undefined;
-  const clientResponse = artifact.pipeline.clientResponse as Record<string, unknown> | undefined;
-  const requestMatches =
-    artifact.requestBody !== null &&
-    artifact.requestBody !== undefined &&
-    clientRawRequest !== undefined &&
-    Object.hasOwn(clientRawRequest, "body") &&
-    isDeepStrictEqual(artifact.requestBody, clientRawRequest.body);
-  const responseMatches =
-    artifact.responseBody !== null &&
-    artifact.responseBody !== undefined &&
-    clientResponse !== undefined &&
-    Object.hasOwn(clientResponse, "body") &&
-    isDeepStrictEqual(artifact.responseBody, clientResponse.body);
+  const requestPaths = ["clientRawRequest", "openaiRequest", "providerRequest"] as const;
+  const responsePaths = ["clientResponse", "providerResponse"] as const;
+  const requestBodies = requestPaths.flatMap((name) => {
+    const entry = artifact.pipeline?.[name] as Record<string, unknown> | undefined;
+    return entry && Object.hasOwn(entry, "body") && entry.body !== undefined
+      ? [{ name, entry, reference: `pipeline.${name}.body` as const }]
+      : [];
+  });
+  const responseBodies = responsePaths.flatMap((name) => {
+    const entry = artifact.pipeline?.[name] as Record<string, unknown> | undefined;
+    return entry && Object.hasOwn(entry, "body") && entry.body !== undefined
+      ? [{ name, entry, reference: `pipeline.${name}.body` as const }]
+      : [];
+  });
+  const canonicalRequest = requestBodies[0];
+  const canonicalResponse = responseBodies[0];
+  const duplicateRequestBodies = canonicalRequest
+    ? requestBodies.slice(1).filter(({ entry }) =>
+        isDeepStrictEqual(canonicalRequest.entry.body, entry.body)
+      )
+    : [];
+  const duplicateResponseBodies = canonicalResponse
+    ? responseBodies.slice(1).filter(({ entry }) =>
+        isDeepStrictEqual(canonicalResponse.entry.body, entry.body)
+      )
+    : [];
+  const requestMatches = Boolean(
+    canonicalRequest &&
+      artifact.requestBody !== null &&
+      artifact.requestBody !== undefined &&
+      isDeepStrictEqual(artifact.requestBody, canonicalRequest.entry.body)
+  );
+  const responseMatches = Boolean(
+    canonicalResponse &&
+      artifact.responseBody !== null &&
+      artifact.responseBody !== undefined &&
+      isDeepStrictEqual(artifact.responseBody, canonicalResponse.entry.body)
+  );
+  if (
+    duplicateRequestBodies.length === 0 &&
+    duplicateResponseBodies.length === 0 &&
+    !requestMatches &&
+    !responseMatches
+  )
+    return artifact;
 
-  if (!requestMatches && !responseMatches) return artifact;
+  const pipeline = { ...artifact.pipeline } as Record<string, unknown>;
+  for (const duplicate of duplicateRequestBodies) {
+    pipeline[duplicate.name] = {
+      ...duplicate.entry,
+      body: undefined,
+      bodyRef: canonicalRequest?.reference,
+    };
+  }
+  for (const duplicate of duplicateResponseBodies) {
+    pipeline[duplicate.name] = {
+      ...duplicate.entry,
+      body: undefined,
+      bodyRef: canonicalResponse?.reference,
+    };
+  }
+
   return {
     ...artifact,
+    schemaVersion:
+      duplicateRequestBodies.length > 0 || duplicateResponseBodies.length > 0
+        ? 7
+        : artifact.schemaVersion,
+    pipeline: pipeline as unknown as RequestPipelinePayloads,
     ...(requestMatches
-      ? { requestBody: undefined, requestBodyRef: "pipeline.clientRawRequest.body" as const }
+      ? { requestBody: undefined, requestBodyRef: canonicalRequest?.reference }
       : {}),
     ...(responseMatches
-      ? { responseBody: undefined, responseBodyRef: "pipeline.clientResponse.body" as const }
+      ? { responseBody: undefined, responseBodyRef: canonicalResponse?.reference }
       : {}),
   };
 }
 
+const CALL_LOG_BODY_REFERENCES = new Set([
+  "pipeline.clientRawRequest.body",
+  "pipeline.openaiRequest.body",
+  "pipeline.providerRequest.body",
+  "pipeline.clientResponse.body",
+  "pipeline.providerResponse.body",
+]);
+
+function resolveArtifactBodyReference(artifact: CallLogArtifact, reference: unknown): unknown {
+  if (typeof reference !== "string" || !CALL_LOG_BODY_REFERENCES.has(reference)) {
+    throw new Error("Unsupported call-log pipeline body reference");
+  }
+  const [, payloadName] = reference.split(".");
+  const entry = artifact.pipeline?.[payloadName as keyof RequestPipelinePayloads] as
+    | Record<string, unknown>
+    | undefined;
+  if (!entry || !Object.hasOwn(entry, "body")) {
+    throw new Error("Call-log pipeline body reference target is missing");
+  }
+  return entry.body;
+}
+
 function expandDuplicatePayloadReferences(artifact: CallLogArtifact): CallLogArtifact {
+  for (const name of ["openaiRequest", "providerRequest", "providerResponse"] as const) {
+    const entry = artifact.pipeline?.[name] as Record<string, unknown> | undefined;
+    if (entry && Object.hasOwn(entry, "bodyRef")) {
+      entry.body = resolveArtifactBodyReference(artifact, entry.bodyRef);
+      delete entry.bodyRef;
+    }
+  }
+
   if (artifact.requestBodyRef) {
-    if (artifact.requestBodyRef !== "pipeline.clientRawRequest.body") {
+    if (!CALL_LOG_BODY_REFERENCES.has(artifact.requestBodyRef)) {
       throw new Error("Unsupported call-log request body reference");
     }
-    const clientRawRequest = artifact.pipeline?.clientRawRequest as
-      | Record<string, unknown>
-      | undefined;
-    if (!clientRawRequest || !Object.hasOwn(clientRawRequest, "body")) {
-      throw new Error("Call-log request body reference target is missing");
-    }
-    artifact.requestBody = clientRawRequest.body;
+    artifact.requestBody = resolveArtifactBodyReference(artifact, artifact.requestBodyRef);
     delete artifact.requestBodyRef;
   }
 
   if (artifact.responseBodyRef) {
-    if (artifact.responseBodyRef !== "pipeline.clientResponse.body") {
+    if (!CALL_LOG_BODY_REFERENCES.has(artifact.responseBodyRef)) {
       throw new Error("Unsupported call-log response body reference");
     }
-    const clientResponse = artifact.pipeline?.clientResponse as Record<string, unknown> | undefined;
-    if (!clientResponse || !Object.hasOwn(clientResponse, "body")) {
-      throw new Error("Call-log response body reference target is missing");
-    }
-    artifact.responseBody = clientResponse.body;
+    artifact.responseBody = resolveArtifactBodyReference(artifact, artifact.responseBodyRef);
     delete artifact.responseBodyRef;
   }
   return artifact;

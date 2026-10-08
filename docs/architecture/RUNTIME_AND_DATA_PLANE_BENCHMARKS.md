@@ -36,8 +36,12 @@ document semantically complete. The core inference paths also list the accepted 
 headers, dashboard session cookie, and anonymous mode when `REQUIRE_API_KEY` is disabled. For other
 routes with confirmed configuration-dependent access, the spec includes anonymous alternatives
 where the handler allows them, including model discovery, combo/routing metadata, and API Explorer
-endpoints. All 98 operations previously missing `x-loopback-only` under routeGuard's local-only
-prefixes are now annotated; the route-guard checker and unit test enforce those markers.
+endpoints. This pass also documents the local pressure/admission 503 body and its `Retry-After` and
+`x-request-id` headers on the seven chat routes that share the admission path; `ApiErrorResponse`
+now includes the `code` and `reason` fields emitted by the handler. The contract test checks those
+routes and headers against the implementation. All 98 operations previously missing
+`x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
+and unit test enforce those markers.
 
 ## Request path through the current monolith
 
@@ -92,6 +96,14 @@ correlation ID, and the rejected response returns it in `x-request-id`; malforme
 replaced with a generated UUID. Route labels are allowlisted families, and no prompt, raw path,
 header, or credential data is added. If no sample exists on a first-request trip, sample fields are
 explicitly `null`; cached cgroup/PSI values can be up to one second old.
+
+The immediate absolute-heap rejection now also records event-time process RSS, heap total, external
+bytes, array-buffer bytes, and V8 used/limit values, so a first rejection has useful process context
+even before the asynchronous sampler has published its first snapshot. The existing per-request
+`process.memoryUsage()` call supplies those process values; the extra V8 heap snapshot runs only on
+the rejection path. Validation also caught a correlation-propagation regression: a new call passed
+`reqId` outside its scope in `handleSingleModelChatImplementation`. It now uses that function's
+`runtimeOptions.correlationId`; the chat-admission binding suite passed 10/10 after the fix.
 
 ## Read-only observation of the running candidate
 
@@ -291,6 +303,14 @@ top-level request/response field; the conservative preparation reservation still
 both source snapshots that are already live. This reduces a later transient copy and stored bytes,
 but it does not eliminate the original parsed request plus the logger's bounded snapshot.
 
+Schema 7 extends that exact-value compaction to repeated `pipeline.openaiRequest.body`,
+`pipeline.providerRequest.body`, and `pipeline.providerResponse.body` values. The on-disk file keeps
+one body and stores references for identical stages; `readCallArtifact()` expands them back to the
+original object layout. No substring, approximate, or lossy text deduplication occurs. A synthetic
+100 KiB request and 30 KiB response duplicated across client/OpenAI/provider stages saved more than
+300 KiB, and a separate cap test confirms that fallback artifacts do not retain references after
+their body-bearing pipeline is omitted. The focused artifact-cap/worker/drain suites passed 28/28.
+
 ## Build/runtime evaluation
 
 The production Node image's exact base digest (`node:26.10.0-trixie-slim`) passed native dependency
@@ -320,6 +340,14 @@ Bun build resolves package ranges independently from the npm lock. Add a Bun loc
 its resolved graph before considering that image reproducible. Bun 1.4.2's stream-proxy microbench
 was close to 1.4.0; a full Bun 1.4.2 application build was not run.
 
+A no-emit TypeScript check limited to the changed files still pulled in the broad `chat.ts` import
+graph. Node spent about 3 minutes at 1.5–1.6 CPU cores and hit its default 4 GiB V8 heap limit;
+there was no build artifact or typecheck result. This is separate from the earlier 5 GiB Next build
+failures. A narrower follow-up that excluded `chat.ts` and included only the pressure/artifact modules
+and their focused tests still reached a 3 GiB V8 heap limit and exited after about 74 seconds without
+a result. Neither attempt reported a source diagnostic. A valid typecheck still needs a truly smaller
+dependency boundary or a builder with a larger, explicitly budgeted heap.
+
 ## Remaining acceptance checks
 
 - Obtain a management-scoped credential for the candidate or add a safe internal V8 snapshot
@@ -334,6 +362,9 @@ was close to 1.4.0; a full Bun 1.4.2 application build was not run.
   snapshot or controlled recovery result exists yet.
 - Repeat full Next builds on a dedicated builder with enough memory to complete; record wall time,
   peak cgroup memory, output size, and health/model-catalog smoke tests.
+- Typecheck the changed source with a bounded project graph or a larger, explicitly budgeted builder;
+  the broad no-emit check exhausted 4 GiB, and the follow-up excluding `chat.ts` exhausted 3 GiB before
+  either could report source errors.
 - Run the Bun application build with a locked dependency graph and on both 1.4.0 and 1.4.2; record
   native-module, database, streaming, and shutdown differences.
 - Exercise the full OmniRoute app with mock provider credentials at 70 and 100 active sessions,

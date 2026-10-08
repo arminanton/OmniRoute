@@ -186,6 +186,51 @@ test("client inference auth reflects key, session, and configured anonymous acce
   }
 });
 
+test("chat routes document local pressure errors, retry timing, and correlation", () => {
+  const pressureRoutes = [
+    ["/api/v1/chat/completions", "post"],
+    ["/api/v1/providers/{provider}/chat/completions", "post"],
+    ["/api/v1/api/chat", "post"],
+    ["/api/v1/messages", "post"],
+    ["/api/v1/responses", "post"],
+    ["/api/v1/completions", "post"],
+    ["/api/v1/responses/{path}", "post"],
+  ] as const;
+  for (const [pathname, method] of pressureRoutes) {
+    assert.equal(
+      operation(pathname, method).responses?.["503"]?.$ref,
+      "#/components/responses/ServiceUnavailable",
+      `${pathname} documents local admission/resource-pressure rejection`
+    );
+  }
+
+  const responses = spec.components?.responses as
+    | Record<
+        string,
+        {
+          headers?: Record<string, unknown>;
+          content?: Record<string, { schema?: Record<string, unknown> }>;
+        }
+      >
+    | undefined;
+  const pressure = responses?.ServiceUnavailable;
+  assert.ok(pressure);
+  assert.ok(pressure.headers?.["Retry-After"]);
+  assert.ok(pressure.headers?.["x-request-id"]);
+  assert.equal(
+    pressure.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/ApiErrorResponse"
+  );
+  const schemas = spec.components?.schemas as
+    | Record<string, { properties?: Record<string, unknown> }>
+    | undefined;
+  const errorShape = schemas?.ApiErrorResponse?.properties?.error as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  assert.ok(errorShape?.properties?.code);
+  assert.ok(errorShape.properties?.reason);
+});
+
 test("all local OpenAPI references resolve", () => {
   const refs: string[] = [];
   const walk = (value: unknown): void => {

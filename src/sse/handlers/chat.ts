@@ -1592,7 +1592,7 @@ async function handleSingleModelChatImplementation(
       : undefined;
 
   // 2. Local pressure precedes availability/breaker gates and account selection.
-  const pressureGuard = checkResourcePressureBeforeProviderWork(reqId);
+  const pressureGuard = checkResourcePressureBeforeProviderWork(runtimeOptions?.correlationId);
   if (pressureGuard) return pressureGuard.response;
   const providerProfile = await getRuntimeProviderProfile(provider);
   const gate = await checkPipelineGates(provider, model, {

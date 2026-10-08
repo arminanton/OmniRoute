@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import v8 from "node:v8";
 
 import { checkHeapPressureGuard, HEAP_PRESSURE_THRESHOLD_MB } from "./heapPressure.ts";
 import { buildErrorBody } from "./error.ts";
@@ -42,6 +43,7 @@ export type ResourcePressureRuntimeOptions = {
   thresholds?: Partial<ResourcePressureThresholds>;
   heapThresholdMb?: number | null;
   immediateHeapUsedMb?: () => number;
+  immediateMemoryUsage?: () => NodeJS.MemoryUsage;
   sample?: () => Promise<ResourceSignals>;
   nowMs?: () => number;
   schedule?: (refresh: () => void) => void;
@@ -228,15 +230,28 @@ function immediateHeapGuard(
   thresholdMb: number | null,
   signals: ResourceSignals | null,
   sampleAgeMs: number,
-  context?: ResourcePressureRequestContext
+  context?: ResourcePressureRequestContext,
+  immediateMemory?: NodeJS.MemoryUsage | null
 ): ResourcePressureGuardResult | null {
   if (thresholdMb == null) return null;
   const guard = checkHeapPressureGuard(heapUsedMb, thresholdMb);
   if (!guard) return null;
   const correlationId = sanitizeResourcePressureCorrelationId(context?.correlationId);
+  let heapStatistics: ReturnType<typeof v8.getHeapStatistics> | null = null;
+  try {
+    heapStatistics = v8.getHeapStatistics();
+  } catch {
+    // The 503 still needs to be returned if a diagnostic snapshot is unavailable.
+  }
   return buildCriticalGuard("v8_heap_absolute", {
     immediateHeapUsedMb: Math.round(heapUsedMb),
     thresholdMb: Math.round(thresholdMb),
+    eventHeapTotalMb: megabytes(immediateMemory?.heapTotal),
+    eventRssMb: megabytes(immediateMemory?.rss),
+    eventExternalMb: megabytes(immediateMemory?.external),
+    eventArrayBuffersMb: megabytes(immediateMemory?.arrayBuffers),
+    eventV8HeapUsedMb: megabytes(heapStatistics?.used_heap_size),
+    eventV8HeapLimitMb: megabytes(heapStatistics?.heap_size_limit),
     ...pressureSampleDetail(signals, sampleAgeMs),
     ...pressureRequestDetail(context),
     ...(correlationId ? { correlationId } : {}),
@@ -266,8 +281,7 @@ export function createResourcePressureRuntime(
   }
 
   const nowMs = options.nowMs ?? Date.now;
-  const immediateHeapUsedMb =
-    options.immediateHeapUsedMb ?? (() => process.memoryUsage().heapUsed / MB);
+  const immediateMemoryUsage = options.immediateMemoryUsage ?? (() => process.memoryUsage());
   const sample = options.sample ?? (() => sampleResourceSignals(options.samplerDeps));
   const schedule =
     options.schedule ??
@@ -314,11 +328,19 @@ export function createResourcePressureRuntime(
 
   return {
     check(context) {
-      let heapUsedMb = 0;
+      let immediateMemory: NodeJS.MemoryUsage | null = null;
       try {
-        heapUsedMb = immediateHeapUsedMb();
+        immediateMemory = immediateMemoryUsage();
       } catch {
-        heapUsedMb = 0;
+        // The fast process snapshot is diagnostic and must not block the request path.
+      }
+      let heapUsedMb = immediateMemory ? immediateMemory.heapUsed / MB : 0;
+      if (options.immediateHeapUsedMb) {
+        try {
+          heapUsedMb = options.immediateHeapUsedMb();
+        } catch {
+          heapUsedMb = 0;
+        }
       }
       const now = nowMs();
       const cacheAge = lastSignals ? Math.max(0, now - lastRefreshAtMs) : Number.POSITIVE_INFINITY;
@@ -327,7 +349,8 @@ export function createResourcePressureRuntime(
         heapThresholdMb,
         lastSignals,
         cacheAge,
-        context
+        context,
+        immediateMemory
       );
       if (now >= nextRefreshAtMs) scheduleRefresh();
       if (immediate) {
