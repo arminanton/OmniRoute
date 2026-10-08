@@ -281,6 +281,11 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/providers/{id}/models", "get", "ProviderConnectionModelDiscoveryResponse"],
     ["/api/providers/health-matrix", "get", "ProviderHealthMatrixResponse"],
     ["/api/providers/health-autopilot", "get", "ProviderHealthAutopilotReport"],
+    [
+      "/api/providers/health-autopilot/actions",
+      "post",
+      "ProviderHealthAutopilotActionResponse",
+    ],
     ["/api/providers/expiration", "get", "ProviderExpirationResponse"],
     ["/api/providers/cursor/agent-availability", "get", "CursorAgentAvailabilityResponse"],
     ["/api/providers/quota-windows", "get", "ProviderQuotaWindowsResponse"],
@@ -463,6 +468,25 @@ test("model, provider, key, and combo management responses match their route pay
       `provider health autopilot query parameter ${parameterName}`
     );
   }
+  const healthAutopilotAction = operation("/api/providers/health-autopilot/actions", "post");
+  const healthAutopilotActionRequest = requestContent(
+    healthAutopilotAction,
+    "application/json"
+  ).schema;
+  assert.equal(
+    healthAutopilotActionRequest.$ref,
+    "#/components/schemas/ProviderHealthAutopilotActionRequest"
+  );
+  const healthAutopilotActionSecurity = healthAutopilotAction.security ?? [];
+  assert.ok(healthAutopilotActionSecurity.some((requirement) => "BearerAuth" in requirement));
+  assert.ok(
+    healthAutopilotActionSecurity.some((requirement) => "ManagementSessionAuth" in requirement)
+  );
+  assert.equal(
+    healthAutopilotActionSecurity.some((requirement) => Object.keys(requirement).length === 0),
+    false
+  );
+  assert.ok(healthAutopilotAction.responses?.["409"]);
   assert.ok(schemas?.ProviderExpirationResponse?.required?.includes("summary"));
   assert.ok(schemas?.ProviderExpirationResponse?.required?.includes("list"));
   const healthMatrixParameters = healthMatrix.parameters ?? [];

@@ -13137,11 +13137,62 @@ paths:
       operationId: postApiProvidersHealthAutopilotActions
       tags:
         - Providers
-      summary: "POST providers › health autopilot › actions"
+      summary: Execute a confirmed provider health-autopilot action
+      description: >-
+        Executes only an action currently present in the provider report. A stale
+        preconditionsHash returns 409; state-changing actions require confirm=true. dryRun=true
+        returns a preview without applying the change.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderHealthAutopilotActionRequest"
       x-always-protected: true
       responses:
         "200":
-          description: OK
+          description: Action preview or state change result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderHealthAutopilotActionResponse"
+        "400":
+          description: Invalid action or explicit confirmation is missing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderHealthAutopilotActionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: The action is no longer applicable to the latest report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderHealthAutopilotActionErrorResponse"
+        "409":
+          description: Preconditions changed or the target is in a terminal state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderHealthAutopilotActionErrorResponse"
+        "500":
+          description: Failed to apply the provider health-autopilot action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/providers/health-matrix:
     get:
       operationId: getApiProvidersHealthMatrix
@@ -20844,6 +20895,65 @@ components:
           items:
             $ref: "#/components/schemas/ProviderHealthAutopilotProvider"
       additionalProperties: false
+
+    ProviderHealthAutopilotActionRequest:
+      type: object
+      required: [type, target, preconditionsHash]
+      properties:
+        type:
+          type: string
+          enum:
+            - clear_provider_breaker
+            - clear_connection_cooldown
+            - clear_stale_connection_error
+            - clear_model_lockout
+            - reactivate_connection
+            - deactivate_connection
+        target:
+          $ref: "#/components/schemas/ProviderHealthAutopilotTarget"
+        preconditionsHash: { type: string, minLength: 8, maxLength: 128 }
+        dryRun: { type: boolean }
+        confirm: { type: boolean }
+      additionalProperties: true
+
+    ProviderHealthAutopilotActionResponse:
+      type: object
+      required: [success, dryRun, action, target, checkedAt]
+      properties:
+        success: { type: boolean, const: true }
+        dryRun: { type: boolean }
+        action:
+          type: string
+          enum:
+            - clear_provider_breaker
+            - clear_connection_cooldown
+            - clear_stale_connection_error
+            - clear_model_lockout
+            - reactivate_connection
+            - deactivate_connection
+        target:
+          $ref: "#/components/schemas/ProviderHealthAutopilotTarget"
+        changed:
+          type: object
+          additionalProperties: true
+        checkedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ProviderHealthAutopilotActionErrorResponse:
+      type: object
+      properties:
+        success: { type: boolean, const: false }
+        error:
+          oneOf:
+            - { type: string }
+            - type: object
+              properties:
+                message: { type: string }
+                type: { type: string }
+                code: { type: string }
+              additionalProperties: true
+        currentPreconditionsHash: { type: string }
+      additionalProperties: true
 
     ProviderExpirationRecord:
       type: object
