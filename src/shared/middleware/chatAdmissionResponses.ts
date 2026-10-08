@@ -1,8 +1,11 @@
 import { buildErrorBody } from "@omniroute/open-sse/utils/error.ts";
+import { randomUUID } from "node:crypto";
 
 import { CORS_HEADERS } from "../utils/cors";
 
 const JSON_HEADERS = { ...CORS_HEADERS, "Content-Type": "application/json" };
+const SAFE_REQUEST_ID =
+  /^(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|[a-f0-9]{32})$/i;
 
 /**
  * `Retry-After` floors for the retryable 503s — the pre-#12135 fixed values. A caller
@@ -63,7 +66,9 @@ export function bodyExceedsBudgetResponse(maxInflightBytes: number): Response {
   );
 }
 
-export function resourcePressureRejectionResponse(): Response {
+export function resourcePressureRejectionResponse(correlationId?: string | null): Response {
+  const requestId =
+    correlationId && SAFE_REQUEST_ID.test(correlationId) ? correlationId : randomUUID();
   return new Response(
     JSON.stringify(
       buildErrorBody(
@@ -73,7 +78,10 @@ export function resourcePressureRejectionResponse(): Response {
         { type: "server_error", code: "resource_pressure" }
       )
     ),
-    { status: 503, headers: { ...JSON_HEADERS, "Retry-After": "2" } }
+    {
+      status: 503,
+      headers: { ...JSON_HEADERS, "Retry-After": "2", "x-request-id": requestId },
+    }
   );
 }
 

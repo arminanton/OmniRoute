@@ -574,7 +574,7 @@ async function handleChatCoreOwned({
   const resilienceSettings = resolveResilienceSettings(cachedSettings);
   if (!skipResourcePressureGuard) {
     try {
-      const pressureGuard = checkResourcePressureGuard();
+      const pressureGuard = checkResourcePressureGuard({ correlationId });
       if (pressureGuard) return pressureGuard;
     } catch {
       /* fail open */

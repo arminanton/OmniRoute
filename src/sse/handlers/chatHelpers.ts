@@ -402,9 +402,11 @@ export async function checkPipelineGates(
   return null;
 }
 
-export function checkResourcePressureBeforeProviderWork(): ResourcePressureGuardResult | null {
+export function checkResourcePressureBeforeProviderWork(
+  correlationId?: string | null
+): ResourcePressureGuardResult | null {
   try {
-    return checkResourcePressureGuard();
+    return checkResourcePressureGuard({ correlationId });
   } catch {
     return null;
   }
@@ -469,7 +471,7 @@ export async function executeChatWithBreaker({
   const capture = <T>(fn: () => T): T =>
     appliedProxySink ? runWithAppliedProxyCapture(appliedProxySink, fn) : fn();
 
-  const pressureGuard = checkResourcePressureBeforeProviderWork();
+  const pressureGuard = checkResourcePressureBeforeProviderWork(correlationId);
   if (pressureGuard) {
     return { localResourcePressureResult: pressureGuard, tlsFingerprintUsed: false };
   }

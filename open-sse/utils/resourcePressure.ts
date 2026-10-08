@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { checkHeapPressureGuard, HEAP_PRESSURE_THRESHOLD_MB } from "./heapPressure.ts";
 import { buildErrorBody } from "./error.ts";
 import {
@@ -29,6 +31,10 @@ export type ResourcePressureObservation = {
   state: ResourcePressureState;
 };
 
+export type ResourcePressureRequestContext = {
+  correlationId?: string | null;
+};
+
 export type ResourcePressureRuntimeOptions = {
   thresholds?: Partial<ResourcePressureThresholds>;
   heapThresholdMb?: number | null;
@@ -43,7 +49,7 @@ export type ResourcePressureRuntimeOptions = {
 };
 
 export type ResourcePressureRuntime = {
-  check: () => ResourcePressureGuardResult | null;
+  check: (context?: ResourcePressureRequestContext) => ResourcePressureGuardResult | null;
   getObservation: () => ResourcePressureObservation;
   whenRefreshSettled: () => Promise<void>;
   dispose: () => void;
@@ -87,6 +93,15 @@ function megabytes(bytes: number | null | undefined): number | null {
     : null;
 }
 
+export function sanitizeResourcePressureCorrelationId(
+  value: string | null | undefined
+): string | null {
+  if (typeof value !== "string") return null;
+  const uuidPattern =
+    /^(?:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|[a-f0-9]{32})$/i;
+  return uuidPattern.test(value) ? value : null;
+}
+
 function pressureSampleDetail(
   signals: ResourceSignals | null,
   sampleAgeMs: number
@@ -124,10 +139,12 @@ function describeCachedPressure(params: {
   signals: ResourceSignals | null;
   recoveryStreak: number;
   cacheAgeMs: number;
+  correlationId?: string | null;
 }): Record<string, number | string | null> {
   return {
     ...pressureSampleDetail(params.signals, params.cacheAgeMs),
     recoveryStreak: params.recoveryStreak,
+    ...(params.correlationId ? { correlationId: params.correlationId } : {}),
   };
 }
 
@@ -135,7 +152,11 @@ function buildCriticalGuard(
   reason: PressureReason,
   detail: Record<string, number | string | null | undefined> = {}
 ): ResourcePressureGuardResult {
-  const detailText = formatPressureDetail(detail);
+  const correlationId =
+    sanitizeResourcePressureCorrelationId(
+      typeof detail.correlationId === "string" ? detail.correlationId : null
+    ) ?? randomUUID();
+  const detailText = formatPressureDetail({ ...detail, correlationId });
   console.warn(
     `[resourcePressure] critical pressure guard tripped (reason=${reason} pid=${process.pid} loggedAt=${new Date().toISOString()}${detailText ? " " + detailText : ""}); returning 503`
   );
@@ -152,7 +173,11 @@ function buildCriticalGuard(
       ),
       {
         status: 503,
-        headers: { "Content-Type": "application/json", "Retry-After": RETRY_AFTER_SECONDS },
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": RETRY_AFTER_SECONDS,
+          "x-request-id": correlationId,
+        },
       }
     ),
   };
@@ -162,15 +187,18 @@ function immediateHeapGuard(
   heapUsedMb: number,
   thresholdMb: number | null,
   signals: ResourceSignals | null,
-  sampleAgeMs: number
+  sampleAgeMs: number,
+  context?: ResourcePressureRequestContext
 ): ResourcePressureGuardResult | null {
   if (thresholdMb == null) return null;
   const guard = checkHeapPressureGuard(heapUsedMb, thresholdMb);
   if (!guard) return null;
+  const correlationId = sanitizeResourcePressureCorrelationId(context?.correlationId);
   return buildCriticalGuard("v8_heap_absolute", {
     immediateHeapUsedMb: Math.round(heapUsedMb),
     thresholdMb: Math.round(thresholdMb),
     ...pressureSampleDetail(signals, sampleAgeMs),
+    ...(correlationId ? { correlationId } : {}),
   });
 }
 
@@ -244,7 +272,7 @@ export function createResourcePressureRuntime(
   };
 
   return {
-    check() {
+    check(context) {
       let heapUsedMb = 0;
       try {
         heapUsedMb = immediateHeapUsedMb();
@@ -253,7 +281,13 @@ export function createResourcePressureRuntime(
       }
       const now = nowMs();
       const cacheAge = lastSignals ? Math.max(0, now - lastRefreshAtMs) : Number.POSITIVE_INFINITY;
-      const immediate = immediateHeapGuard(heapUsedMb, heapThresholdMb, lastSignals, cacheAge);
+      const immediate = immediateHeapGuard(
+        heapUsedMb,
+        heapThresholdMb,
+        lastSignals,
+        cacheAge,
+        context
+      );
       if (now >= nextRefreshAtMs) scheduleRefresh();
       if (immediate) {
         state = {
@@ -275,6 +309,7 @@ export function createResourcePressureRuntime(
           signals: lastSignals,
           recoveryStreak: state.recoveryStreak,
           cacheAgeMs: cacheAge,
+          correlationId: sanitizeResourcePressureCorrelationId(context?.correlationId),
         })
       );
     },
@@ -292,8 +327,10 @@ export function createResourcePressureRuntime(
 
 let defaultRuntime = createResourcePressureRuntime();
 
-export function checkResourcePressureGuard(): ResourcePressureGuardResult | null {
-  return defaultRuntime.check();
+export function checkResourcePressureGuard(
+  context?: ResourcePressureRequestContext
+): ResourcePressureGuardResult | null {
+  return defaultRuntime.check(context);
 }
 
 export function getResourcePressureObservation(): ResourcePressureObservation {

@@ -29,7 +29,7 @@ export type IngestBudgetAcquireResult =
 export interface IngestByteAdmissionOptions {
   maxInflightBytes?: number;
   budgetSource?: IngestBudgetSource;
-  checkPressureSeverity?: () => PressureSeverity;
+  checkPressureSeverity?: (correlationId?: string | null) => PressureSeverity;
   onShed: (reason: "body_exceeds_budget" | "inflight_bytes_budget", lane: string) => void;
 }
 
@@ -41,7 +41,7 @@ export class IngestByteAdmissionController {
   #inflightBytes = 0;
   readonly maxInflightBytes: number;
   readonly budgetSource: IngestBudgetSource;
-  readonly #checkPressureSeverity: () => PressureSeverity;
+  readonly #checkPressureSeverity: (correlationId?: string | null) => PressureSeverity;
   readonly #onShed: IngestByteAdmissionOptions["onShed"];
   #queues = new Map<string, BudgetWaiter[]>();
   #fairKeys: string[] = [];
@@ -58,8 +58,8 @@ export class IngestByteAdmissionController {
     return this.#inflightBytes;
   }
 
-  pressureSeverity(): PressureSeverity {
-    return this.#checkPressureSeverity();
+  pressureSeverity(correlationId?: string | null): PressureSeverity {
+    return this.#checkPressureSeverity(correlationId);
   }
 
   canFit(bytes: number): boolean {

@@ -6,6 +6,7 @@ import {
   reloadResourcePressureRuntime,
   type ResourceSignals,
 } from "../../open-sse/utils/resourcePressure.ts";
+import { resourcePressureRejectionResponse } from "../../src/shared/middleware/chatAdmissionResponses.ts";
 
 const MiB = 1024 ** 2;
 
@@ -78,6 +79,13 @@ describe("resource pressure HTTP guard facade", () => {
     assert.ok(!clientText.includes("987"));
     assert.ok(!/\bMB\b/.test(clientText));
     runtime.dispose();
+  });
+
+  it("returns the request correlation ID on a body-admission pressure rejection", () => {
+    const correlationId = "550e8400-e29b-41d4-a716-446655440000";
+    const response = resourcePressureRejectionResponse(correlationId);
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get("x-request-id"), correlationId);
   });
 
   it("reload atomically replaces and resets the thin default facade", async () => {

@@ -16,6 +16,7 @@
  */
 
 import { createLogger } from "../utils/logger";
+import { randomUUID } from "node:crypto";
 import v8 from "node:v8";
 import { trackRequest } from "../../lib/gracefulShutdown";
 import { resolveIngestByteBudget, type IngestBudgetSource } from "./admissionBudget";
@@ -40,6 +41,7 @@ import {
 import {
   checkResourcePressureGuard,
   getResourcePressureObservation,
+  sanitizeResourcePressureCorrelationId,
   type PressureSeverity,
 } from "@omniroute/open-sse/utils/resourcePressure.ts";
 
@@ -222,9 +224,9 @@ export type ChatAdmissionShedReason =
  * Drive the throttled async sampler even while this first gate sheds requests.
  * A passive cached read would starve the only recovery path once critical.
  */
-export function defaultPressureSeverity(): PressureSeverity {
+export function defaultPressureSeverity(correlationId?: string | null): PressureSeverity {
   try {
-    if (checkResourcePressureGuard()) return "critical";
+    if (checkResourcePressureGuard({ correlationId })) return "critical";
     const severity = getResourcePressureObservation().state.severity;
     // check() is authoritative when its last observation has gone stale.
     return severity === "critical" ? "high" : severity;
@@ -309,7 +311,7 @@ export class ChatAdmissionController {
     budgetOptions: {
       maxInflightBytes?: number;
       budgetSource?: IngestBudgetSource;
-      checkPressureSeverity?: () => PressureSeverity;
+      checkPressureSeverity?: (correlationId?: string | null) => PressureSeverity;
     } = {}
   ) {
     if (!Number.isSafeInteger(maxHeavyInFlight) || maxHeavyInFlight < 1) {
@@ -613,8 +615,8 @@ export class ChatAdmissionController {
     return this.#ingestBudget.budgetSource;
   }
 
-  pressureSeverity(): PressureSeverity {
-    return this.#ingestBudget.pressureSeverity();
+  pressureSeverity(correlationId?: string | null): PressureSeverity {
+    return this.#ingestBudget.pressureSeverity(correlationId);
   }
 
   canFitBudget(bytes: number): boolean {
@@ -680,7 +682,7 @@ export class PerConnectionAdmissionController {
       budget?: {
         maxInflightBytes?: number;
         budgetSource?: IngestBudgetSource;
-        checkPressureSeverity?: () => PressureSeverity;
+        checkPressureSeverity?: (correlationId?: string | null) => PressureSeverity;
       };
     }
   ) {
@@ -1012,9 +1014,13 @@ export async function admitChatRequest(
   // #503-fanout: shed before spending any bytes on ingestion when the process
   // is under genuine critical resource pressure. No-op for every controller a
   // test constructs directly (default severity is always "normal").
-  if (controller.pressureSeverity() === "critical") {
+  const correlationId =
+    sanitizeResourcePressureCorrelationId(
+      request.headers.get("x-request-id") ?? request.headers.get("x-correlation-id")
+    ) ?? randomUUID();
+  if (controller.pressureSeverity(correlationId) === "critical") {
     controller.recordShed("resource_pressure", sessionId);
-    return { admit: false, response: resourcePressureRejectionResponse() };
+    return { admit: false, response: resourcePressureRejectionResponse(correlationId) };
   }
 
   if (contentLength !== null && contentLength > hardMaxBytes) {
@@ -1046,7 +1052,7 @@ export async function admitChatRequest(
     // every controller a test constructs directly, so this resolves
     // synchronously true there — only the production singleton (built with a
     // real host-derived budget) is ever actually gated by it.
-    const severity = controller.pressureSeverity();
+    const severity = controller.pressureSeverity(correlationId);
     const budgetWaitMs =
       severity === "high" ? queueMs : Math.min(queueMs, INGEST_NORMAL_MAX_WAIT_MS);
     const budgetResult = await controller.acquireBudgetWithin(

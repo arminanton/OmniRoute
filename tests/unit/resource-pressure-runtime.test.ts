@@ -95,9 +95,11 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
     const originalWarn = console.warn;
     console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
     try {
-      const guard = runtime.check();
+      const correlationId = "550e8400-e29b-41d4-a716-446655440000";
+      const guard = runtime.check({ correlationId });
       assert.ok(guard);
       assert.equal(guard.status, 503);
+      assert.equal(guard.response.headers.get("x-request-id"), correlationId);
       const diagnostic = warnings.find((warning) => warning.includes("[resourcePressure]"));
       assert.ok(diagnostic);
       assert.match(diagnostic, /immediateHeapUsedMb=201/);
@@ -110,10 +112,35 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
       assert.match(diagnostic, /sampleAgeMs=1/);
       assert.match(diagnostic, /pid=\d+/);
       assert.match(diagnostic, /loggedAt=/);
+      assert.match(diagnostic, new RegExp(`correlationId=${correlationId}`));
 
       const payload = await guard.response.json();
       assert.equal(payload.error.code, "resource_pressure");
       assert.equal(JSON.stringify(payload).includes("cgroupCurrentMb"), false);
+    } finally {
+      console.warn = originalWarn;
+      runtime.dispose();
+    }
+  });
+
+  it("replaces malformed or credential-like correlation IDs with a generated UUID", () => {
+    const runtime = createResourcePressureRuntime({
+      heapThresholdMb: 200,
+      immediateHeapUsedMb: () => 201,
+      sample: async () => signals(1),
+    });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+    try {
+      const guard = runtime.check({ correlationId: "sk_live_do_not_log_this" });
+      assert.ok(guard);
+      const diagnostic = warnings.find((warning) => warning.includes("[resourcePressure]"));
+      assert.ok(diagnostic);
+      assert.equal(diagnostic.includes("sk_live_do_not_log_this"), false);
+      const generatedId = /correlationId=([a-f0-9-]{36})/i.exec(diagnostic)?.[1];
+      assert.ok(generatedId);
+      assert.equal(guard.response.headers.get("x-request-id"), generatedId);
     } finally {
       console.warn = originalWarn;
       runtime.dispose();
