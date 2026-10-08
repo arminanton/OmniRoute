@@ -140,16 +140,18 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
         }
     }
 
-    let response_stream = upstream.bytes_stream();
-    let body = Body::from_stream(async_stream::try_stream! {
+    let upstream_stream = upstream.bytes_stream();
+    let response_stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> =
+        Box::pin(async_stream::try_stream! {
         let _permit = permit;
         let _active = active;
-        let mut stream = response_stream;
+        let mut stream = upstream_stream;
         while let Some(next) = stream.next().await {
             let chunk = next.map_err(|error| io::Error::other(error.to_string()))?;
             yield chunk;
         }
     });
+    let body = Body::from_stream(response_stream);
     let mut builder = Response::builder().status(status);
     if let Some(headers) = builder.headers_mut() {
         *headers = response_headers;
