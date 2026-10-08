@@ -1,0 +1,37 @@
+# Runtime and streaming proxy microbenchmark
+
+This isolated harness compares the transport overhead of the existing Node runtime, Bun's
+`Bun.serve`, and a small Rust/Axum proxy. It uses one local mock SSE upstream and sends the same
+request body and event stream through each gateway. It does not exercise OmniRoute credentials,
+model/account routing, provider adapters, database policy checks, compression, or real-provider
+quotas; results must not be presented as full OmniRoute capacity claims.
+
+The Rust process enforces a bounded number of active requests, rejects known oversized
+`Content-Length` values, streams request and response bodies, and holds its capacity permit until
+the response finishes or the client disconnects. Node and Bun use equivalent in-flight limits and
+stream their bodies through their native HTTP/fetch APIs.
+
+Build the Rust candidate once:
+
+```bash
+cargo build --release --manifest-path benchmarks/runtime-proxy/Cargo.toml
+```
+
+Run one runtime at a time. `BUN_BIN` can point at a specific Bun binary; `--runtime bun-smol`
+enables Bun's lower-memory, more-frequent-GC mode.
+
+```bash
+python3 benchmarks/runtime-proxy/run_bench.py --runtime node --clients 100
+python3 benchmarks/runtime-proxy/run_bench.py --runtime bun --bun-bin /tmp/bun-1.4.2/bun --clients 100
+python3 benchmarks/runtime-proxy/run_bench.py --runtime bun-smol --bun-bin /tmp/bun-1.4.2/bun --clients 100
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --clients 100
+```
+
+Sweep `--clients 1,15,30,70,100` and repeat each point at least three times. The result reports
+header and first-body-byte latency, completion latency, successful streams, throughput, peak
+gateway RSS, and CPU time. Tune `--chunks`, `--chunk-delay-ms`, and `--chunk-bytes` to test other
+stream shapes. Run with the same CPU affinity and process limits for every runtime.
+
+The Node and Bun adapters are benchmark-only and bind to loopback. They are not authenticated
+production proxies. The Rust candidate is a transport proof of concept, not a replacement for the
+OmniRoute policy, provider, quota, or protocol layers.
