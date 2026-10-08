@@ -412,6 +412,13 @@ the build process exited 137 while still in optimized compilation. The container
 hit its memory cap; because the diagnostic container used `--rm`, its final cgroup counters were not
 preserved. No usable standalone bundle was produced. The devvm recovered after the container exited.
 
+A second Node build attempt used the current Dockerfile target, four CPUs, a 9 GiB container RAM cap,
+12 GiB RAM-plus-swap, the configured 6 GiB V8 heap, and its one page-data worker. It reached Next's
+optimized Turbopack compilation, but system memory available fell from 6.2 GiB to 1.8 GiB while swap
+rose from 1.7 to 4.0 GiB over a 30-second sample. I interrupted it at that safety threshold; no
+standalone output or image was produced. After the interruption, the devvm recovered to 8.7 GiB
+available RAM. The host-only memory ceiling prevents a valid completed build comparison here.
+
 The repository's `Dockerfile.bun` path was tested with the pinned Bun 1.4.0 image and the same 5 GiB
 limit. Its install resolved 9,470 package entries and installed 2,405 packages in about 50 seconds.
 The image passed the `wreq-js` and `bun:sqlite` smoke checks. Bun emitted nested-override and peer
@@ -422,6 +429,11 @@ exit code or usable image. Its last sampled cgroup was at the 5 GiB memory cap w
 but no OOM kill. These constrained runs show that neither path completed a release build within the
 devvm budget; use a dedicated builder with more memory and native overlay storage for a valid
 wall-time comparison.
+
+`Dockerfile.bun` did not previously set `CIRCLE_NODE_TOTAL`, so Next could derive its page-data
+worker pool from all visible host CPUs. It now has a configurable `OMNIROUTE_BUILD_WORKERS` argument
+defaulting to two (one Next page-data worker), matching the Node Dockerfile's bounded pool. A focused
+static test protects that wiring; the full Bun build with this change still needs a larger builder.
 
 The Bun base image has a `node` compatibility fallback but no `npm` executable. The package
 `prebuild` hook originally invoked `npm run check:native-deps`, so the hook was changed to call the

@@ -40,6 +40,10 @@ const dockerfile = readFileSync(
   fileURLToPath(new URL("../../Dockerfile", import.meta.url)),
   "utf8"
 );
+const bunDockerfile = readFileSync(
+  fileURLToPath(new URL("../../Dockerfile.bun", import.meta.url)),
+  "utf8"
+);
 
 function readArgDefault(name: string): number {
   const match = dockerfile.match(new RegExp(`^ARG ${name}=(\\d+)$`, "m"));
@@ -87,4 +91,15 @@ test("worker count × measured per-process RSS fits a 16 GB GitHub runner", () =
 test("the worker pool does not oversubscribe the runner's 4 vCPU", () => {
   const workers = readArgDefault("OMNIROUTE_BUILD_WORKERS") - 1;
   assert.ok(workers <= 4, `${workers} workers oversubscribe a 4 vCPU runner`);
+});
+
+test("the Bun builder uses a configurable bounded Next.js worker pool", () => {
+  assert.ok(
+    /^ARG OMNIROUTE_BUILD_WORKERS=2$/m.test(bunDockerfile),
+    "Dockerfile.bun must default to one Next page-data worker"
+  );
+  assert.ok(
+    /^ENV CIRCLE_NODE_TOTAL=\$\{OMNIROUTE_BUILD_WORKERS\}$/m.test(bunDockerfile),
+    "Dockerfile.bun must pass the worker build argument to Next.js"
+  );
 });

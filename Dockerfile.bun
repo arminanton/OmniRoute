@@ -52,6 +52,13 @@ ENV DASHBOARD_ALLOW_EMBED=$DASHBOARD_ALLOW_EMBED
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
+# Keep Next's page-data worker pool bounded just like the Node Dockerfile.
+# Next derives workers as CIRCLE_NODE_TOTAL - 1; without this limit it sizes
+# the pool from the host CPU count, multiplying Turbopack and JavaScript memory
+# on builders with many visible CPUs.
+ARG OMNIROUTE_BUILD_WORKERS=2
+ENV CIRCLE_NODE_TOTAL=${OMNIROUTE_BUILD_WORKERS}
+
 # Bun native Next.js build execution
 RUN bun run --quiet build
 
