@@ -16412,18 +16412,235 @@ paths:
       tags:
         - V1 Relay
       summary: "POST relay › chat › completions"
+      description: >-
+        OpenAI-compatible serverless relay. A relay token is always required and may be
+        supplied as an Authorization Bearer credential or with X-Relay-Token. The outer
+        /api/v1 authentication policy may also require an OmniRoute API key or dashboard
+        session when REQUIRE_API_KEY is enabled. Because Authorization is shared, send
+        the relay token in X-Relay-Token when also sending an OmniRoute Bearer key; a
+        relay Bearer token by itself works when the outer API-key requirement is disabled.
+        The response is JSON for non-streaming requests and SSE when streaming is enabled.
+      security:
+        - RelayTokenHeaderAuth: []
+          BearerAuth: []
+        - RelayTokenHeaderAuth: []
+          ClientApiKeyAuth: []
+        - RelayTokenHeaderAuth: []
+          GoogleApiKeyAuth: []
+        - RelayTokenHeaderAuth: []
+          ManagementSessionAuth: []
+        - RelayTokenHeaderAuth: []
+        - RelayTokenBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
       responses:
         "200":
-          description: OK
+          description: Chat completion JSON response or Server-Sent Events stream.
+          headers:
+            X-Relay-Token:
+              description: Redacted relay-token prefix associated with the request.
+              schema: { type: string }
+            X-Routing-Backend:
+              description: Backend selected for this response (ts or bifrost).
+              schema: { type: string, enum: [ts, bifrost] }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: "SSE events containing JSON chat-completion chunks, followed by data: [DONE]."
+        "400":
+          description: Invalid request or blocked by the prompt-injection guard.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "401":
+          description: Missing, invalid, or expired relay token, or rejected by the outer API-key policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "403":
+          description: Requested model is not allowed by the relay token, or browser-origin policy rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API or chat-admission size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "429":
+          description: Relay token or client-IP rate limit exceeded.
+          headers:
+            Retry-After:
+              description: Seconds until the applicable rate-limit window resets.
+              schema: { type: integer, minimum: 0 }
+            X-RateLimit-Scope:
+              description: Present for per-IP limiting.
+              schema: { type: string, enum: [ip] }
+            X-RateLimit-Remaining:
+              description: Present for per-token limiting.
+              schema: { type: string, example: "0" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "500":
+          description: Unexpected relay or delegated-handler error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "502":
+          description: Explicit Bifrost backend could not be reached, or provider routing failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "503":
+          description: Chat admission or provider service is temporarily unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "504":
+          description: Provider or relay request timed out.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        default:
+          description: Other status returned by the delegated chat-completion pipeline.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
   /api/v1/relay/chat/completions/bifrost:
     post:
       operationId: postApiV1RelayChatCompletionsBifrost
       tags:
         - V1 Relay
       summary: "POST relay › chat › completions › bifrost"
+      description: >-
+        OpenAI-compatible relay that forwards to the configured Bifrost sidecar. A relay
+        token is always required and may be supplied as an Authorization Bearer credential
+        or with X-Relay-Token. The outer /api/v1 authentication policy may also require an
+        OmniRoute API key or dashboard session when REQUIRE_API_KEY is enabled. Because
+        Authorization is shared, send the relay token in X-Relay-Token when also sending
+        an OmniRoute Bearer key; a relay Bearer token by itself works when the outer
+        API-key requirement is disabled. The sidecar route returns 503 when disabled or
+        unconfigured, 502 when unreachable, and 504 on timeout. Provider error statuses
+        are preserved with a normalized JSON error body.
+      security:
+        - RelayTokenHeaderAuth: []
+          BearerAuth: []
+        - RelayTokenHeaderAuth: []
+          ClientApiKeyAuth: []
+        - RelayTokenHeaderAuth: []
+          GoogleApiKeyAuth: []
+        - RelayTokenHeaderAuth: []
+          ManagementSessionAuth: []
+        - RelayTokenHeaderAuth: []
+        - RelayTokenBearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BifrostChatCompletionRequest"
       responses:
         "200":
-          description: OK
+          description: Bifrost chat-completion JSON response or Server-Sent Events stream.
+          headers:
+            X-Relay-Token:
+              description: Redacted relay-token prefix associated with the request.
+              schema: { type: string }
+            X-Routed-By:
+              description: Identifies the Bifrost sidecar as the selected backend.
+              schema: { type: string, enum: [bifrost] }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: "SSE events containing JSON chat-completion chunks, followed by data: [DONE]."
+        "400":
+          description: Invalid JSON, invalid chat-completion body, or blocked by the prompt-injection guard.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "401":
+          description: Missing, invalid, or expired relay token, or rejected by the outer API-key policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "403":
+          description: Requested model is not allowed by the relay token, or browser-origin policy rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "429":
+          description: Relay token or client-IP rate limit exceeded.
+          headers:
+            Retry-After:
+              description: Seconds until the applicable rate-limit window resets.
+              schema: { type: integer, minimum: 0 }
+            X-RateLimit-Scope:
+              description: Present for per-IP limiting.
+              schema: { type: string, enum: [ip] }
+            X-RateLimit-Remaining:
+              description: Present for per-token limiting.
+              schema: { type: string, example: "0" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "500":
+          description: Unexpected relay error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "502":
+          description: Bifrost sidecar is unreachable or returned this upstream status.
+          headers:
+            X-Bifrost-Fallback:
+              description: Suggested TypeScript relay fallback path when the sidecar is unreachable.
+              schema: { type: string, example: /api/v1/relay/chat/completions }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "503":
+          description: Bifrost is disabled, unconfigured, or returned this upstream status.
+          headers:
+            X-Bifrost-Fallback:
+              description: Suggested TypeScript relay fallback path.
+              schema: { type: string, example: /api/v1/relay/chat/completions }
+            X-Bifrost-Killswitch:
+              description: Present when BIFROST_ENABLED=0 disables the sidecar route.
+              schema: { type: string, example: BIFROST_ENABLED=0 }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        "504":
+          description: Bifrost request timed out, or the sidecar returned this upstream status.
+          headers:
+            X-Bifrost-Fallback:
+              description: Suggested TypeScript relay fallback path when the sidecar times out.
+              schema: { type: string, example: /api/v1/relay/chat/completions }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
+        default:
+          description: Other non-success status returned by Bifrost, normalized as a JSON error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayErrorResponse" }
   /api/v1/responses/{path}:
     parameters:
       - name: path
@@ -17661,6 +17878,19 @@ components:
         includes `manage` or `admin` scope. See docs/guides/MANAGEMENT-AUTH.md.
         Bearer credentials are accepted on management routes that use this scheme;
         they are not rejected solely for being Bearer.
+    RelayTokenBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: relay token
+      description: >-
+        Dedicated relay token for the relay-completions endpoints. When the outer
+        REQUIRE_API_KEY policy is enabled, Authorization is consumed by the OmniRoute
+        API-key gate first; use X-Relay-Token for the relay token in that configuration.
+    RelayTokenHeaderAuth:
+      type: apiKey
+      in: header
+      name: X-Relay-Token
+      description: Dedicated relay token header; can be sent alongside an OmniRoute API key.
     ManagementSessionAuth:
       type: apiKey
       in: cookie
@@ -19118,6 +19348,38 @@ components:
         requestId:
           type: string
           format: uuid
+
+    RelayErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message: { type: string }
+            type: { type: string }
+            code: { type: string }
+            reason: { type: string }
+        upstream_details:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    BifrostChatCompletionRequest:
+      description: Bifrost relay requires at least one message and a non-empty model name.
+      allOf:
+        - $ref: "#/components/schemas/ChatCompletionRequest"
+        - type: object
+          required: [model, messages]
+          properties:
+            model:
+              type: string
+              minLength: 1
+            messages:
+              type: array
+              minItems: 1
+              items: {}
 
     ValidationErrorResponse:
       type: object
