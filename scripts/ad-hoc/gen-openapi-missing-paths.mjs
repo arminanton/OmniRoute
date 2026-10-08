@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { collectApiRouteFiles, toApiUrlPath, apiRoot } from "../check/lib/apiRoutes.mjs";
+import { collectApiRouteDefinitions } from "../check/lib/apiRoutes.mjs";
 import { isLocalOnlyPath, ALWAYS_PROTECTED_API_PATHS } from "../../src/server/authz/routeGuard.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -18,35 +18,8 @@ const APPLY = process.argv.includes("--apply");
 
 const normalizeParams = (p) => p.replace(/\{[^}]+\}/g, "{}");
 
-// --- real routes + their exported HTTP methods --------------------------------
-const METHOD_RE =
-  /export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b|export\s+const\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b|export\s*\{[^}]*\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b[^}]*\}/g;
-
-function routeMethods(absFile) {
-  const src = fs.readFileSync(absFile, "utf8");
-  const methods = new Set();
-  for (const m of src.matchAll(METHOD_RE)) {
-    const name = m[1] || m[2];
-    if (name) methods.add(name);
-    if (m[3]) {
-      // re-export list: capture every method inside the braces
-      for (const inner of m[0].matchAll(/\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/g))
-        methods.add(inner[1]);
-    }
-  }
-  methods.delete("OPTIONS"); // CORS preflight — not a documented operation
-  methods.delete("HEAD");
-  return [...methods];
-}
-
-const routeFiles = collectApiRouteFiles(ROOT);
-const API_ROOT = apiRoot(ROOT);
-const routes = new Map(); // urlPath -> methods
-for (const rel of routeFiles) {
-  const abs = path.join(ROOT, rel);
-  const url = toApiUrlPath(path.dirname(abs), API_ROOT);
-  if (url) routes.set(url, routeMethods(abs));
-}
+// --- real routes + their explicitly exported HTTP methods ---------------------
+const routes = collectApiRouteDefinitions(ROOT);
 
 // --- paths already in the spec -------------------------------------------------
 const spec = fs.readFileSync(SPEC, "utf8");
@@ -81,17 +54,26 @@ const existingTags = new Set(
 const newTags = new Map();
 const lines = [];
 lines.push("");
-lines.push("  # --- Generated route coverage (docs audit 2026-08-31) -----------------------");
-lines.push("  # Minimal entries for every implemented route not documented above. Methods");
-lines.push("  # are parsed from each route.ts's exports; summaries are path-derived.");
-lines.push(
-  "  # Regenerate with: node --import tsx/esm scripts/ad-hoc/gen-openapi-missing-paths.mjs --apply"
-);
+lines.push("  # --- Generated route inventory (docs audit follow-up) -----------------------");
+lines.push("  # These entries document implemented paths/methods; request and response");
+lines.push("  # schemas remain intentionally unspecified until verified from each handler.");
+lines.push("  # Regenerate with: node --import tsx/esm scripts/ad-hoc/gen-openapi-missing-paths.mjs --apply");
 for (const [url, methods] of missing) {
   const tag = groupTag(url);
   if (!existingTags.has(tag.toLowerCase()) && !newTags.has(tag))
     newTags.set(tag, `${tag} endpoints (generated route coverage)`);
   lines.push(`  ${url}:`);
+  const pathParameters = [...url.matchAll(/\{([^}]+)\}/g)].map((match) => match[1]);
+  if (pathParameters.length > 0) {
+    lines.push("    parameters:");
+    for (const name of pathParameters) {
+      lines.push(`      - name: ${name}`);
+      lines.push("        in: path");
+      lines.push("        required: true");
+      lines.push("        schema:");
+      lines.push("          type: string");
+    }
+  }
   const loopbackOnly = isLocalOnlyPath(url);
   const alwaysProtected = ALWAYS_PROTECTED_API_PATHS.includes(url);
   for (const method of methods.sort()) {
@@ -99,11 +81,12 @@ for (const [url, methods] of missing) {
     lines.push(`      tags:`);
     lines.push(`        - ${tag}`);
     lines.push(`      summary: "${summaryFor(url, method)}"`);
+    lines.push("      description: Route is implemented; detailed request/response schema has not been verified yet.");
     if (loopbackOnly || isLocalOnlyPath(url, method)) lines.push(`      x-loopback-only: true`);
     if (alwaysProtected) lines.push(`      x-always-protected: true`);
     lines.push(`      responses:`);
-    lines.push(`        "200":`);
-    lines.push(`          description: OK`);
+    lines.push(`        default:`);
+    lines.push(`          description: Route-specific response; inspect the handler for status and body details.`);
   }
 }
 

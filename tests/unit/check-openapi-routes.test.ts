@@ -3,6 +3,8 @@ import assert from "node:assert";
 import {
   normalizeParams,
   findSpecPathsWithoutRoute,
+  findOperationsMissingPathParameters,
+  findRouteMethodMismatches,
   KNOWN_STALE_SPEC,
 } from "../../scripts/check/check-openapi-routes.mjs";
 import { reportStaleEntries } from "../../scripts/check/lib/allowlist.mjs";
@@ -26,6 +28,52 @@ test("flags a documented path that has no real route (invented endpoint)", () =>
   assert.deepEqual(findSpecPathsWithoutRoute(["/api/ghost", "/api/usage"], ["/api/usage"]), [
     "/api/ghost",
   ]);
+});
+
+test("path parameter references satisfy path-template declarations", () => {
+  assert.deepEqual(
+    findOperationsMissingPathParameters(
+      {
+        "/api/providers/{id}": {
+          parameters: [{ $ref: "#/components/parameters/ResourceId" }],
+          get: { responses: {} },
+          patch: { parameters: [{ name: "id", in: "path" }], responses: {} },
+        },
+      },
+      { parameters: { ResourceId: { name: "id", in: "path" } } }
+    ),
+    []
+  );
+});
+
+test("reports path-template variables missing from an operation", () => {
+  assert.deepEqual(
+    findOperationsMissingPathParameters({
+      "/api/providers/{providerId}/models/{modelId}": {
+        parameters: [{ name: "providerId", in: "path" }],
+        get: { parameters: [{ name: "q", in: "query" }], responses: {} },
+      },
+    }),
+    [
+      {
+        method: "GET",
+        path: "/api/providers/{providerId}/models/{modelId}",
+        missing: ["modelId"],
+      },
+    ]
+  );
+});
+
+test("route method audit finds missing and undocumented operations", () => {
+  assert.deepEqual(
+    findRouteMethodMismatches(
+      {
+        "/api/settings/{id}": { get: {}, delete: {} },
+      },
+      new Map([["/api/settings/{settingId}", ["GET", "PUT"]]])
+    ),
+    [{ path: "/api/settings/{id}", missing: ["PUT"], extra: ["DELETE"] }]
+  );
 });
 
 // --- stale-allowlist enforcement (6A.3) ---

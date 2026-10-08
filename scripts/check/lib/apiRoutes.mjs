@@ -19,20 +19,44 @@ export function apiRoot(root = process.cwd()) {
 
 /**
  * Convert a directory under src/app/api (the folder that contains route.ts)
- * to an OpenAPI-style /api/... path.
- * Dynamic segments: [id] → {id}, [...slug] → {slug}.
+ * to its OpenAPI-style /api/... path templates.
+ * Dynamic segments: [id] → {id}, [...slug] → {slug}. An optional catch-all
+ * ([[...slug]]) maps to both its zero-segment and one-or-more-segment forms.
  *
  * @param {string} routeDir absolute directory containing route.ts
  * @param {string} apiRootAbs absolute src/app/api
  * @returns {string}
  */
-export function toApiUrlPath(routeDir, apiRootAbs) {
+function normalizeRouteSegment(segment) {
+  const optionalCatchAll = segment.match(/^\[\[\.\.\.([^\]]+)\]\]$/);
+  if (optionalCatchAll) return `{${optionalCatchAll[1]}}`;
+  const catchAll = segment.match(/^\[\.\.\.([^\]]+)\]$/);
+  if (catchAll) return `{${catchAll[1]}}`;
+  const dynamic = segment.match(/^\[([^\]]+)\]$/);
+  if (dynamic) return `{${dynamic[1]}}`;
+  return segment;
+}
+
+export function toApiUrlPaths(routeDir, apiRootAbs) {
   const rel = path.relative(apiRootAbs, routeDir).replace(/\\/g, "/");
-  if (!rel || rel === ".") return "/api";
-  const normalized = rel
-    .replace(/\[\.\.\.([^\]]+)\]/g, "{$1}")
-    .replace(/\[([^\]]+)\]/g, "{$1}");
-  return `/api/${normalized}`;
+  if (!rel || rel === ".") return ["/api"];
+  const segments = rel.split("/");
+  const optionalIndex = segments.findIndex((segment) => /^\[\[\.\.\.[^\]]+\]\]$/.test(segment));
+  if (optionalIndex >= 0) {
+    if (optionalIndex !== segments.length - 1) {
+      throw new Error(`Optional catch-all route segment must be last: ${rel}`);
+    }
+    const prefix = segments.slice(0, optionalIndex).map(normalizeRouteSegment).join("/");
+    const parameter = normalizeRouteSegment(segments[optionalIndex]);
+    const base = prefix ? `/api/${prefix}` : "/api";
+    return [base, `${base}/${parameter}`];
+  }
+  return [`/api/${segments.map(normalizeRouteSegment).join("/")}`];
+}
+
+/** Backward-compatible single path accessor; optional catch-alls return the suffixed form. */
+export function toApiUrlPath(routeDir, apiRootAbs) {
+  return toApiUrlPaths(routeDir, apiRootAbs).at(-1);
 }
 
 /**
@@ -50,12 +74,12 @@ export function collectApiRouteUrlPaths(root = process.cwd()) {
       if (entry.isDirectory()) {
         walk(full);
       } else if (entry.isFile() && /^route\.tsx?$/.test(entry.name)) {
-        out.push(toApiUrlPath(path.dirname(full), API));
+        out.push(...toApiUrlPaths(path.dirname(full), API));
       }
     }
   }
   walk(API);
-  return out;
+  return [...new Set(out)];
 }
 
 /**
@@ -79,4 +103,39 @@ export function collectApiRouteFiles(root = process.cwd()) {
   }
   walk(API);
   return out;
+}
+
+const ROUTE_METHOD_RE =
+  /export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b|export\s+const\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b|export\s*\{[^}]*\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b[^}]*\}/g;
+
+/** Extract explicitly exported HTTP methods; OPTIONS is handled by shared CORS middleware. */
+export function collectApiRouteMethods(routeFile) {
+  const source = fs.readFileSync(routeFile, "utf8");
+  const methods = new Set();
+  for (const match of source.matchAll(ROUTE_METHOD_RE)) {
+    const direct = match[1] || match[2];
+    if (direct) methods.add(direct);
+    if (match[3]) {
+      for (const inner of match[0].matchAll(/\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/g)) {
+        methods.add(inner[1]);
+      }
+    }
+  }
+  methods.delete("OPTIONS");
+  return [...methods].sort();
+}
+
+/** Map each documented URL template to the explicit methods exported by its route file. */
+export function collectApiRouteDefinitions(root = process.cwd()) {
+  const apiRootAbs = apiRoot(root);
+  const routes = new Map();
+  for (const relativeFile of collectApiRouteFiles(root)) {
+    const absoluteFile = path.join(root, relativeFile);
+    const methods = collectApiRouteMethods(absoluteFile);
+    for (const url of toApiUrlPaths(path.dirname(absoluteFile), apiRootAbs)) {
+      const merged = new Set([...(routes.get(url) ?? []), ...methods]);
+      routes.set(url, [...merged].sort());
+    }
+  }
+  return routes;
 }

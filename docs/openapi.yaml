@@ -1765,6 +1765,25 @@ paths:
           $ref: "#/components/responses/Unauthorized"
 
   /api/v1/embeddings:
+    get:
+      tags: [Embeddings]
+      summary: List embedding models
+      description: Returns the OpenAI-compatible model list filtered to embedding models.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Embedding model list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object: { type: string, const: list }
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Model" }
     post:
       tags: [Embeddings]
       summary: Create embeddings
@@ -1885,6 +1904,25 @@ paths:
           description: Embedding vectors
 
   /api/v1/images/generations:
+    get:
+      tags: [Images]
+      summary: List image-generation models
+      description: Returns the OpenAI-compatible model list filtered to image models.
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Image-generation model list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object: { type: string, const: list }
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Model" }
     post:
       tags: [Images]
       summary: Generate images
@@ -2066,6 +2104,15 @@ paths:
           description: API info
 
   /api/v1/models:
+    head:
+      tags: [Models]
+      summary: Probe model catalog availability
+      description: Returns only headers; the model-list body is not generated for a HEAD probe.
+      responses:
+        "200":
+          description: Model catalog endpoint is available
+          headers:
+            content-type: { schema: { type: string, const: application/json } }
     get:
       tags: [Models]
       summary: List available models
@@ -2127,9 +2174,40 @@ paths:
       responses:
         "200":
           description: Internal model list with aliases
+    put:
+      tags: [Models]
+      summary: Set a model alias
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model, alias]
+              properties:
+                model: { type: string, minLength: 1, maxLength: 200 }
+                alias: { type: string, minLength: 1, maxLength: 200 }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Model alias saved
+        "400":
+          description: Invalid model or alias
 
   /api/models/alias:
-    post:
+    get:
+      tags: [Models]
+      summary: List or resolve model aliases
+      parameters:
+        - name: alias
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Alias map or resolution for the requested alias
+        "400":
+          description: Alias could not be resolved
+    put:
       tags: [Models]
       summary: Create or update a model alias
       requestBody:
@@ -2138,9 +2216,28 @@ paths:
           application/json:
             schema:
               type: object
+              required: [model, alias]
+              properties:
+                model: { type: string, minLength: 1 }
+                alias: { type: string, minLength: 1 }
       responses:
         "200":
           description: Alias created/updated
+        "400":
+          description: Model or alias is invalid
+    delete:
+      tags: [Models]
+      summary: Delete a model alias
+      parameters:
+        - name: alias
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Alias deleted
+        "400":
+          description: Alias query parameter is required
 
   /api/models/catalog:
     get:
@@ -2180,6 +2277,43 @@ paths:
       responses:
         "201":
           description: Created provider connection
+    patch:
+      tags: [Providers]
+      summary: Batch-update provider connection activation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids, isActive]
+              properties:
+                ids: { type: array, minItems: 1, maxItems: 100, items: { type: string } }
+                isActive: { type: boolean }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Provider connections updated
+        "400":
+          description: Invalid connection IDs or activation state
+    delete:
+      tags: [Providers]
+      summary: Delete provider connections in a batch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids: { type: array, minItems: 1, maxItems: 100, items: { type: string } }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Provider connections deleted
+        "400":
+          description: Invalid or oversized connection ID list
 
   /api/providers/{id}:
     get:
@@ -2206,6 +2340,24 @@ paths:
       responses:
         "200":
           description: Updated provider
+    put:
+      tags: [Providers]
+      summary: Replace a provider connection
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderConnectionCreate"
+      responses:
+        "200":
+          description: Provider connection updated
+        "400":
+          description: Invalid provider connection data
+        "404":
+          description: Provider connection not found
     delete:
       tags: [Providers]
       summary: Delete provider connection
@@ -2319,7 +2471,7 @@ paths:
           description: Created node
 
   /api/provider-nodes/{id}:
-    patch:
+    put:
       tags: [Provider Nodes]
       summary: Update provider node
       parameters:
@@ -2346,11 +2498,104 @@ paths:
 
   /api/provider-models:
     get:
-      tags: [Provider Nodes]
+      tags: [Providers]
       summary: List provider models
       responses:
         "200":
           description: Provider model list
+    post:
+      tags: [Providers]
+      summary: Add a custom provider model
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, modelId]
+              properties:
+                provider: { type: string, minLength: 1 }
+                modelId: { type: string, minLength: 1 }
+                modelName: { type: string }
+                source: { type: string }
+                apiFormat: { type: string }
+                supportedEndpoints: { type: array, items: { type: string } }
+                targetFormat: { type: string }
+                max_input_tokens: { type: integer, minimum: 1 }
+                max_output_tokens: { type: integer, minimum: 1 }
+              additionalProperties: true
+      responses:
+        "200":
+          description: Custom provider model added or updated
+        "400":
+          description: Invalid provider model data
+        "401":
+          description: Authentication required
+    put:
+      tags: [Providers]
+      summary: Replace or upsert a custom provider model
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider, modelId]
+              properties:
+                provider: { type: string, minLength: 1 }
+                modelId: { type: string, minLength: 1 }
+              additionalProperties: true
+      responses:
+        "200":
+          description: Custom provider model saved
+        "400":
+          description: Invalid provider model data
+        "401":
+          description: Authentication required
+    patch:
+      tags: [Providers]
+      summary: Update custom models for one provider
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Provider custom models updated
+        "400":
+          description: Invalid provider or model data
+        "401":
+          description: Authentication required
+    delete:
+      tags: [Providers]
+      summary: Delete custom provider models
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          schema: { type: string }
+        - name: model
+          in: query
+          schema: { type: string }
+        - name: all
+          in: query
+          schema: { type: boolean }
+        - name: resetOverride
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Custom provider model removed
+        "400":
+          description: Provider query parameter is missing
+        "401":
+          description: Authentication required
 
   /api/keys:
     get:
@@ -2529,6 +2774,17 @@ paths:
       responses:
         "200":
           description: Metrics for combos
+    delete:
+      tags: [Combos]
+      summary: Reset combo metrics
+      description: Resets one combo's metrics when combo is set, or all combo metrics otherwise.
+      parameters:
+        - name: combo
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Combo metrics reset
 
   /api/combos/test:
     post:
@@ -2569,6 +2825,20 @@ paths:
           application/json:
             schema:
               type: object
+      responses:
+        "200":
+          description: Updated settings
+    put:
+      tags: [Settings]
+      summary: Update application settings (PUT compatibility alias)
+      description: Delegates to the same settings update handler as PATCH.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
       responses:
         "200":
           description: Updated settings
@@ -2959,6 +3229,21 @@ paths:
       responses:
         "200":
           description: Default combo settings
+    patch:
+      tags: [Settings]
+      summary: Update combo default settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Updated combo default settings
+        "400":
+          description: Invalid combo default settings
 
   /api/settings/proxy:
     get:
@@ -2967,12 +3252,37 @@ paths:
       responses:
         "200":
           description: Current proxy settings
-    patch:
+    put:
       tags: [Settings]
       summary: Update proxy settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
       responses:
         "200":
           description: Updated proxy settings
+        "400":
+          description: Invalid proxy settings
+    delete:
+      tags: [Settings]
+      summary: Delete a proxy configuration
+      parameters:
+        - name: level
+          in: query
+          required: true
+          schema: { type: string }
+        - name: id
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Proxy configuration deleted
+        "400":
+          description: The level query parameter is missing
 
   /api/settings/proxy/test:
     post:
@@ -2983,6 +3293,12 @@ paths:
           description: Test result
 
   /api/settings/require-login:
+    get:
+      tags: [Settings]
+      summary: Read management login and setup status
+      responses:
+        "200":
+          description: Login requirement, setup, password, OIDC, and session state
     post:
       tags: [Settings]
       summary: Toggle login requirement
@@ -3483,6 +3799,12 @@ paths:
       responses:
         "200":
           description: Proxy log entries
+    delete:
+      tags: [Usage]
+      summary: Clear proxy logs
+      responses:
+        "200":
+          description: Proxy logs cleared
 
   /api/usage/request-logs:
     get:
@@ -3718,12 +4040,36 @@ paths:
       responses:
         "200":
           description: Current pricing configuration
-    post:
+    patch:
       tags: [Pricing]
-      summary: Set model pricing
+      summary: Update model pricing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: true
       responses:
         "200":
           description: Updated pricing
+        "400":
+          description: Invalid pricing data
+    delete:
+      tags: [Pricing]
+      summary: Reset model pricing
+      parameters:
+        - name: provider
+          in: query
+          schema: { type: string }
+        - name: model
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: Pricing reset
 
   /api/pricing/defaults:
     get:
@@ -3920,6 +4266,28 @@ paths:
       responses:
         "200":
           description: Backup created
+    delete:
+      tags: [CLI Tools]
+      summary: Delete a CLI tool backup
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [backupId]
+              properties:
+                tool: { type: string }
+                toolId: { type: string }
+                backupId: { type: string, minLength: 1 }
+              anyOf:
+                - required: [tool]
+                - required: [toolId]
+      responses:
+        "200":
+          description: CLI tool backup deleted
+        "400":
+          description: Invalid tool or backup ID
 
   /api/cli-tools/runtime/{toolId}:
     get:
@@ -3948,6 +4316,36 @@ paths:
       responses:
         "200":
           description: Guide settings
+    post:
+      tags: [CLI Tools]
+      summary: Save CLI tool guide settings
+      description: Writes supported connection settings to the selected CLI tool's configuration file.
+      parameters:
+        - name: toolId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                baseUrl: { type: string }
+                apiKey: { type: [string, "null"] }
+                keyId: { type: string }
+                model: { type: string }
+                models: { type: array, minItems: 1, items: { type: string } }
+                modelLabels: { type: object, additionalProperties: { type: string } }
+              anyOf:
+                - required: [model]
+                - required: [models]
+      responses:
+        "200":
+          description: Tool configuration saved
+        "400":
+          description: Invalid settings or unsupported configuration target
 
   /api/cli-tools/antigravity-mitm:
     get:
@@ -5426,6 +5824,33 @@ paths:
           description: OAuth flow response
         "302":
           description: Redirect to provider auth page
+    post:
+      tags: [OAuth]
+      summary: Submit a provider-specific OAuth action
+      description: Provider and action determine the callback payload and result status.
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema: { type: string }
+        - name: action
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Provider-specific OAuth action result
+        "302":
+          description: OAuth redirect
+        "400":
+          description: Invalid OAuth action
+        "410":
+          description: OAuth flow has been retired
 
   /api/oauth/cursor/auto-import:
     get:
@@ -5466,12 +5891,6 @@ paths:
           description: Import result
 
   /api/oauth/kiro/import:
-    get:
-      tags: [OAuth]
-      summary: Get Kiro import status
-      responses:
-        "200":
-          description: Current import status
     post:
       tags: [OAuth]
       summary: Import Kiro OAuth credentials
@@ -5736,6 +6155,17 @@ paths:
           description: Shutdown initiated
 
   /api/db-backups:
+    put:
+      tags: [System]
+      summary: Create a manual database backup
+      description: A backup may be skipped when no database changes have occurred since the previous backup.
+      responses:
+        "200":
+          description: Backup created or skipped
+        "401":
+          description: Authentication required
+        "500":
+          description: Backup creation failed
     get:
       tags: [System]
       summary: List database backups
@@ -5769,6 +6199,26 @@ paths:
       responses:
         "200":
           description: Backup retention settings saved
+    delete:
+      tags: [System]
+      summary: Clean up database backups and save retention settings
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                keepLatest: { type: integer, minimum: 1, maximum: 200 }
+                retentionDays: { type: integer, minimum: 0, maximum: 3650 }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Backup cleanup and retention settings
+        "400":
+          description: Invalid retention settings
+        "401":
+          description: Authentication required
 
   /api/storage/health:
     get:
@@ -5779,6 +6229,13 @@ paths:
           description: Storage health status
 
   /api/sync/cloud:
+    get:
+      tags: [System]
+      summary: Read cloud synchronization status
+      description: Reports whether cloud sync is enabled and whether a verification connection is available.
+      responses:
+        "200":
+          description: Cloud-enabled and connection status
     post:
       tags: [System]
       summary: Sync with cloud
@@ -5787,6 +6244,12 @@ paths:
           description: Sync result
 
   /api/sync/initialize:
+    get:
+      tags: [System]
+      summary: Read cloud sync initialization status
+      responses:
+        "200":
+          description: Cloud and model sync initialization flags
     post:
       tags: [System]
       summary: Initialize cloud sync
@@ -6203,6 +6666,17 @@ paths:
       responses:
         "200":
           description: Health status
+    delete:
+      tags: [System]
+      summary: Reset provider circuit breakers
+      description: Requires authentication and resets every provider circuit breaker to its healthy state.
+      responses:
+        "200":
+          description: Circuit breakers reset
+        "401":
+          description: Authentication required
+        "500":
+          description: Circuit breaker reset failed
 
   /api/monitoring/compression:
     get:
@@ -6227,6 +6701,25 @@ paths:
       responses:
         "200":
           description: Rate limit status by account
+    post:
+      tags: [System]
+      summary: Enable or disable account rate-limit protection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connectionId, enabled]
+              properties:
+                connectionId: { type: string, minLength: 1 }
+                enabled: { type: boolean }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Rate-limit protection updated
+        "400":
+          description: Invalid request
 
   /api/sessions:
     get:
@@ -6575,13 +7068,6 @@ paths:
       responses:
         "201":
           description: Created policy
-    delete:
-      tags: [System]
-      summary: Delete routing policy
-      responses:
-        "200":
-          description: Policy deleted
-
   /api/compliance/audit-log:
     get:
       tags: [System]
@@ -6591,7 +7077,7 @@ paths:
         high-level actions only (powers the Activity feed). Use `level=all`
         (default) for full compliance table.
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       parameters:
         - name: level
           in: query
@@ -6636,7 +7122,7 @@ paths:
       tags: [Quota]
       summary: List quota pools
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       responses:
         "200":
           description: Array of QuotaPool objects
@@ -6654,7 +7140,7 @@ paths:
       tags: [Quota]
       summary: Create quota pool
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -6680,7 +7166,7 @@ paths:
       tags: [Quota]
       summary: Get quota pool by ID
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       parameters:
         - name: id
           in: path
@@ -6704,7 +7190,7 @@ paths:
       tags: [Quota]
       summary: Update quota pool (name or allocations)
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       parameters:
         - name: id
           in: path
@@ -6732,7 +7218,7 @@ paths:
       tags: [Quota]
       summary: Delete quota pool
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       parameters:
         - name: id
           in: path
@@ -6754,7 +7240,7 @@ paths:
       tags: [Quota]
       summary: Get pool usage snapshot (per-key consumption + burn rate)
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       parameters:
         - name: id
           in: path
@@ -6780,7 +7266,7 @@ paths:
       tags: [Quota]
       summary: List resolved provider plans (catalog + manual overrides)
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       responses:
         "200":
           description: Array of ProviderPlan
@@ -6794,7 +7280,7 @@ paths:
       tags: [Quota]
       summary: Get resolved plan for a connection
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       parameters:
         - name: connectionId
           in: path
@@ -6814,7 +7300,7 @@ paths:
       tags: [Quota]
       summary: Upsert manual plan override for a connection
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       parameters:
         - name: connectionId
           in: path
@@ -6840,7 +7326,7 @@ paths:
       tags: [Quota]
       summary: Delete manual plan override (reverts to catalog/auto)
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       parameters:
         - name: connectionId
           in: path
@@ -6862,7 +7348,7 @@ paths:
       tags: [Quota]
       summary: Dry-run quota enforcement check (preview only, no consumption recorded)
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       parameters:
         - name: apiKeyId
           in: query
@@ -6902,7 +7388,7 @@ paths:
       summary: Get current quota store driver settings
       description: Redis URL is masked in the response (shows only scheme+host).
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       responses:
         "200":
           description: QuotaStoreSettings (driver + masked redisUrl)
@@ -6914,7 +7400,7 @@ paths:
       tags: [Settings]
       summary: Update quota store driver settings
       security:
-        - bearerAuth: []
+        - BearerAuth: []
       requestBody:
         required: true
         content:
@@ -7020,13 +7506,13 @@ paths:
         "409":
           description: Port 443 conflict
 
-  /api/tools/agent-bridge/agents/{agentId}/dns:
+  /api/tools/agent-bridge/agents/{id}/dns:
     post:
       tags: [AgentBridge]
       summary: Enable or disable DNS for one agent
       description: Adds or removes /etc/hosts entries for the agent's host list. SPAWN_CAPABLE.
       parameters:
-        - name: agentId
+        - name: id
           in: path
           required: true
           schema:
@@ -7043,12 +7529,12 @@ paths:
         "400":
           description: Validation error
 
-  /api/tools/agent-bridge/agents/{agentId}/mappings:
+  /api/tools/agent-bridge/agents/{id}/mappings:
     get:
       tags: [AgentBridge]
       summary: Get model mappings for one agent
       parameters:
-        - name: agentId
+        - name: id
           in: path
           required: true
           schema:
@@ -7066,7 +7552,7 @@ paths:
       tags: [AgentBridge]
       summary: Update model mappings for one agent
       parameters:
-        - name: agentId
+        - name: id
           in: path
           required: true
           schema:
@@ -7094,9 +7580,9 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/AgentBridgeBypassRow"
-    put:
+    post:
       tags: [AgentBridge]
-      summary: Update user bypass patterns
+      summary: Replace AgentBridge bypass patterns
       requestBody:
         required: true
         content:
@@ -7105,9 +7591,28 @@ paths:
               $ref: "#/components/schemas/AgentBridgeBypassUpsert"
       responses:
         "200":
-          description: Patterns updated
+          description: Bypass patterns replaced
+    delete:
+      tags: [AgentBridge]
+      summary: Remove one AgentBridge bypass pattern
+      parameters:
+        - name: pattern
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Bypass pattern removed
+        "400":
+          description: Pattern query parameter is missing
 
   /api/tools/agent-bridge/cert:
+    get:
+      tags: [AgentBridge]
+      summary: Read AgentBridge CA certificate status
+      responses:
+        "200":
+          description: Certificate existence, trust state, and local path
     post:
       tags: [AgentBridge]
       summary: Download or regenerate the AgentBridge CA certificate
@@ -7125,6 +7630,25 @@ paths:
       responses:
         "200":
           description: CA certificate PEM (download) or regeneration confirmation
+    delete:
+      tags: [AgentBridge]
+      summary: Remove trust for the AgentBridge CA certificate
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sudoPassword: { type: string }
+              additionalProperties: false
+      responses:
+        "200":
+          description: Certificate trust removed
+        "400":
+          description: Required sudo password is missing
+        "404":
+          description: Certificate does not exist
 
   /api/tools/agent-bridge/upstream-ca:
     get:
@@ -8316,6 +8840,18 @@ paths:
   # are parsed from each route.ts's exports; summaries are path-derived.
   # Regenerate with: node scripts/ad-hoc/gen-openapi-missing-paths.mjs --apply
   /api/{omnirouteApiCatchAll}:
+    parameters:
+      - name: omnirouteApiCatchAll
+        in: path
+        required: true
+        schema:
+          type: string
+    head:
+      tags: [OmnirouteApiCatchAll]
+      summary: Return the catch-all API not-found response for HEAD
+      responses:
+        "404":
+          description: No matching API route exists
     delete:
       tags:
         - OmnirouteApiCatchAll
@@ -8375,6 +8911,12 @@ paths:
         "200":
           description: OK
   /api/a2a/tasks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - A2a
@@ -8383,6 +8925,12 @@ paths:
         "200":
           description: OK
   /api/a2a/tasks/{id}/cancel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - A2a
@@ -8494,6 +9042,12 @@ paths:
         "200":
           description: OK
   /api/batches/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Batches
@@ -8864,6 +9418,12 @@ paths:
         "200":
           description: OK
   /api/codex/connect/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Codex
@@ -8967,6 +9527,12 @@ paths:
         "201":
           description: Created
   /api/conductor/tasks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Conductor
@@ -8975,6 +9541,12 @@ paths:
         "200":
           description: OK
   /api/conductor/tasks/{id}/cancel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Conductor
@@ -9029,6 +9601,12 @@ paths:
         "200":
           description: OK
   /api/context/combos/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Context
@@ -9051,6 +9629,12 @@ paths:
         "200":
           description: OK
   /api/context/combos/{id}/assignments:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Context
@@ -9112,6 +9696,12 @@ paths:
         "200":
           description: OK
   /api/conversations/{id}/tree:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Conversations
@@ -9129,6 +9719,12 @@ paths:
         "200":
           description: OK
   /api/cursor-cli/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Cursor cli
@@ -9201,6 +9797,12 @@ paths:
         "200":
           description: OK
   /api/discovery/results/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Discovery
@@ -9227,6 +9829,12 @@ paths:
         "200":
           description: OK
   /api/discovery/verify/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Discovery
@@ -9260,6 +9868,12 @@ paths:
         "200":
           description: OK
   /api/evals/suites/{suiteId}:
+    parameters:
+      - name: suiteId
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Evals
@@ -9290,6 +9904,12 @@ paths:
         "200":
           description: OK
   /api/files/{id}/content:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Files
@@ -9589,6 +10209,12 @@ paths:
         "200":
           description: OK
   /api/keys/{id}/regenerate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Keys
@@ -9597,6 +10223,12 @@ paths:
         "200":
           description: OK
   /api/keys/{id}/reveal:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Keys
@@ -9605,6 +10237,12 @@ paths:
         "200":
           description: OK
   /api/keys/{id}/usage-limits:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Keys
@@ -9628,6 +10266,12 @@ paths:
         "200":
           description: OK
   /api/keys/groups/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Keys
@@ -9650,6 +10294,12 @@ paths:
         "200":
           description: OK
   /api/keys/groups/{id}/keys:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Keys
@@ -9672,6 +10322,12 @@ paths:
         "200":
           description: OK
   /api/keys/groups/{id}/permissions:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Keys
@@ -9721,6 +10377,12 @@ paths:
         "200":
           description: OK
   /api/logs/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Logs
@@ -9856,6 +10518,12 @@ paths:
         "200":
           description: OK
   /api/middleware/hooks/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Middleware
@@ -9918,6 +10586,12 @@ paths:
         "200":
           description: OK
   /api/model-combo-mappings/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Model combo mappings
@@ -9972,6 +10646,12 @@ paths:
         "200":
           description: OK
   /api/oauth/{provider}/paste-credentials:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Oauth
@@ -10091,6 +10771,12 @@ paths:
         "200":
           description: OK
   /api/plugins/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Plugins
@@ -10108,6 +10794,12 @@ paths:
         "200":
           description: OK
   /api/plugins/{name}/activate:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Plugins
@@ -10117,6 +10809,12 @@ paths:
         "200":
           description: OK
   /api/plugins/{name}/config:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Plugins
@@ -10134,6 +10832,12 @@ paths:
         "200":
           description: OK
   /api/plugins/{name}/deactivate:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Plugins
@@ -10208,6 +10912,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/cc-alias:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Providers
@@ -10223,6 +10933,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/chatgpt-web-codex-doctor:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Providers
@@ -10232,6 +10948,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/claude-auth/apply-local:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10241,6 +10963,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/claude-auth/export:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10250,6 +10978,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/codex-auth/apply-local:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10259,6 +10993,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/codex-auth/export:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10268,6 +11008,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/interception-rules:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Providers
@@ -10290,6 +11036,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/login:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10299,6 +11051,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/param-filters:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Providers
@@ -10321,6 +11079,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/refresh:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10329,6 +11093,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/refresh-cursor:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10338,6 +11108,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/refresh-token:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10346,6 +11122,12 @@ paths:
         "200":
           description: OK
   /api/providers/{id}/sync-models:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10538,6 +11320,12 @@ paths:
         "200":
           description: OK
   /api/providers/volcengine-plan/connect/{sessionId}/cancel:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10547,6 +11335,12 @@ paths:
         "200":
           description: OK
   /api/providers/volcengine-plan/connect/{sessionId}/code:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10556,6 +11350,12 @@ paths:
         "200":
           description: OK
   /api/providers/volcengine-plan/connect/{sessionId}/identity:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10565,6 +11365,12 @@ paths:
         "200":
           description: OK
   /api/providers/volcengine-plan/connect/{sessionId}/resend:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Providers
@@ -10574,6 +11380,12 @@ paths:
         "200":
           description: OK
   /api/providers/volcengine-plan/connect/{sessionId}/status:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Providers
@@ -10638,6 +11450,12 @@ paths:
         "200":
           description: OK
   /api/quota/groups/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Quota
@@ -10653,6 +11471,12 @@ paths:
         "200":
           description: OK
   /api/quota/keys/{id}/models:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Quota
@@ -10661,6 +11485,12 @@ paths:
         "200":
           description: OK
   /api/quota/pools/{id}/log:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Quota
@@ -10800,6 +11630,12 @@ paths:
         "200":
           description: OK
   /api/relay/tokens/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Relay
@@ -10837,6 +11673,12 @@ paths:
         "200":
           description: OK
   /api/routing/decisions/{requestId}:
+    parameters:
+      - name: requestId
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Routing
@@ -10905,6 +11747,12 @@ paths:
         "200":
           description: OK
   /api/session-pools/{provider}:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Session pools
@@ -11114,6 +11962,12 @@ paths:
         "200":
           description: OK
   /api/settings/free-proxies/{id}/add-to-pool:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Settings
@@ -11379,6 +12233,12 @@ paths:
         "200":
           description: OK
   /api/settings/proxies/{id}/repair-relay:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Settings
@@ -11588,6 +12448,12 @@ paths:
         "200":
           description: OK
   /api/settings/reasoning-routing-rules/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Settings
@@ -11663,6 +12529,12 @@ paths:
         "200":
           description: OK
   /api/skills/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Skills
@@ -11783,6 +12655,12 @@ paths:
         "200":
           description: OK
   /api/sync/tokens/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Sync
@@ -11831,6 +12709,12 @@ paths:
         "200":
           description: OK
   /api/tools/agent-bridge/agents/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Tools
@@ -11848,6 +12732,12 @@ paths:
         "200":
           description: OK
   /api/tools/agent-bridge/agents/{id}/detect:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Tools
@@ -11857,6 +12747,12 @@ paths:
         "200":
           description: OK
   /api/tools/agent-bridge/agents/{id}/detected-models:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Tools
@@ -11953,6 +12849,12 @@ paths:
         "200":
           description: OK
   /api/tools/traffic-inspector/sessions/{id}/requests:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Tools
@@ -12063,6 +12965,12 @@ paths:
         "200":
           description: OK
   /api/upstream-proxy/{providerId}:
+    parameters:
+      - name: providerId
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Upstream proxy
@@ -12148,6 +13056,12 @@ paths:
         "200":
           description: OK
   /api/usage/combo-trace/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Usage
@@ -12203,6 +13117,12 @@ paths:
         "200":
           description: OK
   /api/usage/route-explain/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Usage
@@ -12241,6 +13161,18 @@ paths:
         "200":
           description: OK
   /api/v1/{omnirouteCatchAll}:
+    parameters:
+      - name: omnirouteCatchAll
+        in: path
+        required: true
+        schema:
+          type: string
+    head:
+      tags: [V1 OmnirouteCatchAll]
+      summary: Return the versioned API not-found response for HEAD
+      responses:
+        "404":
+          description: No matching versioned API route exists
     delete:
       tags:
         - V1 OmnirouteCatchAll
@@ -12277,6 +13209,12 @@ paths:
         "200":
           description: OK
   /api/v1/accounts/{id}/limits:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Accounts
@@ -12337,6 +13275,12 @@ paths:
         "200":
           description: OK
   /api/v1/agents/tasks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - V1 Agents
@@ -12367,6 +13311,12 @@ paths:
         "200":
           description: OK
   /api/v1/auto-combo/{channel}/candidates:
+    parameters:
+      - name: channel
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Auto-combo
@@ -12390,6 +13340,12 @@ paths:
         "200":
           description: OK
   /api/v1/batches/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - V1 Batches
@@ -12405,6 +13361,12 @@ paths:
         "200":
           description: OK
   /api/v1/batches/{id}/cancel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Batches
@@ -12460,6 +13422,12 @@ paths:
         "200":
           description: OK
   /api/v1/files/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - V1 Files
@@ -12475,6 +13443,12 @@ paths:
         "200":
           description: OK
   /api/v1/files/{id}/content:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Files
@@ -12582,6 +13556,12 @@ paths:
         "200":
           description: OK
   /api/v1/models/{model}:
+    parameters:
+      - name: model
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Models
@@ -12589,6 +13569,15 @@ paths:
       responses:
         "200":
           description: OK
+    head:
+      tags: [V1 Models]
+      summary: Probe a model endpoint
+      description: Returns only headers and does not enumerate or serialize model details.
+      responses:
+        "200":
+          description: Model endpoint is available
+          headers:
+            content-type: { schema: { type: string, const: application/json } }
   /api/v1/muse-code/models:
     get:
       tags:
@@ -12613,6 +13602,12 @@ paths:
         "200":
           description: OK
   /api/v1/providers/{provider}/limits:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Providers
@@ -12651,6 +13646,12 @@ paths:
         "200":
           description: OK
   /api/v1/registered-keys/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - V1 Registered-keys
@@ -12666,6 +13667,12 @@ paths:
         "200":
           description: OK
   /api/v1/registered-keys/{id}/revoke:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Registered-keys
@@ -12690,6 +13697,12 @@ paths:
         "200":
           description: OK
   /api/v1/responses/{path}:
+    parameters:
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Responses
@@ -12744,6 +13757,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12752,6 +13771,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/api/chat:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12760,6 +13785,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/api/show:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12768,6 +13799,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/api/tags:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12776,6 +13813,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/api/version:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12784,6 +13827,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/chat/completions:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12792,6 +13841,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/combos:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12800,6 +13855,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/models:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12808,6 +13869,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/responses:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12816,6 +13883,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/v1/chat/completions:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12824,6 +13897,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/{token}/v1/models:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12831,22 +13910,80 @@ paths:
       responses:
         "200":
           description: OK
-  /api/v1/vscode/combos/{token}/{{slug}}:
+  /api/v1/vscode/combos/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
-      summary: "GET vscode › combos › <token> › <{slug>}"
+      summary: Read the VS Code combo endpoint at its base path
+      description: Optional catch-all route with no suffix; detailed response schema remains route-specific.
       responses:
-        "200":
-          description: OK
+        default:
+          description: Route-specific response; inspect the handler for status and body details.
     post:
       tags:
         - V1 Vscode
-      summary: "POST vscode › combos › <token> › <{slug>}"
+      summary: Send a VS Code combo request at its base path
+      description: Optional catch-all route with no suffix; detailed request and response schemas remain route-specific.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
       responses:
-        "200":
-          description: OK
+        default:
+          description: Route-specific response; inspect the handler for status and body details.
+  /api/v1/vscode/combos/{token}/{slug}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slug
+        in: path
+        required: true
+        allowReserved: true
+        schema:
+          type: string
+        description: Optional catch-all path suffix accepted as one or more path segments by Next.js.
+    get:
+      tags:
+        - V1 Vscode
+      summary: Read a VS Code combo endpoint by path suffix
+      description: Catch-all route; detailed response schema remains route-specific.
+      responses:
+        default:
+          description: Route-specific response; inspect the handler for status and body details.
+    post:
+      tags:
+        - V1 Vscode
+      summary: Send a VS Code combo request by path suffix
+      description: Catch-all route; request and response schemas remain route-specific.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        default:
+          description: Route-specific response; inspect the handler for status and body details.
   /api/v1/vscode/raw/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12855,6 +13992,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/raw/{token}/api/chat:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12863,6 +14006,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/raw/{token}/api/show:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12871,6 +14020,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/raw/{token}/api/tags:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12879,6 +14034,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/raw/{token}/api/version:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12887,6 +14048,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/raw/{token}/chat/completions:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12895,6 +14062,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/raw/{token}/combos:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12903,6 +14076,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/raw/{token}/models:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -12910,7 +14089,467 @@ paths:
       responses:
         "200":
           description: OK
+  /api/a2a/tasks/history:
+    get:
+      tags: [A2a]
+      summary: List persisted A2A task history
+      description: >-
+        Lists persisted task transitions, including tasks that have expired from the in-memory
+        task manager. Valid API-key callers are owner-scoped; management callers see all tasks.
+        Authentication follows the instance's REQUIRE_API_KEY and login policy.
+      parameters:
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: skill
+          in: query
+          schema: { type: string, minLength: 1 }
+        - name: state
+          in: query
+          schema: { type: string, enum: [submitted, working, completed, failed, cancelled] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: Persisted task page and total count
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tasks, total, limit, offset]
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, state, skill, createdAt, updatedAt, completedAt]
+                      properties:
+                        id: { type: string }
+                        state: { type: string, enum: [submitted, working, completed, failed, cancelled] }
+                        skill: { type: [string, "null"] }
+                        createdAt: { type: string, format: date-time }
+                        updatedAt: { type: string, format: date-time }
+                        completedAt: { type: [string, "null"], format: date-time }
+                  total: { type: integer, minimum: 0 }
+                  limit: { type: integer, minimum: 1, maximum: 500 }
+                  offset: { type: integer, minimum: 0 }
+        "400": { description: Invalid history query parameters }
+        "401": { description: Authentication required when the instance policy requires it }
+        "500": { description: Task history could not be read }
+
+  /api/canary-drain:
+    post:
+      tags: [System]
+      summary: Set this deployment generation's draining state
+      description: >-
+        Requires management authentication. The generation must match
+        OMNIROUTE_APP_GENERATION; stale or foreign generations are rejected. This control route
+        returns the current canary readiness document after changing the drain flag.
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [generation, draining]
+              properties:
+                generation: { type: string, minLength: 1 }
+                draining: { type: boolean }
+      responses:
+        "200":
+          description: Updated readiness state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CanaryReadiness" }
+        "400": { description: Invalid control request }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "409": { description: Deployment generation conflict }
+
+  /api/canary-readiness:
+    get:
+      tags: [System]
+      summary: Read authenticated canary readiness
+      description: >-
+        Runs bounded database, coordination, conversation-state, and registered component probes.
+        The response is 503 while any required readiness check is false.
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      responses:
+        "200":
+          description: All required readiness probes passed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CanaryReadiness" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "503":
+          description: One or more bounded readiness probes did not pass
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CanaryReadiness" }
+    post:
+      tags: [System]
+      summary: Acknowledge a peer conversation-state handoff
+      description: >-
+        Requires management authentication and a current peer challenge. The handler accepts only
+        generation and peerChallengeId, and never trusts caller-supplied proof booleans or URLs.
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [generation, peerChallengeId]
+              properties:
+                generation: { type: string, pattern: "^[a-f0-9]{32}$" }
+                peerChallengeId: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Peer handoff challenge completed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [protocol, generation, peerGeneration, peerChallengeId, completed]
+                properties:
+                  protocol: { type: string, const: omni-conversation-state/v1 }
+                  generation: { type: string }
+                  peerGeneration: { type: string }
+                  peerChallengeId: { type: string, format: uuid }
+                  completed: { type: boolean, const: true }
+        "400": { description: Invalid or duplicated handoff fields }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "409": { description: Handoff generation, challenge, or shape mismatch }
+        "413": { description: Handoff body exceeds 4096 bytes }
+        "503": { description: Generation is not bootstrapped or handoff state is unavailable }
+
+  /api/conversations/{id}:
+    get:
+      tags: [Conversations]
+      summary: Get one conversation summary
+      description: >-
+        Returns refreshed summary fields for the conversation modal, including active-request and
+        genuine-continuation annotations. Requires management authentication when login policy is
+        enabled.
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      responses:
+        "200":
+          description: Conversation row with live annotations
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversation]
+                properties:
+                  conversation:
+                    type: object
+                    description: Conversation summary; internal artifact paths and key IDs are omitted.
+                    additionalProperties: true
+        "400": { description: Missing conversation ID }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "404": { description: Conversation not found }
+        "500": { description: Conversation could not be fetched }
+
+  /api/memory/rerank-providers:
+    get:
+      tags: [Memory]
+      summary: List configured rerank providers and models
+      description: >-
+        Lists curated rerank providers first, then local provider nodes that expose chat,
+        Responses, or rerank APIs. Credentials are represented only by hasKey; secret values are
+        never returned. Authentication follows the instance's management-login policy.
+      responses:
+        "200":
+          description: Provider listings for the memory rerank selector
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [providers]
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      required: [provider, hasKey, models]
+                      properties:
+                        provider: { type: string }
+                        hasKey: { type: boolean }
+                        models:
+                          type: array
+                          items:
+                            type: object
+                            required: [id, name, dimensions]
+                            properties:
+                              id: { type: string }
+                              name: { type: string }
+                              dimensions: { type: [integer, "null"] }
+        "401": { description: Authentication required when the instance policy requires it }
+        "500": { description: Provider listing could not be built }
+
+  /api/providers/{id}/browser-login/{action}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceId"
+      - name: action
+        in: path
+        required: true
+        allowReserved: true
+        x-nextjs-catch-all: true
+        description: >-
+          Catch-all suffix. POST accepts start, {session}/capture, {session}/cancel,
+          {session}/status, and the bridge-only {session}/authorize. GET accepts
+          {session}/view and {session}/assets/{assetPath}.
+        schema: { type: string }
+    get:
+      tags: [Providers]
+      summary: Read a provider browser-login view or asset
+      description: Requires a same-origin dashboard session and a browser-login-enabled connection.
+      security:
+        - ManagementSessionAuth: []
+      responses:
+        "200":
+          description: Browser-login HTML view or JavaScript asset
+          content:
+            text/html:
+              schema: { type: string }
+            text/javascript:
+              schema: { type: string }
+        "403": { description: Dashboard session or same-origin request required }
+        "409": { description: Browser-login session or asset is unavailable }
+    post:
+      tags: [Providers]
+      summary: Start or control provider browser login
+      description: >-
+        Requires a same-origin dashboard session. The JSON body must be an empty object. Start
+        returns the new session ID and expiry; capture, cancel, and status actions return ok.
+        Authorize is restricted to the configured WebSocket bridge secret.
+      security:
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              maxProperties: 0
+              additionalProperties: false
+      responses:
+        "200":
+          description: Session-start, bridge-owner, or operation acknowledgement payload
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [id, expires]
+                    properties:
+                      id: { type: string }
+                      expires: { type: number }
+                  - type: object
+                    required: [ok]
+                    properties:
+                      ok: { type: boolean, const: true }
+                  - type: object
+                    required: [owner]
+                    properties:
+                      owner: { type: string }
+        "403": { description: Dashboard session or same-origin request required }
+        "409": { description: Connection, session, or requested action is unavailable }
+
+  /api/usage/diagnostic-overflow:
+    get:
+      tags: [Usage]
+      summary: List private diagnostic overflow traces
+      description: >-
+        Lists bounded metadata for private request/response captures. Payload bytes are available
+        only through the authenticated download routes; trace ownership and capture state are
+        checked before file access.
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: before
+          in: query
+          schema: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Private trace manifests
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [traces]
+                properties:
+                  traces:
+                    type: array
+                    items: { $ref: "#/components/schemas/DiagnosticOverflowManifest" }
+        "400": { description: Invalid pagination parameters }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "503": { description: Diagnostic overflow store is unavailable }
+    head:
+      tags: [Usage]
+      summary: Reject implicit HEAD access to private overflow data
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      responses:
+        "405":
+          description: HEAD is intentionally refused; use GET to list manifests
+          headers:
+            Allow: { schema: { type: string, const: GET } }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+
+  /api/usage/diagnostic-overflow/{traceId}:
+    parameters:
+      - name: traceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Usage]
+      summary: Read one private diagnostic trace manifest
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Trace manifest without raw payload contents
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowManifest" }
+        "400": { description: Trace ID is not a UUID }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "404": { description: Trace manifest not found }
+        "503": { description: Diagnostic overflow store is unavailable }
+    head:
+      tags: [Usage]
+      summary: Reject implicit HEAD access to a private overflow manifest
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      responses:
+        "405":
+          description: HEAD is intentionally refused; use GET to inspect the trace
+          headers:
+            Allow: { schema: { type: string, const: GET } }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+
+  /api/usage/diagnostic-overflow/{traceId}/client-request:
+    parameters:
+      - name: traceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Usage]
+      summary: Download the private client request capture
+      description: Returns a gzip stream; response headers state whether capture completed fully.
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Gzip-compressed raw client request bytes
+          headers:
+            X-Diagnostic-Capture-State: { schema: { type: string, enum: [capturing, complete, incomplete] } }
+            X-Diagnostic-Capture-Complete: { schema: { type: string, enum: ["true", "false"] } }
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+        "400": { description: Trace ID is invalid }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "404": { description: Client request capture not found }
+        "409": { description: Client request capture is not ready or its file alias is invalid }
+        "503": { description: Diagnostic overflow store is unavailable }
+    head:
+      tags: [Usage]
+      summary: Reject implicit HEAD access to a client request capture
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      responses:
+        "405":
+          description: HEAD is intentionally refused; use GET to download the capture
+          headers:
+            Allow: { schema: { type: string, const: GET } }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+
+  /api/usage/diagnostic-overflow/{traceId}/{attemptId}/{kind}:
+    parameters:
+      - name: traceId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: attemptId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: kind
+        in: path
+        required: true
+        schema: { type: string, enum: [request, response, client-request] }
+    get:
+      tags: [Usage]
+      summary: Download one private provider attempt capture
+      description: Returns a gzip stream; response headers state whether capture completed fully.
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Gzip-compressed request or response capture
+          headers:
+            X-Diagnostic-Capture-State: { schema: { type: string, enum: [capturing, complete, incomplete] } }
+            X-Diagnostic-Capture-Complete: { schema: { type: string, enum: ["true", "false"] } }
+            Content-Disposition: { schema: { type: string } }
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+        "400": { description: Trace, attempt, or file alias is invalid }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "404": { description: Capture file not found }
+        "409": { description: Capture is still being written or its alias is invalid }
+        "503": { description: Diagnostic overflow store is unavailable }
+    head:
+      tags: [Usage]
+      summary: Reject implicit HEAD access to a provider attempt capture
+      security:
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+      responses:
+        "405":
+          description: HEAD is intentionally refused; use GET to download the capture
+          headers:
+            Allow: { schema: { type: string, const: GET } }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+
   /api/v1/vscode/raw/{token}/responses:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12919,6 +14558,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/raw/{token}/v1/chat/completions:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - V1 Vscode
@@ -12927,6 +14572,12 @@ paths:
         "200":
           description: OK
   /api/v1/vscode/raw/{token}/v1/models:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - V1 Vscode
@@ -13000,6 +14651,12 @@ paths:
         "200":
           description: OK
   /api/vnc-session/{params}:
+    parameters:
+      - name: params
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Vnc session
@@ -13040,6 +14697,12 @@ paths:
         "200":
           description: OK
   /api/webhooks/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     delete:
       tags:
         - Webhooks
@@ -13062,6 +14725,12 @@ paths:
         "200":
           description: OK
   /api/webhooks/{id}/deliveries:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     get:
       tags:
         - Webhooks
@@ -13070,6 +14739,12 @@ paths:
         "200":
           description: OK
   /api/webhooks/{id}/test:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
     post:
       tags:
         - Webhooks
@@ -13186,6 +14861,94 @@ components:
             requestId: 0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d
 
   schemas:
+    CanaryReadiness:
+      type: object
+      required: [schema, generation, ready, databaseReady, coordination, conversationState, lifecycle]
+      properties:
+        schema: { type: string, const: omni-canary-readiness/v1 }
+        generation: { type: string, description: Active OMNIROUTE_APP_GENERATION; empty before bootstrap. }
+        ready: { type: boolean }
+        databaseReady: { type: boolean }
+        coordination:
+          type: object
+          required: [protocol, accountAdmission, refreshOwnership, backgroundOwnership, conversationState]
+          properties:
+            protocol: { type: string, const: omni-coordination/v1 }
+            accountAdmission: { type: boolean }
+            refreshOwnership: { type: boolean }
+            backgroundOwnership: { type: boolean }
+            conversationState: { type: boolean }
+        conversationState:
+          type: object
+          required: [protocol, ready, challengeId, expiresAt, peerGeneration, handoffFresh, reason]
+          properties:
+            protocol: { type: string, const: omni-conversation-state/v1 }
+            ready: { type: boolean }
+            challengeId: { type: [string, "null"], format: uuid }
+            expiresAt: { type: [integer, "null"], description: Unix epoch milliseconds. }
+            peerGeneration: { type: [string, "null"] }
+            handoffFresh: { type: boolean }
+            reason: { type: [string, "null"] }
+        lifecycle:
+          type: object
+          required: [activeResponses, activeWebSockets, pendingUploads, queuedRequests, conversationPins, upstreamLeases, diagnosticCaptureWork, draining]
+          properties:
+            activeResponses: { type: [integer, "null"], minimum: 0 }
+            activeWebSockets: { type: [integer, "null"], minimum: 0 }
+            pendingUploads: { type: [integer, "null"], minimum: 0 }
+            queuedRequests: { type: [integer, "null"], minimum: 0 }
+            conversationPins: { type: [integer, "null"], minimum: 0 }
+            upstreamLeases: { type: [integer, "null"], minimum: 0 }
+            diagnosticCaptureWork: { type: [integer, "null"], minimum: 0 }
+            draining: { type: boolean }
+    DiagnosticOverflowFile:
+      type: object
+      required: [state, complete, rawBytes, compressedBytes]
+      properties:
+        representation:
+          type: string
+          enum: [parsed_json_reserialized_utf8, serialized_provider_request_utf8, decoded_upstream_bytes]
+        state: { type: string, enum: [capturing, complete, incomplete] }
+        complete: { type: boolean }
+        reason: { type: string }
+        rawBytes: { type: integer, minimum: 0 }
+        compressedBytes: { type: integer, minimum: 0 }
+        sha256: { type: string }
+        gzipSha256: { type: string }
+    DiagnosticOverflowManifest:
+      type: object
+      required: [schema, traceId, provider, createdAt, state, reasons, attempts]
+      properties:
+        schema: { type: string, const: omni-diagnostic-overflow/v1 }
+        traceId: { type: string, format: uuid }
+        requestId: { type: string }
+        provider: { type: string }
+        createdAt: { type: integer, description: Unix epoch milliseconds. }
+        sealedAt: { type: integer, description: Unix epoch milliseconds. }
+        state: { type: string, enum: [capturing, complete, incomplete] }
+        reasons:
+          type: array
+          items: { type: string }
+        clientRequest:
+          $ref: "#/components/schemas/DiagnosticOverflowFile"
+        attempts:
+          type: array
+          items:
+            type: object
+            required: [attemptId, headers, request, response]
+            properties:
+              attemptId: { type: string, format: uuid }
+              transport: { type: string }
+              method: { type: string }
+              url: { type: string, format: uri }
+              status: { type: integer }
+              headers:
+                type: object
+                additionalProperties: { type: string }
+              request:
+                $ref: "#/components/schemas/DiagnosticOverflowFile"
+              response:
+                $ref: "#/components/schemas/DiagnosticOverflowFile"
     ExclusiveConnectionLeaseLifecycle:
       type: object
       description: >-
