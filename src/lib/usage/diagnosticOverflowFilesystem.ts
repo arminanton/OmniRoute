@@ -89,6 +89,7 @@ export function safeReason(reason: string): string {
     "backpressure_overflow",
     "missing_eof",
     "file_missing",
+    "unsupported_reader",
   ]).has(reason)
     ? reason
     : "capture_error";

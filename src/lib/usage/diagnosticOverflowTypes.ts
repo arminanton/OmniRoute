@@ -93,6 +93,7 @@ export function projectDiagnosticOverflowReference(
       "read_error",
       "upstream_error",
       "missing_eof",
+      "unsupported_reader",
     ].includes(source.reason)
       ? { reason: source.reason }
       : {}),

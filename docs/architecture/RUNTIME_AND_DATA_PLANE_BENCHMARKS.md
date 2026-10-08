@@ -129,7 +129,10 @@ The immediate absolute-heap rejection now also records event-time process RSS, h
 bytes, array-buffer bytes, and V8 used/limit values, so a first rejection has useful process context
 even before the asynchronous sampler has published its first snapshot. The existing per-request
 `process.memoryUsage()` call supplies those process values; the extra V8 heap snapshot runs only on
-the rejection path. Validation also caught a correlation-propagation regression: a new call passed
+the rejection path. It also suppresses the heap helper's generic warning on this path, leaving one
+correlated resource-pressure diagnostic per rejected request. A regression test now verifies that
+the immediate absolute-heap guard accepts the next request once live heap usage returns to its
+threshold. Validation also caught a correlation-propagation regression: a new call passed
 `reqId` outside its scope in `handleSingleModelChatImplementation`. It now uses that function's
 `runtimeOptions.correlationId`; the chat-admission binding suite passed 10/10 after the fix.
 
@@ -200,6 +203,16 @@ untraversed. Without such a reference, detail stays missing. Node and Bun tests 
 This lets an existing overflow capture remain reachable in the log UI even in a broken image, but
 it cannot repair old rows or capture providers without an overflow trace. The external candidate
 image recipe still needs to include and verify the worker.
+
+The private overflow path now also records HTTP attempts made by the Codex executor when all of the
+existing gates allow detailed capture: overflow capture enabled, detailed logging enabled, a client
+snapshot above the configured threshold, and provider `codex`/`openai-codex`. It stores exact
+serialized provider request and response bytes in private gzip files and only allowlisted status,
+URL path, and headers in the manifest. `noLog` and disabled detailed logging do not create a trace.
+Codex response chunks are forwarded without waiting for disk writes; a bounded 256 KiB per-file
+write queue marks the capture incomplete if storage cannot keep up. The synthetic HTTP 429, pre-header
+timeout, secret-redaction, and delayed-write tests pass. This does not capture Codex native WebSocket
+event bodies or prove full-app/provider reliability; those remain separate acceptance checks.
 
 ## Isolated streaming proxy results
 
@@ -517,6 +530,44 @@ stores more prompt text in stage previews; the 1.31 MiB body is much smaller tha
 request. No default change is justified before testing provider transformations, privacy, and heap
 behavior with real-sized traffic.
 
+## Private diagnostic-overflow concurrency probe
+
+`scripts/perf/bench-diagnostic-overflow-concurrency.mjs` exercises the production private-overflow
+trace, request logger, provider fetch observer, stream reader, gzip writers, and WAL budget accounting
+with a mocked Codex HTTP provider. It runs 100 independent requests with 4 MiB JSON bodies and
+64 KiB response streams, holds all 100 streams active together, and compares overflow disabled with
+overflow enabled. The payload uses base64-encoded random bytes to avoid the unrealistically high gzip
+ratio of repeated filler text. The 4 MiB size matches the default capture threshold; the benchmark
+uses a fresh, private temporary data directory and removes it at exit. Reproduce with:
+
+```bash
+OMNI_DIAGNOSTIC_OVERFLOW_ENABLED=false node --import tsx/esm --import ./open-sse/utils/setupPolyfill.ts scripts/perf/bench-diagnostic-overflow-concurrency.mjs 100 4194304 65536
+OMNI_DIAGNOSTIC_OVERFLOW_ENABLED=true node --import tsx/esm --import ./open-sse/utils/setupPolyfill.ts scripts/perf/bench-diagnostic-overflow-concurrency.mjs 100 4194304 65536
+```
+
+One paired trial measured:
+
+| Capture | 100 response headers, p50 / p95 | Client completion, p50 / p95 |  Peak RSS | Capture tail after responses | Private files |
+| ------- | ------------------------------: | ---------------------------: | --------: | ---------------------------: | ------------: |
+| Off     |                   1.66 / 2.41 s |                1.76 / 2.52 s | 1,353 MiB |                         0 ms |             0 |
+| On      |                   1.99 / 2.78 s |                2.16 / 2.96 s | 1,462 MiB |                      12.35 s |      642.8 MB |
+
+Across three capture-enabled repeats, p95 response-header latency stayed between 2.75 and 2.80 s,
+median completion between 2.14 and 2.18 s, and all 100 traces completed. In the representative run,
+enabled capture added about 0.4 s to median completion and 109 MiB to peak RSS. Responses finished
+about 12.35 s before the background writers had sealed all traces. That run wrote about 806 MiB of
+raw client/provider/response data and 642.8 MB of compressed files. The diagnostic metadata database
+uses SQLite WAL with `synchronous=NORMAL` because it is disposable diagnostic state. SQLite documents
+that this mode preserves WAL consistency but may roll back a recent transaction after a power loss;
+payload files are individually fsynced before being marked complete, and startup cleanup removes only
+aged, UUID-shaped orphan directories containing owned capture filenames. A held-fsync regression
+test verifies that the client reaches EOF before background trace finalization completes.
+[SQLite synchronous-mode details](https://www.sqlite.org/pragma.html#pragma_synchronous).
+
+This is an isolated capture-path capacity test, not a 100-agent application E2E result: it has no
+Next route/auth stack, account scheduling, provider quota, tool loop, real network, or Maria's 4 GiB
+container cap. Full app/agent-cycle verification remains required.
+
 ## Build/runtime evaluation
 
 Next.js 16 lists Node.js 20.9+ as its runtime requirement and makes Turbopack the default
@@ -597,8 +648,9 @@ no-auth catalog filter with the optional model ID shape.
 ## Remaining acceptance checks
 
 - Query the new management-only pressure sample on `GET /api/monitoring/health` using a credential
-  accepted by the candidate. Blue now exposes V8 heap, process external/array-buffer/RSS, cgroup,
-  PSI, guard state, and sample age together. The current `~/.omni-mg` credential receives 403
+  accepted by the candidate. Blue now exposes the configured immediate-heap threshold, V8 heap,
+  process external/array-buffer/RSS, cgroup, host-PSI source, guard state, and sample age together.
+  The current `~/.omni-mg` credential receives 403
   `Invalid management token` from `/api/usage/call-logs`, so the running candidate only returns
   public health. A heap snapshot or isolated allocation profile is still required to identify
   retained V8 objects.

@@ -56,6 +56,14 @@ async function decoded(
   assert.equal(hash(value), result.metadata.sha256);
   return value;
 }
+async function waitForFinalManifest(traceId: string) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const manifest = await readDiagnosticOverflowManifest(traceId);
+    if (manifest?.state !== "capturing") return manifest;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("diagnostic overflow trace did not finalize");
+}
 async function logger(body: unknown, eligible = true) {
   const raw = buildClientRawRequest(
     new Request("http://synthetic.invalid/v1/chat/completions"),
@@ -160,7 +168,7 @@ test("originalparsedJSON outgoingserializer and >11MiB decodederror remain exact
     });
     assert.equal(result.response.status, 400);
     await result.response.text();
-    const manifest = await readDiagnosticOverflowManifest(traceId);
+    const manifest = await waitForFinalManifest(traceId);
     assert.ok(manifest);
     assert.equal(manifest.state, "complete");
     assert.equal(manifest.attempts.length, 1);
@@ -275,7 +283,7 @@ test("403 removal and regional disposal retain independent complete attempt resp
       );
     });
     await result.response.text();
-    const manifest = await readDiagnosticOverflowManifest(traceId);
+    const manifest = await waitForFinalManifest(traceId);
     assert.ok(manifest);
     assert.equal(sends, 3);
     assert.equal(manifest.attempts.length, 3);
@@ -474,7 +482,7 @@ test("private overflow snapshots only client requests above the configured size 
   }
 });
 
-test("non-Antigravity requests release the overflow snapshot without serializing it", async () => {
+test("Codex keeps opt-in overflow payloads while other providers release them without serialization", async () => {
   let serialized = 0;
   const body = {
     model: "cx/gpt-6.1-sol",
@@ -497,9 +505,35 @@ test("non-Antigravity requests release the overflow snapshot without serializing
     diagnosticClientJson: () => getDiagnosticClientJson(raw),
     releaseDiagnosticClientJson: () => releaseDiagnosticClientJson(raw),
   });
-  assert.equal(log.getDiagnosticOverflowTrace(), null);
-  assert.equal(serialized, 0, "Codex should not stringify an AG-only overflow payload");
-  assert.equal(getDiagnosticClientJson(raw), undefined, "non-AG snapshot should be released");
+  const codexTrace = log.getDiagnosticOverflowTrace();
+  assert.ok(codexTrace, "the operator-enabled Codex diagnostic path should retain its trace");
+  assert.equal(serialized, 1, "the opt-in Codex request snapshot should be serialized once");
+  assert.equal(getDiagnosticClientJson(raw), undefined, "the source snapshot should be released");
+  await codexTrace.finish();
+
+  const otherBody = {
+    model: "claude-sonnet-4-6",
+    messages: [{ role: "user", content: "a large request body" }],
+    toJSON() {
+      serialized++;
+      return { model: this.model, messages: this.messages };
+    },
+  };
+  const otherRaw = buildClientRawRequest(
+    new Request("http://synthetic.invalid/v1/chat/completions"),
+    otherBody,
+    true
+  );
+  const otherLog = await createRequestLogger(undefined, undefined, undefined, {
+    enabled: true,
+    provider: "claude",
+    diagnosticOverflowEligible: true,
+    diagnosticClientJson: () => getDiagnosticClientJson(otherRaw),
+    releaseDiagnosticClientJson: () => releaseDiagnosticClientJson(otherRaw),
+  });
+  assert.equal(otherLog.getDiagnosticOverflowTrace(), null);
+  assert.equal(serialized, 1, "unselected providers must not serialize an overflow snapshot");
+  assert.equal(getDiagnosticClientJson(otherRaw), undefined);
 });
 
 test("credits retry has its own exact serialized body and complete captured response", async () => {
@@ -547,7 +581,7 @@ test("credits retry has its own exact serialized body and complete captured resp
       );
     });
     assert.equal(await result.response.text(), responseText);
-    const manifest = await readDiagnosticOverflowManifest(traceId);
+    const manifest = await waitForFinalManifest(traceId);
     assert.ok(manifest);
     assert.equal(manifest.attempts.length, 1);
     assert.ok(wire.includes("GOOGLE_ONE_AI"));

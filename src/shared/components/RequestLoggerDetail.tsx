@@ -85,6 +85,66 @@ const STREAM_TIMESTAMP_PREFIX = /\[\d{2}:\d{2}:\d{2}\.\d{3}\] /g;
 type StreamSegment =
   { type: "text"; value: string } | { type: "json"; value: unknown; raw: string };
 
+type DiagnosticOverflowAttemptSummary = {
+  attemptId: string;
+  transport?: string;
+  method?: string;
+  url?: string;
+  status?: number;
+  request?: { state?: string; complete?: boolean; rawBytes?: number; reason?: string };
+  response?: { state?: string; complete?: boolean; rawBytes?: number; reason?: string };
+};
+type DiagnosticOverflowFileSummary = {
+  state?: string;
+  complete?: boolean;
+  rawBytes?: number;
+  reason?: string;
+};
+
+type DiagnosticOverflowManifestSummary = {
+  traceId: string;
+  state?: string;
+  clientRequest?: DiagnosticOverflowFileSummary;
+  attempts: DiagnosticOverflowAttemptSummary[];
+};
+
+const DIAGNOSTIC_UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
+
+function projectDiagnosticOverflowFile(value: unknown): DiagnosticOverflowFileSummary | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  return {
+    state: typeof source.state === "string" ? source.state : undefined,
+    complete: typeof source.complete === "boolean" ? source.complete : undefined,
+    reason: typeof source.reason === "string" ? source.reason : undefined,
+    rawBytes:
+      typeof source.rawBytes === "number" && Number.isFinite(source.rawBytes)
+        ? source.rawBytes
+        : undefined,
+  };
+}
+
+function projectDiagnosticOverflowAttempts(value: unknown): DiagnosticOverflowAttemptSummary[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const attempt = candidate as Record<string, unknown>;
+    if (typeof attempt.attemptId !== "string" || !DIAGNOSTIC_UUID_RE.test(attempt.attemptId))
+      return [];
+    return [
+      {
+        attemptId: attempt.attemptId,
+        transport: typeof attempt.transport === "string" ? attempt.transport : undefined,
+        method: typeof attempt.method === "string" ? attempt.method : undefined,
+        url: typeof attempt.url === "string" ? attempt.url : undefined,
+        status: typeof attempt.status === "number" ? attempt.status : undefined,
+        request: projectDiagnosticOverflowFile(attempt.request),
+        response: projectDiagnosticOverflowFile(attempt.response),
+      },
+    ];
+  });
+}
+
 // Splits a raw joined SSE capture into renderable segments: each `data:`
 // line that parses as JSON becomes its own segment (rendered as a
 // collapsible tree), everything else (comments, keep-alives, [DONE],
@@ -311,6 +371,8 @@ export default function RequestLoggerDetail({
   const [unblocking, setUnblocking] = useState(false);
   const [cleared, setCleared] = useState(false);
   const [copiedAll, setCopiedAll] = useState(false);
+  const [diagnosticOverflowAttemptState, setDiagnosticOverflowAttemptState] =
+    useState<DiagnosticOverflowManifestSummary | null>(null);
 
   // #7920 gave this component formatErrorForDisplay for structured error objects, but the
   // #8213 combo/cooldown checks below went straight to the raw field and call
@@ -398,6 +460,65 @@ export default function RequestLoggerDetail({
     !diagnosticOverflow ||
     typeof diagnosticOverflow !== "object" ||
     diagnosticOverflow.persisted !== false;
+  const diagnosticOverflowAttempts =
+    diagnosticOverflowAttemptState?.traceId === diagnosticOverflowTraceId
+      ? diagnosticOverflowAttemptState.attempts
+      : [];
+  const diagnosticOverflowClientRequest =
+    diagnosticOverflowAttemptState?.traceId === diagnosticOverflowTraceId
+      ? diagnosticOverflowAttemptState.clientRequest
+      : undefined;
+  const canDownloadDiagnosticClientRequest =
+    (diagnosticOverflowClientRequest?.rawBytes ?? 0) > 0 ||
+    (!diagnosticOverflowClientRequest && diagnosticOverflow?.state === "complete");
+  const diagnosticOverflowDisplayState =
+    diagnosticOverflowAttemptState?.traceId === diagnosticOverflowTraceId &&
+    diagnosticOverflowAttemptState.state
+      ? diagnosticOverflowAttemptState.state
+      : typeof diagnosticOverflow?.state === "string"
+        ? diagnosticOverflow.state
+        : "captured";
+  useEffect(() => {
+    if (!diagnosticOverflowTraceId || !diagnosticOverflowPersisted) return;
+    const controller = new AbortController();
+    let active = true;
+    let polls = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const loadManifest = async () => {
+      try {
+        const response = await fetch(
+          `/api/usage/diagnostic-overflow/${diagnosticOverflowTraceId}`,
+          {
+            signal: controller.signal,
+          }
+        );
+        if (!response.ok) return;
+        const manifest: unknown = await response.json();
+        if (!active) return;
+        const record =
+          manifest && typeof manifest === "object" && !Array.isArray(manifest)
+            ? (manifest as Record<string, unknown>)
+            : null;
+        const state = typeof record?.state === "string" ? record.state : undefined;
+        setDiagnosticOverflowAttemptState({
+          traceId: diagnosticOverflowTraceId,
+          state,
+          clientRequest: projectDiagnosticOverflowFile(record?.clientRequest),
+          attempts: projectDiagnosticOverflowAttempts(record?.attempts),
+        });
+        if (state === "capturing" && polls++ < 60)
+          timer = setTimeout(() => void loadManifest(), 500);
+      } catch {
+        // The call-log detail remains usable if management capture inspection is unavailable.
+      }
+    };
+    void loadManifest();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+      controller.abort();
+    };
+  }, [diagnosticOverflowTraceId, diagnosticOverflowPersisted]);
   const pipelineError = pipelinePayloads?.error;
   const pipelineErrorWithOverflow = diagnosticOverflow
     ? {
@@ -1104,11 +1225,7 @@ export default function RequestLoggerDetail({
                   data-testid="diagnostic-overflow-links"
                 >
                   <span className="text-text-muted">{t("detailStatus")}:</span>
-                  <span className="font-mono">
-                    {typeof diagnosticOverflow?.state === "string"
-                      ? diagnosticOverflow.state
-                      : "captured"}
-                  </span>
+                  <span className="font-mono">{diagnosticOverflowDisplayState}</span>
                   <a
                     className="font-mono text-primary underline underline-offset-2"
                     href={`/api/usage/diagnostic-overflow/${diagnosticOverflowTraceId}`}
@@ -1117,13 +1234,71 @@ export default function RequestLoggerDetail({
                   >
                     {diagnosticOverflowTraceId}
                   </a>
-                  <a
-                    className="text-primary underline underline-offset-2"
-                    download
-                    href={`/api/usage/diagnostic-overflow/${diagnosticOverflowTraceId}/client-request`}
-                  >
-                    {t("payload.clientRawRequest")} (.gz)
-                  </a>
+                  {canDownloadDiagnosticClientRequest && (
+                    <a
+                      className="text-primary underline underline-offset-2"
+                      download
+                      href={`/api/usage/diagnostic-overflow/${diagnosticOverflowTraceId}/client-request`}
+                      title={
+                        diagnosticOverflowClientRequest?.reason ||
+                        (diagnosticOverflowClientRequest?.complete === false
+                          ? "Client request capture is incomplete"
+                          : "Complete client request capture")
+                      }
+                    >
+                      {t("payload.clientRawRequest")} (.gz)
+                      {diagnosticOverflowClientRequest?.complete === false ? " · partial" : ""}
+                    </a>
+                  )}
+                  {diagnosticOverflowAttempts.length > 0 && (
+                    <div
+                      className="w-full space-y-2 border-t border-sky-500/20 pt-2"
+                      data-testid="diagnostic-overflow-attempt-links"
+                    >
+                      {diagnosticOverflowAttempts.map((attempt, index) => (
+                        <div className="flex flex-wrap items-center gap-3" key={attempt.attemptId}>
+                          <span className="font-mono text-text-muted" title={attempt.url}>
+                            Attempt {index + 1}
+                            {attempt.transport ? ` · ${attempt.transport}` : ""}
+                            {attempt.status ? ` · HTTP ${attempt.status}` : ""}
+                            {attempt.method ? ` · ${attempt.method}` : ""}
+                          </span>
+                          {(attempt.request?.rawBytes ?? 0) > 0 && (
+                            <a
+                              className="text-primary underline underline-offset-2"
+                              download
+                              href={`/api/usage/diagnostic-overflow/${diagnosticOverflowTraceId}/${attempt.attemptId}/request`}
+                              title={
+                                attempt.request?.reason ||
+                                (attempt.request?.complete === false
+                                  ? "Provider request capture is incomplete"
+                                  : "Complete provider request capture")
+                              }
+                            >
+                              {t("payload.providerRequest")} (.gz)
+                              {attempt.request?.complete === false ? " · partial" : ""}
+                            </a>
+                          )}
+                          {(attempt.response?.rawBytes ?? 0) > 0 && (
+                            <a
+                              className="text-primary underline underline-offset-2"
+                              download
+                              href={`/api/usage/diagnostic-overflow/${diagnosticOverflowTraceId}/${attempt.attemptId}/response`}
+                              title={
+                                attempt.response?.reason ||
+                                (attempt.response?.complete === false
+                                  ? "Provider response capture is incomplete"
+                                  : "Complete provider response capture")
+                              }
+                            >
+                              {t("payload.providerResponse")} (.gz)
+                              {attempt.response?.complete === false ? " · partial" : ""}
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 

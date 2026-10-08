@@ -15,6 +15,11 @@ const sync = (fd: number) =>
   new Promise<void>((resolve, reject) =>
     fs.fsync(fd, (error) => (error ? reject(error) : resolve()))
   );
+const MAX_QUEUED_BYTES = 256 * 1024;
+// String offsets count UTF-16 code units. 64 Ki code units stay below the byte
+// queue cap even when every character uses three UTF-8 bytes.
+const WRITE_BODY_CHUNK_BYTES = 64 * 1024;
+const RESERVATION_CHUNK_BYTES = 4 * 1024 * 1024;
 export class DiagnosticOverflowWriter {
   private gzip = createGzip({ level: 1, chunkSize: 64 * 1024 });
   private output: fs.WriteStream | undefined;
@@ -57,7 +62,6 @@ export class DiagnosticOverflowWriter {
           fs.constants.O_WRONLY,
         0o600
       );
-      syncDirectory(directory);
       this.output = fs.createWriteStream("", {
         fd: this.fd,
         autoClose: false,
@@ -86,7 +90,7 @@ export class DiagnosticOverflowWriter {
   }
   write(chunk: Uint8Array): Promise<void> {
     if (this.stopped || this.sealed) return Promise.resolve();
-    if (this.queuedBytes > 0 && this.queuedBytes + chunk.byteLength > 256 * 1024) {
+    if (this.queuedBytes > 0 && this.queuedBytes + chunk.byteLength > MAX_QUEUED_BYTES) {
       this.stop("backpressure_overflow");
       return Promise.resolve();
     }
@@ -95,7 +99,6 @@ export class DiagnosticOverflowWriter {
       .then(async () => {
         if (this.stopped) return;
         try {
-          this.coordinator.assertOwner(this.traceId, this.owner);
           for (let offset = 0; offset < chunk.byteLength && !this.stopped; offset += 64 * 1024) {
             let part = chunk.subarray(offset, Math.min(chunk.byteLength, offset + 64 * 1024));
             const room = this.coordinator.maxFileBytes - this.rawBytes;
@@ -104,13 +107,19 @@ export class DiagnosticOverflowWriter {
               break;
             }
             if (part.byteLength > room) part = part.subarray(0, room);
+            // reserve() checks lease ownership in SQLite. Rechecking the same
+            // row for each 64 KiB gzip piece made large concurrent captures
+            // issue thousands of synchronous queries on the request event loop.
             if (this.credit < part.byteLength)
               this.credit += this.coordinator.reserve(
                 this.traceId,
                 this.owner,
                 this.attemptId,
                 this.kind,
-                Math.min(1024 * 1024, this.coordinator.maxFileBytes - this.rawBytes - this.credit)
+                Math.min(
+                  RESERVATION_CHUNK_BYTES,
+                  this.coordinator.maxFileBytes - this.rawBytes - this.credit
+                )
               );
             if (this.credit < part.byteLength) part = part.subarray(0, this.credit);
             if (!part.byteLength) {
@@ -163,13 +172,17 @@ export class DiagnosticOverflowWriter {
   }
   async writeBody(body: string | Uint8Array): Promise<void> {
     if (typeof body !== "string") {
-      for (let offset = 0; offset < body.byteLength && !this.stopped; offset += 64 * 1024)
-        await this.write(body.subarray(offset, offset + 64 * 1024));
+      for (
+        let offset = 0;
+        offset < body.byteLength && !this.stopped;
+        offset += WRITE_BODY_CHUNK_BYTES
+      )
+        await this.write(body.subarray(offset, offset + WRITE_BODY_CHUNK_BYTES));
       return;
     }
     // Preserve UTF-8 across JavaScript surrogate boundaries without duplicating the whole body.
     for (let offset = 0; offset < body.length && !this.stopped;) {
-      let end = Math.min(body.length, offset + 16 * 1024);
+      let end = Math.min(body.length, offset + WRITE_BODY_CHUNK_BYTES);
       if (
         end < body.length &&
         body.charCodeAt(end - 1) >= 0xd800 &&

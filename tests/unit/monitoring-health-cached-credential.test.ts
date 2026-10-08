@@ -100,6 +100,8 @@ test("GET /api/monitoring/health returns the stale cached summary immediately", 
     stale: 1,
   });
   assert.deepEqual(Object.keys(body.system?.resourcePressure ?? {}).sort(), [
+    "heapPressureThresholdMb",
+    "psiSource",
     "sampleAgeMs",
     "signals",
     "state",

@@ -576,8 +576,7 @@ async function handleChatCoreOwned({
     try {
       const pressureGuard = checkResourcePressureGuard({
         correlationId,
-        endpoint:
-          typeof clientRawRequest?.endpoint === "string" ? clientRawRequest.endpoint : null,
+        endpoint: typeof clientRawRequest?.endpoint === "string" ? clientRawRequest.endpoint : null,
         provider: typeof provider === "string" ? provider : null,
         model: typeof model === "string" ? model : null,
       });
@@ -1342,6 +1341,7 @@ async function handleChatCoreOwned({
   const pendingScope = { id: pendingRequestId, model, provider, connectionId: pendingConnId };
   const providerRequestCapture = createPreparedRequestLogger(reqLogger, pendingScope, {
     enabled: detailedLoggingEnabled,
+    provider,
   });
   // 0. Log client raw request (before format conversion) — redacts video transcript
   // cues in the logged copy only; see videoBridgeSnapshotRedaction.ts.

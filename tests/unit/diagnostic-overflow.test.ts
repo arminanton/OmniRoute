@@ -28,6 +28,13 @@ async function bytes(
   for await (const chunk of file.stream) chunks.push(Buffer.from(chunk));
   return gunzipSync(Buffer.concat(chunks));
 }
+async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("timed out waiting for diagnostic writer state");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
 
 test("defaultoff and noLog eligibility do not create private payload files; cold enabled ownership is unknown", async () => {
   const directory = root();
@@ -58,6 +65,17 @@ test("actual files retain exact >10MiB client/request/decodedresponse bytes, UTF
   const body = "x".repeat(16383) + "😀" + "x".repeat(11 * 1024 * 1024);
   const trace = store.createTrace({ provider: "antigravity", requestId: "private@email.example" });
   try {
+    assert.equal(
+      (store.coordinator.db.prepare("PRAGMA journal_mode").get() as { journal_mode: string })
+        .journal_mode,
+      "wal"
+    );
+    assert.equal(
+      (store.coordinator.db.prepare("PRAGMA synchronous").get() as { synchronous: number })
+        .synchronous,
+      1,
+      "diagnostic metadata uses NORMAL durability; payload files are fsynced before complete"
+    );
     await trace.writeClientRequest(body);
     const attempt = await trace.beginAttempt({
       requestBody: body,
@@ -102,6 +120,10 @@ test("actual files retain exact >10MiB client/request/decodedresponse bytes, UTF
     assert.ok(!JSON.stringify(manifest).includes("private@email"));
     assert.ok(!JSON.stringify(manifest).includes("key=secret"));
     assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+    for (const suffix of ["-wal", "-shm"]) {
+      const sidecar = path.join(directory, `coordination.sqlite${suffix}`);
+      if (fs.existsSync(sidecar)) assert.equal(fs.statSync(sidecar).mode & 0o777, 0o600);
+    }
     for (const file of fs.readdirSync(path.join(directory, trace.traceId)))
       assert.equal(fs.statSync(path.join(directory, trace.traceId, file)).mode & 0o777, 0o600);
   } finally {
@@ -292,7 +314,7 @@ test(
 
 test("quota rejection and unsafe filesystem failure expose incomplete references without zero-byte budget growth", async () => {
   const directory = root(),
-    store = new DiagnosticOverflowStore({ root: directory, maxTotalBytes: 320 * 1024 });
+    store = new DiagnosticOverflowStore({ root: directory, maxTotalBytes: 512 * 1024 });
   try {
     const trace = store.createTrace({ provider: "antigravity" });
     const attempt = await trace.beginAttempt({ requestBody: "request" });
@@ -300,7 +322,7 @@ test("quota rejection and unsafe filesystem failure expose incomplete references
     await attempt.finish();
     await trace.finish();
     assert.equal(store.read(trace.traceId)?.state, "incomplete");
-    assert.ok(store.coordinator.used() <= 320 * 1024);
+    assert.ok(store.coordinator.used() <= 512 * 1024);
     const rejected = store.createTrace({ provider: "antigravity" });
     assert.deepEqual(projectDiagnosticOverflowReference(rejected.snapshot()), rejected.snapshot());
     assert.equal(rejected.snapshot().state, "incomplete");
@@ -339,6 +361,34 @@ test("retention does not erase unknown files or foreign symlink targets", async 
   } finally {
     store.close();
     fs.rmSync(directory, { recursive: true });
+  }
+});
+
+test("maintenance removes only safe orphan capture directories left by a rolled-back WAL commit", () => {
+  const directory = root();
+  const store = new DiagnosticOverflowStore({ root: directory });
+  const orphanId = "11111111-1111-4111-8111-111111111111";
+  const foreignId = "22222222-2222-4222-8222-222222222222";
+  const orphanDirectory = path.join(directory, orphanId);
+  const foreignDirectory = path.join(directory, foreignId);
+  const old = new Date(Date.now() - 120_000);
+  try {
+    fs.mkdirSync(orphanDirectory, { mode: 0o700 });
+    fs.writeFileSync(path.join(orphanDirectory, `${orphanId}.client_request.gz`), "orphan", {
+      mode: 0o600,
+    });
+    fs.utimesSync(orphanDirectory, old, old);
+
+    fs.mkdirSync(foreignDirectory, { mode: 0o700 });
+    fs.writeFileSync(path.join(foreignDirectory, "operator-file.secret"), "keep", { mode: 0o600 });
+    fs.utimesSync(foreignDirectory, old, old);
+
+    store.cleanup();
+    assert.equal(fs.existsSync(orphanDirectory), false);
+    assert.equal(fs.existsSync(path.join(foreignDirectory, "operator-file.secret")), true);
+  } finally {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -397,6 +447,7 @@ test("independent module copies share initialized state and active gzip/fsync ow
   try {
     const attempt = await trace.beginAttempt({ requestBody: "fixture" });
     await attempt.writeResponse(Buffer.from("body"));
+    await waitFor(() => store.read(trace.traceId)?.attempts[0]?.request.complete === true, 5000);
     fs.fsync = ((fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
       release = () => originalSync(fd, callback);
       observed();
@@ -486,6 +537,7 @@ test("actual Node descriptor owner closes once and remains active until close ac
   try {
     const attempt = await trace.beginAttempt({ requestBody: "fixture" });
     await attempt.writeResponse(Buffer.from("complete response"));
+    await waitFor(() => store.read(trace.traceId)?.attempts[0]?.request.complete === true, 5000);
     const target = path.join(directory, trace.traceId, `${attempt.id}.provider_response.gz`);
     fs.close = ((fd: number, callback: (error: NodeJS.ErrnoException | null) => void) => {
       let owns = false;

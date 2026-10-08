@@ -582,7 +582,9 @@ export async function createRequestLogger(
     eligible:
       options.enabled !== false &&
       options.diagnosticOverflowEligible === true &&
-      ["antigravity", "agy"].includes(options.provider || ""),
+      ["antigravity", "agy", "codex", "openai-codex"].includes(
+        options.provider?.toLowerCase() || ""
+      ),
     provider: options.provider || "unknown",
     requestId: options.requestId || undefined,
   });
@@ -590,7 +592,9 @@ export async function createRequestLogger(
   if (diagnosticTrace) {
     const json = options.diagnosticClientJson?.();
     try {
-      if (json !== undefined) await diagnosticTrace.writeClientRequest(json);
+      // Schedule the bounded writer and release request admission immediately;
+      // trace.finish() waits for the pending file before sealing the manifest.
+      if (json !== undefined) void diagnosticTrace.writeClientRequest(json);
       else diagnosticTrace.markIncomplete("client_unavailable");
     } finally {
       options.releaseDiagnosticClientJson?.();
@@ -603,8 +607,8 @@ export async function createRequestLogger(
       if (options.diagnosticSignal.aborted) abort();
     }
   } else {
-    // Non-Antigravity providers never create overflow traces. Drop the raw
-    // snapshot without serializing another copy of every client request.
+    // Providers outside the explicit AG/Codex overflow allowlist never create
+    // raw overflow traces. Drop the snapshot without serializing another copy.
     options.releaseDiagnosticClientJson?.();
   }
   const telemetry = getRequestTransportTelemetry();

@@ -57,11 +57,17 @@ export class DiagnosticOverflowAttempt {
   }
   async initialize(body: string | Uint8Array): Promise<void> {
     const request = this.trace.writer(this.id, "provider_request");
-    if (request) {
-      await request.writeBody(body);
-      await request.seal(true);
-    }
+    // Create the response writer before starting request-file I/O. The upstream
+    // fetch can then begin immediately while both bounded writers drain.
     this.response = this.trace.writer(this.id, "provider_response");
+    if (request) {
+      try {
+        await request.writeBody(body);
+        await request.seal(true);
+      } catch {
+        this.trace.markIncomplete("write_error");
+      }
+    }
   }
   acceptingResponse(): boolean {
     return this.response?.accepting() ?? false;
@@ -73,18 +79,15 @@ export class DiagnosticOverflowAttempt {
       this.trace.markIncomplete("write_error");
     }
   }
-  async finish(metadata: DiagnosticOverflowAttemptMetadata = {}): Promise<void> {
-    if (this.done) return;
+  finish(metadata: DiagnosticOverflowAttemptMetadata = {}): Promise<void> {
+    if (this.done) return Promise.resolve();
     this.done = true;
-    this.trace.attemptMetadata(this.id, metadata);
-    await this.response?.seal(true);
+    return this.trace.finalizeAttempt(this.id, this.response, metadata, true);
   }
-  async fail(reason: string, metadata: DiagnosticOverflowAttemptMetadata = {}): Promise<void> {
-    if (this.done) return;
+  fail(reason: string, metadata: DiagnosticOverflowAttemptMetadata = {}): Promise<void> {
+    if (this.done) return Promise.resolve();
     this.done = true;
-    this.trace.attemptMetadata(this.id, metadata);
-    await this.response?.seal(false, safeReason(reason));
-    this.trace.markIncomplete(reason);
+    return this.trace.finalizeAttempt(this.id, this.response, metadata, false, safeReason(reason));
   }
 }
 export class DiagnosticOverflowTrace {
@@ -94,6 +97,7 @@ export class DiagnosticOverflowTrace {
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private writers: DiagnosticOverflowWriter[] = [];
   private attempts: DiagnosticOverflowAttempt[] = [];
+  private pendingWrites = new Set<Promise<void>>();
   private finishPromise: Promise<void> | undefined;
   private done = false;
   private reason: string | undefined;
@@ -153,15 +157,30 @@ export class DiagnosticOverflowTrace {
     this.writers.push(writer);
     return writer;
   }
-  async writeClientRequest(body: string | Uint8Array): Promise<void> {
+  private trackPendingWrite(pending: Promise<void>): void {
+    this.pendingWrites.add(pending);
+    void pending.then(
+      () => this.pendingWrites.delete(pending),
+      () => this.pendingWrites.delete(pending)
+    );
+  }
+  writeClientRequest(body: string | Uint8Array): Promise<void> {
     try {
       const writer = this.writer(this.traceId, "client_request");
-      if (writer) {
-        await writer.writeBody(body);
-        await writer.seal(true);
-      }
+      if (!writer) return Promise.resolve();
+      const pending = (async () => {
+        try {
+          await writer.writeBody(body);
+          await writer.seal(true);
+        } catch {
+          this.markIncomplete("write_error");
+        }
+      })();
+      this.trackPendingWrite(pending);
+      return pending;
     } catch {
       this.markIncomplete("write_error");
+      return Promise.resolve();
     }
   }
   async beginAttempt(
@@ -183,7 +202,7 @@ export class DiagnosticOverflowTrace {
           response: emptyFile(),
         })
       );
-      await attempt.initialize(input.requestBody);
+      this.trackPendingWrite(attempt.initialize(input.requestBody));
     } catch {
       this.markIncomplete("write_error");
     }
@@ -202,6 +221,32 @@ export class DiagnosticOverflowTrace {
       this.markIncomplete("write_error");
     }
   }
+  finalizeAttempt(
+    id: string,
+    response: DiagnosticOverflowWriter | undefined,
+    metadata: DiagnosticOverflowAttemptMetadata,
+    complete: boolean,
+    reason?: string
+  ): Promise<void> {
+    const pending = new Promise<void>((resolve) => {
+      setImmediate(() => {
+        try {
+          this.attemptMetadata(id, metadata);
+          if (!complete && reason) this.markIncomplete(reason);
+          void response
+            ?.seal(complete, reason ?? "missing_eof")
+            .catch(() => this.markIncomplete("write_error"))
+            .finally(resolve);
+          if (!response) resolve();
+        } catch {
+          this.markIncomplete("write_error");
+          resolve();
+        }
+      });
+    });
+    this.trackPendingWrite(pending);
+    return pending;
+  }
   finish(): Promise<void> {
     this.finishPromise ??= this.finishInternal();
     return this.finishPromise;
@@ -209,6 +254,7 @@ export class DiagnosticOverflowTrace {
   private async finishInternal(): Promise<void> {
     if (this.done) return;
     this.done = true;
+    await Promise.all([...this.pendingWrites]);
     for (const writer of this.writers) await writer.seal(false, this.reason ?? "missing_eof");
     try {
       const manifest = this.coordinator?.sealTrace(this.traceId, this.owner);
@@ -228,6 +274,8 @@ export class DiagnosticOverflowTrace {
 }
 export class DiagnosticOverflowStore {
   readonly coordinator: DiagnosticOverflowCoordinator;
+  private lastMaintenanceAt = 0;
+  private orphanCleanupCursor = "";
   constructor(options: DiagnosticOverflowOptions) {
     this.coordinator = new DiagnosticOverflowCoordinator(path.resolve(options.root), options);
   }
@@ -387,6 +435,57 @@ export class DiagnosticOverflowStore {
         this.coordinator.db.prepare("DELETE FROM traces WHERE id=?").run(manifest.traceId);
       });
     }
+    this.cleanupOrphanTraceDirectories(now);
+  }
+  private cleanupOrphanTraceDirectories(now: number): void {
+    if (!fs.existsSync(this.coordinator.root)) return;
+    const candidates = fs
+      .readdirSync(this.coordinator.root)
+      .filter((name) => DIAGNOSTIC_ID.test(name))
+      .sort();
+    if (!candidates.length) {
+      this.orphanCleanupCursor = "";
+      return;
+    }
+    const firstAfterCursor = candidates.findIndex((name) => name > this.orphanCleanupCursor);
+    const start = firstAfterCursor < 0 ? 0 : firstAfterCursor;
+    const scan = candidates.slice(start).concat(candidates.slice(0, start)).slice(0, 1000);
+    this.orphanCleanupCursor = scan.at(-1) ?? this.orphanCleanupCursor;
+    const graceMs = Math.max(60_000, this.coordinator.leaseMs * 2);
+    let removed = 0;
+    for (const traceId of scan) {
+      if (removed >= 100) break;
+      const directory = path.join(this.coordinator.root, traceId);
+      try {
+        if (this.coordinator.row(traceId)) continue;
+        const stat = fs.lstatSync(directory);
+        if (!stat.isDirectory() || stat.isSymbolicLink() || now - stat.mtimeMs < graceMs) continue;
+        privateDirectory(directory, false);
+        const files = fs.readdirSync(directory);
+        const ownedNames = files.map((name) => {
+          const match =
+            /^([a-f0-9-]{36})\.(client_request|provider_request|provider_response)\.gz$/i.exec(
+              name
+            );
+          if (!match || !DIAGNOSTIC_ID.test(match[1])) return null;
+          if (match[2] === "client_request" && match[1] !== traceId) return null;
+          return name;
+        });
+        if (ownedNames.some((name) => name === null)) continue;
+        for (const name of ownedNames) privateFile(path.join(directory, name!));
+        for (const name of ownedNames) fs.unlinkSync(path.join(directory, name!));
+        fs.rmdirSync(directory);
+        removed++;
+      } catch {
+        // Unknown, active, or incorrectly permissioned paths are never removed.
+      }
+    }
+    if (removed) syncDirectory(this.coordinator.root);
+  }
+  cleanupIfDue(now = Date.now(), intervalMs = 60_000): void {
+    if (now - this.lastMaintenanceAt < intervalMs) return;
+    this.lastMaintenanceAt = now;
+    this.cleanup(now);
   }
   close(): void {
     this.coordinator.close();
@@ -417,7 +516,7 @@ export async function createDiagnosticOverflowTrace(input: {
   try {
     const store = defaultStore();
     try {
-      store?.cleanup();
+      store?.cleanupIfDue();
     } catch {
       /* Retention failures do not stop new eligible capture. */
     }
@@ -469,7 +568,9 @@ export function getDiagnosticOverflowActiveWork(): number | null {
 export async function initializeDiagnosticOverflowStore(): Promise<boolean> {
   if (process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED !== "true") return true;
   try {
-    return !!defaultStore();
+    const store = defaultStore();
+    store?.cleanupIfDue();
+    return !!store;
   } catch {
     return false;
   }

@@ -87,20 +87,27 @@ function captureResponse(response: Response, capture: OwnedCapture): Response {
               if (done) return;
               if (item.done) {
                 done = true;
-                await capture.attempt.finish(capture.metadata);
+                void capture.attempt.finish(capture.metadata);
                 reader?.releaseLock();
                 controller.close();
               } else {
+                // Keep ordinary network-sized chunks independent of disk I/O;
+                // drain a single oversized source chunk in bounded pieces.
+                const drainLargeSourceChunk = item.value.byteLength > 256 * 1024;
                 for (let offset = 0; offset < item.value.byteLength; offset += 65536) {
                   if (done) return;
-                  await capture.attempt.writeResponse(item.value.subarray(offset, offset + 65536));
+                  const pending = capture.attempt.writeResponse(
+                    item.value.subarray(offset, offset + 65536)
+                  );
+                  if (drainLargeSourceChunk) await pending;
+                  else void pending;
                 }
                 controller.enqueue(item.value);
               }
             } catch (error) {
               if (!done) {
                 done = true;
-                await capture.attempt.fail(
+                void capture.attempt.fail(
                   capture.signal?.aborted ? "abort" : "read_error",
                   capture.metadata
                 );
@@ -117,7 +124,7 @@ function captureResponse(response: Response, capture: OwnedCapture): Response {
             try {
               await ownedReader().cancel(reason);
             } finally {
-              await capture.attempt.fail(
+              void capture.attempt.fail(
                 capture.signal?.aborted ? "abort" : "cancel",
                 capture.metadata
               );
@@ -170,7 +177,7 @@ export async function captureAntigravityFetch(
     });
   } catch (error) {
     captureCurrentProviderAttempt(projectGoogleAttemptTransportError(url, error));
-    await attempt.fail(
+    void attempt.fail(
       init.signal?.aborted
         ? "abort"
         : isLogicalRetryBudgetError(error)

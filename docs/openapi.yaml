@@ -17964,8 +17964,16 @@ components:
       additionalProperties: true
     RuntimeMemoryPressureSnapshot:
       type: object
-      required: [state, sampleAgeMs, signals]
+      required: [heapPressureThresholdMb, psiSource, state, sampleAgeMs, signals]
       properties:
+        heapPressureThresholdMb:
+          type: number
+          minimum: 1
+          description: Configured immediate V8 heap shed threshold, in mebibytes.
+        psiSource:
+          type: string
+          const: host_proc_pressure_memory
+          description: PSI comes from host /proc/pressure/memory, not the container cgroup.
         state:
           type: object
           required: [severity, reason, elevatedStreak, recoveryStreak, lastTransitionAtMs, observedAtMs]

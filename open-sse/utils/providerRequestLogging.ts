@@ -1,4 +1,7 @@
-import type { DiagnosticOverflowTrace } from "@/lib/usage/diagnosticOverflow";
+import type {
+  DiagnosticOverflowAttempt,
+  DiagnosticOverflowTrace,
+} from "@/lib/usage/diagnosticOverflow";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import { updatePendingScope, type PendingRequestScope } from "@/lib/usage/pendingRequestScope";
@@ -14,6 +17,7 @@ export type Capture = {
   /** Skip observing serialized provider bodies when detailed request logging is disabled. */
   enabled?: boolean;
   diagnosticTrace?: DiagnosticOverflowTrace | null;
+  diagnosticProvider?: string;
   capture: (request: ProviderRequestPrepared) => Promise<void> | void;
   attempt?: (diagnostic: Record<string, unknown>) => void;
   body: (fallback: unknown) => unknown;
@@ -159,31 +163,157 @@ function installFetchCapture() {
   captureState.wrappedInnerFetch = globalThis.fetch.bind(globalThis);
   captureState.wrappedFetch = (async (input: FetchInput, init?: FetchInit) => {
     const activeCapture = captureState.context.getStore();
-    if (activeCapture) {
-      await captureFetchRequest(activeCapture, input, init);
+    const codexAttempt = activeCapture
+      ? await captureFetchRequest(activeCapture, input, init)
+      : null;
+    try {
+      const response = await captureState.wrappedInnerFetch!(input, init);
+      return codexAttempt && codexAttempt.acceptingResponse()
+        ? captureDiagnosticResponse(response, codexAttempt, init?.signal)
+        : response;
+    } catch (error) {
+      if (codexAttempt) {
+        const reason = init?.signal?.aborted
+          ? "abort"
+          : error instanceof Error && error.name === "TimeoutError"
+            ? "timeout"
+            : "upstream_error";
+        void codexAttempt.fail(reason);
+      }
+      throw error;
     }
-    return captureState.wrappedInnerFetch!(input, init);
   }) as typeof fetch;
   globalThis.fetch = captureState.wrappedFetch;
 }
 
-async function captureFetchRequest(requestCapture: Capture, input: FetchInput, init?: FetchInit) {
+async function captureFetchRequest(
+  requestCapture: Capture,
+  input: FetchInput,
+  init?: FetchInit
+): Promise<DiagnosticOverflowAttempt | null> {
   const method = getFetchMethod(input, init);
-  if (!BODY_METHODS.has(method)) return;
+  if (!BODY_METHODS.has(method)) return null;
 
   const bodyString = bodyToString(init?.body);
-  if (!bodyString) return;
+  if (!bodyString) return null;
 
   const body = parseBody(bodyString);
-  if (!looksLikeProviderRequestBody(body)) return;
+  if (!looksLikeProviderRequestBody(body)) return null;
 
-  await capturePreparedRequest(
-    requestCapture,
-    getFetchUrl(input),
-    getFetchHeaders(input, init),
-    body,
-    bodyString
-  );
+  const url = getFetchUrl(input);
+  const headers = getFetchHeaders(input, init);
+  await capturePreparedRequest(requestCapture, url, headers, body, bodyString);
+
+  const trace = requestCapture.diagnosticTrace;
+  if (!trace || !isCodexProvider(requestCapture.diagnosticProvider)) return null;
+  return trace.beginAttempt({
+    requestBody: bodyString,
+    method,
+    url,
+    headers,
+    transport: "http",
+  });
+}
+
+function isCodexProvider(provider: string | undefined): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === "codex" || normalized === "openai-codex";
+}
+
+function captureDiagnosticResponse(
+  response: Response,
+  attempt: DiagnosticOverflowAttempt,
+  signal?: AbortSignal | null
+): Response {
+  let wrapped: ReadableStream<Uint8Array> | null | undefined;
+  const metadata = { status: response.status, headers: response.headers };
+  const proxy = new Proxy(response, {
+    get(target, key) {
+      if (["text", "json", "arrayBuffer"].includes(String(key)))
+        return async () => {
+          const body = proxy.body;
+          const owned = new Response(body, { headers: target.headers });
+          if (key === "text") return owned.text();
+          if (key === "json") return owned.json();
+          return owned.arrayBuffer();
+        };
+      if (["clone", "blob", "formData"].includes(String(key)))
+        return (...args: unknown[]) => {
+          void attempt.fail("unsupported_reader", metadata);
+          const method = Reflect.get(target, key, target) as (...values: unknown[]) => unknown;
+          return method.apply(target, args);
+        };
+      if (key !== "body") {
+        const value = Reflect.get(target, key, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      if (wrapped !== undefined) return wrapped;
+      const original = Reflect.get(target, key, target) as ReadableStream<Uint8Array> | null;
+      if (!original) {
+        void attempt.finish(metadata);
+        wrapped = null;
+        return null;
+      }
+
+      let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+      const ownedReader = () => (reader ??= original.getReader());
+      let done = false;
+      wrapped = new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            try {
+              const item = await ownedReader().read();
+              if (done) return;
+              if (item.done) {
+                done = true;
+                void attempt.finish(metadata);
+                reader?.releaseLock();
+                controller.close();
+              } else {
+                const drainLargeSourceChunk = item.value.byteLength > 256 * 1024;
+                // Keep ordinary provider/client streaming independent of local disk
+                // I/O. The writer has a bounded queue and marks overflow incomplete. A
+                // single unusually large source chunk is drained in 64 KiB pieces
+                // so it cannot overflow the capture queue before its first write.
+                for (let offset = 0; offset < item.value.byteLength; offset += 65536) {
+                  const pending = attempt.writeResponse(
+                    item.value.subarray(offset, offset + 65536)
+                  );
+                  if (drainLargeSourceChunk) await pending;
+                  else void pending;
+                }
+                controller.enqueue(item.value);
+              }
+            } catch (error) {
+              if (!done) {
+                done = true;
+                void attempt.fail(signal?.aborted ? "abort" : "read_error", metadata);
+                try {
+                  reader?.releaseLock();
+                } catch {}
+                controller.error(error);
+              }
+            }
+          },
+          async cancel(reason) {
+            if (done) return;
+            done = true;
+            try {
+              await ownedReader().cancel(reason);
+            } finally {
+              void attempt.fail(signal?.aborted ? "abort" : "cancel", metadata);
+              try {
+                reader?.releaseLock();
+              } catch {}
+            }
+          },
+        },
+        { highWaterMark: 0 }
+      );
+      return wrapped;
+    },
+  });
+  return proxy;
 }
 
 function getFetchMethod(input: FetchInput, init?: FetchInit) {
@@ -242,13 +372,14 @@ function looksLikeProviderRequestBody(body: unknown) {
 export function createPreparedRequestLogger(
   reqLogger: RequestLoggerLike,
   scope: PendingRequestScope,
-  options: { enabled?: boolean } = {}
+  options: { enabled?: boolean; provider?: string } = {}
 ): Capture {
   let latest: ProviderRequestPrepared | null = null;
   const enabled = options.enabled !== false;
   return {
     enabled,
     diagnosticTrace: enabled ? reqLogger.getDiagnosticOverflowTrace?.() : null,
+    diagnosticProvider: options.provider,
     attempt(diagnostic) {
       if (!enabled) return;
       reqLogger.logProviderAttempt?.(diagnostic);

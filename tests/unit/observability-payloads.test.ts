@@ -11,6 +11,7 @@ import {
   projectWalMaintenanceSummary,
 } from "../../src/lib/monitoring/observability.ts";
 import type { ResourcePressureObservation } from "@omniroute/open-sse/utils/resourcePressure.ts";
+import { HEAP_PRESSURE_THRESHOLD_MB } from "@omniroute/open-sse/utils/heapPressure.ts";
 
 test("resource-pressure health projection exposes bounded memory signals and sample age", () => {
   const observation: ResourcePressureObservation = {
@@ -56,6 +57,8 @@ test("resource-pressure health projection exposes bounded memory signals and sam
       1_000
     ),
     {
+      heapPressureThresholdMb: HEAP_PRESSURE_THRESHOLD_MB,
+      psiSource: "host_proc_pressure_memory",
       state: observation.state,
       sampleAgeMs: 100,
       signals: observation.signals,
@@ -77,6 +80,8 @@ test("resource-pressure health projection makes an absent sample explicit", () =
   };
 
   assert.deepEqual(projectResourcePressureObservation(observation), {
+    heapPressureThresholdMb: HEAP_PRESSURE_THRESHOLD_MB,
+    psiSource: "host_proc_pressure_memory",
     state: observation.state,
     sampleAgeMs: null,
     signals: null,
@@ -220,6 +225,8 @@ test("buildHealthPayload reports Codex persisted parents through aggregate child
   assert.ok(payload.sessions);
   assert.deepEqual(payload.rateLimitStatus, {});
   assert.deepEqual(Object.keys(payload.system.resourcePressure ?? {}).sort(), [
+    "heapPressureThresholdMb",
+    "psiSource",
     "sampleAgeMs",
     "signals",
     "state",

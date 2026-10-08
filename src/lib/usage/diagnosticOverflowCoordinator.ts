@@ -12,6 +12,7 @@ import {
 import { privateDirectory, privateFile, safeReason } from "./diagnosticOverflowFilesystem";
 const TRACE_OVERHEAD = 256 * 1024;
 const FILE_OVERHEAD = 64 * 1024;
+const SQLITE_GROWTH_HEADROOM = 64 * 1024;
 const EMPTY_FILE: DiagnosticOverflowFile = {
   state: "capturing",
   complete: false,
@@ -52,8 +53,11 @@ export class DiagnosticOverflowCoordinator {
     }
     privateFile(filename);
     this.db = new DatabaseSync(filename);
-    // DELETE journal inherits SQLite DB permissions, and does not leave unprotected WAL companions.
-    this.db.exec("PRAGMA busy_timeout=1000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
+    // This index is best-effort diagnostic state, not application data. WAL with
+    // NORMAL avoids a durability fsync for every tiny capture reservation and
+    // file-state update; payload files themselves are still fsynced before they
+    // are advertised complete. The enclosing 0700 directory protects WAL/SHM.
+    this.db.exec("PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
     this.db.exec(
       "CREATE TABLE IF NOT EXISTS traces (id TEXT PRIMARY KEY, owner TEXT NOT NULL, lease_until INTEGER NOT NULL, reserved INTEGER NOT NULL, manifest TEXT NOT NULL); CREATE TABLE IF NOT EXISTS files (trace_id TEXT NOT NULL, attempt_id TEXT NOT NULL, kind TEXT NOT NULL, reserved INTEGER NOT NULL, metadata TEXT NOT NULL, PRIMARY KEY(trace_id,attempt_id,kind));"
     );
@@ -86,9 +90,11 @@ export class DiagnosticOverflowCoordinator {
       .get() as { value: number };
     const filename = path.join(this.root, "coordination.sqlite");
     let databaseBytes = fs.statSync(filename).size;
-    try {
-      databaseBytes += fs.statSync(`${filename}-journal`).size;
-    } catch {}
+    for (const suffix of ["-journal", "-wal", "-shm"]) {
+      try {
+        databaseBytes += fs.statSync(`${filename}${suffix}`).size;
+      } catch {}
+    }
     return Number(result.value) + databaseBytes;
   }
   assertOwner(id: string, owner: string): DiagnosticOverflowManifest {
@@ -162,7 +168,10 @@ export class DiagnosticOverflowCoordinator {
   ): number {
     return this.transaction(() => {
       this.assertOwner(id, owner);
-      const room = Math.max(0, this.maxTotalBytes - this.used());
+      // WAL/SHM pages can grow by a few pages as this transaction commits.
+      // Leave a fixed coordination margin so concurrent reservations cannot
+      // push the on-disk total beyond the configured budget after commit.
+      const room = Math.max(0, this.maxTotalBytes - this.used() - SQLITE_GROWTH_HEADROOM);
       const grant = Math.min(room, requested);
       this.db
         .prepare(

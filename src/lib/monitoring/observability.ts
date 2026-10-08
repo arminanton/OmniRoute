@@ -7,6 +7,7 @@ import {
   getResourcePressureObservation,
   type ResourcePressureObservation,
 } from "@omniroute/open-sse/utils/resourcePressure.ts";
+import { HEAP_PRESSURE_THRESHOLD_MB } from "@omniroute/open-sse/utils/heapPressure.ts";
 import type { PerConnectionAdmissionController } from "@/shared/middleware/chatBodyAdmission";
 import type { WalMaintenanceState } from "@/lib/db/walMaintenance";
 
@@ -104,6 +105,8 @@ export function projectResourcePressureObservation(
   if (!observation || typeof observation !== "object") return null;
   const signals = observation.signals;
   return {
+    heapPressureThresholdMb: HEAP_PRESSURE_THRESHOLD_MB,
+    psiSource: "host_proc_pressure_memory",
     state: {
       severity: observation.state.severity,
       reason: observation.state.reason,

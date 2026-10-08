@@ -234,7 +234,9 @@ function immediateHeapGuard(
   immediateMemory?: NodeJS.MemoryUsage | null
 ): ResourcePressureGuardResult | null {
   if (thresholdMb == null) return null;
-  const guard = checkHeapPressureGuard(heapUsedMb, thresholdMb);
+  // The detailed correlated resource-pressure warning below is the single log
+  // record for this rejection; avoid the generic duplicate from the heap helper.
+  const guard = checkHeapPressureGuard(heapUsedMb, thresholdMb, false);
   if (!guard) return null;
   const correlationId = sanitizeResourcePressureCorrelationId(context?.correlationId);
   let heapStatistics: ReturnType<typeof v8.getHeapStatistics> | null = null;

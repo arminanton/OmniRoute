@@ -87,6 +87,11 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
       assert.equal(memoryReads, 1, "one existing process-memory read supplies all event metrics");
       const diagnostic = warnings.find((warning) => warning.includes("[resourcePressure]"));
       assert.ok(diagnostic);
+      assert.equal(
+        warnings.length,
+        1,
+        "one immediate heap rejection should produce one correlated diagnostic, not a duplicate"
+      );
       assert.match(diagnostic, /immediateHeapUsedMb=201/);
       assert.match(diagnostic, /eventHeapTotalMb=250/);
       assert.match(diagnostic, /eventRssMb=321/);
@@ -97,6 +102,29 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
       assert.match(diagnostic, /sampleHeapUsedMb=null/);
     } finally {
       console.warn = originalWarn;
+      runtime.dispose();
+    }
+  });
+
+  it("clears the immediate absolute heap rejection after the live heap falls below threshold", () => {
+    let liveHeapMb = 201;
+    const runtime = createResourcePressureRuntime({
+      heapThresholdMb: 200,
+      immediateHeapUsedMb: () => liveHeapMb,
+      sample: async () => signals(1, 100),
+    });
+    try {
+      const first = runtime.check();
+      assert.ok(first);
+      assert.equal(first.status, 503);
+
+      liveHeapMb = 200;
+      assert.equal(
+        runtime.check(),
+        null,
+        "the absolute threshold is a live check, not a latched outage"
+      );
+    } finally {
       runtime.dispose();
     }
   });

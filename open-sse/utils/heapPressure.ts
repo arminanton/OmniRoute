@@ -61,12 +61,15 @@ export type HeapPressureGuardResult = {
  */
 export function checkHeapPressureGuard(
   heapUsedMb: number,
-  thresholdMb: number = HEAP_PRESSURE_THRESHOLD_MB
+  thresholdMb: number = HEAP_PRESSURE_THRESHOLD_MB,
+  emitWarning = true
 ): HeapPressureGuardResult | null {
   if (heapUsedMb <= thresholdMb) return null;
-  console.warn(
-    `[chatCore] heap pressure guard tripped: ${Math.round(heapUsedMb)}MB > ${thresholdMb}MB; returning 503`
-  );
+  if (emitWarning) {
+    console.warn(
+      `[chatCore] heap pressure guard tripped: ${Math.round(heapUsedMb)}MB > ${thresholdMb}MB; returning 503`
+    );
+  }
   return {
     success: false,
     status: 503,

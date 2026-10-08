@@ -119,6 +119,12 @@ async function close(traces: Set<DiagnosticOverflowTrace>, reason?: string) {
   await Promise.all([...traces].map((trace) => (reason ? trace.abort(reason) : trace.finish())));
 }
 
+function closeInBackground(traces: Set<DiagnosticOverflowTrace>, reason?: string): void {
+  void close(traces, reason).catch(() => {
+    // Diagnostic finalization is best-effort and cannot hold an API response open.
+  });
+}
+
 /** One Core provider leg owns its trace through final client body EOF/cancel/error. */
 export async function runWithDiagnosticCaptureLifecycle<T>(invoke: () => Promise<T>): Promise<T> {
   if (process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED !== "true") return invoke();
@@ -131,28 +137,22 @@ export async function runWithDiagnosticCaptureLifecycle<T>(invoke: () => Promise
         result && typeof result === "object" ? (result as Record<string, unknown>) : null;
       const response = result instanceof Response ? result : record?.response;
       if (!(response instanceof Response) || !response.body) {
-        await close(traces);
+        closeInBackground(traces);
         return result;
       }
       const reader = response.body.getReader();
-      let ended = false;
-      const finish = async (reason?: string) => {
-        if (ended) return;
-        ended = true;
-        await close(traces, reason);
-      };
       const body = new ReadableStream<Uint8Array>(
         {
           async pull(controller) {
             try {
               const item = await reader.read();
               if (item.done) {
-                await finish();
+                closeInBackground(traces);
                 reader.releaseLock();
                 controller.close();
               } else controller.enqueue(item.value);
             } catch (error) {
-              await finish("read_error");
+              closeInBackground(traces, "read_error");
               try {
                 reader.releaseLock();
               } catch {}
@@ -163,7 +163,7 @@ export async function runWithDiagnosticCaptureLifecycle<T>(invoke: () => Promise
             try {
               await reader.cancel(reason);
             } finally {
-              await finish("abort");
+              closeInBackground(traces, "abort");
               try {
                 reader.releaseLock();
               } catch {}
@@ -184,7 +184,7 @@ export async function runWithDiagnosticCaptureLifecycle<T>(invoke: () => Promise
       }
       return (result instanceof Response ? wrapped : { ...record, response: wrapped }) as T;
     } catch (error) {
-      await close(traces, "abort");
+      closeInBackground(traces, "abort");
       throw error;
     }
   });
