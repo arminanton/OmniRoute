@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 213
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 239
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 206 operations have success
+contract is still stronger on route coverage than schema completeness: 209 operations have success
 response content schemas and 149 declare operation-level security. Of 1,004 operations with a
-non-`204` success status, 798 still lack an explicit success-body schema; 11 operations have no
+non-`204` success status, 795 still lack an explicit success-body schema; 11 operations have no
 declared `2xx` status, and 14 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -66,10 +66,10 @@ analytics/history/budget, and call-log summary/detail endpoints. It also types t
 provider suggestions/plugin manifest, and quota preflight. The OpenAI single-model response now
 describes provider context/input/output limits and capabilities. The Gemini v1beta model-list and
 generation routes also describe native request/response formats. The provider-client response now
-masks primary and rotating API keys and omits OAuth tokens. A subsequent usage-contract pass added
-typed schemas and query parameters for provider quota/utilization, combo health/forecast, and
-per-key token-limit CRUD, including its Zod-backed mutation body and validation errors. The spec has
-213 component schemas. All 98 operations previously missing
+masks primary and rotating API keys and omits OAuth tokens. Subsequent usage-contract passes added
+typed schemas and query parameters for provider quota/utilization, combo health/forecast/autopilot/
+scoring/dashboard, and per-key token-limit CRUD, including its Zod-backed mutation body and
+validation errors. The spec has 239 component schemas. All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
 
@@ -325,6 +325,55 @@ model comes from compile-checked ownership and borrowing. The benchmark demonstr
 process, not a safe replacement for OmniRoute's provider, quota, security, cache, and tool-execution
 behavior.
 
+## Chat-completions transport and Bifrost comparison
+
+The runtime harness now also sends OpenAI Chat Completions streams with previous synthetic
+assistant tool_calls and tool-result messages. It uses 100 persistent HTTP/1.1 client sessions,
+five sequential requests per session, 100 SSE chunks at 10 ms, and a local mock provider. The largest
+request in the 256 KiB-per-user-turn scenario is 1,312,164 bytes. The transcript has tool-call
+history but no tool execution or model generation.
+
+The repeated three-trial matrix ran on the 8-logical-CPU ARM64 devvm. The Rust mock used CPUs 2–3,
+the gateway CPUs 0–1, and the Python load client CPUs 4–7. Node 25.8.1 and Rust 1.94.0 ran as host
+processes; Bun 1.4.0 ran in a 512 MiB container. Bifrost v1.3.9 ran from its pinned ARM64 image with
+a 2 GiB container memory limit, 128 client workers, 128 per-provider workers/queue slots, request
+logging disabled, and an OpenAI-compatible provider pointing at the same local mock. The Bifrost
+pool limits are explicit because its docs describe 300 client workers by default and 1,000 provider
+workers with a 5,000-item provider queue; larger pools increase baseline memory ([client settings](https://github.com/maximhq/bifrost/blob/dev/docs/deployment-guides/config-json/client.mdx), [provider concurrency settings](https://github.com/maximhq/bifrost/blob/dev/docs/quickstart/gateway/provider-configuration.mdx)).
+Bifrost startup also reported a catalog of 4,962 models across 126 providers; the Rust adapter builds
+no model catalog or provider-routing layer.
+
+Each cell below reports the median across three trials. Every run completed 500/500 requests with no
+HTTP failures. First-body and completion figures are the median of each trial's p95; RSS and CPU
+are gateway-process samples.
+
+| Runtime                | User text per turn | Max request | First-body p95 | Completion p95 |  Peak RSS |    CPU | Throughput |
+| ---------------------- | -----------------: | ----------: | -------------: | -------------: | --------: | -----: | ---------: |
+| Node 25.8.1            |             16 KiB |    83,364 B |       183.8 ms |       1,306 ms | 163.5 MiB | 2.56 s | 85.2 req/s |
+| Bun 1.4.0              |             16 KiB |    83,364 B |        82.2 ms |       1,201 ms |  48.7 MiB | 1.17 s | 87.3 req/s |
+| Rust/Axum/Reqwest 1.94 |             16 KiB |    83,364 B |        75.4 ms |       1,188 ms |  16.3 MiB | 0.56 s | 87.5 req/s |
+| Bifrost 1.3.9          |             16 KiB |    83,364 B |        42.0 ms |       1,153 ms | 177.5 MiB | 1.70 s | 87.1 req/s |
+| Node 25.8.1            |            256 KiB | 1,312,164 B |       203.9 ms |       1,328 ms | 317.0 MiB | 3.23 s | 82.7 req/s |
+| Bun 1.4.0              |            256 KiB | 1,312,164 B |        59.3 ms |       1,166 ms |  66.1 MiB | 1.41 s | 83.8 req/s |
+| Rust/Axum/Reqwest 1.94 |            256 KiB | 1,312,164 B |        73.3 ms |       1,185 ms |  60.3 MiB | 0.64 s | 83.0 req/s |
+| Bifrost 1.3.9          |            256 KiB | 1,312,164 B |       119.8 ms |       1,235 ms | 1,335 MiB | 3.85 s | 81.2 req/s |
+
+At the 1,312,164-byte request size, a separate one-trial Bifrost run capped at 1 GiB still completed
+500/500, but throughput fell to 16.1 req/s, first-body p95 rose to 20.17 s, and process RSS reached
+1,012.8 MiB. Podman reported 1.004 GB of the 1.074 GB container limit after the run; host swap use
+increased by roughly 0.5 GiB and returned after the container stopped. With a 2 GiB limit,
+Bifrost's first-body p95 was about 120 ms and its median process high-water RSS was 1.31 GiB.
+This strongly suggests request-size/memory pressure caused the low-cap latency collapse; it does not
+establish a general Bifrost limit or an upstream provider limit.
+
+For this mock workload, all four gateways had similar throughput at both request sizes. Rust used
+the least process CPU and memory in the transparent-proxy comparison; Bun's results were close and
+its p95 first-body latency was lowest among the Node/Bun/Rust trio at the large request size.
+Bifrost includes provider routing and request processing, while this Rust implementation only
+forwards bounded streams. This is therefore a measured capability-versus-transport comparison, not
+proof that the Rust prototype replaces Bifrost or OmniRoute. It does independently reject any
+universal speed or memory claim from these measurements alone.
+
 ## One thousand simultaneous transport sessions
 
 The same 1,000-session transport workload was repeated with the gateway pinned to four CPUs, the
@@ -439,7 +488,7 @@ log artifacts. The reported 70–100 sessions are not a full-agent acceptance re
 
 The `omni-admission-node` adapter also exercises OmniRoute's actual TypeScript
 `withChatAdmission` / `admitChatRequest` code, including the byte-budget queue and release at the end
-of an SSE stream. On 2026-10-08, the prior implementation failed a 100-session test with 1.31 MiB
+of an SSE stream. On 2026-10-08, the prior implementation failed a 100-session test with 1.31 MB (1.25 MiB)
 requests and one-second streams: 55/100 sessions finished and 417/500 requests succeeded. The
 normal-pressure byte wait stopped at about 250 ms even though the configured queue window was 30
 seconds, so requests shed with `inflight_bytes_budget` before stream completion freed capacity.
@@ -462,7 +511,7 @@ gateway peak RSS was 343.1 MiB, and gateway CPU was 3.0 seconds. Peak in-flight 
 run.
 
 The same production-admission adapter was rerun on Maria on 2026-10-08 using host Node 24.21.0,
-four shared CPUs, five turns per session, 1.31 MiB maximum request bodies, and 100 synthetic SSE
+four shared CPUs, five turns per session, 1.31 MB (1.25 MiB) maximum request bodies, and 100 synthetic SSE
 chunks per response. It passed 350/350 at 70 sessions and 500/500 in each of three 100-session
 trials. The 100-session table shows medians across those trials; the byte figures are peak values.
 
@@ -475,6 +524,14 @@ All four runs ended with zero active admission leases, queued bytes, waiting req
 byte charges. This confirms that the current admission wrapper drains on the Maria host at this
 synthetic request size and stream duration. The adapter does not run Next auth, call-log artifact
 writes, provider routing, real tools, or external quotas, and so is not full Prime-agent E2E.
+
+A separate chat-shaped admission check used 100 sessions, five rounds, 16 KiB of synthetic user text
+per turn, 100 SSE chunks at 10 ms, and the same CPU split on Maria. It completed 500/500 requests;
+first-body p95 was 971.5 ms, completion p95 was 2,066.8 ms, gateway RSS reached 329.7 MiB, and CPU
+time was 6.17 seconds. Peak in-flight and queued byte reservations were 73.2 MB and 20.4 MB; all
+leases and queues returned to zero. The adapter exercises the production admission middleware with
+Chat Completions-shaped request bodies, but its deterministic SSE response is not an upstream
+provider's Chat Completions stream.
 
 ## Antigravity CLI/IDE tool-roundtrip and capture check
 
@@ -519,7 +576,7 @@ RUN_ANTIGRAVITY_CAPTURE_BENCH=1 DISABLE_SQLITE_AUTO_BACKUP=true \
 ```
 
 A slower single trial used 300 chunks per response (3 seconds of streamed body time) at 100
-sessions, with the same 1.31 MiB maximum request and five turns per session. It completed 500/500
+sessions, with the same 1.31 MB (1.25 MiB) maximum request and five turns per session. It completed 500/500
 requests without errors in 22.4 seconds. First-body p95 was 3.07 seconds and completion p95 was
 6.22 seconds because waiters joined as stream leases became available. Peak in-flight charge was
 73.21 MB (69.82 MiB), queued reservations peaked at 19.92 MB (18.99 MiB), and all counters returned
@@ -538,7 +595,7 @@ The route-level harness now runs the synthetic client and mock provider in separ
 The test gateway streams the incoming HTTP body directly into `route.POST()` and counts bytes as
 they pass, so it does not parse and reserialize a second request copy. With
 `ANTIGRAVITY_CAPTURE_CONTEXT_BYTES=262144`, each request carries five user-context strings and
-is about 1.31 MiB. The four phases send 402 chat requests across 1, 30, 70, and 100 sessions;
+is about 1.31 MB (1.25 MiB). The four phases send 402 chat requests across 1, 30, 70, and 100 sessions;
 each session performs a tool-call and tool-result round trip.
 
 With ordinary detailed call-log artifacts only, all 402 summary rows were saved and every response
@@ -560,7 +617,7 @@ serialized Antigravity provider request into another retained JSON object. If th
 cannot be persisted, the logger falls back to ordinary detailed capture. Codex and other providers
 continue using their existing call-log pipeline.
 
-With private overflow enabled, the 100-session, 1.31 MiB run passed all 402 requests, retained
+With private overflow enabled, the 100-session, 1.31 MB (1.25 MiB) run passed all 402 requests, retained
 402/402 call-log artifacts, and finalized 402/402 private traces with complete client request,
 provider request, and provider response files. A sample trace contained 1,311,457 client bytes and
 a 326-byte provider response. The run produced no `resource_pressure` rejection; reported maximum RSS
@@ -576,7 +633,7 @@ request and completed in 82.42–83.24 seconds wall time, with peak RSS ranging 
 2,811,080 KiB and filesystem output ranging from 1,909,536 to 1,911,176 KiB before cleanup. The
 text-table scan optimizations did not materially change end-to-end wall time or RSS in this route
 test; that points to request parsing, private gzip capture, and disk writes dominating its cost. This
-corpus uses high-entropy random context, five 256 KiB user messages per session, and 1.31 MiB
+corpus uses high-entropy random context, five 256 KiB user messages per session, and 1.31 MB (1.25 MiB)
 requests; its timing should not be compared directly with the earlier 22–24 second low-context
 runs. It validates the 100-session route/capture path, not sustained production throughput or a real
 provider.
@@ -635,7 +692,7 @@ request and each provider request/response, including partial-state labels. This
 payloads reachable from the call-log row while keeping them out of the ordinary artifact.
 
 The private-capture test sets `OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES` to 1 MiB for this
-1.31 MiB request corpus. Its normal production default is 4 MiB, so an operator investigating
+1.31 MB (1.25 MiB) request corpus. Its normal production default is 4 MiB, so an operator investigating
 requests of this size must lower the threshold and enable private overflow. The diagnostic store
 defaults to a 2 GiB aggregate budget and seven-day retention; do not interpret the 10 MiB call-artifact
 limit as that private-store budget.
@@ -750,7 +807,7 @@ module setup separately as `setupMs`; process high-water RSS is also included in
 | Bun 1.4.0    |            1,311,987 |                    5/100 |               100/100 |           412 ms |            168.9 MiB |                6.67 MB |
 
 The chunk-text dictionary increased successful detail capture from 20 to 23 per 100 at 262 KiB,
-and from 4 to 5 per 100 at 1.31 MiB, compared with the same harness before text compaction. All
+and from 4 to 5 per 100 at 1.31 MB (1.25 MiB), compared with the same harness before text compaction. All
 summary rows remained. The other details were refused by the existing 128 MiB aggregate reservation
 guard, so this still does **not** validate full capture for 70–100 large concurrent requests. Node
 uses `better-sqlite3`; Bun uses `bun:sqlite`, so the writer timings compare both runtime and SQLite
@@ -793,7 +850,7 @@ execution, account scheduling, actual tool cycles, and real upstream streams; it
 
 The running candidate uses a mixed preview profile: `CHAT_LOG_CLIENT_TEXT_LIMIT=4194304` with
 `CHAT_LOG_TEXT_LIMIT` unset, which leaves stage previews at 64 KiB. The lifecycle harness compared a
-1.31 MiB synthetic request under that profile, the 64/64 KiB defaults, and aligned stage/client
+1.31 MB (1.25 MiB) synthetic request under that profile, the 64/64 KiB defaults, and aligned stage/client
 limits matching the body. The per-artifact cap and concurrency stayed the same:
 
 | Runtime      | Stage text limit | Client text limit | Detailed artifacts ready | Median save time | Median load peak RSS | Artifact bytes written |
@@ -810,7 +867,7 @@ while matching both stage and client limits to the full body reduced it further 
 more artifact per 100 saves. This matches the source path: when the client snapshot equals the raw
 request, `saveCallLog` can reuse one body rather than protecting both copies. It is an inference from
 the copy checks and synthetic benchmark, not a production-route result. The aligned profile also
-stores more prompt text in stage previews; the 1.31 MiB body is much smaller than an 872K-token
+stores more prompt text in stage previews; the 1.31 MB (1.25 MiB) body is much smaller than an 872K-token
 request. No default change is justified before testing provider transformations, privacy, and heap
 behavior with real-sized traffic.
 

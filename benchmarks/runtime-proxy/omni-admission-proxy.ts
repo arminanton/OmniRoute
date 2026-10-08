@@ -46,10 +46,7 @@ const peakAdmission = {
   waiting: admissionController.waitingCount,
 };
 const admissionSampler = setInterval(() => {
-  peakAdmission.activeHeavy = Math.max(
-    peakAdmission.activeHeavy,
-    admissionController.activeHeavy
-  );
+  peakAdmission.activeHeavy = Math.max(peakAdmission.activeHeavy, admissionController.activeHeavy);
   peakAdmission.activeHealthyHeadroom = Math.max(
     peakAdmission.activeHealthyHeadroom,
     admissionController.activeHealthyHeadroom
@@ -68,6 +65,7 @@ const admissionSampler = setInterval(() => {
 admissionSampler.unref();
 
 const port = Number(process.env.PORT || 3901);
+const apiPath = process.env.API_PATH || "/v1/responses";
 const chunks = Number(process.env.CHUNKS || 20);
 const delayMs = Number(process.env.CHUNK_DELAY_MS || 3);
 const chunkData = "x".repeat(Number(process.env.CHUNK_BYTES || 128));
@@ -140,7 +138,7 @@ const server = http.createServer(async (incoming, outgoing) => {
     );
     return;
   }
-  if (incoming.method !== "POST" || url.pathname !== "/v1/responses") {
+  if (incoming.method !== "POST" || url.pathname !== apiPath) {
     outgoing.writeHead(404);
     outgoing.end();
     return;

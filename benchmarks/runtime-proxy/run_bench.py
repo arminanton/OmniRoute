@@ -113,7 +113,14 @@ def pin_process_cpu_affinity(pid, cpu_list):
 
 
 def runtime_command(
-    runtime, bun_bin, rust_bin, gateway_port, upstream_url, max_inflight, gateway_cpus=None
+    runtime,
+    bun_bin,
+    rust_bin,
+    gateway_port,
+    upstream_url,
+    max_inflight,
+    gateway_cpus=None,
+    api_path="/v1/responses",
 ):
     if runtime == "node":
         return apply_cpu_affinity(["node", str(ROOT / "proxy-node.mjs")], gateway_cpus), None
@@ -171,6 +178,8 @@ def runtime_command(
             "MAX_INFLIGHT=%s" % max_inflight,
             "-e",
             "MAX_BODY_BYTES=%s" % (4 * 1024 * 1024),
+            "-e",
+            "API_PATH=%s" % api_path,
             image,
         ] + command, container_name
     raise ValueError(f"unknown runtime: {runtime}")
@@ -197,6 +206,13 @@ async def main():
     parser.add_argument("--rounds", type=int, default=1)
     parser.add_argument("--round-gap-ms", type=int, default=5)
     parser.add_argument("--context-bytes", type=int, default=0)
+    parser.add_argument(
+        "--api-path",
+        choices=["responses", "chat-completions"],
+        default="responses",
+        help="OpenAI API route to benchmark",
+    )
+    parser.add_argument("--model", default="mock/model")
     parser.add_argument("--chunks", type=int, default=50)
     parser.add_argument("--chunk-delay-ms", type=int, default=10)
     parser.add_argument("--chunk-bytes", type=int, default=128)
@@ -222,18 +238,21 @@ async def main():
     if any([args.gateway_cpus, args.upstream_cpus, args.load_cpus]) and not shutil.which("taskset"):
         parser.error("CPU affinity options require taskset on this Linux host")
 
+    api_path = "/v1/chat/completions" if args.api_path == "chat-completions" else "/v1/responses"
     env = os.environ.copy()
     upstream_env = dict(env, **{
         "PORT": str(args.upstream_port),
         "CHUNKS": str(args.chunks),
         "CHUNK_DELAY_MS": str(args.chunk_delay_ms),
         "CHUNK_BYTES": str(args.chunk_bytes),
+        "API_PATH": api_path,
     })
     gateway_env = dict(env, **{
         "PORT": str(args.gateway_port),
         "UPSTREAM_URL": f"http://127.0.0.1:{args.upstream_port}",
         "MAX_INFLIGHT": str(args.max_inflight),
         "MAX_BODY_BYTES": str(4 * 1024 * 1024),
+        "API_PATH": api_path,
     })
 
     upstream = None
@@ -267,6 +286,7 @@ async def main():
             gateway_env["UPSTREAM_URL"],
             args.max_inflight,
             args.gateway_cpus,
+            api_path,
         )
         gateway = subprocess.Popen(
             command,
@@ -321,6 +341,10 @@ async def main():
             str(args.round_gap_ms),
             "--context-bytes",
             str(args.context_bytes),
+            "--api-path",
+            args.api_path,
+            "--model",
+            args.model,
             "--label",
             args.runtime,
         ]
@@ -345,6 +369,8 @@ async def main():
         result["runtime"] = args.runtime
         result["roundsPerSession"] = args.rounds
         result["contextBytesPerTurn"] = args.context_bytes
+        result["apiPath"] = args.api_path
+        result["model"] = args.model
         result["chunksPerResponse"] = args.chunks
         result["chunkDelayMs"] = args.chunk_delay_ms
         result["chunkBytes"] = args.chunk_bytes

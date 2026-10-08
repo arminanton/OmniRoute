@@ -5,9 +5,59 @@ import argparse
 import asyncio
 from collections import Counter
 import json
+import os
 import time
 
 MAX_ERROR_BODY_PREVIEW_BYTES = 512
+
+
+def read_process_metrics(pid):
+    rss_bytes = None
+    cpu_ticks = None
+    try:
+        with open(f"/proc/{pid}/status", encoding="utf8") as status_file:
+            for line in status_file:
+                if line.startswith("VmRSS:"):
+                    rss_bytes = int(line.split()[1]) * 1024
+                    break
+        with open(f"/proc/{pid}/stat", encoding="utf8") as stat_file:
+            fields = stat_file.read().split()
+        cpu_ticks = int(fields[13]) + int(fields[14])
+    except (OSError, ValueError, IndexError):
+        pass
+    return rss_bytes, cpu_ticks
+
+
+async def sample_process_metrics(pid, stop):
+    peak_rss_bytes = 0
+    cpu_start = None
+    cpu_end = None
+    ticks_per_second = os.sysconf("SC_CLK_TCK")
+    while not stop.is_set():
+        rss_bytes, cpu_ticks = read_process_metrics(pid)
+        if rss_bytes is not None:
+            peak_rss_bytes = max(peak_rss_bytes, rss_bytes)
+        if cpu_ticks is not None:
+            cpu_start = cpu_ticks if cpu_start is None else cpu_start
+            cpu_end = cpu_ticks
+        await asyncio.sleep(0.025)
+
+    rss_bytes, cpu_ticks = read_process_metrics(pid)
+    if rss_bytes is not None:
+        peak_rss_bytes = max(peak_rss_bytes, rss_bytes)
+    if cpu_ticks is not None:
+        cpu_start = cpu_ticks if cpu_start is None else cpu_start
+        cpu_end = cpu_ticks
+    cpu_seconds = (
+        (cpu_end - cpu_start) / ticks_per_second
+        if cpu_start is not None and cpu_end is not None
+        else None
+    )
+    return {
+        "sampledProcessPid": pid,
+        "sampledProcessPeakRssMiB": round(peak_rss_bytes / (1024 * 1024), 3),
+        "sampledProcessCpuSeconds": None if cpu_seconds is None else round(cpu_seconds, 3),
+    }
 
 
 def percentile(values, percent):
@@ -89,10 +139,54 @@ async def read_body(reader, headers, started, capture_preview=False):
     return total, first_body_ms, preview.decode("utf8", errors="replace") or None
 
 
-def request_body(session_index, turn, context_bytes):
-    """Build a Responses-shaped transcript with prior synthetic tool turns."""
-    history = []
+def request_body(session_index, turn, context_bytes, api_path, model):
+    """Build a growing transcript with prior synthetic function-call round-trips."""
     context = "x" * context_bytes
+    if api_path == "chat-completions":
+        messages = []
+        for step in range(turn):
+            messages.append({
+                "role": "user",
+                "content": "agent %d step %d %s" % (session_index, step, context),
+            })
+            call_id = "tool-%d-%d" % (session_index, step)
+            messages.append({
+                "role": "assistant",
+                "tool_calls": [{
+                    "id": call_id,
+                    "type": "function",
+                    "function": {"name": "inspect_workspace", "arguments": "{}"},
+                }],
+            })
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "name": "inspect_workspace",
+                "content": "synthetic tool result for step %d" % step,
+            })
+        messages.append({
+            "role": "user",
+            "content": "agent %d step %d %s" % (session_index, turn, context),
+        })
+        return json.dumps(
+            {
+                "model": model,
+                "stream": True,
+                "max_tokens": 64,
+                "messages": messages,
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "inspect_workspace",
+                        "description": "Inspect the synthetic workspace.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }],
+            },
+            separators=(",", ":"),
+        ).encode("utf8")
+
+    history = []
     for step in range(turn):
         history.append(
             {
@@ -125,18 +219,18 @@ def request_body(session_index, turn, context_bytes):
         }
     )
     return json.dumps(
-        {"model": "mock/model", "stream": True, "input": history},
+        {"model": model, "stream": True, "input": history},
         separators=(",", ":"),
     ).encode("utf8")
 
 
-async def call_on_connection(reader, writer, request_id, body, timeout, cancel_after_ms):
+async def call_on_connection(reader, writer, request_id, body, timeout, cancel_after_ms, api_path):
     started = time.perf_counter()
     phase = "request_write"
     try:
         headers_started = time.perf_counter()
         request = (
-            "POST /v1/responses HTTP/1.1\r\n"
+            f"POST {api_path} HTTP/1.1\r\n"
             "Host: 127.0.0.1\r\n"
             "Content-Type: application/json\r\n"
             f"Content-Length: {len(body)}\r\n"
@@ -184,7 +278,17 @@ async def call_on_connection(reader, writer, request_id, body, timeout, cancel_a
         }
 
 
-async def run_session(port, session_index, rounds, timeout, cancel_after_ms, round_gap_ms, context_bytes):
+async def run_session(
+    port,
+    session_index,
+    rounds,
+    timeout,
+    cancel_after_ms,
+    round_gap_ms,
+    context_bytes,
+    api_path,
+    model,
+):
     results = []
     writer = None
     phase = "connect"
@@ -194,7 +298,7 @@ async def run_session(port, session_index, rounds, timeout, cancel_after_ms, rou
         )
         for turn in range(rounds):
             phase = "request_build"
-            body = request_body(session_index, turn, context_bytes)
+            body = request_body(session_index, turn, context_bytes, api_path, model)
             result = await call_on_connection(
                 reader,
                 writer,
@@ -202,6 +306,7 @@ async def run_session(port, session_index, rounds, timeout, cancel_after_ms, rou
                 body,
                 timeout,
                 cancel_after_ms,
+                "/v1/chat/completions" if api_path == "chat-completions" else "/v1/responses",
             )
             phase = result.get("phase", "response_body")
             result["turn"] = turn
@@ -243,6 +348,15 @@ async def main():
     parser.add_argument("--rounds", type=int, default=1)
     parser.add_argument("--round-gap-ms", type=int, default=5)
     parser.add_argument("--context-bytes", type=int, default=0)
+    parser.add_argument(
+        "--api-path", choices=["responses", "chat-completions"], default="responses"
+    )
+    parser.add_argument("--model", default="mock/model")
+    parser.add_argument(
+        "--sample-pid",
+        type=int,
+        help="Optional host PID whose RSS and CPU time should be sampled during the load",
+    )
     args = parser.parse_args()
     if args.rounds < 1:
         parser.error("--rounds must be at least 1")
@@ -252,6 +366,12 @@ async def main():
         parser.error("--cancel-after-ms is only valid with --rounds 1")
 
     started = time.perf_counter()
+    sampler_stop = asyncio.Event()
+    sampler_task = (
+        asyncio.ensure_future(sample_process_metrics(args.sample_pid, sampler_stop))
+        if args.sample_pid
+        else None
+    )
     sessions = await asyncio.gather(
         *[
             run_session(
@@ -262,10 +382,16 @@ async def main():
                 args.cancel_after_ms,
                 args.round_gap_ms,
                 args.context_bytes,
+                args.api_path,
+                args.model,
             )
             for index in range(args.clients)
         ]
     )
+    process_metrics = {}
+    if sampler_task is not None:
+        sampler_stop.set()
+        process_metrics = await sampler_task
     elapsed = time.perf_counter() - started
     results = [request for session in sessions for request in session["requests"]]
     accepted = [result for result in results if result.get("ok")]
@@ -275,11 +401,14 @@ async def main():
     print(
         json.dumps(
             {
+                **process_metrics,
                 "label": args.label,
                 "clients": args.clients,
                 "maxConcurrentSessions": args.clients,
                 "roundsPerSession": args.rounds,
                 "contextBytesPerTurn": args.context_bytes,
+                "apiPath": args.api_path,
+                "model": args.model,
                 "sessionsCompleted": successful_sessions,
                 "roundsCompleted": sum(session["roundsCompleted"] for session in sessions),
                 "requestsAttempted": len(results),

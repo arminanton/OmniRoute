@@ -56,6 +56,71 @@ turns, tool calls, and tool results. The per-turn context is repeated 64 KiB tex
 transport stress case, not a token-equivalent prompt or real provider/tool execution. Results
 separate completed sessions, completed rounds, and request throughput.
 
+The default endpoint is OpenAI Responses. To exercise OpenAI Chat Completions and tool-shaped
+message history, select chat mode and a provider/model name:
+
+```bash
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --api-path chat-completions --model openai/gpt-4o-mini --clients 100 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10
+```
+
+The chat payload contains previous assistant function calls and tool results followed by the next
+user turn. This models the wire shape of an agent tool cycle; it does not execute tools. The same
+loader can drive an externally started gateway such as Bifrost:
+
+```bash
+python3 benchmarks/runtime-proxy/load.py --port 8080 --api-path chat-completions --model openai/gpt-4o-mini --clients 100 --rounds 5 --context-bytes 262144
+```
+
+When using an external gateway, configure its provider to the same local mock upstream, use the
+same request/response protocol and stream shape, and collect process or container memory separately.
+Pass `--sample-pid <host-pid>` to include the external gateway process's peak RSS and CPU time in
+the loader output. This samples one host process only; it does not replace a container cgroup memory
+measurement.
+The Rust adapter is a transparent transport prototype; it does not yet implement Bifrost or OmniRoute
+provider routing, authentication, retries, quotas, or request/response translation.
+
+### Bifrost comparison
+
+The checked-in `bifrost-config.example.json` pins a local OpenAI-compatible mock provider, disables
+request logging, and sets the client/provider worker pools and queue to 128. The official Bifrost
+client documentation describes larger defaults (300 global workers and 1,000 provider workers) and
+warns that larger pools increase baseline memory ([client configuration](https://github.com/maximhq/bifrost/blob/dev/docs/deployment-guides/config-json/client.mdx),
+[provider concurrency](https://github.com/maximhq/bifrost/blob/dev/docs/quickstart/gateway/provider-configuration.mdx)).
+
+For the recorded probe, Bifrost ran from the pinned ARM64 image `maximhq/bifrost:v1.3.9-arm64`
+(digest `sha256:a5931720a1fb22bcbe73bc2eb59c50e6a9cbdf24754666305f3fd091b541933b`) with a two-GiB
+memory limit and loopback-only listener. A fresh instance has no dashboard password by default, so
+keep it bound to loopback ([gateway setup](https://github.com/maximhq/bifrost/blob/dev/docs/quickstart/gateway/setting-up.mdx)).
+The Rust mock and loader commands above can then be used unchanged against Bifrost's port; add
+`--sample-pid $(podman inspect --format '{{.State.Pid}}' <container-name>)` to sample the gateway
+process's RSS and CPU time.
+
+### Reproducible Bifrost run
+
+On a rootless-Podman ARM64 host, this keeps Bifrost and the mock on loopback and uses only a dummy provider key:
+
+```bash
+set -euo pipefail
+cargo build --release --manifest-path benchmarks/runtime-proxy/Cargo.toml
+API_PATH=/v1/chat/completions PORT=3900 CHUNKS=100 CHUNK_DELAY_MS=10 CHUNK_BYTES=64 taskset -c 2-3 benchmarks/runtime-proxy/target/release/omniroute-runtime-mock-upstream-bench &
+MOCK_PID=$!
+BIFROST_DATA=$(mktemp -d /tmp/omni-bifrost-bench-data.XXXXXX)
+cleanup() { podman stop --time=3 omni-bifrost-bench >/dev/null 2>&1 || true; podman rm -f omni-bifrost-bench >/dev/null 2>&1 || true; kill "$MOCK_PID" 2>/dev/null || true; rm -rf "$BIFROST_DATA"; }
+trap cleanup EXIT
+cp benchmarks/runtime-proxy/bifrost-config.example.json "$BIFROST_DATA/config.json"
+podman run -d --name omni-bifrost-bench --network=host --memory=2g --memory-swap=2g -v "$BIFROST_DATA":/app/data:Z,U -e APP_HOST=127.0.0.1 -e APP_PORT=8080 -e BIFROST_ENCRYPTION_KEY=benchmark-only-key -e BIFROST_OPENAI_KEY=benchmark-dummy docker.io/maximhq/bifrost:v1.3.9-arm64
+for attempt in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:8080/health >/dev/null; then break; fi
+  sleep 1
+done
+curl -fsS http://127.0.0.1:8080/health
+BIFROST_HOST_PID=$(podman inspect --format '{{.State.Pid}}' omni-bifrost-bench)
+taskset -a -pc 0-1 "$BIFROST_HOST_PID"
+taskset -c 4-7 python3 benchmarks/runtime-proxy/load.py --port 8080 --clients 100 --rounds 5 --round-gap-ms 5 --context-bytes 262144 --api-path chat-completions --model openai/gpt-4o-mini --sample-pid "$BIFROST_HOST_PID"
+```
+
+The fresh Bifrost UI/API has no password by default. Do not expose this test listener beyond loopback.
+
 For the comparable four-core, 1,000-simultaneous-session run, pin each component to a disjoint CPU
 set and use the Rust mock upstream for every adapter. The example matches the repeated run from
 2026-10-08: a 16 KiB synthetic context, 20 chunks spaced 25 ms apart, and a 1,024-request admission

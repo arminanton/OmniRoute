@@ -1,5 +1,6 @@
 const port = Number(Bun.env.PORT || 3901);
 const upstreamUrl = Bun.env.UPSTREAM_URL || "http://127.0.0.1:3900";
+const apiPath = Bun.env.API_PATH || "/v1/responses";
 const maxInflight = Number(Bun.env.MAX_INFLIGHT || 128);
 const maxBodyBytes = Number(Bun.env.MAX_BODY_BYTES || 4 * 1024 * 1024);
 let active = 0;
@@ -49,7 +50,7 @@ Bun.serve({
     if (url.pathname === "/health") {
       return Response.json({ ok: true, active, limit: maxInflight });
     }
-    if (request.method !== "POST" || url.pathname !== "/v1/responses") {
+    if (request.method !== "POST" || url.pathname !== apiPath) {
       return new Response(null, { status: 404 });
     }
     const contentLength = Number(request.headers.get("content-length") || 0);
@@ -98,10 +99,7 @@ Bun.serve({
       });
     } catch {
       release();
-      return Response.json(
-        { error: { message: "mock upstream unavailable" } },
-        { status: 502 }
-      );
+      return Response.json({ error: { message: "mock upstream unavailable" } }, { status: 502 });
     }
   },
 });

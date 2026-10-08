@@ -24,6 +24,7 @@ struct MockState {
     chunks: usize,
     chunk_delay: Duration,
     chunk_data: String,
+    chat_completions: bool,
     active: Arc<AtomicUsize>,
 }
 
@@ -49,6 +50,18 @@ async fn health(State(state): State<MockState>) -> Json<serde_json::Value> {
     }))
 }
 
+async fn models() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "object": "list",
+        "data": [{
+            "id": "gpt-4o-mini",
+            "object": "model",
+            "created": 0,
+            "owned_by": "benchmark"
+        }]
+    }))
+}
+
 async fn stream_response(State(state): State<MockState>, request: Request) -> Response {
     // Mirror the Node mock: consume uploads asynchronously while sending response headers
     // immediately, so large request bodies don't make the mock itself dominate first-byte time.
@@ -64,16 +77,42 @@ async fn stream_response(State(state): State<MockState>, request: Request) -> Re
     let active = state.active.clone();
     let chunk_data = state.chunk_data;
     let chunk_delay = state.chunk_delay;
+    let chat_completions = state.chat_completions;
     let stream = async_stream::stream! {
         let _active = ActiveStream::new(active);
         for index in 0..state.chunks {
-            let event = format!(
-                "data: {{\"type\":\"response.output_text.delta\",\"index\":{index},\"delta\":\"{chunk_data}\"}}\n\n"
-            );
+            let event = if chat_completions {
+                let payload = serde_json::json!({
+                    "id": "chatcmpl-bench",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": "gpt-4o-mini",
+                    "choices": [{
+                        "index": 0,
+                        "delta": { "content": chunk_data },
+                        "finish_reason": null
+                    }]
+                });
+                format!("data: {payload}\n\n")
+            } else {
+                format!(
+                    "data: {{\"type\":\"response.output_text.delta\",\"index\":{index},\"delta\":\"{chunk_data}\"}}\n\n"
+                )
+            };
             yield Ok::<Bytes, io::Error>(Bytes::from(event));
             if !chunk_delay.is_zero() {
                 sleep(chunk_delay).await;
             }
+        }
+        if chat_completions {
+            let payload = serde_json::json!({
+                "id": "chatcmpl-bench",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "gpt-4o-mini",
+                "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }]
+            });
+            yield Ok::<Bytes, io::Error>(Bytes::from(format!("data: {payload}\n\n")));
         }
         yield Ok::<Bytes, io::Error>(Bytes::from_static(b"data: [DONE]\n\n"));
     };
@@ -109,16 +148,19 @@ async fn main() -> io::Result<()> {
     let chunks = env_usize("CHUNKS", 50);
     let chunk_delay_ms = env_usize("CHUNK_DELAY_MS", 10);
     let chunk_bytes = env_usize("CHUNK_BYTES", 128);
+    let api_path = env::var("API_PATH").unwrap_or_else(|_| "/v1/responses".into());
     let state = MockState {
         chunks,
         chunk_delay: Duration::from_millis(chunk_delay_ms as u64),
         chunk_data: "x".repeat(chunk_bytes),
+        chat_completions: api_path == "/v1/chat/completions",
         active: Arc::new(AtomicUsize::new(0)),
     };
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/v1/responses", post(stream_response))
+        .route("/v1/models", get(models))
+        .route(&api_path, post(stream_response))
         .with_state(state);
     let listener = TcpListener::bind(("127.0.0.1", port)).await?;
     axum::serve(listener, app)

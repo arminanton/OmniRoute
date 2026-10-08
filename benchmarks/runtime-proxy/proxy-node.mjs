@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 
 const port = Number(process.env.PORT || 3901);
 const upstreamUrl = process.env.UPSTREAM_URL || "http://127.0.0.1:3900";
+const apiPath = process.env.API_PATH || "/v1/responses";
 const maxInflight = Number(process.env.MAX_INFLIGHT || 128);
 const maxBodyBytes = Number(process.env.MAX_BODY_BYTES || 4 * 1024 * 1024);
 const active = new Set();
@@ -13,7 +14,7 @@ const server = http.createServer(async (request, response) => {
     response.end(JSON.stringify({ ok: true, active: active.size, limit: maxInflight }));
     return;
   }
-  if (request.method !== "POST" || request.url !== "/v1/responses") {
+  if (request.method !== "POST" || request.url !== apiPath) {
     response.writeHead(404);
     response.end();
     return;
@@ -68,7 +69,9 @@ const server = http.createServer(async (request, response) => {
       response.end();
       return;
     }
-    Readable.fromWeb(upstream.body).on("error", () => response.destroy()).pipe(response);
+    Readable.fromWeb(upstream.body)
+      .on("error", () => response.destroy())
+      .pipe(response);
   } catch {
     if (!response.headersSent) {
       response.writeHead(502, { "content-type": "application/json" });

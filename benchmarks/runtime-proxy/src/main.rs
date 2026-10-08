@@ -193,6 +193,7 @@ async fn main() -> io::Result<()> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(4 * 1024 * 1024);
+    let api_path = env::var("API_PATH").unwrap_or_else(|_| "/v1/responses".into());
     let upstream = env::var("UPSTREAM_URL").unwrap_or_else(|_| "http://127.0.0.1:3900".into());
     let client = Client::builder()
         .pool_max_idle_per_host(max_inflight)
@@ -207,7 +208,7 @@ async fn main() -> io::Result<()> {
     };
     let app = Router::new()
         .route("/health", get(health))
-        .route("/v1/responses", post(proxy))
+        .route(&api_path, post(proxy))
         .with_state(state);
     let listener = TcpListener::bind(("127.0.0.1", port)).await?;
     axum::serve(listener, app)

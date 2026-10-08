@@ -15569,28 +15569,206 @@ paths:
       operationId: getApiUsageComboHealthAutopilot
       tags:
         - Usage
-      summary: "GET usage › combo health autopilot"
+      summary: Get combo health autopilot report
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: range
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [1h, 24h, 7d, 30d]
+            default: 24h
+        - name: horizon
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: 30d
+        - name: comboId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: includeHealthy
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["true", "false"]
+            default: "false"
+        - name: includeActions
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["true", "false"]
+            default: "true"
       responses:
         "200":
-          description: OK
+          description: Combo health, issues, suggestions, and evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComboAutopilotReport"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: The requested combo was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Combo health autopilot calculation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/combo-health-dashboard:
     get:
       operationId: getApiUsageComboHealthDashboard
       tags:
         - Usage
-      summary: "GET usage › combo health dashboard"
+      summary: Get combined combo health dashboard
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: range
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [1h, 24h, 7d, 30d]
+            default: 24h
+        - name: horizon
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: 30d
+        - name: comboId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: taskType
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
       responses:
         "200":
-          description: OK
+          description: Health, forecast, autopilot, and scoring, with partial-result errors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComboHealthDashboardResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: The requested combo was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Combo health dashboard calculation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/usage/combo-scoring-inspector:
     get:
       operationId: getApiUsageComboScoringInspector
       tags:
         - Usage
-      summary: "GET usage › combo scoring inspector"
+      summary: Inspect combo scoring factors and targets
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: range
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [1h, 24h, 7d, 30d]
+            default: 24h
+        - name: horizon
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: 30d
+        - name: comboId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: taskType
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 64
       responses:
         "200":
-          description: OK
+          description: Read-only recomputed combo scores and resilience signals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComboScoringInspectorResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: The requested combo was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Combo scoring inspection failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/combo-trace/{id}:
     parameters:
       - name: id
@@ -23337,6 +23515,428 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ComboForecastMetrics"
+      additionalProperties: false
+
+    ComboAutopilotSeverity:
+      type: string
+      enum: [info, warning, critical]
+
+    ComboAutopilotStatus:
+      type: string
+      enum: [healthy, warning, critical]
+
+    ComboAutopilotState:
+      type: string
+      enum: [healthy, degraded, down]
+
+    ComboAutopilotIssueKind:
+      type: string
+      enum:
+        - combo_no_targets
+        - combo_no_recent_traffic
+        - combo_low_success_rate
+        - target_low_success_rate
+        - target_last_error
+        - target_quota_exhausted
+        - target_low_quota
+        - forecast_quota_risk
+        - usage_skew_high
+        - provider_health_issue
+        - data_quality_gap
+
+    ComboAutopilotActionType:
+      type: string
+      enum:
+        - open_combo_editor
+        - run_combo_test
+        - open_provider_health_autopilot
+        - review_quota_limits
+        - review_pricing
+
+    ComboAutopilotTargetRef:
+      type: object
+      required: [comboId, comboName]
+      properties:
+        comboId: { type: string }
+        comboName: { type: string }
+        provider: { type: string }
+        connectionId: { type: [string, "null"] }
+        executionKey: { type: string }
+        model: { type: string }
+      additionalProperties: false
+
+    ComboAutopilotAction:
+      type: object
+      required: [type, mode, label, target]
+      properties:
+        type:
+          $ref: "#/components/schemas/ComboAutopilotActionType"
+        mode: { type: string, const: manual }
+        label: { type: string }
+        href: { type: string }
+        target:
+          $ref: "#/components/schemas/ComboAutopilotTargetRef"
+      additionalProperties: false
+
+    ComboAutopilotIssue:
+      type: object
+      required: [id, severity, kind, title, recommendation, evidence, target, actions]
+      properties:
+        id: { type: string }
+        severity:
+          $ref: "#/components/schemas/ComboAutopilotSeverity"
+        kind:
+          $ref: "#/components/schemas/ComboAutopilotIssueKind"
+        title: { type: string }
+        recommendation: { type: string }
+        evidence:
+          type: object
+          additionalProperties: true
+        target:
+          $ref: "#/components/schemas/ComboAutopilotTargetRef"
+        actions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboAutopilotAction"
+      additionalProperties: false
+
+    ComboAutopilotCombo:
+      type: object
+      required: [comboId, comboName, strategy, state, score, signals, issues]
+      properties:
+        comboId: { type: string }
+        comboName: { type: string }
+        strategy: { type: string }
+        state:
+          $ref: "#/components/schemas/ComboAutopilotState"
+        score: { type: number }
+        signals:
+          type: object
+          required: [totalRequests, successRate, avgLatencyMs, worstQuotaRemainingPct, forecastRisk, forecastConfidence, usageSkew, targetCount, providerIssueCount, dataQualityNotes]
+          properties:
+            totalRequests: { type: number, minimum: 0 }
+            successRate: { type: number, minimum: 0, maximum: 1 }
+            avgLatencyMs: { type: number, minimum: 0 }
+            worstQuotaRemainingPct: { type: [number, "null"], minimum: 0, maximum: 100 }
+            forecastRisk:
+              type: string
+              enum: [low, medium, high, critical, unknown]
+            forecastConfidence:
+              type: string
+              enum: [high, medium, low, no_data]
+            usageSkew: { type: number, minimum: 0, maximum: 1 }
+            targetCount: { type: integer, minimum: 0 }
+            providerIssueCount: { type: integer, minimum: 0 }
+            dataQualityNotes:
+              type: array
+              items: { type: string }
+          additionalProperties: false
+        issues:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboAutopilotIssue"
+      additionalProperties: false
+
+    ComboAutopilotReport:
+      type: object
+      required: [status, checkedAt, timeRange, horizon, summary, combos]
+      properties:
+        status:
+          $ref: "#/components/schemas/ComboAutopilotStatus"
+        checkedAt: { type: string, format: date-time }
+        timeRange: { type: string, enum: [1h, 24h, 7d, 30d] }
+        horizon: { type: string, enum: [24h, 7d, 30d] }
+        summary:
+          type: object
+          required: [comboCount, healthyCount, degradedCount, downCount, issueCount, suggestionCount]
+          properties:
+            comboCount: { type: integer, minimum: 0 }
+            healthyCount: { type: integer, minimum: 0 }
+            degradedCount: { type: integer, minimum: 0 }
+            downCount: { type: integer, minimum: 0 }
+            issueCount: { type: integer, minimum: 0 }
+            suggestionCount: { type: integer, minimum: 0 }
+            actionableCount:
+              type: integer
+              minimum: 0
+              deprecated: true
+              description: Backward-compatible alias for suggestionCount.
+          additionalProperties: false
+        combos:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboAutopilotCombo"
+      additionalProperties: false
+
+    ComboScoringInspectorFactorKey:
+      type: string
+      enum:
+        - quota
+        - health
+        - costInv
+        - latencyInv
+        - taskFit
+        - stability
+        - tierPriority
+        - tierAffinity
+        - specificityMatch
+        - contextAffinity
+        - cacheAffinity
+        - sessionAvailability
+        - resetWindowAffinity
+        - connectionDensity
+        - quality
+        - reliability
+
+    ComboScoringInspectorSource:
+      type: string
+      enum: [combo_health, combo_forecast, combo_autopilot, runtime, default]
+
+    ComboScoringInspectorWeightSource:
+      type: string
+      enum: [default, explicit, mode_pack]
+
+    ResilienceExplainScope:
+      type: string
+      enum: [provider, connection, model]
+
+    ResilienceExplainState:
+      type: string
+      enum: [eligible, degraded, skipped, unknown]
+
+    ResilienceSkipCode:
+      type: string
+      enum:
+        - provider_circuit_open
+        - provider_circuit_half_open
+        - connection_not_allowed
+        - connection_cooldown
+        - connection_terminal_status
+        - connection_unavailable
+        - codex_scope_cooldown
+        - model_lockout
+        - model_excluded
+        - no_active_connection
+        - inspector_error
+
+    ResilienceSkipReason:
+      type: object
+      required: [scope, code, message]
+      properties:
+        scope:
+          $ref: "#/components/schemas/ResilienceExplainScope"
+        code:
+          $ref: "#/components/schemas/ResilienceSkipCode"
+        message: { type: string }
+        retryAfterMs: { type: [number, "null"], minimum: 0 }
+        connectionId: { type: [string, "null"] }
+        evidence:
+          type: object
+          additionalProperties: true
+      additionalProperties: false
+
+    ResilienceProviderExplanation:
+      type: object
+      required: [provider, state, circuitBreakerState, retryAfterMs, failureCount, lastFailureTime]
+      properties:
+        provider: { type: string }
+        state:
+          $ref: "#/components/schemas/ResilienceExplainState"
+        circuitBreakerState: { type: string, enum: [CLOSED, OPEN, HALF_OPEN, UNKNOWN] }
+        retryAfterMs: { type: [number, "null"], minimum: 0 }
+        failureCount: { type: [integer, "null"], minimum: 0 }
+        lastFailureTime: { type: [number, "null"] }
+      additionalProperties: false
+
+    ResilienceAccountExplanation:
+      type: object
+      required: [connectionId, state, reasonCode, retryAfterMs, testStatus, lastErrorType, errorCode, backoffLevel]
+      properties:
+        connectionId: { type: string }
+        state:
+          $ref: "#/components/schemas/ResilienceExplainState"
+        reasonCode:
+          oneOf:
+            - $ref: "#/components/schemas/ResilienceSkipCode"
+            - type: "null"
+        retryAfterMs: { type: [number, "null"], minimum: 0 }
+        testStatus: { type: [string, "null"] }
+        lastErrorType: { type: [string, "null"] }
+        errorCode: { type: [string, number, "null"] }
+        backoffLevel: { type: [integer, "null"], minimum: 0 }
+      additionalProperties: false
+
+    ResilienceModelExplanation:
+      type: object
+      required: [provider, model, connectionId, state, reason, retryAfterMs, failureCount, lockedAt]
+      properties:
+        provider: { type: string }
+        model: { type: string }
+        connectionId: { type: string }
+        state:
+          $ref: "#/components/schemas/ResilienceExplainState"
+        reason: { type: [string, "null"] }
+        retryAfterMs: { type: [number, "null"], minimum: 0 }
+        failureCount: { type: [integer, "null"], minimum: 0 }
+        lockedAt: { type: [string, "null"] }
+      additionalProperties: false
+
+    ResilienceExplanation:
+      type: object
+      required: [provider, accounts, models, skipReasons, summary, targetState]
+      properties:
+        provider:
+          $ref: "#/components/schemas/ResilienceProviderExplanation"
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResilienceAccountExplanation"
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResilienceModelExplanation"
+        skipReasons:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResilienceSkipReason"
+        summary:
+          type: array
+          items: { type: string }
+        targetState:
+          $ref: "#/components/schemas/ResilienceExplainState"
+      additionalProperties: false
+
+    ComboScoringInspectorFactor:
+      type: object
+      required: [key, value, weight, contribution, source]
+      properties:
+        key:
+          $ref: "#/components/schemas/ComboScoringInspectorFactorKey"
+        value: { type: number }
+        weight: { type: number }
+        contribution: { type: number }
+        source:
+          $ref: "#/components/schemas/ComboScoringInspectorSource"
+        note: { type: string }
+      additionalProperties: false
+
+    ComboScoringInspectorTarget:
+      type: object
+      required: [executionKey, stepId, provider, model, connectionId, label, rank, score, factors, signals]
+      properties:
+        executionKey: { type: string }
+        stepId: { type: [string, "null"] }
+        provider: { type: string }
+        model: { type: string }
+        connectionId: { type: [string, "null"] }
+        label: { type: [string, "null"] }
+        rank: { type: integer, minimum: 0 }
+        score: { type: number }
+        factors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboScoringInspectorFactor"
+        signals:
+          type: object
+          required: [quotaRemainingPct, projectedQuotaRemainingPct, successRate, avgLatencyMs, forecastRisk, autopilotIssueCount, resilience]
+          properties:
+            quotaRemainingPct: { type: [number, "null"] }
+            projectedQuotaRemainingPct: { type: [number, "null"] }
+            successRate: { type: [number, "null"] }
+            avgLatencyMs: { type: [number, "null"] }
+            forecastRisk:
+              oneOf:
+                - type: string
+                  enum: [low, medium, high, critical, unknown]
+                - type: "null"
+            autopilotIssueCount: { type: integer, minimum: 0 }
+            resilience:
+              $ref: "#/components/schemas/ResilienceExplanation"
+          additionalProperties: false
+      additionalProperties: false
+
+    ComboScoringInspectorCombo:
+      type: object
+      required: [comboId, comboName, strategy, taskType, weights, weightSource, modePack, selectedExecutionKey, targets, warnings]
+      properties:
+        comboId: { type: string }
+        comboName: { type: string }
+        strategy: { type: string }
+        taskType: { type: string }
+        weights:
+          type: object
+          required:
+            - quota
+            - health
+            - costInv
+            - latencyInv
+            - taskFit
+            - stability
+            - tierPriority
+            - tierAffinity
+            - specificityMatch
+            - contextAffinity
+            - cacheAffinity
+            - sessionAvailability
+            - resetWindowAffinity
+            - connectionDensity
+            - quality
+            - reliability
+          propertyNames:
+            $ref: "#/components/schemas/ComboScoringInspectorFactorKey"
+          additionalProperties: { type: number }
+        weightSource:
+          $ref: "#/components/schemas/ComboScoringInspectorWeightSource"
+        modePack: { type: [string, "null"] }
+        selectedExecutionKey: { type: [string, "null"] }
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboScoringInspectorTarget"
+        warnings:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    ComboScoringInspectorResponse:
+      type: object
+      required: [asOf, timeRange, horizon, method, combos]
+      properties:
+        asOf: { type: string, format: date-time }
+        timeRange: { type: string, enum: [1h, 24h, 7d, 30d] }
+        horizon: { type: string, enum: [24h, 7d, 30d] }
+        method: { type: string, const: read_only_recompute }
+        combos:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboScoringInspectorCombo"
+      additionalProperties: false
+
+    ComboHealthDashboardResponse:
+      type: object
+      required: [health, forecast, autopilot, scoring, errors]
+      properties:
+        health:
+          $ref: "#/components/schemas/ComboHealthResponse"
+        forecast:
+          oneOf:
+            - $ref: "#/components/schemas/ComboForecastResponse"
+            - type: "null"
+        autopilot:
+          oneOf:
+            - $ref: "#/components/schemas/ComboAutopilotReport"
+            - type: "null"
+        scoring:
+          oneOf:
+            - $ref: "#/components/schemas/ComboScoringInspectorResponse"
+            - type: "null"
+        errors:
+          type: object
+          properties:
+            forecast: { type: string }
+            autopilot: { type: string }
+            scoring: { type: string }
+          additionalProperties: false
       additionalProperties: false
 
     TokenLimitScopeType:

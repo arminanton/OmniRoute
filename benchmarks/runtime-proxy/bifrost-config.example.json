@@ -1,0 +1,35 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "encryption_key": "env.BIFROST_ENCRYPTION_KEY",
+  "client": {
+    "initial_pool_size": 128,
+    "drop_excess_requests": false,
+    "enable_logging": false,
+    "max_request_body_size_mb": 4,
+    "enforce_auth_on_inference": false
+  },
+  "providers": {
+    "openai": {
+      "keys": [
+        {
+          "name": "local-benchmark",
+          "value": "env.BIFROST_OPENAI_KEY",
+          "models": ["gpt-4o-mini"],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "http://127.0.0.1:3900",
+        "allow_private_network": true,
+        "default_request_timeout_in_seconds": 30
+      },
+      "concurrency_and_buffer_size": {
+        "concurrency": 128,
+        "buffer_size": 128
+      }
+    }
+  },
+  "config_store": {
+    "enabled": false
+  }
+}

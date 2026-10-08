@@ -14,7 +14,7 @@ const spec = yaml.load(fs.readFileSync(path.join(process.cwd(), "docs/openapi.ya
           name: string;
           in: string;
           required?: boolean;
-          schema?: { enum?: unknown[]; default?: unknown };
+          schema?: { enum?: unknown[]; default?: unknown; maxLength?: number };
         }>;
         requestBody?: {
           content?: Record<string, { schema?: { $ref?: string } }>;
@@ -113,4 +113,35 @@ test("token-limit CRUD documents the validator body and all response envelopes",
     "^\\d+$"
   );
   assert.equal(spec.components.schemas.TokenLimit.properties?.createdAt?.format, undefined);
+});
+
+test("combo autopilot, dashboard, and scoring contracts expose their typed results", () => {
+  const autopilot = spec.paths["/api/usage/combo-health-autopilot"]?.get;
+  assert.equal(
+    autopilot?.parameters?.find((parameter) => parameter.name === "range")?.schema?.default,
+    "24h"
+  );
+  assert.equal(
+    autopilot?.parameters?.find((parameter) => parameter.name === "includeHealthy")?.schema
+      ?.default,
+    "false"
+  );
+  assert.equal(
+    responseSchema("/api/usage/combo-health-autopilot", "get")?.$ref,
+    "#/components/schemas/ComboAutopilotReport"
+  );
+
+  const dashboard = spec.paths["/api/usage/combo-health-dashboard"]?.get;
+  assert.equal(
+    dashboard?.parameters?.find((parameter) => parameter.name === "taskType")?.schema?.maxLength,
+    64
+  );
+  assert.equal(
+    responseSchema("/api/usage/combo-health-dashboard", "get")?.$ref,
+    "#/components/schemas/ComboHealthDashboardResponse"
+  );
+  assert.equal(
+    responseSchema("/api/usage/combo-scoring-inspector", "get")?.$ref,
+    "#/components/schemas/ComboScoringInspectorResponse"
+  );
 });
