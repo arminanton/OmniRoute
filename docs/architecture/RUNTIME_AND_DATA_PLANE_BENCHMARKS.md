@@ -115,7 +115,10 @@ capture; the exact worker failure reason and whether it explains every missing a
 to be confirmed. The repository's Node and Bun Dockerfiles now fail their image build if the
 colocated worker is absent, and the standalone-bundling unit test covers it. The separate
 `deploy-swap/runtime-profile-v1/Candidate.Containerfile` that produced this running image is outside
-the blue checkout and has not been changed. The live container and its data were observed read-only.
+the blue checkout and has not been changed. The feature branch now rate-limits payload-free
+artifact-preparation refusal diagnostics with reason and reserved-byte estimates, and reports
+worker spawn/write failures by a sanitized code. The live container and its data were observed
+read-only.
 
 The full-capture path does bounded synchronous work before handing an artifact to a worker. The
 writer's weighted queue is capped at 128 MiB and serializes one artifact at a time; `reserveCallLogArtifactPreparation`
