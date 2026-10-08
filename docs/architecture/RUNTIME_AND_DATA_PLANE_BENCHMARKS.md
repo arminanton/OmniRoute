@@ -26,8 +26,8 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 182 operations have
-success response content schemas and 142 declare operation-level security. Another 833 operations
+contract is still stronger on route coverage than schema completeness: 183 operations have
+success response content schemas and 142 declare operation-level security. Another 832 operations
 still lack an explicit success-body schema after excluding intentional `204` responses; 14 of those
 have no declared `2xx` status and need route-by-route status review. The OpenAI chat, Anthropic
 Messages, OpenAI Responses, token-count, embedding, image-generation, audio, moderation, rerank,
@@ -45,11 +45,11 @@ routes and headers against the implementation. It adds typed management response
 picker/alias/catalog APIs, provider connection list/create/detail/update/delete, cursor-agent
 availability, provider quota-window and web-session metadata, provider batch-test request/results,
 provider credential-validation inputs/results, connection-test results, connection model discovery,
-and the provider health matrix; API key list/create, combo list, usage analytics/history/budget, and call-log
-summary/detail endpoints. It also types the v1 root catalog,
+and the provider health matrix/expiration summary; API key list/create, combo list, usage
+analytics/history/budget, and call-log summary/detail endpoints. It also types the v1 root catalog,
 provider suggestions/plugin manifest, and quota preflight. The OpenAI single-model response now
 describes provider context/input/output limits and capabilities. The Gemini v1beta model-list and
-generation routes also describe native request/response formats. The spec has 142 component
+generation routes also describe native request/response formats. The spec has 145 component
 schemas. All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -456,6 +456,6 @@ dependency boundary or a builder with a larger, explicitly budgeted heap.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 182 operations with success-response content; the
+- Continue the OpenAPI handler audit beyond the 183 operations with success-response content; the
   path/method/security-tier inventory is complete, but the remaining response schemas and auth
   behavior have not all been source-verified.

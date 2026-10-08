@@ -13048,10 +13048,20 @@ paths:
       operationId: getApiProvidersExpiration
       tags:
         - Providers
-      summary: "GET providers › expiration"
+      summary: List provider credential expiration status
       responses:
         "200":
-          description: OK
+          description: Expiration summary and tracked provider credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderExpirationResponse"
+        "500":
+          description: Failed to fetch expiration metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/providers/free-onboarding:
     get:
       operationId: getApiProvidersFreeOnboarding
@@ -20665,6 +20675,57 @@ components:
               items:
                 $ref: "#/components/schemas/ProviderHealthMatrixWebSessionPool"
           additionalProperties: false
+      additionalProperties: false
+
+    ProviderExpirationRecord:
+      type: object
+      required:
+        - connectionId
+        - provider
+        - connectionName
+        - expiresAt
+        - expiryType
+        - alertDays
+        - lastChecked
+        - status
+        - note
+      properties:
+        connectionId: { type: string }
+        provider: { type: string }
+        connectionName: { type: string }
+        expiresAt: { type: [string, "null"] }
+        expiryType: { type: string, enum: [oauth_token, subscription, api_credits, free_tier_reset] }
+        alertDays: { type: number }
+        lastChecked: { type: string, format: date-time }
+        status: { type: string, enum: [active, expiring_soon, expired, unknown] }
+        note: { type: [string, "null"] }
+      additionalProperties: false
+
+    ProviderExpirationSummary:
+      type: object
+      required: [total, active, expiringSoon, expired, unknown, nextExpiration]
+      properties:
+        total: { type: integer, minimum: 0 }
+        active: { type: integer, minimum: 0 }
+        expiringSoon: { type: integer, minimum: 0 }
+        expired: { type: integer, minimum: 0 }
+        unknown: { type: integer, minimum: 0 }
+        nextExpiration:
+          oneOf:
+            - $ref: "#/components/schemas/ProviderExpirationRecord"
+            - { type: "null" }
+      additionalProperties: false
+
+    ProviderExpirationResponse:
+      type: object
+      required: [summary, list]
+      properties:
+        summary:
+          $ref: "#/components/schemas/ProviderExpirationSummary"
+        list:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderExpirationRecord"
       additionalProperties: false
 
     ApiKey:
