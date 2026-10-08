@@ -107,18 +107,18 @@ async def main():
     args = parser.parse_args()
 
     env = os.environ.copy()
-    upstream_env = env | {
+    upstream_env = dict(env, **{
         "PORT": str(args.upstream_port),
         "CHUNKS": str(args.chunks),
         "CHUNK_DELAY_MS": str(args.chunk_delay_ms),
         "CHUNK_BYTES": str(args.chunk_bytes),
-    }
-    gateway_env = env | {
+    })
+    gateway_env = dict(env, **{
         "PORT": str(args.gateway_port),
         "UPSTREAM_URL": f"http://127.0.0.1:{args.upstream_port}",
         "MAX_INFLIGHT": str(args.max_inflight),
         "MAX_BODY_BYTES": str(4 * 1024 * 1024),
-    }
+    })
 
     upstream = subprocess.Popen(
         ["node", str(ROOT / "mock-upstream.mjs")],
@@ -126,7 +126,7 @@ async def main():
         env=upstream_env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
-        text=True,
+        universal_newlines=True,
     )
     gateway = None
     try:
@@ -137,12 +137,12 @@ async def main():
             env=gateway_env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            text=True,
+            universal_newlines=True,
         )
         await wait_for_server(f"http://127.0.0.1:{args.gateway_port}/health", gateway)
 
         stop = asyncio.Event()
-        metrics_task = asyncio.create_task(sample_metrics(gateway.pid, stop))
+        metrics_task = asyncio.ensure_future(sample_metrics(gateway.pid, stop))
         loader = subprocess.run(
             [
                 sys.executable,
@@ -155,8 +155,9 @@ async def main():
                 args.runtime,
             ],
             cwd=ROOT,
-            capture_output=True,
-            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
             timeout=120,
             check=False,
         )
@@ -187,4 +188,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(main())
+    finally:
+        loop.close()
