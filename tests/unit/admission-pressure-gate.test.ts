@@ -1,6 +1,6 @@
 // #503-fanout: the ingest byte-budget gate must be pressure-driven, not
-// unconditional. `normal` admits within budget (bounded wait capped short);
-// `high` uses the caller's full bounded wait; `critical` sheds before any
+// unconditional. `normal` admits within budget and uses the caller's bounded
+// queue wait; `high` uses the same bounded wait; `critical` sheds before any
 // bytes are even ingested. This is the counterpart to
 // agent-fanout-admission-regression.test.ts, focused on the pressure
 // dimension rather than the fan-out/concurrency dimension.
@@ -47,7 +47,7 @@ test("normal pressure: a request within the byte budget is admitted", async () =
   if (result.admit) result.lease?.release();
 });
 
-test("normal pressure: contention sheds within the short wait instead of the full queueMs", async () => {
+test("normal pressure: contention sheds at the configured queue deadline", async () => {
   const controller = new ChatAdmissionController(
     Number.MAX_SAFE_INTEGER,
     undefined,
@@ -67,7 +67,7 @@ test("normal pressure: contention sheds within the short wait instead of the ful
     sessionId: "budget-exhausted",
     largeBodyBytes: 1024,
     hardMaxBytes: 10 * 1024 * 1024,
-    queueMs: 5000,
+    queueMs: 400,
   });
   const elapsedMs = Date.now() - start;
   occupied.release();
@@ -75,9 +75,10 @@ test("normal pressure: contention sheds within the short wait instead of the ful
   assert.equal(result.admit, false);
   if (!result.admit) assert.equal(result.response.status, 503);
   assert.ok(
-    elapsedMs < 2000,
-    `normal pressure must cap the ingest wait well under the full queueMs (took ${elapsedMs}ms)`
+    elapsedMs >= 300 && elapsedMs < 1500,
+    `normal pressure must honor the bounded queueMs deadline (took ${elapsedMs}ms)`
   );
+  assert.equal(controller.byteBudgetQueuedBytes, 0);
 });
 
 test("a body larger than the whole budget fails immediately with a distinct diagnosis", async () => {
