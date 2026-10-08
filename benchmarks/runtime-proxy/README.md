@@ -42,6 +42,20 @@ cancellation case succeeds only if the mock upstream reports zero active streams
 disconnect. In the recorded 100-client run, the 64-slot admission cap accepted 64 streams, returned
 503 for 36, and all three runtimes released every upstream stream after cancellation.
 
+Replay independent agent sessions with multiple turns and tool-shaped history over a reused client
+connection:
+
+```bash
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --clients 100 --rounds 5 --context-bytes 65536
+python3 benchmarks/runtime-proxy/run_bench.py --runtime bun142-container --clients 100 --rounds 5 --context-bytes 65536
+python3 benchmarks/runtime-proxy/run_bench.py --runtime node26-container --clients 100 --rounds 5 --context-bytes 65536
+```
+
+Each session sends five sequential requests. Each later request includes earlier synthetic user
+turns, tool calls, and tool results. The per-turn context is repeated 64 KiB text; it is a bounded
+transport stress case, not a token-equivalent prompt or real provider/tool execution. Results
+separate completed sessions, completed rounds, and request throughput.
+
 Sweep `--clients 1,15,30,70,100` and repeat each point at least three times. The result reports
 header and first-body-byte latency, completion latency, successful streams, throughput, peak
 gateway RSS, and CPU time. Tune `--chunks`, `--chunk-delay-ms`, and `--chunk-bytes` to test other

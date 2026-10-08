@@ -155,6 +155,9 @@ async def main():
         required=True,
     )
     parser.add_argument("--clients", type=int, default=100)
+    parser.add_argument("--rounds", type=int, default=1)
+    parser.add_argument("--round-gap-ms", type=int, default=5)
+    parser.add_argument("--context-bytes", type=int, default=0)
     parser.add_argument("--chunks", type=int, default=50)
     parser.add_argument("--chunk-delay-ms", type=int, default=10)
     parser.add_argument("--chunk-bytes", type=int, default=128)
@@ -249,6 +252,12 @@ async def main():
             str(args.gateway_port),
             "--clients",
             str(args.clients),
+            "--rounds",
+            str(args.rounds),
+            "--round-gap-ms",
+            str(args.round_gap_ms),
+            "--context-bytes",
+            str(args.context_bytes),
             "--label",
             args.runtime,
         ]
@@ -270,6 +279,8 @@ async def main():
         result = json.loads(loader.stdout)
         result.update(metrics)
         result["runtime"] = args.runtime
+        result["roundsPerSession"] = args.rounds
+        result["contextBytesPerTurn"] = args.context_bytes
         result["chunksPerResponse"] = args.chunks
         result["chunkDelayMs"] = args.chunk_delay_ms
         result["chunkBytes"] = args.chunk_bytes
