@@ -6,6 +6,7 @@ import * as yaml from "js-yaml";
 
 const ROOT = process.cwd();
 const OPENAPI_PATH = path.join(ROOT, "docs", "openapi.yaml");
+const HTTP_METHODS = new Set(["get", "put", "post", "delete", "options", "head", "patch", "trace"]);
 
 const {
   LOCAL_ONLY_API_PREFIXES,
@@ -58,6 +59,7 @@ test("every routeGuard loopback-only operation is annotated in OpenAPI", () => {
     if (!matchesPrefix && !matchesPattern) continue;
 
     for (const [method, operation] of Object.entries(methods as Record<string, any>)) {
+      if (!HTTP_METHODS.has(method)) continue;
       if (!operation || typeof operation !== "object") continue;
       assert.equal(
         operation["x-loopback-only"],
