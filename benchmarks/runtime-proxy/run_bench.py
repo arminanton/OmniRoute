@@ -90,6 +90,14 @@ def sample_metrics(pid, stop):
 def runtime_command(runtime, bun_bin, rust_bin, gateway_port, upstream_url, max_inflight):
     if runtime == "node":
         return ["node", str(ROOT / "proxy-node.mjs")], None
+    if runtime == "omni-admission-node":
+        return [
+            "node",
+            "--max-old-space-size=2048",
+            "--import",
+            "tsx/esm",
+            str(ROOT / "omni-admission-proxy.ts"),
+        ], None
     if runtime == "bun":
         return [bun_bin, str(ROOT / "proxy-bun.ts")], None
     if runtime == "bun-smol":
@@ -144,6 +152,7 @@ async def main():
         "--runtime",
         choices=[
             "node",
+            "omni-admission-node",
             "bun",
             "bun-smol",
             "rust",
@@ -187,18 +196,25 @@ async def main():
         "MAX_BODY_BYTES": str(4 * 1024 * 1024),
     })
 
-    upstream = subprocess.Popen(
-        ["node", str(ROOT / "mock-upstream.mjs")],
-        cwd=ROOT,
-        env=upstream_env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        universal_newlines=True,
-    )
+    upstream = None
+    if args.runtime != "omni-admission-node":
+        upstream = subprocess.Popen(
+            ["node", str(ROOT / "mock-upstream.mjs")],
+            cwd=ROOT,
+            env=upstream_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
     gateway = None
     gateway_container_name = None
     try:
-        await wait_for_server(f"http://127.0.0.1:{args.upstream_port}/health", upstream)
+        if upstream is not None:
+            await wait_for_server(f"http://127.0.0.1:{args.upstream_port}/health", upstream)
+        if args.runtime == "omni-admission-node":
+            gateway_env["CHUNKS"] = str(args.chunks)
+            gateway_env["CHUNK_DELAY_MS"] = str(args.chunk_delay_ms)
+            gateway_env["CHUNK_BYTES"] = str(args.chunk_bytes)
         command, gateway_container_name = runtime_command(
             args.runtime,
             args.bun_bin,
@@ -284,24 +300,47 @@ async def main():
         result["chunksPerResponse"] = args.chunks
         result["chunkDelayMs"] = args.chunk_delay_ms
         result["chunkBytes"] = args.chunk_bytes
+        if args.runtime == "omni-admission-node":
+            with urllib.request.urlopen(
+                "http://127.0.0.1:%d/health" % args.gateway_port, timeout=2
+            ) as response:
+                result["gatewayHealth"] = json.load(response)
         if args.cancel_after_ms is not None:
             deadline = time.monotonic() + 5
             active = None
             while time.monotonic() < deadline:
                 try:
+                    health_port = (
+                        args.gateway_port
+                        if args.runtime == "omni-admission-node"
+                        else args.upstream_port
+                    )
                     with urllib.request.urlopen(
-                        "http://127.0.0.1:%d/health" % args.upstream_port,
-                        timeout=1,
+                        "http://127.0.0.1:%d/health" % health_port, timeout=1
                     ) as response:
-                        active = json.load(response).get("activeStreams")
+                        health = json.load(response)
+                        active = (
+                            health.get("admission", {}).get("activeHeavy")
+                            if args.runtime == "omni-admission-node"
+                            else health.get("activeStreams")
+                        )
                     if active == 0:
                         break
                 except Exception:
                     pass
                 time.sleep(0.05)
-            result["upstreamActiveAfterCancel"] = active
+            result[
+                "admissionActiveAfterCancel"
+                if args.runtime == "omni-admission-node"
+                else "upstreamActiveAfterCancel"
+            ] = active
         print(json.dumps(result, separators=(",", ":")))
-        if (result["failed"] and not args.allow_non2xx) or result.get("upstreamActiveAfterCancel", 0) != 0:
+        leaked_active = result.get(
+            "admissionActiveAfterCancel", result.get("upstreamActiveAfterCancel", 0)
+        )
+        if (result["failed"] and not args.allow_non2xx) or (
+            args.cancel_after_ms is not None and leaked_active != 0
+        ):
             raise SystemExit(1)
     finally:
         if gateway_container_name:

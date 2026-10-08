@@ -56,17 +56,6 @@ turns, tool calls, and tool results. The per-turn context is repeated 64 KiB tex
 transport stress case, not a token-equivalent prompt or real provider/tool execution. Results
 separate completed sessions, completed rounds, and request throughput.
 
-Exercise OmniRoute's actual TypeScript request-admission wrapper with the same deterministic
-multi-turn bodies and a local streaming response:
-
-```bash
-node --import tsx/esm benchmarks/runtime-proxy/chat-admission-sessions.ts --clients 100 --rounds 5
-```
-
-This covers request-body admission, correlation IDs, concurrency/byte leases, and release when SSE
-responses close. It does not run the Next production bundle, routing/database account selection,
-call-log artifact persistence, provider adapters, or real model/tool execution.
-
 Sweep `--clients 1,15,30,70,100` and repeat each point at least three times. The result reports
 header and first-body-byte latency, completion latency, successful streams, throughput, peak
 gateway RSS, and CPU time. Tune `--chunks`, `--chunk-delay-ms`, and `--chunk-bytes` to test other
@@ -75,3 +64,18 @@ stream shapes. Run with the same CPU affinity and process limits for every runti
 The Node and Bun adapters are benchmark-only and bind to loopback. They are not authenticated
 production proxies. The Rust candidate is a transport proof of concept, not a replacement for the
 OmniRoute policy, provider, quota, or protocol layers.
+
+For a higher-fidelity front-door test, `omni-admission-node` runs the production TypeScript
+`withChatAdmission` / `admitChatRequest` path behind a small local HTTP adapter. The loader runs in
+a separate Python process, so its request bodies do not count toward gateway RSS:
+
+```bash
+python3 benchmarks/runtime-proxy/run_bench.py --runtime omni-admission-node --clients 100 --rounds 5 --context-bytes 262144
+```
+
+This measures body buffering/parsing, actual V8-derived admission budgeting, correlation IDs, and
+stream-lifetime lease release. It still uses a deterministic local SSE handler; provider routing,
+database account selection, persistent artifact capture, and model/tool execution remain outside
+this harness. The reported health snapshot includes the effective byte budget and peak admission
+occupancy. Run the Node suite on an isolated builder with the same heap and cgroup limits as the
+target deployment.
