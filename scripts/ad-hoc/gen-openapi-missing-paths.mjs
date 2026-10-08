@@ -3,18 +3,32 @@
 // honest OpenAPI entry for every real route that docs/openapi.yaml does not
 // document yet. Enumerates routes with the SAME lib the check:api-docs-refs
 // gate uses, so the generated set can never diverge from the gate's universe.
-// Minimal by design: real methods (parsed from each route.ts's exports), a
-// group tag, a neutral path-derived summary and a generic 200 — no invented
-// semantics. Rich schemas stay hand-curated in the existing entries.
+// Minimal by design: real methods (parsed from each route.ts's exports), path
+// parameters, a neutral summary and a default response. Rich schemas stay
+// hand-curated until verified against each handler.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { collectApiRouteDefinitions } from "../check/lib/apiRoutes.mjs";
-import { isLocalOnlyPath, ALWAYS_PROTECTED_API_PATHS } from "../../src/server/authz/routeGuard.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SPEC = path.join(ROOT, "docs", "openapi.yaml");
 const APPLY = process.argv.includes("--apply");
+
+// Importing routeGuard reaches modules that initialize SQLite. Keep this
+// one-shot documentation tool hermetic even when it runs on a host with a
+// real ~/.omniroute database configured.
+const temporaryDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-openapi-gen-"));
+process.env.DATA_DIR = temporaryDataDir;
+process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
+process.on("exit", () => {
+  fs.rmSync(temporaryDataDir, { recursive: true, force: true });
+});
+
+const { isLocalOnlyPath, ALWAYS_PROTECTED_API_PATHS } = await import(
+  "../../src/server/authz/routeGuard.ts"
+);
 
 const normalizeParams = (p) => p.replace(/\{[^}]+\}/g, "{}");
 
