@@ -95,9 +95,18 @@ the 12:17 guard event (its latest row is three connection tests at 11:49), and t
 resource-pressure log has no request/correlation ID. This confirms that an early heap rejection is
 currently not joined to a call-log record.
 
-There is also a separate capture gap: 118 rows from 03:22–04:56 show
-`has_pipeline_details=1` but `detail_state=missing`, with no artifact size. The latest file in the
-mounted `call_logs` directory predates this candidate's 19:46 start. Its logs contain one generic
+The call-log summary rows do show the workload immediately preceding the earlier guard cluster.
+From 03:22–03:36 UTC there were 38 successful `codex/gpt-6-luna-max` requests with mean input
+338,155 tokens, maximum 354,057, and mean duration 13.7 seconds. From 04:12–04:56 there were 80
+more with mean input 377,071 tokens, maximum 398,367, mean duration 17.3 seconds, and one request
+lasting 97.991 seconds. All 118 were marked as having pipeline details, but every artifact was
+missing. Repeated local heap-guard 503s began at 04:56 and continued through 05:00, reporting
+1,826–1,911 MiB against 1,822 MiB. This timing supports large-context traffic plus capture as a
+plausible contributor; missing artifacts prevent verifying the request bodies or assigning
+causality.
+
+Artifact persistence is also missing: the latest file in the mounted `call_logs` directory
+predates this candidate's 19:46 start. Its logs contain one generic
 `Call-log artifact worker failed` warning at 03:36; the running image filesystem has neither
 `/app/src/lib/usage/callLogArtifactWorker.js` nor its `.ts` source, while the current worker resolver
 expects one of those runtime paths. This strongly suggests an image-packaging gap in artifact
@@ -284,14 +293,29 @@ was close to 1.4.0; a full Bun 1.4.2 application build was not run.
 
 ## Remaining acceptance checks
 
+- Obtain a management-scoped credential for the candidate or add a safe internal V8 snapshot
+  endpoint, then sample the actual app PID's `heapUsed`, `external`, `arrayBuffers`, RSS, and cgroup
+  data together. The current host sampler cannot identify the retained V8 objects.
+- Fix the external candidate-image assembly so the artifact worker is present, then verify that
+  pipeline artifacts are written and readable. The current image lost 118 detailed artifacts and
+  no artifact file is newer than the image start; do not treat the `full-capture-v1` label as proof
+  that capture works.
+- Reproduce heap growth from a clean start with capture on/off and optional subsystems isolated;
+  test that the local pressure guard recovers without restarting after pressure clears. No heap
+  snapshot or controlled recovery result exists yet.
 - Repeat full Next builds on a dedicated builder with enough memory to complete; record wall time,
   peak cgroup memory, output size, and health/model-catalog smoke tests.
 - Run the Bun application build with a locked dependency graph and on both 1.4.0 and 1.4.2; record
   native-module, database, streaming, and shutdown differences.
 - Exercise the full OmniRoute app with mock provider credentials at 70 and 100 active sessions,
-  including actual tool-call cycles, authentication, call-log capture, and account-level limits.
+  including actual tool-call cycles, authentication, account-level limits, and verified artifact
+  capture. The current long-stream test covers only the production admission middleware plus mock
+  streaming.
 - Compare the current TypeScript route, Rust proxy, and Bifrost only with identical provider mocks
   and request policy; no language-wide performance conclusion follows from the current harness.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
+- Continue the OpenAPI handler audit beyond the 131 operations with success-response content; the
+  path/method/security-tier inventory is complete, but the remaining response schemas and auth
+  behavior have not all been source-verified.
