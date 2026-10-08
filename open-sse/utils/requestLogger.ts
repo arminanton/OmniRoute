@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+
 import {
   createDiagnosticOverflowTrace,
   type DiagnosticOverflowTrace,
@@ -263,6 +265,55 @@ export function cloneBoundedForLog(
     result[TRUNCATED_KEYS_MARKER] = dropped;
   }
   return result;
+}
+
+/**
+ * Snapshot client request data without serializing an identical Responses input
+ * twice. `effectiveInput` is important when `previous_response_id` reconstruction
+ * changed the dispatched input; when the bounded logged values are structurally
+ * equal to the pre-reconstruction `body.input`, the continuation reader already
+ * falls back to that field for older artifacts and deduplicated snapshots, so retain a
+ * small reference marker.
+ */
+export function cloneClientRawRequestPayloadForLog(
+  body: unknown,
+  effectiveInput: unknown
+): JsonRecord {
+  // Normal Responses requests carry the same input at both capture points.
+  // Avoid building a second bounded object tree when the two logging policies
+  // use the same per-string cap. With different caps we keep the old two-copy
+  // representation unless the resulting snapshots compare equal below; this
+  // preserves the continuation reader's historical truncation behavior.
+  const bodyInput =
+    typeof body === "object" && body !== null && !Array.isArray(body)
+      ? (body as JsonRecord).input
+      : undefined;
+  const sameTextLimit = getChatLogClientTextLimit() === getChatLogTextLimit();
+  const identicalInputBeforeSnapshot =
+    Array.isArray(bodyInput) &&
+    Array.isArray(effectiveInput) &&
+    (bodyInput === effectiveInput || (sameTextLimit && isDeepStrictEqual(bodyInput, effectiveInput)));
+  const bodySnapshot = cloneBoundedForLog(body, 0, null, getChatLogClientTextLimit());
+  if (effectiveInput === undefined) return { body: bodySnapshot };
+
+  if (identicalInputBeforeSnapshot && sameTextLimit) {
+    return { body: bodySnapshot, effectiveInputRef: "body.input" };
+  }
+
+  const effectiveInputSnapshot = cloneBoundedForLog(effectiveInput);
+  const boundedBodyInput =
+    typeof bodySnapshot === "object" && bodySnapshot !== null && !Array.isArray(bodySnapshot)
+      ? (bodySnapshot as JsonRecord).input
+      : undefined;
+  if (
+    Array.isArray(boundedBodyInput) &&
+    Array.isArray(effectiveInputSnapshot) &&
+    isDeepStrictEqual(boundedBodyInput, effectiveInputSnapshot)
+  ) {
+    return { body: bodySnapshot, effectiveInputRef: "body.input" };
+  }
+
+  return { body: bodySnapshot, effectiveInput: effectiveInputSnapshot };
 }
 
 type AggregateStreamChunkBudget = {
@@ -585,21 +636,7 @@ export async function createRequestLogger(
         timestamp: new Date().toISOString(),
         endpoint,
         headers: maskSensitiveHeaders(headers),
-        body: cloneBoundedForLog(body, 0, null, getChatLogClientTextLimit()),
-        // The actual `input` this request dispatched with, captured AFTER
-        // OmniRoute's own previous_response_id reconstruction (see
-        // src/sse/handlers/chat.ts) -- `body` above is deliberately the
-        // pre-reconstruction raw client bytes (captureDeferredClientRawBody's
-        // whole point) and is NOT what got sent for a continued turn.
-        // resolvePreviousResponseState must chain off this field, not
-        // `body.input`: reading the raw pre-reconstruction input for a
-        // request that was itself a continuation compounds into progressively
-        // truncated history a few hops deep (live incident 2026-09-03,
-        // manifested as a malformed request with no leading system/user
-        // message rejected by the upstream provider).
-        ...(effectiveInput !== undefined
-          ? { effectiveInput: cloneBoundedForLog(effectiveInput) }
-          : {}),
+        ...cloneClientRawRequestPayloadForLog(body, effectiveInput),
       };
     },
 

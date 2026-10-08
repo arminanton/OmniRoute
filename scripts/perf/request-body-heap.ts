@@ -7,9 +7,11 @@
  * state). This benchmark attributes retained heap to each of those mechanisms individually, so a
  * fix can be justified by numbers instead of intuition — and so a regression can be caught later.
  *
- * It measures the real production helpers (no reimplementation): `cloneLogPayload` is what
- * `buildClientRawRequest` calls per request, and `cloneBoundedForLog` is what the request logger
- * actually retains downstream.
+ * It measures the real production helpers (no reimplementation): `buildClientRawRequest` uses
+ * `cloneBoundedForLog` for its pending-request snapshot, and
+ * `cloneClientRawRequestPayloadForLog` builds the detailed call-log payload. An earlier version
+ * measured `cloneLogPayload` here even though the chat route had switched to bounded snapshots;
+ * that overstated the retained copies on the actual request path.
  *
  * Deterministic and API-free (no network, no upstream credentials). The DATA_DIR is redirected to
  * a temp dir before importing, because the request-logger module opens the SQLite database on
@@ -42,8 +44,10 @@ const { buildAgentPayload, INCIDENT_SHAPE } = await import("./agentPayloadCorpus
 
 const realLog = console.log;
 console.log = () => {};
-const { cloneLogPayload } = await import("../../src/lib/logPayloads.ts");
-const { cloneBoundedForLog } = await import("../../open-sse/utils/requestLogger.ts");
+const { cloneBoundedForLog, cloneClientRawRequestPayloadForLog } = await import(
+  "../../open-sse/utils/requestLogger.ts"
+);
+const { getChatLogClientTextLimit } = await import("../../src/lib/logEnv.ts");
 console.log = realLog;
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -60,7 +64,7 @@ const MESSAGES = numArg("--messages", INCIDENT_SHAPE.messages);
 const TOOLS = numArg("--tools", INCIDENT_SHAPE.tools);
 // Calibrated so the defaults land on the incident's 3.05 MiB wire size.
 const CONTENT_WORDS = numArg("--content-words", INCIDENT_SHAPE.contentWords);
-const TARGETS = numArg("--targets", 3); // combo targets -> attemptBody clones
+const TARGETS = numArg("--targets", 3); // combo targets -> shallow attemptBody copies
 const CONCURRENCY = numArg("--concurrency", 8);
 const MAX_RETAINED = numArg("--max-retained-mib", 0); // 0 = report only
 const AS_JSON = HAS("--json");
@@ -103,66 +107,100 @@ async function main(): Promise<void> {
   }
 
   const body = buildAgentPayload(MESSAGES, TOOLS, CONTENT_WORDS);
-  const wireBytes = Buffer.byteLength(JSON.stringify(body), "utf8");
+  const serializationStarted = performance.now();
+  const wireJson = JSON.stringify(body);
+  const jsonSerializationMs = performance.now() - serializationStarted;
+  const wireBytes = Buffer.byteLength(wireJson, "utf8");
 
   const rows: Row[] = [];
-  const hold: unknown[] = []; // keep results reachable so "retained" means retained
+  const hold: unknown[] = []; // keep measured values reachable until output is complete
 
-  // 1. The entry-point clone every chat request pays (src/sse/handlers/chat.ts buildClientRawRequest).
-  {
-    const r = measureRetained(() => cloneLogPayload(body));
-    hold.push(r.value);
-    rows.push({ mechanism: "cloneLogPayload (unbounded)", site: "chat.ts buildClientRawRequest", bytes: r.bytes });
-  }
+  const clientTextLimit = getChatLogClientTextLimit();
+  const clientSnapshot = measureRetained(() =>
+    cloneBoundedForLog(body, 0, null, clientTextLimit)
+  );
+  hold.push(clientSnapshot.value);
+  rows.push({
+    mechanism: "bounded client snapshot",
+    site: "buildClientRawRequest → pending-call details",
+    bytes: clientSnapshot.bytes,
+  });
 
-  // 2. What the request logger actually keeps (open-sse/utils/requestLogger.ts).
-  {
-    const r = measureRetained(() => cloneBoundedForLog(body));
-    hold.push(r.value);
-    rows.push({ mechanism: "cloneBoundedForLog (bounded)", site: "requestLogger.logClientRawRequest", bytes: r.bytes });
-  }
+  const legacyPipeline = measureRetained(() => ({
+    body: cloneBoundedForLog(clientSnapshot.value, 0, null, clientTextLimit),
+    effectiveInput: cloneBoundedForLog(body.input),
+  }));
+  hold.push(legacyPipeline.value);
+  rows.push({
+    mechanism: "legacy call-log snapshot (two input trees)",
+    site: "requestLogger.logClientRawRequest before dedup",
+    bytes: legacyPipeline.bytes,
+  });
 
-  // 3. Combo per-target attempt clones (open-sse/services/combo.ts attemptBody).
-  {
-    const r = measureRetained(() => Array.from({ length: TARGETS }, () => structuredClone(body)));
-    hold.push(r.value);
-    rows.push({ mechanism: `structuredClone x${TARGETS} (combo targets)`, site: "combo.ts attemptBody", bytes: r.bytes });
-  }
+  const deduplicatedPipeline = measureRetained(() =>
+    cloneClientRawRequestPayloadForLog(clientSnapshot.value, body.input)
+  );
+  hold.push(deduplicatedPipeline.value);
+  rows.push({
+    mechanism: "deduplicated call-log snapshot",
+    site: "requestLogger.logClientRawRequest with input reference",
+    bytes: deduplicatedPipeline.bytes,
+  });
 
-  // 4. Whole-body serialization for token estimation (combo.ts estimateTokens(JSON.stringify(...))).
-  {
-    const r = measureRetained(() => JSON.stringify(body));
-    hold.push(r.value);
-    rows.push({ mechanism: "JSON.stringify (token estimate)", site: "combo.ts estimateTokens", bytes: r.bytes });
-  }
+  // The combo executor shallow-copies the top-level body per target. Nested
+  // messages/input/tool arrays remain shared unless a transform replaces them.
+  const comboBodies = measureRetained(() =>
+    Array.from({ length: TARGETS }, () => ({ ...body }))
+  );
+  hold.push(comboBodies.value);
+  rows.push({
+    mechanism: `shallow attempt body x${TARGETS}`,
+    site: "combo executeTargetAttempt",
+    bytes: comboBodies.bytes,
+  });
 
-  // 5. Overlap: what C concurrent in-flight requests retain via the entry clone alone.
+  const legacyPipelineBytes = Buffer.byteLength(JSON.stringify(legacyPipeline.value), "utf8");
+  const deduplicatedPipelineBytes = Buffer.byteLength(JSON.stringify(deduplicatedPipeline.value), "utf8");
+
+  // Model independent in-flight clients: each has a separately parsed body,
+  // a bounded pending snapshot, and a detailed-log payload. The synthetic
+  // corpus is incident-derived; this is retained heap, not provider capacity.
   const concurrent = measureRetained(() =>
-    Array.from({ length: CONCURRENCY }, () => cloneLogPayload(body))
+    Array.from({ length: CONCURRENCY }, () => {
+      const parsedBody = structuredClone(body);
+      const pendingSnapshot = cloneBoundedForLog(parsedBody, 0, null, clientTextLimit);
+      const pipeline = cloneClientRawRequestPayloadForLog(pendingSnapshot, parsedBody.input);
+      return { parsedBody, pendingSnapshot, pipeline };
+    })
   );
   hold.push(concurrent.value);
 
-  const perRequest = rows.reduce((a, r) => a + r.bytes, 0);
+  const requestSnapshotBytes = clientSnapshot.bytes + deduplicatedPipeline.bytes;
 
   if (AS_JSON) {
     console.log(
       JSON.stringify(
         {
+          runtime: process.version,
           shape: { messages: MESSAGES, tools: TOOLS, targets: TARGETS, concurrency: CONCURRENCY },
           wireBytes,
+          jsonSerializationMs,
           mechanisms: rows,
-          perRequestBytes: perRequest,
-          concurrentEntryCloneBytes: concurrent.bytes,
+          legacyPipelineBytes,
+          deduplicatedPipelineBytes,
+          serializedPipelineBytesSaved: Math.max(0, legacyPipelineBytes - deduplicatedPipelineBytes),
+          oneRequestSnapshotBytes: requestSnapshotBytes,
+          concurrentRequestSnapshotBytes: concurrent.bytes,
         },
         null,
         2
       )
     );
   } else {
-    console.log(`# Request-body heap amplification (#7847)\n`);
+    console.log(`# Request-body retained-state benchmark (#7847)\n`);
     console.log(
-      `Shape: ${MESSAGES} messages · ${TOOLS} tools · wire size **${fmt(wireBytes)} MiB**` +
-        ` · ${TARGETS} combo targets\n`
+      `Runtime: **${process.version}** · shape: ${MESSAGES} messages · ${TOOLS} tools · wire size **${fmt(wireBytes)} MiB**` +
+        ` · ${TARGETS} combo targets · JSON stringify ${jsonSerializationMs.toFixed(1)} ms\n`
     );
     console.log("| mechanism | call site | retained | x wire |");
     console.log("| --- | --- | ---: | ---: |");
@@ -171,20 +209,23 @@ async function main(): Promise<void> {
         `| ${r.mechanism} | \`${r.site}\` | ${fmt(r.bytes)} MiB | ${(r.bytes / wireBytes).toFixed(2)}x |`
       );
     }
+    console.log("");
     console.log(
-      `| **per request (sum)** | | **${fmt(perRequest)} MiB** | **${(perRequest / wireBytes).toFixed(2)}x** |`
+      `Pipeline JSON: ${fmt(legacyPipelineBytes)} MiB before dedup → ${fmt(deduplicatedPipelineBytes)} MiB after dedup ` +
+        `(**${fmt(legacyPipelineBytes - deduplicatedPipelineBytes)} MiB saved**).`
     );
     console.log("");
     console.log(
-      `${CONCURRENCY} concurrent requests retain **${fmt(concurrent.bytes)} MiB**` +
-        ` via the entry clone alone (${(concurrent.bytes / wireBytes).toFixed(2)}x wire).`
+      `One modeled request retains **${fmt(requestSnapshotBytes)} MiB** in the two measured snapshots; ` +
+        `${CONCURRENCY} independent concurrent requests retain **${fmt(concurrent.bytes)} MiB** ` +
+        `including parsed bodies, pending snapshots, and deduplicated pipeline payloads.`
     );
     console.log("");
   }
 
-  if (MAX_RETAINED > 0 && perRequest / MIB > MAX_RETAINED) {
+  if (MAX_RETAINED > 0 && concurrent.bytes / MIB > MAX_RETAINED) {
     console.error(
-      `[heap-bench] FAIL — per-request retained ${fmt(perRequest)} MiB exceeds --max-retained-mib ${MAX_RETAINED}`
+      `[heap-bench] FAIL — ${CONCURRENCY}-request retained ${fmt(concurrent.bytes)} MiB exceeds --max-retained-mib ${MAX_RETAINED}`
     );
     process.exitCode = 1;
   }

@@ -189,7 +189,7 @@ test("resolvePreviousResponseState chains off effectiveInput, not the pre-recons
   });
 });
 
-test("resolvePreviousResponseState falls back to clientRawRequest.body.input when effectiveInput is absent (pre-fix artifacts)", () => {
+test("resolvePreviousResponseState reads the body input for deduplicated effectiveInput references", () => {
   insertCallLog({
     id: "log-legacy-no-effective-input",
     responseId: "resp_legacy",
@@ -198,7 +198,10 @@ test("resolvePreviousResponseState falls back to clientRawRequest.body.input whe
     artifactRelPath: "2026-01-01/log-legacy-no-effective-input.json",
   });
   writeArtifact("2026-01-01/log-legacy-no-effective-input.json", {
-    clientRawRequest: { body: { input: [{ type: "message", role: "user", content: "hi" }] } },
+    clientRawRequest: {
+      body: { input: [{ type: "message", role: "user", content: "hi" }] },
+      effectiveInputRef: "body.input",
+    },
     providerRequest: { body: { input: [{ type: "message", role: "user", content: "hi" }] } },
     clientResponse: {
       id: "resp_legacy",

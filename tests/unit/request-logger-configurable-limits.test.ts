@@ -27,6 +27,130 @@ test("pipeline clone retains a diagnostic tool result above the old 64K cap", ()
     assert.deepEqual(cloneBoundedForLog(record), record);
   });
 });
+
+test("client request logs reference effectiveInput when it duplicates body.input", async () => {
+  const logger = await createRequestLogger(undefined, undefined, "gpt-5.6", {
+    captureStreamChunks: false,
+  });
+  const input = [{ type: "message", role: "user", content: "same logged input" }];
+  const body = { model: "gpt-5.6", input, stream: true };
+  logger.logClientRawRequest("/v1/responses", body, {}, input);
+
+  const clientRawRequest = logger.getPipelinePayloads()?.clientRawRequest;
+  assert.ok(clientRawRequest);
+  assert.equal(clientRawRequest.effectiveInputRef, "body.input");
+  assert.equal(Object.hasOwn(clientRawRequest, "effectiveInput"), false);
+  assert.deepEqual(
+    (clientRawRequest.body as Record<string, unknown>).input,
+    input,
+    "the raw request remains available for continuation reconstruction"
+  );
+
+  const deduplicatedBytes = Buffer.byteLength(JSON.stringify(clientRawRequest));
+  const legacyBytes = Buffer.byteLength(
+    JSON.stringify({ ...clientRawRequest, effectiveInput: input, effectiveInputRef: undefined })
+  );
+  assert.ok(deduplicatedBytes < legacyBytes);
+});
+
+test("large equal inputs are deduplicated before building a second bounded snapshot", async () => {
+  const priorTextLimit = process.env.CHAT_LOG_TEXT_LIMIT;
+  const priorClientLimit = process.env.CHAT_LOG_CLIENT_TEXT_LIMIT;
+  try {
+    process.env.CHAT_LOG_TEXT_LIMIT = "524288";
+    delete process.env.CHAT_LOG_CLIENT_TEXT_LIMIT;
+    const logger = await createRequestLogger(undefined, undefined, "gpt-5.6", {
+      captureStreamChunks: false,
+    });
+    const input = [
+      { type: "message", role: "user", content: "large repeated payload:" + "x".repeat(256_000) },
+    ];
+    logger.logClientRawRequest(
+      "/v1/responses",
+      { model: "gpt-5.6", input: structuredClone(input), stream: true },
+      {},
+      input
+    );
+
+    const clientRawRequest = logger.getPipelinePayloads()?.clientRawRequest;
+    assert.ok(clientRawRequest);
+    assert.equal(clientRawRequest.effectiveInputRef, "body.input");
+    assert.equal(Object.hasOwn(clientRawRequest, "effectiveInput"), false);
+    assert.ok(
+      Buffer.byteLength(JSON.stringify(clientRawRequest)) <
+        Buffer.byteLength(
+          JSON.stringify({
+            ...clientRawRequest,
+            effectiveInput: input,
+            effectiveInputRef: undefined,
+          })
+        )
+    );
+  } finally {
+    if (priorTextLimit === undefined) delete process.env.CHAT_LOG_TEXT_LIMIT;
+    else process.env.CHAT_LOG_TEXT_LIMIT = priorTextLimit;
+    if (priorClientLimit === undefined) delete process.env.CHAT_LOG_CLIENT_TEXT_LIMIT;
+    else process.env.CHAT_LOG_CLIENT_TEXT_LIMIT = priorClientLimit;
+  }
+});
+
+test("deduplication preserves the separate effective-input text cap", async () => {
+  const priorTextLimit = process.env.CHAT_LOG_TEXT_LIMIT;
+  const priorClientLimit = process.env.CHAT_LOG_CLIENT_TEXT_LIMIT;
+  try {
+    process.env.CHAT_LOG_TEXT_LIMIT = "65536";
+    process.env.CHAT_LOG_CLIENT_TEXT_LIMIT = "131072";
+    const logger = await createRequestLogger(undefined, undefined, "gpt-5.6", {
+      captureStreamChunks: false,
+    });
+    const input = [{ type: "message", role: "user", content: "x".repeat(100_000) }];
+    logger.logClientRawRequest(
+      "/v1/responses",
+      { model: "gpt-5.6", input: structuredClone(input) },
+      {},
+      input
+    );
+
+    const clientRawRequest = logger.getPipelinePayloads()?.clientRawRequest;
+    assert.ok(clientRawRequest);
+    assert.equal(Object.hasOwn(clientRawRequest, "effectiveInputRef"), false);
+    assert.equal(Object.hasOwn(clientRawRequest, "effectiveInput"), true);
+    const effectiveInput = clientRawRequest.effectiveInput as Array<{ content: string }>;
+    assert.ok(effectiveInput[0].content.length <= 65_536);
+    assert.ok(
+      (clientRawRequest.body as { input: Array<{ content: string }> }).input[0].content.length >
+        effectiveInput[0].content.length
+    );
+  } finally {
+    if (priorTextLimit === undefined) delete process.env.CHAT_LOG_TEXT_LIMIT;
+    else process.env.CHAT_LOG_TEXT_LIMIT = priorTextLimit;
+    if (priorClientLimit === undefined) delete process.env.CHAT_LOG_CLIENT_TEXT_LIMIT;
+    else process.env.CHAT_LOG_CLIENT_TEXT_LIMIT = priorClientLimit;
+  }
+});
+
+test("client request logs retain effectiveInput when continuation changes it", async () => {
+  const logger = await createRequestLogger(undefined, undefined, "gpt-5.6", {
+    captureStreamChunks: false,
+  });
+  const rawInput = [{ type: "message", role: "user", content: "current turn" }];
+  const effectiveInput = [
+    { type: "message", role: "system", content: "reconstructed prior context" },
+    ...rawInput,
+  ];
+  logger.logClientRawRequest(
+    "/v1/responses",
+    { model: "gpt-5.6", input: rawInput, previous_response_id: "resp_previous" },
+    {},
+    effectiveInput
+  );
+
+  const clientRawRequest = logger.getPipelinePayloads()?.clientRawRequest;
+  assert.ok(clientRawRequest);
+  assert.equal(Object.hasOwn(clientRawRequest, "effectiveInputRef"), false);
+  assert.deepEqual(clientRawRequest.effectiveInput, effectiveInput);
+});
+
 test("configured pipeline limits are bounded and idempotent", () => {
   withLimits("256", "3", () => {
     const input = { ...record, nested: "x".repeat(2000) };
