@@ -25,10 +25,11 @@ preferred implementation language for this project. Bifrost/Go remains an option
 an assumed performance winner. The main `/api/v1/chat/completions` route does not select Bifrost;
 the Go sidecar is exposed through the relay endpoints.
 
-Route coverage is stronger than schema completeness. All 1,029 operations still lack explicit
-`operationId` values, only 120 have response content schemas, and 121 declare operation-level
-security. The next contract pass must compare authentication and request/response schemas with each
-handler before calling the entire OpenAPI document semantically complete. For routes with confirmed
+All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
+contract is still stronger on route coverage than schema completeness: only 120 operations have
+response content schemas and 121 declare operation-level security. The next contract pass must
+compare authentication and request/response schemas with each handler before calling the entire
+OpenAPI document semantically complete. For routes with confirmed
 configuration-dependent access, the spec now includes anonymous alternatives where the handler
 allows them, including model discovery, combo/routing metadata, and the API Explorer endpoints.
 All 98 operations previously missing `x-loopback-only` under routeGuard's local-only prefixes are

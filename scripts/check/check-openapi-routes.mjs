@@ -12,6 +12,10 @@ import { pathToFileURL } from "node:url";
 import * as yaml from "js-yaml";
 import { reportStaleEntries } from "./lib/allowlist.mjs";
 import { apiRoot, collectApiRouteDefinitions, collectApiRouteUrlPaths } from "./lib/apiRoutes.mjs";
+import {
+  findDuplicateOperationIds,
+  findOperationsMissingOperationIds,
+} from "./lib/openapiOperationIds.mjs";
 
 const ROOT = process.cwd();
 const OPENAPI_PATH = path.join(ROOT, "docs", "openapi.yaml");
@@ -163,6 +167,26 @@ export function runOpenapiRoutesCheck(opts = {}) {
         methodMismatches
           .map(({ path: route, missing, extra }) =>
             `  ✗ ${route}: missing [${missing.join(", ")}]; undocumented [${extra.join(", ")}]`
+          )
+          .join("\n")
+    );
+  }
+  const missingOperationIds = findOperationsMissingOperationIds(raw.paths);
+  if (missingOperationIds.length) {
+    parts.push(
+      `[openapi-routes] ${missingOperationIds.length} operation(s) omit operationId:\n` +
+        missingOperationIds
+          .map(({ method, path: route }) => `  ✗ ${method} ${route}`)
+          .join("\n")
+    );
+  }
+  const duplicateOperationIds = findDuplicateOperationIds(raw.paths);
+  if (duplicateOperationIds.length) {
+    parts.push(
+      `[openapi-routes] ${duplicateOperationIds.length} duplicate operationId value(s):\n` +
+        duplicateOperationIds
+          .map(({ operationId, locations }) =>
+            `  ✗ ${operationId}: ${locations.map(({ method, path }) => `${method} ${path}`).join(", ")}`
           )
           .join("\n")
     );

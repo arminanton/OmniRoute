@@ -5,9 +5,15 @@ import {
   findSpecPathsWithoutRoute,
   findOperationsMissingPathParameters,
   findRouteMethodMismatches,
+  runOpenapiRoutesCheck,
   KNOWN_STALE_SPEC,
 } from "../../scripts/check/check-openapi-routes.mjs";
 import { reportStaleEntries } from "../../scripts/check/lib/allowlist.mjs";
+import {
+  findDuplicateOperationIds,
+  findOperationsMissingOperationIds,
+  operationIdFor,
+} from "../../scripts/check/lib/openapiOperationIds.mjs";
 
 test("normalizeParams collapses any {param} name to {}", () => {
   assert.equal(normalizeParams("/api/providers/{providerId}/models"), "/api/providers/{}/models");
@@ -74,6 +80,39 @@ test("route method audit finds missing and undocumented operations", () => {
     ),
     [{ path: "/api/settings/{id}", missing: ["PUT"], extra: ["DELETE"] }]
   );
+});
+
+test("route-derived operation IDs include method and named path parameters", () => {
+  assert.equal(
+    operationIdFor("GET", "/api/v1/providers/{provider}/models"),
+    "getApiV1ProvidersByProviderModels"
+  );
+  assert.equal(
+    operationIdFor("POST", "/api/tools/traffic-inspector/requests/{...path}"),
+    "postApiToolsTrafficInspectorRequestsByPath"
+  );
+});
+
+test("operation ID checks report missing and duplicate IDs", () => {
+  const paths = {
+    "/api/a": { get: { operationId: "getApiA" }, post: {} },
+    "/api/b": { get: { operationId: "getApiA" } },
+  };
+  assert.deepEqual(findOperationsMissingOperationIds(paths), [{ method: "POST", path: "/api/a" }]);
+  assert.deepEqual(findDuplicateOperationIds(paths), [
+    {
+      operationId: "getApiA",
+      locations: [
+        { method: "GET", path: "/api/a" },
+        { method: "GET", path: "/api/b" },
+      ],
+    },
+  ]);
+});
+
+test("live OpenAPI inventory has routes, methods, path parameters, and unique operation IDs", () => {
+  const result = runOpenapiRoutesCheck();
+  assert.equal(result.ok, true, result.message);
 });
 
 // --- stale-allowlist enforcement (6A.3) ---
