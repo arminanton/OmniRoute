@@ -16486,31 +16486,39 @@ paths:
         required: true
         schema:
           type: string
+        description: VS Code client API token carried in the path; treat this value as a credential.
     get:
       operationId: getApiV1VscodeCombosByToken
       tags:
         - V1 Vscode
-      summary: Read the VS Code combo endpoint at its base path
-      description: Optional catch-all route with no suffix; detailed response schema remains route-specific.
+      summary: List combo models in VS Code catalog format
+      description: Returns the combo-only catalog with OpenAI-compatible list metadata.
       responses:
+        "200":
+          description: Combo model catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeComboListResponse"
         default:
-          description: Route-specific response; inspect the handler for status and body details.
+          description: Catalog or authorization error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
     post:
       operationId: postApiV1VscodeCombosByToken
       tags:
         - V1 Vscode
-      summary: Send a VS Code combo request at its base path
-      description: Optional catch-all route with no suffix; detailed request and response schemas remain route-specific.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              additionalProperties: true
+      summary: Reject an unsupported POST to the combo base path
+      description: The compatibility route accepts POST only at the `/api/show` suffix.
       responses:
-        default:
-          description: Route-specific response; inspect the handler for status and body details.
+        "404":
+          description: The combo base path does not support POST
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/v1/vscode/combos/{token}/{slug}:
     parameters:
       - name: token
@@ -16518,38 +16526,72 @@ paths:
         required: true
         schema:
           type: string
+        description: VS Code client API token carried in the path; treat this value as a credential.
       - name: slug
         in: path
         required: true
         allowReserved: true
         schema:
           type: string
-        description: Optional catch-all path suffix accepted as one or more path segments by Next.js.
+        description: >-
+          Optional catch-all path suffix accepted as one or more path segments by Next.js (for
+          example `api/version`, `api/tags`, or `api/show`).
     get:
       operationId: getApiV1VscodeCombosByTokenBySlug
       tags:
         - V1 Vscode
-      summary: Read a VS Code combo endpoint by path suffix
-      description: Catch-all route; detailed response schema remains route-specific.
+      summary: Read an Ollama-compatible combo endpoint
+      description: Returns version, tags, or combo catalog data depending on the path suffix.
       responses:
+        "200":
+          description: Ollama version, tags, or combo catalog response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeComboGetResponse"
         default:
-          description: Route-specific response; inspect the handler for status and body details.
+          description: Catalog or authorization error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
     post:
       operationId: postApiV1VscodeCombosByTokenBySlug
       tags:
         - V1 Vscode
-      summary: Send a VS Code combo request by path suffix
-      description: Catch-all route; request and response schemas remain route-specific.
+      summary: Return Ollama-compatible details for a combo
+      description: The `api/show` suffix accepts either `name` or `model` in the request body.
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: "#/components/schemas/VscodeComboShowRequest"
       responses:
+        "200":
+          description: Combo model details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeComboShowResponse"
+        "400":
+          description: Model name is missing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Unsupported suffix or combo model not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
         default:
-          description: Route-specific response; inspect the handler for status and body details.
+          description: Catalog or authorization error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
   /api/v1/vscode/raw/{token}:
     parameters:
       - name: token
@@ -21005,6 +21047,128 @@ components:
           items:
             $ref: "#/components/schemas/ProviderExpirationRecord"
       additionalProperties: false
+
+    VscodeComboListResponse:
+      type: object
+      required: [object, data]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Model"
+      additionalProperties: true
+
+    VscodeOllamaVersionResponse:
+      type: object
+      required: [version]
+      properties:
+        version: { type: string, const: "0.6.4" }
+      additionalProperties: false
+
+    VscodeOllamaComboTag:
+      type: object
+      required: [name, model, modified_at, size, digest, details]
+      properties:
+        name: { type: string }
+        model: { type: string }
+        modified_at: { type: string, format: date-time, const: "2026-01-01T00:00:00Z" }
+        size: { type: integer, const: 0 }
+        digest: { type: string }
+        supports_reasoning_effort:
+          type: array
+          items: { type: string }
+        supportsReasoningEffort:
+          type: array
+          items: { type: string }
+        supportedReasoningEfforts:
+          type: array
+          items: { type: string }
+        defaultReasoningEffort: { type: string }
+        selected_reasoning_effort: { type: string }
+        selectedReasoningEffort: { type: string }
+        configurationSchema: { type: object, additionalProperties: true }
+        configSchema: { type: object, additionalProperties: true }
+        details:
+          type: object
+          required: [format, family, parameter_size, quantization_level]
+          properties:
+            format: { type: string, const: omniroute-combo }
+            family: { type: string }
+            parameter_size: { type: string }
+            quantization_level: { type: string, const: dynamic }
+          additionalProperties: true
+      additionalProperties: true
+
+    VscodeOllamaComboTagsResponse:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/VscodeOllamaComboTag"
+      additionalProperties: false
+
+    VscodeComboGetResponse:
+      oneOf:
+        - $ref: "#/components/schemas/VscodeComboListResponse"
+        - $ref: "#/components/schemas/VscodeOllamaVersionResponse"
+        - $ref: "#/components/schemas/VscodeOllamaComboTagsResponse"
+
+    VscodeComboShowRequest:
+      type: object
+      anyOf:
+        - required: [name]
+        - required: [model]
+      properties:
+        name: { type: string, minLength: 1 }
+        model: { type: string, minLength: 1 }
+      additionalProperties: true
+
+    VscodeComboShowResponse:
+      type: object
+      required: [model, remote_model, license, modelfile, parameters, template, details, model_info, capabilities]
+      properties:
+        model: { type: string }
+        remote_model: { type: string }
+        license: { type: string, const: proprietary }
+        modelfile: { type: string }
+        parameters: { type: string }
+        template: { type: string }
+        supports_reasoning_effort:
+          type: array
+          items: { type: string }
+        supportsReasoningEffort:
+          type: array
+          items: { type: string }
+        supportedReasoningEfforts:
+          type: array
+          items: { type: string }
+        defaultReasoningEffort: { type: string }
+        selected_reasoning_effort: { type: string }
+        selectedReasoningEffort: { type: string }
+        configurationSchema: { type: object, additionalProperties: true }
+        configSchema: { type: object, additionalProperties: true }
+        details:
+          type: object
+          properties:
+            parent_model: { type: string }
+            format: { type: string, const: omniroute-combo }
+            family: { type: string }
+            families:
+              type: array
+              items: { type: string }
+            parameter_size: { type: string }
+            quantization_level: { type: string, const: dynamic }
+          additionalProperties: true
+        model_info:
+          type: object
+          additionalProperties: true
+        capabilities:
+          type: array
+          items: { type: string }
+      additionalProperties: true
 
     ApiKey:
       type: object

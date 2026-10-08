@@ -287,6 +287,9 @@ test("model, provider, key, and combo management responses match their route pay
       "ProviderHealthAutopilotActionResponse",
     ],
     ["/api/providers/expiration", "get", "ProviderExpirationResponse"],
+    ["/api/v1/vscode/combos/{token}", "get", "VscodeComboListResponse"],
+    ["/api/v1/vscode/combos/{token}/{slug}", "get", "VscodeComboGetResponse"],
+    ["/api/v1/vscode/combos/{token}/{slug}", "post", "VscodeComboShowResponse"],
     ["/api/providers/cursor/agent-availability", "get", "CursorAgentAvailabilityResponse"],
     ["/api/providers/quota-windows", "get", "ProviderQuotaWindowsResponse"],
     ["/api/providers/web-session-contract", "get", "WebSessionContract"],
@@ -487,6 +490,11 @@ test("model, provider, key, and combo management responses match their route pay
     false
   );
   assert.ok(healthAutopilotAction.responses?.["409"]);
+  const vscodeComboShow = operation("/api/v1/vscode/combos/{token}/{slug}", "post");
+  const vscodeComboShowRequest = requestContent(vscodeComboShow, "application/json").schema;
+  assert.equal(vscodeComboShowRequest.$ref, "#/components/schemas/VscodeComboShowRequest");
+  assert.equal(vscodeComboShow.requestBody?.required, false);
+  assert.ok(operation("/api/v1/vscode/combos/{token}", "post").responses?.["404"]);
   assert.ok(schemas?.ProviderExpirationResponse?.required?.includes("summary"));
   assert.ok(schemas?.ProviderExpirationResponse?.required?.includes("list"));
   const healthMatrixParameters = healthMatrix.parameters ?? [];
