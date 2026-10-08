@@ -176,9 +176,9 @@ for (const [pathStr, methods] of Object.entries(paths)) {
   }
 }
 
-// Reverse pass (non-fatal): every YAML path that falls under a LOCAL_ONLY prefix
-// should carry `x-loopback-only`. Pattern-only routes are intentionally excluded
-// — they are not "under" a broad prefix. Known annotation gaps stay warnings.
+// Reverse pass: every YAML operation covered by a LOCAL_ONLY prefix should carry
+// `x-loopback-only`. Pattern-only routes are also guarded by the unit test, since
+// their dynamic segment can appear before the protected suffix.
 const reverseWarnings = [];
 for (const [pathStr, methods] of Object.entries(paths)) {
   if (!methods || typeof methods !== "object") continue;
@@ -194,12 +194,7 @@ for (const [pathStr, methods] of Object.entries(paths)) {
   }
 }
 
-if (reverseWarnings.length > 0) {
-  console.warn(
-    `[openapi-security-tiers] WARN — ${reverseWarnings.length} LOCAL_ONLY paths missing x-loopback-only annotation (non-fatal):`
-  );
-  reverseWarnings.forEach((w) => console.warn(`  - ${w}`));
-}
+if (reverseWarnings.length > 0) errors.push(...reverseWarnings);
 
 if (errors.length === 0) {
   console.log("[openapi-security-tiers] PASS — all security tier annotations match routeGuard.ts");

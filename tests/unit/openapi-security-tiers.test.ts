@@ -44,6 +44,30 @@ test("every x-loopback-only path matches a LOCAL_ONLY prefix or pattern in route
   }
 });
 
+test("every routeGuard loopback-only operation is annotated in OpenAPI", () => {
+  for (const [pathStr, methods] of Object.entries(paths)) {
+    if (!pathStr.startsWith("/api/") || !methods || typeof methods !== "object") continue;
+    const concretePath = pathStr.replace(/\{[^}]+\}/g, "sample-id");
+    const matchesPrefix = (LOCAL_ONLY_API_PREFIXES as ReadonlyArray<string>).some((prefix) => {
+      const normalized = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
+      return concretePath === normalized || concretePath.startsWith(`${normalized}/`);
+    });
+    const matchesPattern = (LOCAL_ONLY_API_PATTERNS as ReadonlyArray<RegExp>).some((pattern) =>
+      pattern.test(concretePath)
+    );
+    if (!matchesPrefix && !matchesPattern) continue;
+
+    for (const [method, operation] of Object.entries(methods as Record<string, any>)) {
+      if (!operation || typeof operation !== "object") continue;
+      assert.equal(
+        operation["x-loopback-only"],
+        true,
+        `${method.toUpperCase()} ${pathStr} is loopback-only in routeGuard.ts`
+      );
+    }
+  }
+});
+
 test("GET /api/openapi/spec documents its conditional management auth contract", () => {
   const operation = paths["/api/openapi/spec"]?.get;
 
