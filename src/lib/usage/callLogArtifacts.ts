@@ -6,6 +6,7 @@ import {
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/errorSanitization.ts";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { RequestPipelinePayloads } from "@omniroute/open-sse/utils/requestLogger.ts";
 import { resolveDataDir } from "../dataPaths";
 import { getCallLogPipelineMaxSizeBytes, isChatDebugFileEnabled } from "../logEnv";
@@ -61,7 +62,7 @@ function preserveErrorForSizeLimit(error: unknown): unknown {
 export type CallLogDetailState = "none" | "ready" | "missing" | "corrupt" | "legacy-inline";
 
 export type CallLogArtifact = {
-  schemaVersion: 5;
+  schemaVersion: 5 | 6;
   summary: {
     id: string;
     timestamp: string;
@@ -94,6 +95,8 @@ export type CallLogArtifact = {
   };
   requestBody: unknown;
   responseBody: unknown;
+  requestBodyRef?: "pipeline.clientRawRequest.body";
+  responseBodyRef?: "pipeline.clientResponse.body";
   error: unknown;
   pipeline?: RequestPipelinePayloads;
 };
@@ -344,6 +347,72 @@ function getArtifactMaxBytes(artifact: CallLogArtifact): number {
   return artifact.pipeline ? getCallLogPipelineMaxSizeBytes() : MAX_CALL_LOG_ARTIFACT_BYTES;
 }
 
+/**
+ * Store the top-level compatibility payload once when the pipeline already has
+ * the exact same JSON value. Readers expand the references so API/UI callers
+ * keep the legacy in-memory shape; only the on-disk artifact is compacted.
+ */
+function compactDuplicatePayloadReferences(artifact: CallLogArtifact): CallLogArtifact {
+  if (artifact.schemaVersion < 6 || !artifact.pipeline) return artifact;
+
+  const clientRawRequest = artifact.pipeline.clientRawRequest as
+    | Record<string, unknown>
+    | undefined;
+  const clientResponse = artifact.pipeline.clientResponse as Record<string, unknown> | undefined;
+  const requestMatches =
+    artifact.requestBody !== null &&
+    artifact.requestBody !== undefined &&
+    clientRawRequest !== undefined &&
+    Object.hasOwn(clientRawRequest, "body") &&
+    isDeepStrictEqual(artifact.requestBody, clientRawRequest.body);
+  const responseMatches =
+    artifact.responseBody !== null &&
+    artifact.responseBody !== undefined &&
+    clientResponse !== undefined &&
+    Object.hasOwn(clientResponse, "body") &&
+    isDeepStrictEqual(artifact.responseBody, clientResponse.body);
+
+  if (!requestMatches && !responseMatches) return artifact;
+  return {
+    ...artifact,
+    ...(requestMatches
+      ? { requestBody: undefined, requestBodyRef: "pipeline.clientRawRequest.body" as const }
+      : {}),
+    ...(responseMatches
+      ? { responseBody: undefined, responseBodyRef: "pipeline.clientResponse.body" as const }
+      : {}),
+  };
+}
+
+function expandDuplicatePayloadReferences(artifact: CallLogArtifact): CallLogArtifact {
+  if (artifact.requestBodyRef) {
+    if (artifact.requestBodyRef !== "pipeline.clientRawRequest.body") {
+      throw new Error("Unsupported call-log request body reference");
+    }
+    const clientRawRequest = artifact.pipeline?.clientRawRequest as
+      | Record<string, unknown>
+      | undefined;
+    if (!clientRawRequest || !Object.hasOwn(clientRawRequest, "body")) {
+      throw new Error("Call-log request body reference target is missing");
+    }
+    artifact.requestBody = clientRawRequest.body;
+    delete artifact.requestBodyRef;
+  }
+
+  if (artifact.responseBodyRef) {
+    if (artifact.responseBodyRef !== "pipeline.clientResponse.body") {
+      throw new Error("Unsupported call-log response body reference");
+    }
+    const clientResponse = artifact.pipeline?.clientResponse as Record<string, unknown> | undefined;
+    if (!clientResponse || !Object.hasOwn(clientResponse, "body")) {
+      throw new Error("Call-log response body reference target is missing");
+    }
+    artifact.responseBody = clientResponse.body;
+    delete artifact.responseBodyRef;
+  }
+  return artifact;
+}
+
 function buildMinimalArtifactForSizeLimit(artifact: CallLogArtifact) {
   return {
     schemaVersion: artifact.schemaVersion,
@@ -409,12 +478,13 @@ function serializeArtifactForStorage(artifact: CallLogArtifact): string {
   // JSON.parse (readCallArtifact), so pretty-printing only doubled the bytes and CPU of
   // serializing large request/response bodies on every request — a contributor to the
   // CPU-runaway. The debug path above keeps pretty output for human inspection.
-  const serialized = JSON.stringify(artifact);
+  const compacted = compactDuplicatePayloadReferences(artifact);
+  const serialized = JSON.stringify(compacted);
   if (Buffer.byteLength(serialized) <= maxBytes) {
     return serialized;
   }
 
-  const truncated = JSON.stringify(truncateArtifactForStorage(artifact));
+  const truncated = JSON.stringify(truncateArtifactForStorage(compacted));
   if (Buffer.byteLength(truncated) <= maxBytes) {
     return truncated;
   }
@@ -486,10 +556,8 @@ export function readCallArtifact(relativePath: string | null): {
     if (!fs.existsSync(absPath)) {
       return { artifact: null, state: "missing" };
     }
-    return {
-      artifact: JSON.parse(fs.readFileSync(absPath, "utf8")) as CallLogArtifact,
-      state: "ready",
-    };
+    const artifact = JSON.parse(fs.readFileSync(absPath, "utf8")) as CallLogArtifact;
+    return { artifact: expandDuplicatePayloadReferences(artifact), state: "ready" };
   } catch (error) {
     console.error("[callLogs] Failed to read request artifact:", (error as Error).message);
     return { artifact: null, state: "corrupt" };

@@ -772,7 +772,7 @@ test("saveCallLog falls back to a compact sentinel when the configured cap is ve
   const artifactPath = path.join(TEST_DATA_DIR, "call_logs", (row as CallLogRow).artifact_relpath);
   const artifact = JSON.parse(fs.readFileSync(artifactPath, "utf8"));
   assert.deepEqual(artifact, {
-    schemaVersion: 5,
+    schemaVersion: 6,
     _omniroute_truncated: true,
     reason: "call_log_artifact_size_limit_exceeded",
     error: null,

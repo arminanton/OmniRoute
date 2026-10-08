@@ -236,7 +236,7 @@ function buildArtifact(
   pipelinePayloads: RequestPipelinePayloads | null
 ): CallLogArtifact {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     summary: {
       id: logEntry.id,
       timestamp: logEntry.timestamp,
