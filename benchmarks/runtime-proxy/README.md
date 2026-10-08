@@ -56,20 +56,58 @@ turns, tool calls, and tool results. The per-turn context is repeated 64 KiB tex
 transport stress case, not a token-equivalent prompt or real provider/tool execution. Results
 separate completed sessions, completed rounds, and request throughput.
 
-For a one-request, 1,000-simultaneous-session transport stress run, use the same body and chunk
-shape for each adapter:
+For the comparable four-core, 1,000-simultaneous-session run, pin each component to a disjoint CPU
+set and use the Rust mock upstream for every adapter. The example matches the repeated run from
+2026-10-08: a 16 KiB synthetic context, 20 chunks spaced 25 ms apart, and a 1,024-request admission
+cap. The devvm has eight logical CPUs, so these CPU sets leave no core shared between gateway,
+upstream, and load generator:
 
 ```bash
-python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --clients 1000 --rounds 1 --context-bytes 65536 --chunks 40 --chunk-delay-ms 25 --max-inflight 1024
-python3 benchmarks/runtime-proxy/run_bench.py --runtime node --clients 1000 --rounds 1 --context-bytes 65536 --chunks 40 --chunk-delay-ms 25 --max-inflight 1024
-python3 benchmarks/runtime-proxy/run_bench.py --runtime bun140-container --clients 1000 --rounds 1 --context-bytes 65536 --chunks 40 --chunk-delay-ms 25 --max-inflight 1024
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --upstream-runtime rust --clients 1000 --rounds 1 --context-bytes 16384 --chunks 20 --chunk-delay-ms 25 --max-inflight 1024 --gateway-cpus 0-3 --upstream-cpus 4-5 --load-cpus 6-7
+python3 benchmarks/runtime-proxy/run_bench.py --runtime node --upstream-runtime rust --clients 1000 --rounds 1 --context-bytes 16384 --chunks 20 --chunk-delay-ms 25 --max-inflight 1024 --gateway-cpus 0-3 --upstream-cpus 4-5 --load-cpus 6-7
+python3 benchmarks/runtime-proxy/run_bench.py --runtime bun140-container --upstream-runtime rust --clients 1000 --rounds 1 --context-bytes 16384 --chunks 20 --chunk-delay-ms 25 --max-inflight 1024 --gateway-cpus 0-3 --upstream-cpus 4-5 --load-cpus 6-7
 ```
 
 On 2026-10-08, each runtime completed 1,000/1,000 requests in three sequential trials on the
 aarch64 devvm. Node 25.8.1 and Rust 1.94.0 ran on the host; Bun 1.4.0 ran in the cached official
-container with a 512 MiB cap. The recorded p95/RSS/CPU table and limitations are in
-`docs/architecture/RUNTIME_AND_DATA_PLANE_BENCHMARKS.md`. The load uses one synthetic request per
-session; it does not execute tools or exercise real provider/account policies.
+container with a 512 MiB cap. Rootless Podman lacks a delegated cpuset controller on that host, so
+the harness applies `taskset -a -p` to the running container's host PID after startup. The recorded
+p95/RSS/CPU table and limitations are in `docs/architecture/RUNTIME_AND_DATA_PLANE_BENCHMARKS.md`.
+The load uses one synthetic request per session; it does not execute tools or exercise real
+provider/account policies. Repeat the three commands serially at least three times each when
+comparing a different host or runtime version.
+
+To probe beyond the requested 70–100 sessions, build the Rust proxy and mock once and run the
+Rust-only scale points. These single-trial results use an unpinned eight-CPU devvm and should not be
+compared directly with the four-core table:
+
+```bash
+cargo build --release --manifest-path benchmarks/runtime-proxy/Cargo.toml
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --upstream-runtime rust --clients 5000 --rounds 1 --context-bytes 16384 --chunks 20 --chunk-delay-ms 25 --max-inflight 10240
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --upstream-runtime rust --clients 10000 --rounds 1 --context-bytes 16384 --chunks 20 --chunk-delay-ms 25 --max-inflight 10240
+```
+
+For loads above 1,000, pass `--upstream-runtime rust`. The Node mock is convenient for small tests,
+but an earlier 10,000-client run against it returned 1,375 gateway 502s; that was not a valid Rust
+gateway capacity measurement. The Rust benchmark adapter includes the `reqwest` error chain in its
+local 502 body. The loader retains at most 512 bytes of non-2xx response body and records whether a
+failure occurred during connect, request write, response headers, or response body, without
+retaining the synthetic prompt or a full upstream response.
+
+For a 70–100-session, multi-turn run where the gateway, mock provider, and load client all share a
+four-CPU allocation, pin each process to the same set. This is a more realistic CPU-contention check
+than giving the gateway four exclusive cores; the mock is still local and no real model/provider
+capacity is involved:
+
+```bash
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --upstream-runtime rust --clients 70 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10 --max-inflight 128 --gateway-cpus 0-3 --upstream-cpus 0-3 --load-cpus 0-3
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --upstream-runtime rust --clients 100 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10 --max-inflight 128 --gateway-cpus 0-3 --upstream-cpus 0-3 --load-cpus 0-3
+```
+
+The four-CPU co-located 5,000/10,000 sweep had intermittent 502s. A 10,000-session diagnostic retry
+captured `Connection reset by peer (os error 104)` from the local mock connection; repeated runs
+varied substantially, so treat that as a mock-path saturation signal rather than a gateway or real
+provider limit. Keep it separate from the successful isolated-gateway comparison.
 
 Sweep `--clients 1,15,30,70,100` and repeat each point at least three times. The result reports
 header and first-body-byte latency, completion latency, successful streams, throughput, peak

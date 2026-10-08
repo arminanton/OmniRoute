@@ -1,5 +1,7 @@
 use std::{
-    env, io,
+    env,
+    error::Error as StdError,
+    io,
     pin::Pin,
     sync::{
         Arc,
@@ -44,11 +46,21 @@ impl Drop for ActiveGuard {
     }
 }
 
-fn error_response(status: StatusCode, message: &'static str) -> Response {
+fn error_response(status: StatusCode, message: &str) -> Response {
     let body = serde_json::json!({
         "error": { "message": message, "type": "proxy_error" }
     });
     (status, axum::Json(body)).into_response()
+}
+
+fn error_chain(error: &(dyn StdError + 'static)) -> String {
+    let mut messages = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(cause) = source {
+        messages.push(cause.to_string());
+        source = cause.source();
+    }
+    messages.join(": ")
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
@@ -126,7 +138,10 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
         .await
     {
         Ok(response) => response,
-        Err(_) => return error_response(StatusCode::BAD_GATEWAY, "mock upstream unavailable"),
+        Err(error) => {
+            let message = format!("mock upstream unavailable: {}", error_chain(&error));
+            return error_response(StatusCode::BAD_GATEWAY, &message);
+        }
     };
 
     let status =

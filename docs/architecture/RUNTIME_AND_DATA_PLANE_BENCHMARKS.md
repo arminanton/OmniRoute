@@ -5,7 +5,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 85
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 118
 component schemas. The API route inventory checker now verifies that source files and the spec agree
 on every path, exported method, and path parameter; it reports 705/705 routes and the documented
 public copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -241,27 +241,72 @@ behavior.
 
 ## One thousand simultaneous transport sessions
 
-The benchmark harness was extended to 1,000 simultaneous independent sessions on the aarch64 devvm.
-Each session sent one 65,676-byte JSON request, then consumed a local mock SSE stream of 40 chunks at
-25 ms intervals. The gateway admission cap was 1,024. The devvm reported eight logical CPUs and
-14 GiB total memory; it is not the 4-vCPU/24-GiB Maria target. Runs were sequential and the table
-reports the median of three trials. Node and
-Rust ran directly on the host (Node 25.8.1, rustc 1.94.0); Bun ran in the cached official 1.4.0
-container with a 512 MiB memory cap. The proxy-process RSS and CPU columns exclude the Python client
-and mock server. No provider, account selection, tool execution, database, or call-log capture ran.
+The same 1,000-session transport workload was repeated with the gateway pinned to four CPUs, the
+Rust mock upstream on two CPUs, and the Python load client on two CPUs of the eight-CPU aarch64
+devvm. Each session sent one 16,524-byte JSON body and received 20 SSE chunks at 25 ms intervals;
+the admission cap was 1,024. This isolates a four-core gateway from the local mock and load client.
+The devvm reports eight logical CPUs and 14 GiB total memory, so this pins the gateway to four
+cores but does not reproduce Maria's 24 GiB memory configuration.
+Node 25.8.1 and Rust 1.94.0 ran on the host. Bun 1.4.0 ran in its cached official image with a 512
+MiB memory cap; because rootless Podman has no delegated cpuset controller, the harness pins the
+container's host PID with `taskset`. The table reports medians from three sequential trials. Every
+runtime completed 1,000/1,000 in all three trials.
 
-| Runtime | Sessions / requests | First body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput median (range) |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Rust/Axum/Reqwest | 1,000 / 1,000 in all trials | 193 ms | 1,241 ms | 58.8 MiB | 0.80 s | 416 req/s (242–420) |
-| Node 25.8.1 | 1,000 / 1,000 in all trials | 1,412 ms | 2,429 ms | 288.0 MiB | 3.01 s | 270 req/s (269–277) |
-| Bun 1.4.0 | 1,000 / 1,000 in all trials | 3,147 ms | 4,160 ms | 108.6 MiB | 1.80 s | 224 req/s (222–225) |
+| Runtime | First body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput median (range) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Rust/Axum/Reqwest | 541 ms | 1,112 ms | 35.7 MiB | 0.40 s | 526 req/s (523–532) |
+| Node 25.8.1 | 913 ms | 1,429 ms | 207.6 MiB | 1.95 s | 440 req/s (431–461) |
+| Bun 1.4.0 | 2,060 ms | 2,583 ms | 65.3 MiB | 0.79 s | 360 req/s (355–360) |
 
-All three adapters completed without request failures. On this one-loopback workload, Rust used about
-one-fifth the Node proxy RSS and one-quarter the CPU; its first-body p95 was much lower. Bun stayed
-below its 512 MiB cap but had the highest first-byte and completion latency in these trials. Rust's
-first trial had lower reported throughput than its next two while its latency and RSS remained
-similar, so its throughput range is included and should not be treated as a stable capacity number.
-This transport result does not predict full OmniRoute behavior or real-provider quotas.
+For this bounded synthetic transport test, Rust used about one-sixth the Node gateway RSS and one-
+fifth of its CPU; Bun used more RSS than Rust and less than Node. Rust had the lowest first-body
+and completion p95 in the measured range. This is a local transport result, not a full OmniRoute
+agent-capacity or provider-quota claim.
+
+The repeatable run command is documented in `benchmarks/runtime-proxy/README.md`. It pins the four-
+CPU gateway, two-CPU Rust mock, and two-CPU load generator separately. Rootless Podman on the devvm
+does not delegate the `cpuset` cgroup controller, so Bun's container process is pinned by host PID
+with `taskset` after startup. This keeps the CPU allocation comparable without changing the
+container's cgroup configuration.
+
+## Rust scale beyond the target session count
+
+With the same Rust mock upstream and load generator sharing the unpinned eight-CPU devvm, the Rust
+proxy was exercised at 5,000 and 10,000 simultaneous sessions. Each sent one 16,525-byte JSON body
+and received 20 mock SSE chunks at 25 ms intervals. Both single trials completed every request.
+
+| Sessions / requests | First body p95 | Completion p95 | Gateway peak RSS | Gateway CPU | Throughput |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 5,000 / 5,000 | 1,529 ms | 1,968 ms | 173.5 MiB | 1.96 s | 1,846 req/s |
+| 10,000 / 10,000 | 1,820 ms | 2,108 ms | 335.4 MiB | 3.80 s | 2,486 req/s |
+
+An earlier 10,000-client run against the Node mock returned 1,375 `502 mock upstream unavailable`
+responses. The bounded error-body preview identified the Node mock as the failing upstream; switching
+the scale test to the Rust mock removed those failures. These 5k/10k runs are one trial each and test
+only this Rust transport adapter. The four-core 1k comparison above is the repeatable CPU-bounded
+result; neither benchmark executes model generation, tool calls, database policy, or call-log capture.
+
+## Whole-host four-CPU saturation probe
+
+A separate single-trial probe pinned the Rust gateway, Rust mock, and Python load generator to the
+same four CPUs, modeling a host where the test harness competes with the gateway rather than having
+dedicated helper cores. It completed 1,000/1,000 requests, but at 5,000 sessions returned 138
+generic proxy `502` responses and at 10,000 returned 402. After adding a bounded error-body preview
+and preserving the `reqwest` source chain in this benchmark-only adapter, another co-located 5,000
+run returned one 502 and one 10,000 run returned 83. The captured failure was `Connection reset by
+peer (os error 104)` while sending to the local mock; prior repeated 10,000 runs varied from zero to
+429 failures. This points to the constrained, co-located loopback mock connection path, but the
+specific close behavior is not isolated. The stress results are not evidence of OmniRoute or a real
+provider failing. Gateway peak RSS was 174.8 MiB at 5,000 and 389.6 MiB at 10,000 in the earlier
+failed trials. The separate 70–100 long-lived-session probe on the same four-CPU set is more
+representative of the requested agent count. With five sequential turns per
+session, 262,144 bytes of synthetic user text per turn, bodies up to 1,311,987 bytes, and 100 SSE
+chunks spaced 10 ms apart, the 70-session run completed 350/350 requests. Three 100-session trials
+each completed 500/500 requests; median first-body p95 was 66.8 ms, completion p95 1,184.8 ms,
+gateway peak RSS 61.3 MiB, and gateway CPU 0.85 seconds. This supports the transport prototype at
+70–100 synthetic active sessions on a shared four-CPU set. It does not include OmniRoute auth,
+routing/account policy, database work, provider SDKs, persistent call-log capture, tool execution,
+or real upstream quotas, so it is not yet a production-capacity claim.
 
 ## Production admission middleware with long-lived streams
 

@@ -7,6 +7,8 @@ from collections import Counter
 import json
 import time
 
+MAX_ERROR_BODY_PREVIEW_BYTES = 512
+
 
 def percentile(values, percent):
     if not values:
@@ -34,9 +36,10 @@ async def read_response(reader):
     return status, headers
 
 
-async def read_chunked(reader, started):
+async def read_chunked(reader, started, capture_preview=False):
     first_body_ms = None
     total_bytes = 0
+    preview = bytearray()
     while True:
         size_line = await reader.readline()
         if not size_line:
@@ -47,33 +50,43 @@ async def read_chunked(reader, started):
                 trailer = await reader.readline()
                 if trailer in (b"\r\n", b"\n", b""):
                     break
-            return total_bytes, first_body_ms
+            return total_bytes, first_body_ms, preview.decode("utf8", errors="replace") or None
         data = await reader.readexactly(size)
         await reader.readexactly(2)  # CRLF after the chunk body
+        if capture_preview and len(preview) < MAX_ERROR_BODY_PREVIEW_BYTES:
+            preview.extend(data[: MAX_ERROR_BODY_PREVIEW_BYTES - len(preview)])
         if first_body_ms is None:
             first_body_ms = (time.perf_counter() - started) * 1000
         total_bytes += len(data)
 
 
-async def read_body(reader, headers, started):
+async def read_body(reader, headers, started, capture_preview=False):
     if "chunked" in headers.get("transfer-encoding", "").lower():
-        return await read_chunked(reader, started)
+        return await read_chunked(reader, started, capture_preview)
     if "content-length" in headers:
         size = int(headers["content-length"])
         if size == 0:
-            return 0, None
-        await reader.readexactly(size)
-        return size, (time.perf_counter() - started) * 1000
+            return 0, None, None
+        data = await reader.readexactly(size)
+        preview = (
+            data[:MAX_ERROR_BODY_PREVIEW_BYTES].decode("utf8", errors="replace")
+            if capture_preview
+            else None
+        )
+        return size, (time.perf_counter() - started) * 1000, preview
     total = 0
     first_body_ms = None
+    preview = bytearray()
     while True:
         chunk = await reader.read(65536)
         if not chunk:
             break
+        if capture_preview and len(preview) < MAX_ERROR_BODY_PREVIEW_BYTES:
+            preview.extend(chunk[: MAX_ERROR_BODY_PREVIEW_BYTES - len(preview)])
         if first_body_ms is None:
             first_body_ms = (time.perf_counter() - started) * 1000
         total += len(chunk)
-    return total, first_body_ms
+    return total, first_body_ms, preview.decode("utf8", errors="replace") or None
 
 
 def request_body(session_index, turn, context_bytes):
@@ -119,6 +132,7 @@ def request_body(session_index, turn, context_bytes):
 
 async def call_on_connection(reader, writer, request_id, body, timeout, cancel_after_ms):
     started = time.perf_counter()
+    phase = "request_write"
     try:
         headers_started = time.perf_counter()
         request = (
@@ -131,6 +145,7 @@ async def call_on_connection(reader, writer, request_id, body, timeout, cancel_a
         ).encode("ascii")
         writer.write(request + body)
         await writer.drain()
+        phase = "response_headers"
         status, response_headers = await asyncio.wait_for(read_response(reader), timeout=timeout)
         headers_ms = (time.perf_counter() - headers_started) * 1000
         if cancel_after_ms is not None:
@@ -144,10 +159,12 @@ async def call_on_connection(reader, writer, request_id, body, timeout, cancel_a
                 "elapsedMs": round((time.perf_counter() - started) * 1000, 3),
                 "outputBytes": 0,
             }
-        output_bytes, first_body_ms = await asyncio.wait_for(
-            read_body(reader, response_headers, started), timeout=timeout
+        phase = "response_body"
+        output_bytes, first_body_ms, error_body_preview = await asyncio.wait_for(
+            read_body(reader, response_headers, started, capture_preview=status >= 400),
+            timeout=timeout,
         )
-        return {
+        result = {
             "ok": 200 <= status < 300,
             "status": status,
             "cancelled": False,
@@ -156,18 +173,27 @@ async def call_on_connection(reader, writer, request_id, body, timeout, cancel_a
             "elapsedMs": round((time.perf_counter() - started) * 1000, 3),
             "outputBytes": output_bytes,
         }
+        if error_body_preview:
+            result["errorBodyPreview"] = error_body_preview
+        return result
     except Exception as error:
-        return {"ok": False, "error": type(error).__name__ + ": " + str(error)}
+        return {
+            "ok": False,
+            "phase": phase,
+            "error": type(error).__name__ + ": " + str(error),
+        }
 
 
 async def run_session(port, session_index, rounds, timeout, cancel_after_ms, round_gap_ms, context_bytes):
     results = []
     writer = None
+    phase = "connect"
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection("127.0.0.1", port), timeout=timeout
         )
         for turn in range(rounds):
+            phase = "request_build"
             body = request_body(session_index, turn, context_bytes)
             result = await call_on_connection(
                 reader,
@@ -177,6 +203,7 @@ async def run_session(port, session_index, rounds, timeout, cancel_after_ms, rou
                 timeout,
                 cancel_after_ms,
             )
+            phase = result.get("phase", "response_body")
             result["turn"] = turn
             result["requestBytes"] = len(body)
             results.append(result)
@@ -185,7 +212,11 @@ async def run_session(port, session_index, rounds, timeout, cancel_after_ms, rou
             if turn + 1 < rounds and round_gap_ms:
                 await asyncio.sleep(round_gap_ms / 1000.0)
     except Exception as error:
-        results.append({"ok": False, "error": type(error).__name__ + ": " + str(error)})
+        results.append({
+            "ok": False,
+            "phase": phase,
+            "error": type(error).__name__ + ": " + str(error),
+        })
     finally:
         if writer is not None:
             writer.close()

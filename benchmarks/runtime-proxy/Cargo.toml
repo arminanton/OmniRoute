@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[[bin]]
+name = "omniroute-runtime-mock-upstream-bench"
+path = "src/bin/mock_upstream.rs"
+
 [dependencies]
 async-stream = "0.3"
 axum = "0.8.9"

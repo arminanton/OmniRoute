@@ -7,6 +7,7 @@ import json
 import os
 import pathlib
 import signal
+import shutil
 import subprocess
 import sys
 import threading
@@ -87,24 +88,53 @@ def sample_metrics(pid, stop):
     }
 
 
-def runtime_command(runtime, bun_bin, rust_bin, gateway_port, upstream_url, max_inflight):
+def apply_cpu_affinity(command, cpu_list):
+    if not cpu_list:
+        return command
+    taskset = shutil.which("taskset")
+    if not taskset:
+        raise RuntimeError("CPU affinity was requested but taskset is not installed")
+    return [taskset, "-c", cpu_list] + command
+
+
+def pin_process_cpu_affinity(pid, cpu_list):
+    if not cpu_list:
+        return
+    taskset = shutil.which("taskset")
+    if not taskset:
+        raise RuntimeError("CPU affinity was requested but taskset is not installed")
+    subprocess.run(
+        [taskset, "-a", "-pc", cpu_list, str(pid)],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        universal_newlines=True,
+    )
+
+
+def runtime_command(
+    runtime, bun_bin, rust_bin, gateway_port, upstream_url, max_inflight, gateway_cpus=None
+):
     if runtime == "node":
-        return ["node", str(ROOT / "proxy-node.mjs")], None
+        return apply_cpu_affinity(["node", str(ROOT / "proxy-node.mjs")], gateway_cpus), None
     if runtime == "omni-admission-node":
-        return [
+        command = [
             "node",
             "--max-old-space-size=2048",
             "--import",
             "tsx/esm",
             str(ROOT / "omni-admission-proxy.ts"),
-        ], None
+        ]
+        return apply_cpu_affinity(command, gateway_cpus), None
     if runtime == "bun":
-        return [bun_bin, str(ROOT / "proxy-bun.ts")], None
+        return apply_cpu_affinity([bun_bin, str(ROOT / "proxy-bun.ts")], gateway_cpus), None
     if runtime == "bun-smol":
-        return [bun_bin, "--smol", str(ROOT / "proxy-bun.ts")], None
+        return apply_cpu_affinity([bun_bin, "--smol", str(ROOT / "proxy-bun.ts")], gateway_cpus), None
     if runtime == "rust":
-        return [rust_bin], None
+        return apply_cpu_affinity([rust_bin], gateway_cpus), None
     if runtime in {"node26-container", "bun140-container", "bun142-container", "bun142-smol-container"}:
+        # Pin the live container PID with taskset after startup; rootless Podman may not have a
+        # delegated cpuset controller.
         image, command = {
             "node26-container": (NODE_IMAGE, ["node", "/bench/proxy-node.mjs"]),
             "bun140-container": (
@@ -175,12 +205,22 @@ async def main():
     parser.add_argument("--max-inflight", type=int, default=128)
     parser.add_argument("--upstream-port", type=int, default=3900)
     parser.add_argument("--gateway-port", type=int, default=3901)
+    parser.add_argument("--gateway-cpus", help="Optional Linux CPU affinity list, e.g. 0-3")
+    parser.add_argument("--upstream-cpus", help="Optional CPU affinity for the mock upstream")
+    parser.add_argument("--load-cpus", help="Optional CPU affinity for the concurrent load client")
+    parser.add_argument("--upstream-runtime", choices=["node", "rust"], default="node")
+    parser.add_argument(
+        "--rust-upstream-bin",
+        default=str(ROOT / "target" / "release" / "omniroute-runtime-mock-upstream-bench"),
+    )
     parser.add_argument("--bun-bin", default=os.environ.get("BUN_BIN", "bun"))
     parser.add_argument(
         "--rust-bin",
         default=str(ROOT / "target" / "release" / "omniroute-runtime-proxy-bench"),
     )
     args = parser.parse_args()
+    if any([args.gateway_cpus, args.upstream_cpus, args.load_cpus]) and not shutil.which("taskset"):
+        parser.error("CPU affinity options require taskset on this Linux host")
 
     env = os.environ.copy()
     upstream_env = dict(env, **{
@@ -198,8 +238,12 @@ async def main():
 
     upstream = None
     if args.runtime != "omni-admission-node":
+        upstream_command = ["node", str(ROOT / "mock-upstream.mjs")]
+        if args.upstream_runtime == "rust":
+            upstream_command = [args.rust_upstream_bin]
+        upstream_command = apply_cpu_affinity(upstream_command, args.upstream_cpus)
         upstream = subprocess.Popen(
-            ["node", str(ROOT / "mock-upstream.mjs")],
+            upstream_command,
             cwd=ROOT,
             env=upstream_env,
             stdout=subprocess.DEVNULL,
@@ -222,6 +266,7 @@ async def main():
             args.gateway_port,
             gateway_env["UPSTREAM_URL"],
             args.max_inflight,
+            args.gateway_cpus,
         )
         gateway = subprocess.Popen(
             command,
@@ -253,6 +298,8 @@ async def main():
                         break
                 except Exception:
                     time.sleep(0.05)
+            if metrics_pid > 0:
+                pin_process_cpu_affinity(metrics_pid, args.gateway_cpus)
 
         stop = threading.Event()
         metrics = {}
@@ -277,6 +324,7 @@ async def main():
             "--label",
             args.runtime,
         ]
+        loader_command = apply_cpu_affinity(loader_command, args.load_cpus)
         if args.cancel_after_ms is not None:
             loader_command.extend(["--cancel-after-ms", str(args.cancel_after_ms)])
         loader = subprocess.run(
@@ -300,6 +348,12 @@ async def main():
         result["chunksPerResponse"] = args.chunks
         result["chunkDelayMs"] = args.chunk_delay_ms
         result["chunkBytes"] = args.chunk_bytes
+        if args.gateway_cpus:
+            result["gatewayCpuAffinity"] = args.gateway_cpus
+        if args.upstream_cpus:
+            result["upstreamCpuAffinity"] = args.upstream_cpus
+        if args.load_cpus:
+            result["loadCpuAffinity"] = args.load_cpus
         if args.runtime == "omni-admission-node":
             with urllib.request.urlopen(
                 "http://127.0.0.1:%d/health" % args.gateway_port, timeout=2
@@ -364,7 +418,8 @@ async def main():
 
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(main())
     finally:
