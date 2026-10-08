@@ -231,6 +231,12 @@ Apport exception hook while handling those timeouts; it is secondary. The system
 The controller restarted three times and is active now; the same namespace readlink takes about
 0.01 seconds in three read-only probes.
 
+Host sysstat has no sample at the exact failure second; its 18:20 sample, four minutes later, showed
+77.3% CPU idle, a 1.23 load average on four CPUs, about 20.4 GiB available memory, 11.7% disk
+utilization, and 2,460 swap pages written per second. That later host-wide sample does not prove what
+caused either namespace command to time out, and it cannot substitute for the absent app-cgroup
+measurements at 18:16.
+
 The app did not restart after the dependency recovered. Its unit has `Restart=on-failure`, while the
 dependency stop was recorded as a successful SIGTERM drain. The browser/Codex sidecars initially
 failed their stopped-role cleanup, then restarted at 18:17 on image revision
