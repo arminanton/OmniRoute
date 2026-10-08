@@ -273,6 +273,10 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/models/catalog", "get", "GroupedModelCatalogResponse"],
     ["/api/providers", "get", "ProviderConnectionListResponse"],
     ["/api/providers", "post", "ProviderConnectionEnvelope"],
+    ["/api/providers/{id}", "get", "ProviderConnectionEnvelope"],
+    ["/api/providers/{id}", "patch", "ProviderConnectionEnvelope"],
+    ["/api/providers/{id}", "put", "ProviderConnectionEnvelope"],
+    ["/api/providers/{id}", "delete", "ProviderConnectionDeleteResponse"],
     ["/api/keys", "get", "ApiKeyListResponse"],
     ["/api/keys", "post", "ApiKeyCreateResponse"],
     ["/api/combos", "get", "ComboListResponse"],
@@ -310,9 +314,39 @@ test("model, provider, key, and combo management responses match their route pay
   assert.equal("label" in createKeyProperties, false);
 
   const schemas = spec.components?.schemas as
-    | Record<string, { required?: string[]; properties?: Record<string, unknown> }>
+    | Record<
+        string,
+        { required?: string[]; minProperties?: number; properties?: Record<string, unknown> }
+      >
     | undefined;
   assert.ok(schemas?.ProviderConnectionListResponse?.required?.includes("total"));
+  const providerUpdate = schemas?.ProviderConnectionUpdate;
+  assert.equal(providerUpdate?.minProperties, 1);
+  const providerUpdateProperties = providerUpdate?.properties;
+  assert.ok(providerUpdateProperties?.name);
+  assert.ok(providerUpdateProperties?.providerSpecificData);
+  assert.equal("provider" in (providerUpdateProperties ?? {}), false);
+  for (const method of ["patch", "put"] as const) {
+    assert.equal(
+      requestContent(operation("/api/providers/{id}", method), "application/json").schema.$ref,
+      "#/components/schemas/ProviderConnectionUpdate"
+    );
+  }
+  for (const method of ["get", "patch", "put", "delete"] as const) {
+    const providerOperation = operation("/api/providers/{id}", method);
+    const security = providerOperation.security ?? [];
+    assert.ok(security.some((requirement) => "BearerAuth" in requirement));
+    assert.ok(security.some((requirement) => "ManagementSessionAuth" in requirement));
+    assert.ok(security.some((requirement) => Object.keys(requirement).length === 0));
+    assert.ok(providerOperation.responses?.["401"]);
+    assert.ok(providerOperation.responses?.["403"]);
+    assert.ok(providerOperation.responses?.["503"]);
+  }
+  assert.equal(
+    operation("/api/providers/{id}", "delete").responses?.["404"]?.content?.["application/json"]
+      ?.schema?.$ref,
+    "#/components/schemas/ProviderConnectionErrorResponse"
+  );
   assert.ok(schemas?.ApiKeyListResponse?.required?.includes("allowKeyReveal"));
   assert.ok(schemas?.ApiKeyCreateResponse?.required?.includes("key"));
   assert.equal(

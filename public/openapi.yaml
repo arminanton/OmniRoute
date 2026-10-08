@@ -2678,17 +2678,56 @@ paths:
       operationId: getApiProvidersById
       tags: [Providers]
       summary: Get provider connection
+      description: >-
+        When management authentication is enabled, requires an authenticated dashboard session or
+        a Bearer credential accepted for management access. Anonymous requests may be permitted by
+        the local authentication configuration.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
           description: Provider connection details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionEnvelope"
         "404":
           description: Provider not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to fetch provider connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     patch:
       operationId: patchApiProvidersById
       tags: [Providers]
       summary: Update provider connection
+      description: >-
+        Partial update using the same field semantics as PUT. Management authentication is
+        enforced when enabled by the local authentication configuration.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       requestBody:
@@ -2696,14 +2735,54 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ProviderConnectionCreate"
+              $ref: "#/components/schemas/ProviderConnectionUpdate"
       responses:
         "200":
           description: Updated provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionEnvelope"
+        "400":
+          description: Invalid JSON, update fields, or provider-specific credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "404":
+          description: Provider connection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "500":
+          description: Failed to update provider connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     put:
       operationId: putApiProvidersById
       tags: [Providers]
-      summary: Replace a provider connection
+      summary: Update a provider connection
+      description: >-
+        Applies the same partial-update semantics as PATCH; omitted fields are preserved.
+        Management authentication is enforced when enabled by the local authentication
+        configuration.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       requestBody:
@@ -2711,23 +2790,85 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ProviderConnectionCreate"
+              $ref: "#/components/schemas/ProviderConnectionUpdate"
       responses:
         "200":
           description: Provider connection updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionEnvelope"
         "400":
           description: Invalid provider connection data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
         "404":
           description: Provider connection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "500":
+          description: Failed to update provider connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     delete:
       operationId: deleteApiProvidersById
       tags: [Providers]
       summary: Delete provider connection
+      description: >-
+        When management authentication is enabled, requires an authenticated dashboard session or
+        a Bearer credential accepted for management access. Anonymous requests may be permitted by
+        the local authentication configuration.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
           description: Provider deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionDeleteResponse"
+        "404":
+          description: Provider connection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "500":
+          description: Failed to delete provider connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/providers/{id}/test:
     post:
@@ -16839,7 +16980,7 @@ components:
               type: invalid_request
             requestId: 3f9f6f5a-509a-4b35-b0a7-2d2d99d73a01
     ManagementInvalidToken:
-      description: Bearer tokens are not accepted for management routes
+      description: Management credential is invalid or lacks the required management scope
       content:
         application/json:
           schema:
@@ -19548,6 +19689,109 @@ components:
           type: integer
           nullable: true
           minimum: 0
+
+    ProviderConnectionUpdate:
+      type: object
+      minProperties: 1
+      description: >-
+        Partial update accepted by PUT and PATCH /api/providers/{id}. Omitted properties are
+        preserved. Null clears nullable overrides where supported. provider and url cannot be
+        changed through this route. Unknown properties are ignored by the update validator.
+      properties:
+        name: { type: string, maxLength: 200 }
+        priority: { type: integer, minimum: 1, maximum: 100000 }
+        globalPriority:
+          oneOf:
+            - { type: integer, minimum: 1, maximum: 100000 }
+            - { type: "null" }
+        defaultModel:
+          oneOf:
+            - { type: string, maxLength: 200 }
+            - { type: "null" }
+        isActive: { type: boolean }
+        apiKey:
+          type: string
+          maxLength: 100000
+          description: >-
+            Optional replacement credential. The response never includes this value unless
+            API-key reveal is enabled.
+        testStatus: { type: string, maxLength: 50 }
+        lastError: { type: [string, "null"] }
+        lastErrorAt: { type: [string, "null"] }
+        lastErrorType: { type: [string, "null"] }
+        lastErrorSource: { type: [string, "null"] }
+        errorCode: { type: [string, "null"] }
+        rateLimitedUntil: { type: [string, "null"] }
+        lastTested: { type: [string, "null"] }
+        healthCheckInterval:
+          oneOf:
+            - { type: integer, minimum: 0, maximum: 1440 }
+            - { type: "null" }
+        group:
+          oneOf:
+            - { type: string, maxLength: 100 }
+            - { type: "null" }
+        maxConcurrent:
+          oneOf:
+            - { type: integer, minimum: 0 }
+            - { type: "null" }
+        quotaWindowThresholds:
+          oneOf:
+            - type: object
+              propertyNames: { type: string, minLength: 1, maxLength: 64 }
+              additionalProperties:
+                oneOf:
+                  - { type: integer, minimum: 0, maximum: 100 }
+                  - { type: "null" }
+            - { type: "null" }
+        projectId: { type: [string, "null"] }
+        rateLimitOverrides:
+          oneOf:
+            - type: object
+              properties:
+                rpm: { type: integer, minimum: 0, maximum: 1000000 }
+                rpd: { type: integer, minimum: 0, maximum: 10000000 }
+                tpm: { type: integer, minimum: 0, maximum: 100000000 }
+                tpd: { type: integer, minimum: 0, maximum: 10000000000 }
+                minTime: { type: integer, minimum: 0, maximum: 60000 }
+                maxConcurrent: { type: integer, minimum: 0, maximum: 10000 }
+                maxWaitMs: { type: integer, minimum: 0, maximum: 120000 }
+              additionalProperties: false
+            - { type: "null" }
+        proxyEnabled: { type: boolean }
+        perKeyProxyEnabled: { type: boolean }
+        quotaVisible: { type: boolean }
+        providerSpecificData:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    ProviderConnectionErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          oneOf:
+            - { type: string }
+            - type: object
+              required: [message]
+              properties:
+                message: { type: string }
+                details:
+                  type: array
+                  items: { type: object, additionalProperties: true }
+                rejected:
+                  type: array
+                  items: { type: string }
+              additionalProperties: true
+      additionalProperties: true
+
+    ProviderConnectionDeleteResponse:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, const: Connection deleted successfully }
+      additionalProperties: false
 
     ApiKey:
       type: object
