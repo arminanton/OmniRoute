@@ -16,6 +16,14 @@ process.env.APP_LOG_TO_FILE = "false";
 process.env.APP_LOG_LEVEL = "error";
 process.env.OMNIROUTE_DIRECT_DISPATCHER_CONNECTIONS = "8";
 process.env.ANTIGRAVITY_CREDITS = "never";
+const captureCallLogs = process.env.RUN_ANTIGRAVITY_CAPTURE_BENCH === "1";
+if (captureCallLogs) {
+  process.env.ENABLE_REQUEST_LOGS = "true";
+  process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS = "true";
+  process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = "10240";
+  process.env.CHAT_LOG_TEXT_LIMIT = "65536";
+  process.env.CHAT_LOG_CLIENT_TEXT_LIMIT = "4194304";
+}
 // Leave the background quota timer outside this isolated test lifetime.
 process.env.PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS = "3600000";
 const core = await import("../../src/lib/db/core.ts");
@@ -25,6 +33,7 @@ const settings = await import("../../src/lib/db/settings.ts");
 const { getExecutor } = await import("../../open-sse/executors/index.ts");
 const route = await import("../../src/app/api/v1/chat/completions/route.ts");
 const { flushProxyLogsSync } = await import("../../src/lib/proxyLogger.ts");
+const { CALL_LOGS_DIR, readCallArtifact } = await import("../../src/lib/usage/callLogArtifacts.ts");
 const versions = await import("../../open-sse/services/antigravityVersion.ts");
 
 async function bodyOf(request: http.IncomingMessage): Promise<Record<string, unknown>> {
@@ -145,6 +154,7 @@ test(
       versions.seedAntigravityCliVersionCache("1.2.16-test");
       await settings.updateSettings({
         requireLogin: false,
+        call_log_pipeline_enabled: captureCallLogs,
         sessionAffinityTtlMs: 60000,
         compression: { enabled: false },
         resilienceSettings: {
@@ -169,7 +179,10 @@ test(
           providerSpecificData: { projectId: "synthetic-project", clientProfile: profile },
         });
       const key = await apiKeys.createApiKey("isolated-antigravity-http", "synthetic-test-machine");
-      await apiKeys.updateApiKeyPermissions(key.id, { noLog: true, compressionEnabled: false });
+      await apiKeys.updateApiKeyPermissions(key.id, {
+        noLog: !captureCallLogs,
+        compressionEnabled: false,
+      });
       const upstreamUrl = await listen(upstream),
         gatewayUrl = await listen(gateway);
       const executor = await getExecutor("antigravity");
@@ -265,6 +278,32 @@ test(
       assert.equal(received, 402);
       assert.deepEqual(errors, []);
       assert.deepEqual([...profiles].sort(), ["cli", "ide"]);
+
+      if (captureCallLogs) {
+        const { closeCallLogArtifactWriter } =
+          await import("../../src/lib/usage/callLogArtifactWriter.ts");
+        await closeCallLogArtifactWriter();
+        const rows = core
+          .getDbInstance()
+          .prepare("SELECT id, artifact_relpath FROM call_logs ORDER BY timestamp ASC")
+          .all() as Array<{ id: string; artifact_relpath: string | null }>;
+        const artifactRows = rows.filter((row) => row.artifact_relpath);
+        assert.equal(rows.length, 402, "one call-log summary row should exist per client turn");
+        assert.equal(
+          artifactRows.length,
+          402,
+          "detailed capture should persist every tool and answer leg"
+        );
+        assert.ok(CALL_LOGS_DIR);
+        const firstArtifact = readCallArtifact(artifactRows[0].artifact_relpath);
+        assert.equal(firstArtifact.state, "ready");
+        const streamChunks = firstArtifact.artifact?.pipeline?.streamChunks as
+          Record<string, unknown> | undefined;
+        assert.ok(streamChunks && Object.keys(streamChunks).length > 0);
+        console.log(
+          `ANTIGRAVITY_CAPTURE records=${rows.length} artifacts=${artifactRows.length} streamChannels=${Object.keys(streamChunks).join(",")}`
+        );
+      }
     } finally {
       restoreUrl();
       for (const server of [gateway, upstream]) {
@@ -273,6 +312,11 @@ test(
       }
       await new Promise((resolve) => setImmediate(resolve));
       flushProxyLogsSync();
+      if (captureCallLogs) {
+        const { closeCallLogArtifactWriter } =
+          await import("../../src/lib/usage/callLogArtifactWriter.ts");
+        await closeCallLogArtifactWriter();
+      }
       core.closeDbInstance({ checkpointMode: null });
       fs.rmSync(dataDir, { recursive: true, force: true });
     }

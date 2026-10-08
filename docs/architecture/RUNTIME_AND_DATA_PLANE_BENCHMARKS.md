@@ -432,6 +432,37 @@ byte charges. This confirms that the current admission wrapper drains on the Mar
 synthetic request size and stream duration. The adapter does not run Next auth, call-log artifact
 writes, provider routing, real tools, or external quotas, and so is not full Prime-agent E2E.
 
+## Antigravity CLI/IDE tool-roundtrip and capture check
+
+The existing `tests/integration/antigravity-parallel-tool-roundtrip-http.test.ts` exercises the
+production chat route handler behind local HTTP client and mock-upstream servers. It seeds separate
+synthetic Antigravity CLI and IDE connections, authenticates requests with a test API key, fragments
+upstream SSE frames, and verifies stable provider sessions and thought signatures across a client
+tool call/result round-trip. It runs phases at 1, 30, 70, and 100 simultaneous conversations; each
+conversation makes two completion requests. Half of the conversations use streaming responses.
+
+On Maria on 2026-10-08, the test passed all 402 completion requests across the four phases in 22.2s;
+`/usr/bin/time -v` measured 747,028 KiB maximum RSS for the combined in-process gateway, mock
+upstream, and client load. With `RUN_ANTIGRAVITY_CAPTURE_BENCH=1`, it enables detailed call logs,
+stream chunks, 10 MiB per-artifact allowance, and 4 MiB client text retention. That variant passed
+all 402 requests in 24.2s, persisted 402/402 call-log artifacts, and read back provider/client stream
+chunks from a completed artifact. Peak RSS was 763,068 KiB. The test intentionally covers synthetic
+responses and does not execute Prime's actual tools; it calls the production route handler directly
+and does not pass through `src/proxy.ts`/Next middleware or the standalone server. It also disables
+compression and turns off `noLog` only in capture mode. This closes the provider tool-roundtrip and
+capture gap for the route handler, but the complete Prime/Next/container E2E remains open.
+
+Run the capture variant with:
+
+```bash
+RUN_ANTIGRAVITY_CAPTURE_BENCH=1 DISABLE_SQLITE_AUTO_BACKUP=true \
+  node --max-old-space-size=2048 --import tsx/esm \
+  --import ./open-sse/utils/setupPolyfill.ts \
+  --import ./tests/_setup/isolateDataDir.ts \
+  --test --test-concurrency=1 \
+  tests/integration/antigravity-parallel-tool-roundtrip-http.test.ts
+```
+
 A slower single trial used 300 chunks per response (3 seconds of streamed body time) at 100
 sessions, with the same 1.31 MiB maximum request and five turns per session. It completed 500/500
 requests without errors in 22.4 seconds. First-body p95 was 3.07 seconds and completion p95 was
