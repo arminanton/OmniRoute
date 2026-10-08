@@ -30,6 +30,7 @@ type HeaderInput =
 
 export type RequestPipelinePayloads = {
   diagnosticOverflow?: DiagnosticOverflowReference;
+  diagnosticOverflowOnly?: boolean;
   transportTelemetry?: JsonRecord;
   routeDecision?: JsonRecord;
   clientRawRequest?: JsonRecord;
@@ -50,6 +51,7 @@ export type RequestPipelinePayloads = {
 
 type RequestLogger = {
   getDiagnosticOverflowTrace: () => DiagnosticOverflowTrace | null;
+  diagnosticOverflowOnly: boolean;
   sessionPath: null;
   logClientRawRequest: (
     endpoint: unknown,
@@ -78,7 +80,10 @@ type RequestLogger = {
 
 type RequestLoggerOptions = {
   diagnosticOverflowEligible?: boolean;
+  /** Keep large bodies in the private trace, avoiding duplicate artifact snapshots. */
+  diagnosticOverflowOnly?: boolean;
   diagnosticClientJson?: () => string | undefined;
+  diagnosticClientBody?: () => string | Uint8Array | undefined;
   releaseDiagnosticClientJson?: () => void;
   diagnosticSignal?: AbortSignal | null;
   enabled?: boolean;
@@ -486,6 +491,10 @@ function compactPipelinePayloads(
       if (reference) result.diagnosticOverflow = reference;
       continue;
     }
+    if (key === "diagnosticOverflowOnly") {
+      if (value === true) result.diagnosticOverflowOnly = true;
+      continue;
+    }
     const payloadKey = key as Exclude<
       keyof RequestPipelinePayloads,
       | "streamChunks"
@@ -493,6 +502,7 @@ function compactPipelinePayloads(
       | "providerAttemptDiagnostics"
       | "providerAttemptDiagnosticsDropped"
       | "diagnosticOverflow"
+      | "diagnosticOverflowOnly"
     >;
     result[payloadKey] = value as JsonRecord;
   }
@@ -589,12 +599,16 @@ export async function createRequestLogger(
     requestId: options.requestId || undefined,
   });
   registerDiagnosticTrace(diagnosticTrace);
+  const diagnosticOverflowOnly =
+    options.diagnosticOverflowOnly === true &&
+    diagnosticTrace !== null &&
+    diagnosticTrace.snapshot().persisted !== false;
   if (diagnosticTrace) {
-    const json = options.diagnosticClientJson?.();
+    const clientBody = options.diagnosticClientBody?.() ?? options.diagnosticClientJson?.();
     try {
       // Schedule the bounded writer and release request admission immediately;
       // trace.finish() waits for the pending file before sealing the manifest.
-      if (json !== undefined) void diagnosticTrace.writeClientRequest(json);
+      if (clientBody !== undefined) void diagnosticTrace.writeClientRequest(clientBody);
       else diagnosticTrace.markIncomplete("client_unavailable");
     } finally {
       options.releaseDiagnosticClientJson?.();
@@ -622,6 +636,7 @@ export async function createRequestLogger(
     let routeDecision: JsonRecord | null = null;
     return {
       getDiagnosticOverflowTrace: () => null,
+      diagnosticOverflowOnly: false,
       sessionPath: null,
       logClientRawRequest() {},
       logRouteDecision(decision) {
@@ -643,15 +658,25 @@ export async function createRequestLogger(
   }
 
   const payloads: RequestPipelinePayloads = {
+    ...(diagnosticOverflowOnly ? { diagnosticOverflowOnly: true } : {}),
     ...(captureStreamChunks ? { streamChunks: chunkMethods.streamChunks } : {}),
   };
   let providerAttemptDiagnosticsDropped = 0;
 
   return {
     getDiagnosticOverflowTrace: () => diagnosticTrace,
+    diagnosticOverflowOnly,
     sessionPath: null,
 
     logClientRawRequest(endpoint, body, headers = {}, effectiveInput) {
+      if (diagnosticOverflowOnly) {
+        payloads.clientRawRequest = {
+          timestamp: new Date().toISOString(),
+          endpoint,
+          headers: maskSensitiveHeaders(headers),
+        };
+        return;
+      }
       const cloned = cloneClientRawRequestPayloadForLog(body, effectiveInput);
       cloned.body = reuseEqualBodySnapshot(cloned.body, [
         bodySnapshot(payloads.openaiRequest),
@@ -670,6 +695,10 @@ export async function createRequestLogger(
     },
 
     logOpenAIRequest(body) {
+      if (diagnosticOverflowOnly) {
+        payloads.openaiRequest = { timestamp: new Date().toISOString() };
+        return;
+      }
       const clonedBody = cloneBoundedForLog(body);
       payloads.openaiRequest = {
         timestamp: new Date().toISOString(),
@@ -681,6 +710,13 @@ export async function createRequestLogger(
     },
 
     logTargetRequest(url, headers, body) {
+      if (diagnosticOverflowOnly) {
+        payloads.providerRequest = {
+          timestamp: new Date().toISOString(),
+          headers: maskSensitiveHeaders(headers),
+        };
+        return;
+      }
       const clonedBody = cloneBoundedForLog(body);
       payloads.providerRequest = {
         timestamp: new Date().toISOString(),
@@ -694,6 +730,15 @@ export async function createRequestLogger(
     },
 
     logProviderResponse(status, statusText, headers, body) {
+      if (diagnosticOverflowOnly) {
+        payloads.providerResponse = {
+          timestamp: new Date().toISOString(),
+          status,
+          statusText,
+          headers: maskSensitiveHeaders(headers),
+        };
+        return;
+      }
       const clonedBody = cloneBoundedForLog(body);
       payloads.providerResponse = {
         timestamp: new Date().toISOString(),
@@ -721,6 +766,10 @@ export async function createRequestLogger(
     appendProviderChunk: chunkMethods.appendProviderChunk,
     appendOpenAIChunk: chunkMethods.appendOpenAIChunk,
     logConvertedResponse(body) {
+      if (diagnosticOverflowOnly) {
+        payloads.clientResponse = { timestamp: new Date().toISOString() };
+        return;
+      }
       const clonedBody = cloneBoundedForLog(body);
       payloads.clientResponse = {
         timestamp: new Date().toISOString(),
@@ -738,15 +787,20 @@ export async function createRequestLogger(
         ...(nativeError ? { nativeError: cloneBoundedForLog(nativeError) } : {}),
         timestamp: new Date().toISOString(),
         error: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-        requestBody: reuseEqualBodySnapshot(cloneBoundedForLog(requestBody), [
-          bodySnapshot(payloads.clientRawRequest),
-          bodySnapshot(payloads.openaiRequest),
-          bodySnapshot(payloads.providerRequest),
-        ]),
+        ...(!diagnosticOverflowOnly
+          ? {
+              requestBody: reuseEqualBodySnapshot(cloneBoundedForLog(requestBody), [
+                bodySnapshot(payloads.clientRawRequest),
+                bodySnapshot(payloads.openaiRequest),
+                bodySnapshot(payloads.providerRequest),
+              ]),
+            }
+          : {}),
       };
     },
 
     logToolLoopReceipt(receipt) {
+      if (diagnosticOverflowOnly) return;
       const legs = payloads.toolLoop?.legs ?? [];
       if (legs.length >= MAX_TOOL_LOOP_LEGS) return;
       const cloned = cloneBoundedForLog(receipt);

@@ -220,7 +220,13 @@ export type PersistAttemptLogsContext = {
   model: string | null | undefined;
   skillRequestId: string;
   detailedLoggingEnabled: boolean;
-  reqLogger: { getPipelinePayloads?: () => Record<string, unknown> | undefined } | null | undefined;
+  reqLogger:
+    | {
+        getPipelinePayloads?: () => Record<string, unknown> | undefined;
+        diagnosticOverflowOnly?: boolean;
+      }
+    | null
+    | undefined;
   pendingRequestId: unknown;
   /** Unique call_logs row id for this dispatch; pendingRequestId remains the logical request id. */
   callLogId?: string;
@@ -426,13 +432,22 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
       : null;
 
   if (pipelinePayloads) {
-    if (providerRequest !== undefined && !pipelinePayloads.providerRequest) {
+    const diagnosticOverflowOnly = reqLogger?.diagnosticOverflowOnly === true;
+    if (
+      !diagnosticOverflowOnly &&
+      providerRequest !== undefined &&
+      !pipelinePayloads.providerRequest
+    ) {
       pipelinePayloads.providerRequest = providerRequest as Record<string, unknown>;
     }
-    if (providerResponse !== undefined && !pipelinePayloads.providerResponse) {
+    if (
+      !diagnosticOverflowOnly &&
+      providerResponse !== undefined &&
+      !pipelinePayloads.providerResponse
+    ) {
       pipelinePayloads.providerResponse = providerResponse as Record<string, unknown>;
     }
-    if (clientResponse !== undefined) {
+    if (!diagnosticOverflowOnly && clientResponse !== undefined) {
       pipelinePayloads.clientResponse = clientResponse as Record<string, unknown>;
     }
     if (error) {
@@ -472,30 +487,34 @@ export function persistAttemptLogs(args: PersistAttemptLogsArgs, ctx: PersistAtt
     connectionId: finalConnectionId || undefined,
     duration: Date.now() - startTime,
     tokens: tokens || {},
-    requestBody: cloneBoundedChatLogPayload(
-      attachLogMeta(
-        truncateForLog(
-          applyVideoBridgeLogRedaction(body, videoBridgeLogRedaction) as Record<string, unknown>
-        ),
-        {
-          ...accountRotationMeta,
-          claudePromptCache: claudeCacheMeta,
-        }
-      )
-    ),
-    responseBody: cloneBoundedChatLogPayload(
-      attachLogMeta(truncateForLog(responseBody as Record<string, unknown>), {
-        ...accountRotationMeta,
-        claudePromptCache: claudeCacheMeta
-          ? {
-              applied: claudeCacheMeta.applied,
-              totalBreakpoints: claudeCacheMeta.totalBreakpoints,
-              anthropicBeta: claudeCacheMeta.anthropicBeta,
+    requestBody: reqLogger?.diagnosticOverflowOnly
+      ? null
+      : cloneBoundedChatLogPayload(
+          attachLogMeta(
+            truncateForLog(
+              applyVideoBridgeLogRedaction(body, videoBridgeLogRedaction) as Record<string, unknown>
+            ),
+            {
+              ...accountRotationMeta,
+              claudePromptCache: claudeCacheMeta,
             }
-          : null,
-        claudePromptCacheUsage: claudeCacheUsageMeta,
-      })
-    ),
+          )
+        ),
+    responseBody: reqLogger?.diagnosticOverflowOnly
+      ? null
+      : cloneBoundedChatLogPayload(
+          attachLogMeta(truncateForLog(responseBody as Record<string, unknown>), {
+            ...accountRotationMeta,
+            claudePromptCache: claudeCacheMeta
+              ? {
+                  applied: claudeCacheMeta.applied,
+                  totalBreakpoints: claudeCacheMeta.totalBreakpoints,
+                  anthropicBeta: claudeCacheMeta.anthropicBeta,
+                }
+              : null,
+            claudePromptCacheUsage: claudeCacheUsageMeta,
+          })
+        ),
     error: error || null,
     sourceFormat,
     targetFormat,

@@ -14,6 +14,7 @@ import {
 } from "../../src/sse/handlers/chat/clientRawRequest.ts";
 import {
   hasDiagnosticClientJson,
+  getDiagnosticClientBody,
   getDiagnosticClientJson,
   releaseDiagnosticClientJson,
   runWithDiagnosticCaptureLifecycle,
@@ -35,6 +36,10 @@ import {
   listDiagnosticOverflowTraces,
   getActiveDiagnosticOverflowCount,
 } from "../../src/lib/usage/diagnosticOverflow.ts";
+import {
+  admitChatRequest,
+  ChatAdmissionController,
+} from "../../src/shared/middleware/chatBodyAdmission.ts";
 import { writeCallArtifact, readCallArtifact } from "../../src/lib/usage/callLogArtifacts.ts";
 const encoder = new TextEncoder();
 process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = "true";
@@ -229,6 +234,96 @@ test("originalparsedJSON outgoingserializer and >11MiB decodederror remain exact
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("admission-backed diagnostic capture writes original client bytes without JSON cloning", async () => {
+  const rawBody =
+    '{  "model" : "agy/gemini-3.8-flash", "messages" : [{"role":"user","content":"raw-bytes"}] }\n';
+  const admission = await admitChatRequest(
+    new Request("http://synthetic.invalid/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(Buffer.byteLength(rawBody)),
+      },
+      body: rawBody,
+    }),
+    {
+      controller: new ChatAdmissionController(1),
+      largeBodyBytes: 1,
+      hardMaxBytes: 1024,
+    }
+  );
+  assert.equal(admission.admit, true);
+  if (!admission.admit) return;
+
+  try {
+    const parsedBody = JSON.parse(rawBody);
+    const raw = buildClientRawRequest(admission.request, parsedBody, true);
+    assert.equal(hasDiagnosticClientJson(raw), true);
+    const log = await createRequestLogger(undefined, undefined, undefined, {
+      enabled: true,
+      provider: "antigravity",
+      diagnosticOverflowEligible: true,
+      diagnosticClientBody: () => getDiagnosticClientBody(raw),
+      diagnosticClientJson: () => getDiagnosticClientJson(raw),
+      releaseDiagnosticClientJson: () => releaseDiagnosticClientJson(raw),
+    });
+    const trace = log.getDiagnosticOverflowTrace();
+    assert.ok(trace);
+    await trace!.finish();
+    assert.equal(
+      (await decoded(trace!.traceId, trace!.traceId, "client-request")).toString("utf8"),
+      rawBody
+    );
+  } finally {
+    admission.lease?.release();
+  }
+});
+
+test("private overflow mode stores complete wire bytes without duplicating request bodies in call artifacts", async () => {
+  const body = {
+    model: "agy/gemini-3.8-flash",
+    messages: [{ role: "user", content: "PRIVATE_CAPTURE_SENTINEL_" + "x".repeat(256 * 1024) }],
+  };
+  const serialized = JSON.stringify(body);
+  const raw = buildClientRawRequest(
+    new Request("http://synthetic.invalid/v1/chat/completions", { method: "POST" }),
+    body,
+    true
+  );
+  const log = await createRequestLogger(undefined, undefined, undefined, {
+    enabled: true,
+    provider: "antigravity",
+    diagnosticOverflowEligible: true,
+    diagnosticOverflowOnly: true,
+    diagnosticClientBody: () => serialized,
+  });
+  const trace = log.getDiagnosticOverflowTrace();
+  assert.ok(trace);
+
+  log.logClientRawRequest("/v1/chat/completions", body, { "content-type": "application/json" });
+  log.logOpenAIRequest(body);
+  log.logTargetRequest("https://synthetic.invalid/generate", {}, { request: body });
+  log.logProviderResponse(200, "OK", {}, { response: "large body" });
+  log.logConvertedResponse({ response: "large client body" });
+  log.appendProviderChunk("data: synthetic provider stream\n\n");
+
+  const pipeline = log.getPipelinePayloads() as Record<string, any>;
+  assert.equal(log.diagnosticOverflowOnly, true);
+  assert.equal(pipeline.diagnosticOverflowOnly, true);
+  assert.equal(pipeline.clientRawRequest.body, undefined);
+  assert.equal(pipeline.openaiRequest.body, undefined);
+  assert.equal(pipeline.providerRequest.body, undefined);
+  assert.equal(pipeline.providerResponse.body, undefined);
+  assert.equal(pipeline.clientResponse.body, undefined);
+  assert.ok(pipeline.streamChunks.provider.length > 0);
+
+  await trace!.finish();
+  assert.equal(
+    (await decoded(trace!.traceId, trace!.traceId, "client-request")).toString("utf8"),
+    serialized
+  );
 });
 
 test("403 removal and regional disposal retain independent complete attempt responses", async () => {

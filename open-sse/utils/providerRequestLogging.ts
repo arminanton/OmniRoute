@@ -16,6 +16,8 @@ export type ProviderRequestPrepared = {
 export type Capture = {
   /** Skip observing serialized provider bodies when detailed request logging is disabled. */
   enabled?: boolean;
+  /** Full wire payload is persisted by the private trace; avoid parsing a duplicate log object. */
+  diagnosticOverflowOnly?: boolean;
   diagnosticTrace?: DiagnosticOverflowTrace | null;
   diagnosticProvider?: string;
   capture: (request: ProviderRequestPrepared) => Promise<void> | void;
@@ -28,6 +30,7 @@ export type Capture = {
 
 type RequestLoggerLike = {
   getDiagnosticOverflowTrace?: () => DiagnosticOverflowTrace | null;
+  diagnosticOverflowOnly?: boolean;
   logTargetRequest: (url: unknown, headers: Record<string, string>, body: unknown) => void;
   logProviderAttempt?: (diagnostic: Record<string, unknown>) => void;
 };
@@ -137,6 +140,10 @@ export function captureCurrentProviderBody(
   bodyString: string,
   log?: WarnLog | null
 ) {
+  const requestCapture = captureState.context.getStore();
+  if (requestCapture?.diagnosticOverflowOnly) {
+    return capturePreparedRequest(requestCapture, url, headers, null, "private-overflow", log);
+  }
   return captureCurrentProviderRequest(url, headers, parseBody(bodyString), bodyString, log);
 }
 
@@ -376,8 +383,10 @@ export function createPreparedRequestLogger(
 ): Capture {
   let latest: ProviderRequestPrepared | null = null;
   const enabled = options.enabled !== false;
+  const diagnosticOverflowOnly = reqLogger.diagnosticOverflowOnly === true;
   return {
     enabled,
+    diagnosticOverflowOnly,
     diagnosticTrace: enabled ? reqLogger.getDiagnosticOverflowTrace?.() : null,
     diagnosticProvider: options.provider,
     attempt(diagnostic) {
@@ -387,15 +396,24 @@ export function createPreparedRequestLogger(
     capture(request) {
       if (!enabled) return;
       latest = request;
-      reqLogger.logTargetRequest(request.url, request.headers, request.body);
-      updatePendingScope(scope, {
-        providerRequest: request.body,
-        providerUrl: request.url,
-        stage: "sending_to_provider",
-      });
+      if (diagnosticOverflowOnly) {
+        reqLogger.logTargetRequest(request.url, request.headers, null);
+        updatePendingScope(scope, {
+          providerUrl: request.url,
+          stage: "sending_to_provider",
+        });
+      } else {
+        reqLogger.logTargetRequest(request.url, request.headers, request.body);
+        updatePendingScope(scope, {
+          providerRequest: request.body,
+          providerUrl: request.url,
+          stage: "sending_to_provider",
+        });
+      }
     },
     body(fallback) {
       if (!enabled) return fallback;
+      if (diagnosticOverflowOnly) return fallback;
       const resolved = latest?.body ?? fallback;
       // #4091: the captured body is rebuilt from the serialized upstream payload
       // (the fetch-capture does `JSON.parse(JSON.stringify(...))`), which drops

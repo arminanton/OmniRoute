@@ -2,15 +2,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { DiagnosticOverflowTrace } from "@/lib/usage/diagnosticOverflow";
 import { estimateSizeFast } from "./estimateSize.ts";
 const key = Symbol.for("omniroute.diagnosticCaptureContext.v1");
-type ClientJsonSnapshot = { body: unknown; json?: string };
+type ClientCaptureSnapshot = { body?: unknown; json?: string; bytes?: Uint8Array };
 const runtime = globalThis as typeof globalThis & {
   [key]?: {
-    originals: WeakMap<object, ClientJsonSnapshot>;
+    originals: WeakMap<object, ClientCaptureSnapshot>;
     context: AsyncLocalStorage<Set<DiagnosticOverflowTrace>>;
   };
 };
 const shared = (runtime[key] ??= {
-  originals: new WeakMap<object, ClientJsonSnapshot>(),
+  originals: new WeakMap<object, ClientCaptureSnapshot>(),
   context: new AsyncLocalStorage<Set<DiagnosticOverflowTrace>>(),
 });
 const { originals, context } = shared;
@@ -80,6 +80,19 @@ export function recordDiagnosticClientJson(envelope: object, body: unknown, elig
     // Diagnostic capture is best-effort and must never block request routing.
   }
 }
+/** Retain the admitted immutable bytes so diagnostics can write them directly
+ * instead of cloning the parsed JSON tree and serializing another full-size string.
+ */
+export function recordDiagnosticClientBytes(
+  envelope: object,
+  bytes: Uint8Array | undefined,
+  eligible: boolean
+) {
+  if (!eligible || !bytes || process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED !== "true") return;
+  const minClientBytes = getMinimumClientBytes();
+  if (minClientBytes > 0 && bytes.byteLength <= minClientBytes) return;
+  originals.set(envelope, { bytes });
+}
 export function hasDiagnosticClientJson(envelope: unknown): boolean {
   return !!envelope && typeof envelope === "object" && originals.has(envelope);
 }
@@ -103,12 +116,24 @@ export function getDiagnosticClientJson(envelope: unknown): string | undefined {
     return undefined;
   }
 }
+export function getDiagnosticClientBody(envelope: unknown): string | Uint8Array | undefined {
+  if (!envelope || typeof envelope !== "object") return undefined;
+  const snapshot = originals.get(envelope);
+  if (!snapshot) return undefined;
+  if (snapshot.bytes !== undefined) {
+    const bytes = snapshot.bytes;
+    snapshot.bytes = undefined;
+    return bytes;
+  }
+  return getDiagnosticClientJson(envelope);
+}
 export function releaseDiagnosticClientJson(envelope: unknown) {
   if (!envelope || typeof envelope !== "object") return;
   const snapshot = originals.get(envelope);
   if (snapshot) {
     snapshot.body = undefined;
     snapshot.json = undefined;
+    snapshot.bytes = undefined;
   }
   originals.delete(envelope);
 }

@@ -21,6 +21,8 @@ export type StreamCompletionPayload = {
   error?: string | null;
   errorCode?: string | null;
   ttft?: number | null;
+  itlMs?: number | null;
+  interrupted?: boolean;
 };
 
 export type StreamFailurePayload = {

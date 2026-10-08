@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   hasDiagnosticClientJson,
-  getDiagnosticClientJson,
+  getDiagnosticClientBody,
   releaseDiagnosticClientJson,
   runWithDiagnosticCaptureLifecycle,
 } from "../utils/diagnosticCaptureContext.ts";
@@ -1328,7 +1328,15 @@ async function handleChatCoreOwned({
     enabled: detailedLoggingEnabled,
     diagnosticOverflowEligible:
       detailedLoggingEnabled && !videoBridgeObserved && hasDiagnosticClientJson(clientRawRequest),
-    diagnosticClientJson: () => getDiagnosticClientJson(clientRawRequest),
+    // Antigravity's private trace records the exact wire request/response. When
+    // it is available, avoid keeping a second translated body graph in the
+    // ordinary call-log artifact. Other provider paths keep their current log.
+    diagnosticOverflowOnly:
+      detailedLoggingEnabled &&
+      !videoBridgeObserved &&
+      ["antigravity", "agy"].includes(provider?.toLowerCase() || "") &&
+      hasDiagnosticClientJson(clientRawRequest),
+    diagnosticClientBody: () => getDiagnosticClientBody(clientRawRequest),
     releaseDiagnosticClientJson: () => releaseDiagnosticClientJson(clientRawRequest),
     diagnosticSignal: clientRawRequest?.signal,
     captureStreamChunks: capturePipelineStreamChunks,
@@ -6365,7 +6373,25 @@ async function handleChatCoreOwned({
       if (streamFailureCompletionRecorded) return;
       streamFailureCompletionRecorded = true;
     }
-    const cacheUsageLogMeta = buildCacheUsageLogMeta(streamUsage);
+    const streamUsageRecord =
+      streamUsage && typeof streamUsage === "object" && !Array.isArray(streamUsage)
+        ? (streamUsage as Record<string, unknown>)
+        : null;
+    const numericStreamUsage = streamUsageRecord
+      ? (Object.fromEntries(
+          Object.entries(streamUsageRecord).filter(
+            (entry): entry is [string, number] =>
+              typeof entry[1] === "number" && Number.isFinite(entry[1])
+          )
+        ) as Record<string, number | undefined>)
+      : null;
+    const streamResponseRecord =
+      streamResponseBody &&
+      typeof streamResponseBody === "object" &&
+      !Array.isArray(streamResponseBody)
+        ? (streamResponseBody as Record<string, unknown>)
+        : null;
+    const cacheUsageLogMeta = buildCacheUsageLogMeta(streamUsageRecord);
     const streamConnectionId = getCurrentConnectionId();
 
     if (normalizedStreamStatus === 200) {
@@ -6527,7 +6553,7 @@ async function handleChatCoreOwned({
       apiKeyId: apiKeyInfo?.id,
       provider,
       model,
-      streamUsage,
+      streamUsage: numericStreamUsage,
       serviceTier: effectiveServiceTier,
       calculateCost,
       recordCost,
@@ -6570,12 +6596,12 @@ async function handleChatCoreOwned({
     storeStreamingSemanticCacheResponse({
       enabled: semanticCacheEnabled,
       streamStatus,
-      streamResponseBody,
+      streamResponseBody: streamResponseRecord,
       body: bodyForCacheWrite,
       headers: clientRawRequest?.headers,
       model,
       apiKeyId: apiKeyInfo?.id ?? undefined,
-      streamUsage,
+      streamUsage: streamUsageRecord,
       log,
     });
 

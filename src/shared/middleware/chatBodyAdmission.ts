@@ -45,6 +45,15 @@ import {
   type PressureSeverity,
 } from "@omniroute/open-sse/utils/resourcePressure.ts";
 
+// Preserve the already-buffered client bytes through admission. Diagnostics can
+// write these bytes directly instead of cloning the parsed JSON tree and
+// serializing a second full-size string for every concurrent request.
+const admittedRawRequestBodies = new WeakMap<Request, Uint8Array>();
+
+export function getAdmittedRawRequestBodyBytes(request: Request): Uint8Array | undefined {
+  return admittedRawRequestBodies.get(request);
+}
+
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(String(value), 10);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
@@ -982,13 +991,15 @@ function rebuildRequest(request: Request, body: Uint8Array): Request {
   const headers = new Headers(request.headers);
   // The inbound value may be absent or dishonest. Let the runtime derive the correct value.
   headers.delete("content-length");
-  return new Request(request.url, {
+  const rebuilt = new Request(request.url, {
     method: request.method,
     headers,
     body,
     signal: request.signal,
     duplex: "half",
   } as RequestInit & { duplex: "half" });
+  admittedRawRequestBodies.set(rebuilt, body);
+  return rebuilt;
 }
 
 /** Reserve heavyweight capacity and ingest the body with a hard byte bound. */
@@ -1162,7 +1173,9 @@ export async function admitChatRequest(
       if (totalBytes >= largeBodyBytes) {
         const reserveResult = await reserve(totalBytes, totalBytes);
         if (reserveResult === "resource_pressure") {
-          await reader.cancel("resource pressure reached during chat admission").catch(() => undefined);
+          await reader
+            .cancel("resource pressure reached during chat admission")
+            .catch(() => undefined);
           return { admit: false, response: resourcePressureRejectionResponse(correlationId) };
         }
         if (reserveResult !== "acquired") {

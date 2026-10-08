@@ -11,8 +11,10 @@
 import { mergeAbortSignals } from "@omniroute/open-sse/executors/base.ts";
 import { cloneBoundedForLog } from "@omniroute/open-sse/utils/requestLogger.ts";
 import { getChatLogClientTextLimit } from "@/lib/logEnv";
+import { getAdmittedRawRequestBodyBytes } from "@/shared/middleware/chatBodyAdmission";
 
 import {
+  recordDiagnosticClientBytes,
   recordDiagnosticClientJson,
   inheritDiagnosticClientJson,
 } from "@omniroute/open-sse/utils/diagnosticCaptureContext.ts";
@@ -40,7 +42,10 @@ export function buildClientRawRequest(
     headers,
     signal: request.signal ?? null,
   };
-  recordDiagnosticClientJson(envelope, body, diagnosticOverflowEligible);
+  const admittedBytes = getAdmittedRawRequestBodyBytes(request);
+  if (admittedBytes)
+    recordDiagnosticClientBytes(envelope, admittedBytes, diagnosticOverflowEligible);
+  else recordDiagnosticClientJson(envelope, body, diagnosticOverflowEligible);
   return envelope;
 }
 

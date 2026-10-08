@@ -14,6 +14,7 @@ const {
   CHAT_MAX_HEAVY_IN_FLIGHT,
   perConnectionAdmissionController,
   CHAT_LARGE_BODY_BYTES,
+  getAdmittedRawRequestBodyBytes,
   releaseChatAdmissionAfterHandler,
   releaseChatAdmissionWhenDone,
   resolveSelfLoopBearer,
@@ -52,6 +53,24 @@ function chatRequest(body: string, contentLength: string | null = String(body.le
     body,
   });
 }
+
+test("reconstructed admitted requests retain their immutable original body bytes", async () => {
+  const rawBody = '{  "model" : "fixture", "messages" : [{"role":"user","content":"exact"}] }\n';
+  const request = chatRequest(rawBody, String(Buffer.byteLength(rawBody)));
+  const admitted = await admitChatRequest(request, {
+    controller: new ChatAdmissionController(1),
+    largeBodyBytes: 1,
+    hardMaxBytes: 1024,
+  });
+  assert.equal(admitted.admit, true);
+  if (!admitted.admit) return;
+
+  const capturedBytes = getAdmittedRawRequestBodyBytes(admitted.request);
+  assert.ok(capturedBytes);
+  assert.equal(Buffer.from(capturedBytes!).toString("utf8"), rawBody);
+  assert.deepEqual(JSON.parse(Buffer.from(capturedBytes!).toString("utf8")), JSON.parse(rawBody));
+  admitted.lease?.release();
+});
 
 test("unconfigured local admission defaults keep bounded queue and headroom", () => {
   // These are local defaults, not evidence that an operator configured a smaller

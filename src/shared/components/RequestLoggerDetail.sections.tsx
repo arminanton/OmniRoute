@@ -233,6 +233,13 @@ export function ConversationContextSection({ log, detail }) {
         : [];
 
   const allTurns: NormalizedTurn[] = [...requestTurns, ...responseTurns];
+  const overflowTraceId =
+    typeof liveDetail?.pipelinePayloads?.diagnosticOverflow?.traceId === "string" &&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+      liveDetail.pipelinePayloads.diagnosticOverflow.traceId
+    )
+      ? liveDetail.pipelinePayloads.diagnosticOverflow.traceId
+      : null;
 
   // Follow new content as it streams in — same idea as StreamSection's
   // autoscroll effect, tied to the same liveRefresh toggle.
@@ -241,7 +248,23 @@ export function ConversationContextSection({ log, detail }) {
     scrollToBottom();
   }, [allTurns.length, liveDetail?.partialAssistantText, liveRefresh, open]);
 
-  if (allTurns.length === 0) return null;
+  if (allTurns.length === 0) {
+    if (!overflowTraceId) return null;
+    return (
+      <div
+        className="rounded-xl border border-sky-500/25 bg-sky-500/5 p-4 text-sm text-text-muted"
+        data-testid="conversation-context-private-capture"
+      >
+        <div className="mb-1 text-[11px] font-bold uppercase tracking-wider text-text-primary">
+          Conversation Context
+        </div>
+        <div>
+          Full conversation content is stored in the private diagnostic capture. Use the trace
+          request and response links below to inspect it.
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
