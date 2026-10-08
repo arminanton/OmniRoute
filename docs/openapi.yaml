@@ -386,6 +386,10 @@ paths:
         Quota is consumed from the caller's account.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1679,9 +1683,12 @@ paths:
         to start a completion and `{type:"cancel", id}` to abort it. A separate
         live channel (default port `LIVE_WS_PORT=20129`, path `/live`) streams
         dashboard events on the `requests`, `combo` and `credentials` topics with
-        a 15s heartbeat. Requires an API key.
+        a 15s heartbeat. The handshake may be anonymous when WebSocket auth is
+        disabled; otherwise a valid API key or authenticated dashboard session is required.
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: handshake
           in: query
@@ -1695,6 +1702,10 @@ paths:
           description: WebSocket upgrade successful
         "200":
           description: Handshake descriptor (auth path, message protocol, live channels)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebSocketHandshakeResponse"
         "401":
           description: WebSocket auth required (no credential supplied)
         "403":
@@ -2110,19 +2121,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [prompt]
-              properties:
-                prompt:
-                  type: string
-                model:
-                  type: string
-                n:
-                  type: integer
-                  default: 1
-                size:
-                  type: string
-                  default: 1024x1024
+              $ref: "#/components/schemas/ImageGenerationRequest"
       responses:
         "200":
           description: >-
@@ -2160,7 +2159,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/ImageGenerationRequest"
       responses:
         "200":
           description: Generated images
@@ -2190,7 +2189,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [input]
+              required: [model, input]
               properties:
                 input:
                   type: string
@@ -2198,6 +2197,14 @@ paths:
                   type: string
                 voice:
                   type: string
+                response_format:
+                  type: string
+                  description: Provider-supported audio format (commonly mp3, wav, opus, ogg, or pcm).
+                speed:
+                  type: number
+                  minimum: 0.25
+                  maximum: 4
+              additionalProperties: true
       responses:
         "200":
           description: >-
@@ -2205,6 +2212,11 @@ paths:
             cost-telemetry headers (see `POST /api/v1/chat/completions`); speech
             cost is computed per character when pricing is available, otherwise
             `0` (fail-open).
+          content:
+            audio/*:
+              schema: { type: string, format: binary }
+            application/octet-stream:
+              schema: { type: string, format: binary }
 
   /api/v1/audio/transcriptions:
     post:
@@ -2226,13 +2238,20 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [file]
+              required: [file, model]
               properties:
                 file:
                   type: string
                   format: binary
                 model:
                   type: string
+                response_format:
+                  type: string
+                  enum: [json, text, srt, verbose_json, vtt]
+                language: { type: string }
+                prompt: { type: string }
+                temperature: { type: number, minimum: 0, maximum: 1 }
+              additionalProperties: true
       responses:
         "200":
           description: >-
@@ -2240,15 +2259,34 @@ paths:
             cost-telemetry headers (see `POST /api/v1/chat/completions`);
             transcription cost is computed per second when pricing is available,
             otherwise `0` (fail-open).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioTranscriptionResponse"
+            text/plain:
+              schema: { type: string }
+            text/vtt:
+              schema: { type: string }
+            application/x-subrip:
+              schema: { type: string }
+            text/srt:
+              schema: { type: string }
 
   /api/v1/moderations:
     post:
       operationId: postApiV1Moderations
       tags: [Moderations]
       summary: Create moderation
-      description: Content moderation endpoint. Routes to configured moderation providers.
+      description: >-
+        Content moderation endpoint. Routes to configured moderation providers.
+        Authentication is required when REQUIRE_API_KEY is enabled; otherwise
+        anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -2261,39 +2299,61 @@ paths:
                   oneOf:
                     - type: string
                     - type: array
-                      items:
-                        type: string
+                      items: {}
+                    - type: object
+                      additionalProperties: true
+                model: { type: string }
+              additionalProperties: true
       responses:
         "200":
           description: >-
             Moderation result. Success responses carry the `X-OmniRoute-*`
             cost-telemetry headers (see `POST /api/v1/chat/completions`);
             moderations are always cost `0` (free).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModerationResponse"
 
   /api/v1/rerank:
     post:
       operationId: postApiV1Rerank
       tags: [Rerank]
       summary: Rerank documents
-      description: Document reranking endpoint.
+      description: >-
+        Document reranking endpoint with Cohere-compatible results. Authentication
+        is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are
+        accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [query, documents]
+              required: [model, query, documents]
               properties:
+                model:
+                  type: string
                 query:
                   type: string
                 documents:
                   type: array
                   items:
-                    type: string
-                model:
-                  type: string
+                    oneOf:
+                      - type: string
+                      - type: object
+                        properties:
+                          text: { type: string }
+                        additionalProperties: true
+                top_n: { type: integer, minimum: 1 }
+                return_documents: { type: boolean, default: true }
+              additionalProperties: true
       responses:
         "200":
           description: >-
@@ -2301,6 +2361,10 @@ paths:
             cost-telemetry headers (see `POST /api/v1/chat/completions`); rerank
             cost is computed per search-unit when pricing is available,
             otherwise `0` (fail-open).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RerankResponse"
 
   /api/v1:
     get:
@@ -9156,15 +9220,21 @@ paths:
         asynchronous upstream — the handler polls the returned operation
         until it succeeds or fails before responding, so this endpoint can
         take longer to return for that provider. Success responses carry the
-        `X-OmniRoute-*` cost-telemetry headers.
+        `X-OmniRoute-*` cost-telemetry headers. Authentication is required when
+        REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [document]
               properties:
                 model:
                   type: string
@@ -9175,10 +9245,30 @@ paths:
                     `vertex-deepseek-ocr/deepseek-ocr-maas`. Defaults to
                     `mistral-ocr-latest` when omitted.
                 document:
-                  type: object
+                  oneOf:
+                    - type: string
+                    - type: object
+                      properties:
+                        type: { type: string }
+                        document_url: { type: string, format: uri-reference }
+                        image_url:
+                          oneOf:
+                            - type: string
+                              format: uri-reference
+                            - type: object
+                              additionalProperties: true
+                      anyOf:
+                        - required: [document_url]
+                        - required: [image_url]
+                      additionalProperties: true
+              additionalProperties: true
       responses:
         "200":
           description: OCR result with extracted text.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OcrResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -9195,9 +9285,14 @@ paths:
         OpenAI Whisper–compatible audio translation (multipart/form-data).
         Unlike `/api/v1/audio/transcriptions`, output is always English
         regardless of the source language. Success responses carry the
-        `X-OmniRoute-*` cost-telemetry headers.
+        `X-OmniRoute-*` cost-telemetry headers. Authentication is required when
+        REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -9206,15 +9301,34 @@ paths:
               type: object
               required:
                 - file
+                - model
               properties:
                 file:
                   type: string
                   format: binary
                 model:
                   type: string
+                prompt: { type: string }
+                response_format:
+                  type: string
+                  enum: [json, text, srt, vtt]
+                temperature: { type: number, minimum: 0, maximum: 1 }
+              additionalProperties: true
       responses:
         "200":
           description: English translation of the audio.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioTranscriptionResponse"
+            text/plain:
+              schema: { type: string }
+            text/vtt:
+              schema: { type: string }
+            application/x-subrip:
+              schema: { type: string }
+            text/srt:
+              schema: { type: string }
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -9229,12 +9343,26 @@ paths:
       description: >-
         Proxies `GET https://api.elevenlabs.io/v1/voices` using the stored
         `elevenlabs` provider credentials (the caller never sends `xi-api-key`).
-        The incoming query string is forwarded unchanged.
+        The incoming query string is forwarded unchanged. Authentication is
+        required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: ElevenLabs voice list, relayed verbatim.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  voices:
+                    type: array
+                    items: { type: object, additionalProperties: true }
+                additionalProperties: true
         "401":
           description: No usable `elevenlabs` credential is configured.
         "429":
@@ -9250,8 +9378,14 @@ paths:
         Streams the request body to `POST https://api.elevenlabs.io/v1/speech-to-text`
         using the stored `elevenlabs` provider credentials. `content-type` and
         `accept` are forwarded; the upstream body is relayed unchanged.
+        Authentication is required when REQUIRE_API_KEY is enabled; otherwise
+        anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -9265,6 +9399,12 @@ paths:
       responses:
         "200":
           description: Transcription payload, relayed verbatim from ElevenLabs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AudioTranscriptionResponse"
+            text/plain:
+              schema: { type: string }
         "401":
           description: No usable `elevenlabs` credential is configured.
         "429":
@@ -9280,9 +9420,14 @@ paths:
         Streams the request body to
         `POST https://api.elevenlabs.io/v1/text-to-speech/{voiceId}` using the stored
         `elevenlabs` provider credentials. `voiceId` must match `^[A-Za-z0-9_-]+$`
-        or the request is rejected with 400 before any upstream call.
+        or the request is rejected with 400 before any upstream call. Authentication
+        is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: voiceId
           in: path
@@ -9302,6 +9447,11 @@ paths:
       responses:
         "200":
           description: Audio stream, relayed verbatim from ElevenLabs.
+          content:
+            audio/*:
+              schema: { type: string, format: binary }
+            application/octet-stream:
+              schema: { type: string, format: binary }
         "400":
           description: Invalid ElevenLabs voice ID.
         "401":
@@ -14595,9 +14745,47 @@ paths:
       tags:
         - V1 Classify
       summary: "POST classify"
+      description: >-
+        Jina-compatible zero/few-shot text classification. Authentication is
+        required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties:
+                model: { type: string }
+                classifier_id: { type: string }
+                input:
+                  oneOf:
+                    - type: string
+                    - type: array
+                      minItems: 1
+                      items: {}
+                labels:
+                  type: array
+                  minItems: 1
+                  items: { type: string }
+              additionalProperties: true
       responses:
         "200":
-          description: OK
+          description: Jina classification results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JinaClassifyResponse"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JinaClassifyResponse"
   /api/v1/combos:
     get:
       operationId: getApiV1Combos
@@ -14623,9 +14811,32 @@ paths:
       tags:
         - V1 Completions
       summary: "POST completions"
+      description: >-
+        Legacy OpenAI Completions API. Accepts either `prompt` or chat `messages`
+        and returns the legacy `text_completion` shape. Authentication is required
+        when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LegacyCompletionRequest"
       responses:
         "200":
-          description: OK
+          description: Legacy text-completion response or SSE stream of text-completion chunks.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyCompletionResponse"
+            text/event-stream:
+              schema:
+                type: string
   /api/v1/files:
     get:
       operationId: getApiV1Files
@@ -14687,26 +14898,125 @@ paths:
       tags:
         - V1 Images
       summary: "POST images › edits"
+      description: >-
+        Creates an edited image using a provider-specific image-edit flow.
+        Authentication is required when REQUIRE_API_KEY is enabled; otherwise
+        anonymous requests are accepted.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompt, model]
+              properties:
+                prompt: { type: string }
+                model: { type: string }
+                size: { type: string }
+                response_format: { type: string, enum: [url, b64_json] }
+                image: {}
+                image_url:
+                  oneOf:
+                    - type: string
+                    - type: object
+                      additionalProperties: true
+                images:
+                  type: array
+                  items: {}
+              anyOf:
+                - required: [image]
+                - required: [image_url]
+                - required: [images]
+              additionalProperties: true
+          multipart/form-data:
+            schema:
+              type: object
+              required: [prompt, model]
+              properties:
+                prompt: { type: string }
+                model: { type: string }
+                size: { type: string }
+                response_format: { type: string, enum: [url, b64_json] }
+                image:
+                  type: string
+                  format: binary
+                image[]:
+                  type: array
+                  items: { type: string, format: binary }
+              anyOf:
+                - required: [image]
+                - required: ["image[]"]
+              additionalProperties: true
       responses:
         "200":
-          description: OK
+          description: Edited image result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGenerationResponse"
   /api/v1/images/upscale:
     get:
       operationId: getApiV1ImagesUpscale
       tags:
         - V1 Images
       summary: "GET images › upscale"
+      description: Image-upscale model catalog; authentication follows the configured model-catalog policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Image-upscale model list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelListResponse"
     post:
       operationId: postApiV1ImagesUpscale
       tags:
         - V1 Images
       summary: "POST images › upscale"
+      description: >-
+        Upscales an image using a configured provider. Authentication is required
+        when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImageUpscaleRequest"
+          multipart/form-data:
+            schema:
+              type: object
+              required: [model, image]
+              properties:
+                model: { type: string }
+                image: { type: string, format: binary }
+                prompt: { type: string }
+                factor: { type: string }
+                creativity: { type: string }
+                response_format: { type: string, enum: [url, b64_json] }
+              additionalProperties: true
       responses:
         "200":
-          description: OK
+          description: Upscaled image result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGenerationResponse"
   /api/v1/issues/report:
     post:
       operationId: postApiV1IssuesReport
@@ -14961,9 +15271,31 @@ paths:
       tags:
         - V1 Responses
       summary: "POST responses › <path>"
+      description: >-
+        OpenAI Responses-compatible catch-all route. Authentication is required
+        when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResponsesRequest"
       responses:
         "200":
-          description: OK
+          description: Responses API object or SSE stream.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponsesResponse"
+            text/event-stream:
+              schema:
+                type: string
   /api/v1/search/analytics:
     get:
       operationId: getApiV1SearchAnalytics
@@ -14979,9 +15311,40 @@ paths:
       tags:
         - V1 Segment
       summary: "POST segment"
+      description: >-
+        Jina-compatible text segmentation/tokenization. Authentication is required
+        when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string, minLength: 1 }
+                tokenizer: { type: string }
+                return_tokens: { type: boolean }
+                return_chunks: { type: boolean }
+                max_chunk_length: { type: number, exclusiveMinimum: 0 }
+              additionalProperties: true
       responses:
         "200":
-          description: OK
+          description: Jina segmentation and token-count result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JinaSegmentResponse"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JinaSegmentResponse"
   /api/v1/video-bridge/drilldown:
     delete:
       operationId: deleteApiV1VideoBridgeDrilldown
@@ -17951,6 +18314,285 @@ components:
                 description: Base64-encoded image bytes when response_format is b64_json.
               revised_prompt: { type: string }
             additionalProperties: true
+      additionalProperties: true
+
+    ImageGenerationRequest:
+      type: object
+      required: [model]
+      properties:
+        model: { type: string }
+        prompt:
+          type: string
+          description: Optional for providers whose image-edit/generation mode accepts structured inputs.
+        n:
+          type: integer
+          minimum: 1
+          default: 1
+        size: { type: string }
+        quality: { type: string }
+        style: { type: string }
+        response_format:
+          type: string
+          enum: [url, b64_json]
+      additionalProperties: true
+
+    ImageUpscaleRequest:
+      type: object
+      required: [model]
+      properties:
+        model: { type: string }
+        prompt: { type: string }
+        image:
+          oneOf:
+            - type: string
+            - type: object
+              additionalProperties: true
+        image_url:
+          oneOf:
+            - type: string
+            - type: object
+              additionalProperties: true
+        image_urls:
+          type: array
+          items: {}
+        factor:
+          oneOf:
+            - type: number
+            - type: string
+        creativity:
+          oneOf:
+            - type: number
+            - type: string
+        response_format:
+          type: string
+          enum: [url, b64_json]
+      additionalProperties: true
+
+    AudioTranscriptionResponse:
+      type: object
+      description: OpenAI Whisper-compatible transcription or translation result.
+      properties:
+        text: { type: string }
+        task: { type: string }
+        language: { type: string }
+        duration: { type: number, minimum: 0 }
+        segments:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              start: { type: number }
+              end: { type: number }
+              text: { type: string }
+              avg_logprob: { type: number }
+            additionalProperties: true
+        words:
+          type: array
+          items: { type: object, additionalProperties: true }
+        usage:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    ModerationResponse:
+      type: object
+      description: OpenAI-compatible moderation result.
+      properties:
+        id: { type: string }
+        model: { type: string }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              flagged: { type: boolean }
+              categories:
+                type: object
+                additionalProperties: { type: boolean }
+              category_scores:
+                type: object
+                additionalProperties: { type: number }
+              category_applied_input_types:
+                type: object
+                additionalProperties:
+                  type: array
+                  items: { type: string }
+            additionalProperties: true
+      additionalProperties: true
+
+    RerankResponse:
+      type: object
+      description: Cohere-compatible rerank response normalized by OmniRoute.
+      properties:
+        id: { type: string }
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer, minimum: 0 }
+              relevance_score: { type: number }
+              document:
+                type: object
+                properties:
+                  text: { type: string }
+                additionalProperties: true
+            additionalProperties: true
+        meta:
+          type: object
+          properties:
+            api_version:
+              type: object
+              properties:
+                version: { type: string }
+              additionalProperties: true
+            billed_units:
+              type: object
+              properties:
+                search_units: { type: integer, minimum: 0 }
+              additionalProperties: true
+          additionalProperties: true
+      additionalProperties: true
+
+    OcrResponse:
+      type: object
+      description: Provider-normalized OCR result; page and text details vary by provider.
+      properties:
+        id: { type: string }
+        model: { type: string }
+        pages:
+          type: array
+          items: { type: object, additionalProperties: true }
+        text: { type: string }
+        usage:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    JinaClassifyResponse:
+      type: object
+      description: Jina-compatible classification result; provider-specific metadata may be included.
+      properties:
+        model: { type: string }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer, minimum: 0 }
+              prediction: { type: string }
+              label: { type: string }
+              score: { type: number }
+              confidence: { type: number }
+            additionalProperties: true
+        usage:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    JinaSegmentResponse:
+      type: object
+      description: Jina-compatible segmentation result; token and chunk fields vary by options.
+      properties:
+        num_tokens: { type: integer, minimum: 0 }
+        num_chunks: { type: integer, minimum: 0 }
+        chunks:
+          type: array
+          items:
+            type: object
+            properties:
+              text: { type: string }
+              start: { type: integer, minimum: 0 }
+              end: { type: integer, minimum: 0 }
+              token_count: { type: integer, minimum: 0 }
+            additionalProperties: true
+        tokens:
+          type: array
+          items: { type: object, additionalProperties: true }
+      additionalProperties: true
+
+    LegacyCompletionRequest:
+      type: object
+      required: [model]
+      properties:
+        model: { type: string }
+        prompt:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+        messages:
+          type: array
+          items: { type: object, additionalProperties: true }
+        stream: { type: boolean, default: false }
+        max_tokens: { type: integer, minimum: 1 }
+        max_completion_tokens: { type: integer, minimum: 1 }
+        temperature: { type: number, minimum: 0, maximum: 2 }
+        top_p: { type: number, minimum: 0, maximum: 1 }
+        stop:
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+        logprobs: { type: integer, minimum: 0, maximum: 5 }
+      anyOf:
+        - required: [prompt]
+        - required: [messages]
+      additionalProperties: true
+
+    LegacyCompletionResponse:
+      type: object
+      description: OpenAI legacy text-completion response; provider extensions may be preserved.
+      properties:
+        id: { type: string }
+        object: { type: string, const: text_completion }
+        created: { type: integer }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              text: { type: string }
+              index: { type: integer }
+              logprobs:
+                oneOf:
+                  - type: object
+                    additionalProperties: true
+                  - type: "null"
+              finish_reason:
+                oneOf:
+                  - type: string
+                  - type: "null"
+            additionalProperties: true
+        usage:
+          type: object
+          additionalProperties: true
+        system_fingerprint: { type: string }
+      additionalProperties: true
+
+    WebSocketHandshakeResponse:
+      type: object
+      description: WebSocket connection descriptor returned by GET /api/v1/ws?handshake=1.
+      properties:
+        ok: { type: boolean }
+        path: { type: string }
+        wsAuth: { type: boolean }
+        authenticated: { type: boolean }
+        authType:
+          type: string
+          enum: [none, api_key, session]
+        protocol:
+          type: object
+          properties:
+            request: { type: object, additionalProperties: true }
+            cancel: { type: object, additionalProperties: true }
+            live: { type: object, additionalProperties: true }
+          additionalProperties: true
+        live:
+          type: object
+          additionalProperties: true
       additionalProperties: true
 
     Model:

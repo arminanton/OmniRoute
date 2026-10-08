@@ -64,6 +64,74 @@ test("primary inference operations describe their JSON and streaming wire format
     successContent(operation("/api/v1/embeddings", "post"), "application/json").schema.$ref,
     "#/components/schemas/EmbeddingResponse"
   );
+  assert.ok(successContent(operation("/api/v1/audio/speech", "post"), "audio/*"));
+  assert.equal(
+    successContent(
+      operation("/api/v1/audio/transcriptions", "post"),
+      "application/json"
+    ).schema.$ref,
+    "#/components/schemas/AudioTranscriptionResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/audio/translations", "post"), "application/json").schema
+      .$ref,
+    "#/components/schemas/AudioTranscriptionResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/moderations", "post"), "application/json").schema.$ref,
+    "#/components/schemas/ModerationResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/rerank", "post"), "application/json").schema.$ref,
+    "#/components/schemas/RerankResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/ocr", "post"), "application/json").schema.$ref,
+    "#/components/schemas/OcrResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/completions", "post"), "application/json").schema.$ref,
+    "#/components/schemas/LegacyCompletionResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/images/edits", "post"), "application/json").schema.$ref,
+    "#/components/schemas/ImageGenerationResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/images/upscale", "post"), "application/json").schema.$ref,
+    "#/components/schemas/ImageGenerationResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/images/upscale", "get"), "application/json").schema.$ref,
+    "#/components/schemas/ModelListResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/classify", "post"), "application/json").schema.$ref,
+    "#/components/schemas/JinaClassifyResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/segment", "post"), "application/json").schema.$ref,
+    "#/components/schemas/JinaSegmentResponse"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/responses/{path}", "post"), "application/json").schema
+      .$ref,
+    "#/components/schemas/ResponsesResponse"
+  );
+  assert.deepEqual(
+    operation("/api/v1/audio/speech", "post").requestBody.content["application/json"].schema
+      .required,
+    ["model", "input"]
+  );
+  assert.equal(
+    operation("/api/v1/images/generations", "post").requestBody.content["application/json"]
+      .schema.$ref,
+    "#/components/schemas/ImageGenerationRequest"
+  );
+  assert.equal(
+    successContent(operation("/api/v1/ws", "get"), "application/json").schema.$ref,
+    "#/components/schemas/WebSocketHandshakeResponse"
+  );
 });
 
 test("client inference auth reflects key, session, and configured anonymous access", () => {
@@ -74,6 +142,17 @@ test("client inference auth reflects key, session, and configured anonymous acce
     ["/api/v1/responses", "post"],
     ["/api/v1/embeddings", "post"],
     ["/api/v1/images/generations", "post"],
+    ["/api/v1/audio/speech", "post"],
+    ["/api/v1/audio/transcriptions", "post"],
+    ["/api/v1/audio/translations", "post"],
+    ["/api/v1/moderations", "post"],
+    ["/api/v1/rerank", "post"],
+    ["/api/v1/ocr", "post"],
+    ["/api/v1/classify", "post"],
+    ["/api/v1/segment", "post"],
+    ["/api/v1/completions", "post"],
+    ["/api/v1/images/edits", "post"],
+    ["/api/v1/images/upscale", "post"],
   ] as const;
   for (const [pathname, method] of guardedOperations) {
     const requirements = operation(pathname, method).security ?? [];

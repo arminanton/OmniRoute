@@ -5,7 +5,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 74
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 85
 component schemas. The API route inventory checker now verifies that source files and the spec agree
 on every path, exported method, and path parameter; it reports 705/705 routes and the documented
 public copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -26,9 +26,10 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 131 operations have
+contract is still stronger on route coverage than schema completeness: 148 operations have
 response content schemas and 121 declare operation-level security. The OpenAI chat, Anthropic
-Messages, OpenAI Responses, token-count, embedding, and image-generation paths now describe their
+Messages, OpenAI Responses, token-count, embedding, image-generation, audio, moderation, rerank,
+OCR, Jina classify/segment, legacy completions, and WebSocket-handshake paths now describe their
 principal request/response shapes and streaming media. The remaining contract pass must compare
 authentication and request/response schemas with each handler before calling the entire OpenAPI
 document semantically complete. The core inference paths also list the accepted bearer/API-key
@@ -344,6 +345,6 @@ was close to 1.4.0; a full Bun 1.4.2 application build was not run.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 131 operations with success-response content; the
+- Continue the OpenAPI handler audit beyond the 148 operations with success-response content; the
   path/method/security-tier inventory is complete, but the remaining response schemas and auth
   behavior have not all been source-verified.
