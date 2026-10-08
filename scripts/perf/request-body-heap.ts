@@ -49,6 +49,9 @@ const { cloneBoundedForLog, cloneClientRawRequestPayloadForLog } = await import(
   "../../open-sse/utils/requestLogger.ts"
 );
 const { getChatLogClientTextLimit } = await import("../../src/lib/logEnv.ts");
+const { estimateCallLogArtifactFootprint } = await import(
+  "../../src/lib/usage/callLogArtifactWriter.ts"
+);
 console.log = realLog;
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -180,6 +183,48 @@ async function main(): Promise<void> {
   const legacyPipelineBytes = Buffer.byteLength(JSON.stringify(legacyPipeline.value), "utf8");
   const deduplicatedPipelineBytes = Buffer.byteLength(JSON.stringify(deduplicatedPipeline.value), "utf8");
 
+  const summary = {
+    id: "heap-benchmark",
+    timestamp: new Date(0).toISOString(),
+    method: "POST",
+    path: "/v1/responses",
+    status: 200,
+    model: "mock/model",
+    requestedModel: null,
+    provider: "mock",
+    account: "mock",
+    connectionId: null,
+    duration: 1,
+    tokens: { in: 0, out: 0, cacheRead: null, cacheWrite: null, reasoning: null, compressed: null },
+    requestType: null,
+    sourceFormat: "openai-responses",
+    targetFormat: "openai-responses",
+    apiKeyId: null,
+    apiKeyName: null,
+    comboName: null,
+    comboStepId: null,
+    comboExecutionKey: null,
+  };
+  const makeArtifact = (clientRawRequest: unknown) => ({
+    schemaVersion: 5,
+    summary,
+    requestBody: body,
+    responseBody: null,
+    error: null,
+    pipeline: { clientRawRequest },
+  });
+  function measureArtifactFootprint(artifact: ReturnType<typeof makeArtifact>) {
+    const started = performance.now();
+    const estimate = estimateCallLogArtifactFootprint(artifact);
+    return { ...estimate, durationMs: performance.now() - started };
+  }
+  const legacyArtifactFootprint = measureArtifactFootprint(makeArtifact(legacyPipeline.value));
+  const deduplicatedArtifactFootprint = measureArtifactFootprint(
+    makeArtifact(deduplicatedPipeline.value)
+  );
+  const queuedReservationBytes = (estimate: typeof legacyArtifactFootprint) =>
+    estimate.reason ? null : estimate.estimatedBytes * 2 + 64 * 1024;
+
   // Model independent in-flight clients: each has a separately parsed body,
   // a bounded pending snapshot, and a detailed-log payload. The synthetic
   // corpus is incident-derived; this is retained heap, not provider capacity.
@@ -220,6 +265,12 @@ async function main(): Promise<void> {
           legacyPipelineBytes,
           deduplicatedPipelineBytes,
           serializedPipelineBytesSaved: Math.max(0, legacyPipelineBytes - deduplicatedPipelineBytes),
+          artifactQueueFootprint: {
+            legacy: legacyArtifactFootprint,
+            deduplicated: deduplicatedArtifactFootprint,
+            legacyReservedBytes: queuedReservationBytes(legacyArtifactFootprint),
+            deduplicatedReservedBytes: queuedReservationBytes(deduplicatedArtifactFootprint),
+          },
           effectiveInputUsesReference:
             (deduplicatedPipeline.value as Record<string, unknown>).effectiveInputRef === "body.input",
           oneRequestSnapshotBytes: requestSnapshotBytes,
@@ -246,6 +297,14 @@ async function main(): Promise<void> {
     console.log(
       `Pipeline JSON: ${fmt(legacyPipelineBytes)} MiB before dedup → ${fmt(deduplicatedPipelineBytes)} MiB after dedup ` +
         `(**${fmt(legacyPipelineBytes - deduplicatedPipelineBytes)} MiB saved**).`
+    );
+    console.log("");
+    console.log(
+      `Artifact queue estimate: ${fmt(legacyArtifactFootprint.estimatedBytes)} MiB legacy ` +
+        `(${legacyArtifactFootprint.durationMs.toFixed(1)} ms) → ` +
+        `${fmt(deduplicatedArtifactFootprint.estimatedBytes)} MiB deduplicated ` +
+        `(${deduplicatedArtifactFootprint.durationMs.toFixed(1)} ms); the writer reserves twice ` +
+        `the estimate plus 64 KiB before projection and worker transfer.`
     );
     console.log("");
     console.log(
