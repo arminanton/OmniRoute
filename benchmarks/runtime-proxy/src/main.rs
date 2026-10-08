@@ -16,6 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use reqwest::Client;
 use tokio::{net::TcpListener, sync::Semaphore};
