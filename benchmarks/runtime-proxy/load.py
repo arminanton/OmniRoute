@@ -3,6 +3,7 @@
 
 import argparse
 import asyncio
+from collections import Counter
 import json
 import time
 
@@ -75,7 +76,7 @@ async def read_body(reader, headers, started):
     return total, first_body_ms
 
 
-async def call_one(port, index, body, timeout):
+async def call_one(port, index, body, timeout, cancel_after_ms):
     started = time.perf_counter()
     writer = None
     try:
@@ -97,6 +98,23 @@ async def call_one(port, index, body, timeout):
             read_response(reader), timeout=timeout
         )
         headers_ms = (time.perf_counter() - headers_started) * 1000
+        if cancel_after_ms is not None:
+            await asyncio.sleep(cancel_after_ms / 1000.0)
+            elapsed_ms = (time.perf_counter() - started) * 1000
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return {
+                "ok": 200 <= status < 300,
+                "status": status,
+                "cancelled": True,
+                "headersMs": round(headers_ms, 3),
+                "firstBodyMs": None,
+                "elapsedMs": round(elapsed_ms, 3),
+                "outputBytes": 0,
+            }
         output_bytes, first_body_ms = await asyncio.wait_for(
             read_body(reader, response_headers, started), timeout=timeout
         )
@@ -104,6 +122,7 @@ async def call_one(port, index, body, timeout):
         return {
             "ok": 200 <= status < 300,
             "status": status,
+            "cancelled": False,
             "headersMs": round(headers_ms, 3),
             "firstBodyMs": None if first_body_ms is None else round(first_body_ms, 3),
             "elapsedMs": round(elapsed_ms, 3),
@@ -126,6 +145,7 @@ async def main():
     parser.add_argument("--clients", type=int, default=100)
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--label", default="unspecified")
+    parser.add_argument("--cancel-after-ms", type=int)
     args = parser.parse_args()
     body = json.dumps(
         {
@@ -137,10 +157,19 @@ async def main():
     ).encode("utf8")
     started = time.perf_counter()
     results = await asyncio.gather(
-        *[call_one(args.port, index, body, args.timeout) for index in range(args.clients)]
+        *[
+            call_one(args.port, index, body, args.timeout, args.cancel_after_ms)
+            for index in range(args.clients)
+        ]
     )
     elapsed = time.perf_counter() - started
-    good = [result for result in results if result.get("ok")]
+    accepted = [result for result in results if result.get("ok")]
+    completed = [result for result in accepted if not result.get("cancelled")]
+    first_body_times = [
+        result["firstBodyMs"]
+        for result in accepted
+        if result["firstBodyMs"] is not None
+    ]
     print(
         json.dumps(
             {
@@ -148,16 +177,19 @@ async def main():
                 "clients": args.clients,
                 "requestBytes": len(body),
                 "wallMs": round(elapsed * 1000, 3),
-                "throughputPerSecond": round(len(good) / elapsed, 3) if elapsed else 0,
-                "completed": len(good),
-                "failed": len(results) - len(good),
-                "headersP50Ms": percentile([r["headersMs"] for r in good], 50),
-                "headersP95Ms": percentile([r["headersMs"] for r in good], 95),
-                "firstBodyP50Ms": percentile([r["firstBodyMs"] for r in good if r["firstBodyMs"] is not None], 50),
-                "firstBodyP95Ms": percentile([r["firstBodyMs"] for r in good if r["firstBodyMs"] is not None], 95),
-                "completionP50Ms": percentile([r["elapsedMs"] for r in good], 50),
-                "completionP95Ms": percentile([r["elapsedMs"] for r in good], 95),
-                "bytesP50": percentile([r["outputBytes"] for r in good], 50),
+                "throughputPerSecond": round(len(accepted) / elapsed, 3) if elapsed else 0,
+                "accepted": len(accepted),
+                "completed": len(completed),
+                "failed": len(results) - len(accepted),
+                "cancelled": sum(1 for result in results if result.get("cancelled")),
+                "statusCounts": dict(Counter(str(result["status"]) for result in results if "status" in result)),
+                "headersP50Ms": percentile([r["headersMs"] for r in accepted], 50),
+                "headersP95Ms": percentile([r["headersMs"] for r in accepted], 95),
+                "firstBodyP50Ms": percentile(first_body_times, 50),
+                "firstBodyP95Ms": percentile(first_body_times, 95),
+                "completionP50Ms": percentile([r["elapsedMs"] for r in completed], 50),
+                "completionP95Ms": percentile([r["elapsedMs"] for r in completed], 95),
+                "bytesP50": percentile([r["outputBytes"] for r in completed], 50),
                 "sampleFailures": [r for r in results if not r.get("ok")][:3],
             },
             separators=(",", ":"),

@@ -158,6 +158,8 @@ async def main():
     parser.add_argument("--chunks", type=int, default=50)
     parser.add_argument("--chunk-delay-ms", type=int, default=10)
     parser.add_argument("--chunk-bytes", type=int, default=128)
+    parser.add_argument("--cancel-after-ms", type=int)
+    parser.add_argument("--allow-non2xx", action="store_true")
     parser.add_argument("--max-inflight", type=int, default=128)
     parser.add_argument("--upstream-port", type=int, default=3900)
     parser.add_argument("--gateway-port", type=int, default=3901)
@@ -240,17 +242,20 @@ async def main():
             daemon=True,
         )
         sampler.start()
+        loader_command = [
+            sys.executable,
+            str(ROOT / "load.py"),
+            "--port",
+            str(args.gateway_port),
+            "--clients",
+            str(args.clients),
+            "--label",
+            args.runtime,
+        ]
+        if args.cancel_after_ms is not None:
+            loader_command.extend(["--cancel-after-ms", str(args.cancel_after_ms)])
         loader = subprocess.run(
-            [
-                sys.executable,
-                str(ROOT / "load.py"),
-                "--port",
-                str(args.gateway_port),
-                "--clients",
-                str(args.clients),
-                "--label",
-                args.runtime,
-            ],
+            loader_command,
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -268,8 +273,24 @@ async def main():
         result["chunksPerResponse"] = args.chunks
         result["chunkDelayMs"] = args.chunk_delay_ms
         result["chunkBytes"] = args.chunk_bytes
+        if args.cancel_after_ms is not None:
+            deadline = time.monotonic() + 5
+            active = None
+            while time.monotonic() < deadline:
+                try:
+                    with urllib.request.urlopen(
+                        "http://127.0.0.1:%d/health" % args.upstream_port,
+                        timeout=1,
+                    ) as response:
+                        active = json.load(response).get("activeStreams")
+                    if active == 0:
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.05)
+            result["upstreamActiveAfterCancel"] = active
         print(json.dumps(result, separators=(",", ":")))
-        if result["failed"]:
+        if (result["failed"] and not args.allow_non2xx) or result.get("upstreamActiveAfterCancel", 0) != 0:
             raise SystemExit(1)
     finally:
         if gateway_container_name:

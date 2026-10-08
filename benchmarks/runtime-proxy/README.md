@@ -30,6 +30,17 @@ python3 benchmarks/runtime-proxy/run_bench.py --runtime bun-smol --bun-bin /tmp/
 python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --clients 100
 ```
 
+Exercise admission and cancellation separately:
+
+```bash
+python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --clients 100 --max-inflight 64 --allow-non2xx
+python3 benchmarks/runtime-proxy/run_bench.py --runtime bun142-container --clients 100 --cancel-after-ms 100
+```
+
+The first command should show a bounded set of 503 responses at the configured capacity. The
+cancellation case succeeds only if the mock upstream reports zero active streams after clients
+disconnect.
+
 Sweep `--clients 1,15,30,70,100` and repeat each point at least three times. The result reports
 header and first-body-byte latency, completion latency, successful streams, throughput, peak
 gateway RSS, and CPU time. Tune `--chunks`, `--chunk-delay-ms`, and `--chunk-bytes` to test other
