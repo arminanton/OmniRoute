@@ -384,6 +384,31 @@ export default function RequestLoggerDetail({
   };
 
   const pipelinePayloads = detail?.pipelinePayloads || null;
+  const diagnosticOverflow = pipelinePayloads?.diagnosticOverflow;
+  const diagnosticOverflowTraceId =
+    diagnosticOverflow &&
+    typeof diagnosticOverflow === "object" &&
+    typeof diagnosticOverflow.traceId === "string" &&
+    /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+      diagnosticOverflow.traceId
+    )
+      ? diagnosticOverflow.traceId
+      : null;
+  const diagnosticOverflowPersisted =
+    !diagnosticOverflow ||
+    typeof diagnosticOverflow !== "object" ||
+    diagnosticOverflow.persisted !== false;
+  const pipelineError = pipelinePayloads?.error;
+  const pipelineErrorWithOverflow = diagnosticOverflow
+    ? {
+        ...(pipelineError && typeof pipelineError === "object" && !Array.isArray(pipelineError)
+          ? pipelineError
+          : pipelineError == null
+            ? {}
+            : { message: pipelineError }),
+        diagnosticOverflow,
+      }
+    : pipelineError;
   const payloadSections = pipelinePayloads
     ? [
         ["clientRawRequest", t("payload.clientRawRequest")],
@@ -397,7 +422,7 @@ export default function RequestLoggerDetail({
         .map(([key, title]) => ({
           key,
           title,
-          json: toPrettyJson(pipelinePayloads[key]),
+          json: toPrettyJson(key === "error" ? pipelineErrorWithOverflow : pipelinePayloads[key]),
         }))
         .filter((section) => section.json)
     : [];
@@ -1072,6 +1097,35 @@ export default function RequestLoggerDetail({
                     onCopy={() => onCopy(section.json)}
                   />
                 ))}
+
+              {diagnosticOverflowTraceId && diagnosticOverflowPersisted && (
+                <div
+                  className="flex flex-wrap items-center gap-3 rounded-xl border border-sky-500/25 bg-sky-500/5 p-3 text-xs"
+                  data-testid="diagnostic-overflow-links"
+                >
+                  <span className="text-text-muted">{t("detailStatus")}:</span>
+                  <span className="font-mono">
+                    {typeof diagnosticOverflow?.state === "string"
+                      ? diagnosticOverflow.state
+                      : "captured"}
+                  </span>
+                  <a
+                    className="font-mono text-primary underline underline-offset-2"
+                    href={`/api/usage/diagnostic-overflow/${diagnosticOverflowTraceId}`}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    {diagnosticOverflowTraceId}
+                  </a>
+                  <a
+                    className="text-primary underline underline-offset-2"
+                    download
+                    href={`/api/usage/diagnostic-overflow/${diagnosticOverflowTraceId}/client-request`}
+                  >
+                    {t("payload.clientRawRequest")} (.gz)
+                  </a>
+                </div>
+              )}
 
               {payloadSections.length === 0 && responseJson && (
                 <PayloadSection

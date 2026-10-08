@@ -2,7 +2,7 @@
 /**
  * Exercise the production request logger, call-log preparation, SQLite summary,
  * and artifact worker together. All state is isolated in a temporary DATA_DIR.
- * Run with: node --import tsx/esm scripts/perf/bench-call-log-lifecycle.mjs 100 262144
+ * Run with: node --import tsx/esm scripts/perf/bench-call-log-lifecycle.mjs 100 262144 65536 65536
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -12,8 +12,14 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const clients = parsePositiveInt(process.argv[2], 100);
 const requestBytes = parsePositiveInt(process.argv[3], 262_144);
-const textLimitBytes = parsePositiveInt(process.argv[4], 64 * 1024);
-if (clients > 1_000 || requestBytes > 4 * 1024 * 1024 || textLimitBytes > 4 * 1024 * 1024) {
+const stageTextLimitBytes = parsePositiveInt(process.argv[4], 64 * 1024);
+const clientTextLimitBytes = parsePositiveInt(process.argv[5], stageTextLimitBytes);
+if (
+  clients > 1_000 ||
+  requestBytes > 4 * 1024 * 1024 ||
+  stageTextLimitBytes > 4 * 1024 * 1024 ||
+  clientTextLimitBytes > 4 * 1024 * 1024
+) {
   throw new RangeError("benchmark limits are 1,000 clients and 4 MiB per body/text limit");
 }
 
@@ -24,8 +30,8 @@ process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
 process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = "10240";
 process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS = "true";
 process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = "256";
-process.env.CHAT_LOG_TEXT_LIMIT = String(textLimitBytes);
-process.env.CHAT_LOG_CLIENT_TEXT_LIMIT = String(textLimitBytes);
+process.env.CHAT_LOG_TEXT_LIMIT = String(stageTextLimitBytes);
+process.env.CHAT_LOG_CLIENT_TEXT_LIMIT = String(clientTextLimitBytes);
 process.env.NODE_ENV = "test";
 
 let closeCallLogSaves;
@@ -157,7 +163,8 @@ try {
       runtime: process.versions.bun ? `bun-${process.versions.bun}` : process.version,
       clients,
       targetRequestBytes: requestBytes,
-      capturedTextLimitBytes: textLimitBytes,
+      stageTextLimitBytes,
+      clientTextLimitBytes,
       streamChunkCountPerTrack: streamChunks.length,
       completedSaves: ids.length,
       states,

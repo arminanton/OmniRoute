@@ -473,6 +473,10 @@ reservation estimator, SQLite writes, and artifact worker. Reproduce with
 for the larger request shape. The byte argument is an approximate JSON body target; the JSON
 envelope and per-session label add a small amount. `setupMs` separates imports and temporary SQLite
 migrations from the timed save phase, while peak RSS is sampled every 10 ms during concurrent saves.
+The script accepts separate stage and client text limits; omitting the fourth argument makes the
+client limit equal the stage limit. Reproduce the candidate's mixed 64 KiB/4 MiB profile with
+`node --import tsx/esm scripts/perf/bench-call-log-lifecycle.mjs 100 1311987 65536 4194304` or
+the same command under Bun; use `100 1311987 1311987 1311987` to align both limits with the body.
 Each runtime/size ran three times.
 
 | Runtime      | Target request bytes | Detailed artifacts ready | Summary rows retained | Median save time | Median load peak RSS | Artifact bytes written |
@@ -490,24 +494,28 @@ driver versus Node's `better-sqlite3`. The harness still omits Next routing/auth
 execution, account scheduling, actual tool cycles, and real upstream streams; it does **not** prove
 70–100-agent end-to-end capacity.
 
-The full logger harness also compared a 1.31 MiB request with the text preview limit left at its
-64 KiB default versus both `CHAT_LOG_TEXT_LIMIT` and `CHAT_LOG_CLIENT_TEXT_LIMIT` set to 1,311,987
-bytes. The per-artifact cap and concurrency stayed the same:
+The running candidate uses a mixed preview profile: `CHAT_LOG_CLIENT_TEXT_LIMIT=4194304` with
+`CHAT_LOG_TEXT_LIMIT` unset, which leaves stage previews at 64 KiB. The lifecycle harness compared a
+1.31 MiB synthetic request under that profile, the 64/64 KiB defaults, and aligned stage/client
+limits matching the body. The per-artifact cap and concurrency stayed the same:
 
-| Runtime      | Text preview limit | Detailed artifacts ready | Median save time | Median load peak RSS | Artifact bytes written |
-| ------------ | -----------------: | -----------------------: | ---------------: | -------------------: | ---------------------: |
-| Node 24.21.0 |             65,536 |                    4/100 |           682 ms |            548.2 MiB |                5.60 MB |
-| Node 24.21.0 |          1,311,987 |                    5/100 |           641 ms |            389.2 MiB |                6.68 MB |
-| Bun 1.4.0    |             65,536 |                    4/100 |           477 ms |            477.2 MiB |                5.60 MB |
-| Bun 1.4.0    |          1,311,987 |                    5/100 |           403 ms |            305.5 MiB |                6.68 MB |
+| Runtime      | Stage text limit | Client text limit | Detailed artifacts ready | Median save time | Median load peak RSS | Artifact bytes written |
+| ------------ | ---------------: | ----------------: | -----------------------: | ---------------: | -------------------: | ---------------------: |
+| Node 24.21.0 |           65,536 |            65,536 |                    4/100 |           682 ms |            548.2 MiB |                5.60 MB |
+| Bun 1.4.0    |           65,536 |            65,536 |                    4/100 |           477 ms |            477.2 MiB |                5.60 MB |
+| Node 24.21.0 |           65,536 |         4,194,304 |                    4/100 |           715 ms |            514.8 MiB |                5.87 MB |
+| Bun 1.4.0    |           65,536 |         4,194,304 |                    4/100 |           499 ms |            441.8 MiB |                5.87 MB |
+| Node 24.21.0 |        1,311,987 |         1,311,987 |                    5/100 |           641 ms |            389.2 MiB |                6.68 MB |
+| Bun 1.4.0    |        1,311,987 |         1,311,987 |                    5/100 |           403 ms |            305.5 MiB |                6.68 MB |
 
-In this synthetic body shape, matching the logger's client/OpenAI/provider snapshots to the full
-request changed the save path so it could reuse the request body instead of retaining a separate
-full raw body alongside a 64 KiB stage preview. The sampled peak fell 29% on Node and 36% on Bun,
-with one more detailed artifact retained per 100 saves. This is an inference from the current copy
-and equality checks plus this synthetic benchmark, not a production-route result; the larger text
-limits also retain more prompt text in intermediate logs, so they remain opt-in pending live-sized
-privacy and memory tests.
+At this synthetic body size, the mixed candidate profile used less sampled RSS than 64/64 KiB,
+while matching both stage and client limits to the full body reduced it further and retained one
+more artifact per 100 saves. This matches the source path: when the client snapshot equals the raw
+request, `saveCallLog` can reuse one body rather than protecting both copies. It is an inference from
+the copy checks and synthetic benchmark, not a production-route result. The aligned profile also
+stores more prompt text in stage previews; the 1.31 MiB body is much smaller than an 872K-token
+request. No default change is justified before testing provider transformations, privacy, and heap
+behavior with real-sized traffic.
 
 ## Build/runtime evaluation
 
@@ -582,7 +590,9 @@ a result. Neither attempt reported a source diagnostic. The repository target
 `npm run typecheck:core` has since passed after the call-log changes. The broad no-emit failures
 still show that a full-project check needs a smaller dependency boundary or a builder with a larger,
 explicitly budgeted heap; this target does not prove that the full Next application build fits the
-current builder.
+current builder. The dashboard-scoped typecheck now passes within its frozen baseline of 206
+pre-existing diagnostics; its two unbaselined provider-model ID errors were fixed by aligning the
+no-auth catalog filter with the optional model ID shape.
 
 ## Remaining acceptance checks
 

@@ -78,6 +78,43 @@ test("event stream shows only when debugEnabled and appears above legacy respons
   );
 });
 
+test("private diagnostic overflow references are visible and expose authenticated capture links", () => {
+  const traceId = "11111111-1111-4111-8111-111111111111";
+  const html = renderToStaticMarkup(
+    React.createElement(RequestLoggerDetail, {
+      log: {
+        status: 504,
+        method: "POST",
+        path: "/v1/responses",
+        timestamp: "2026-10-08T17:00:00.000Z",
+        duration: 30_000,
+        provider: "agy",
+        sourceFormat: "openai-responses",
+        model: "gemini-3.8-flash-high",
+        tokens: { in: 0, out: 0 },
+      },
+      detail: {
+        detailState: "ready",
+        requestBody: "[omitted: call log artifact worker unavailable]",
+        pipelinePayloads: {
+          error: { reason: "call_log_artifact_worker_missing" },
+          diagnosticOverflow: { schema: "omni-diagnostic-overflow/v1", traceId, state: "complete" },
+        },
+      },
+      loading: false,
+      debugEnabled: false,
+      onClose: () => {},
+      onCopy: async () => true,
+    })
+  );
+
+  assert.match(html, /data-testid="diagnostic-overflow-links"/);
+  assert.ok(html.includes(`/api/usage/diagnostic-overflow/${traceId}`));
+  assert.ok(html.includes(`/api/usage/diagnostic-overflow/${traceId}/client-request`));
+  assert.ok(html.includes(traceId));
+  assert.ok(html.includes("call_log_artifact_worker_missing"));
+});
+
 // Regression: commit 692d6be80 ("unify active and finished requests into single
 // view") swapped the collapsible PayloadSection for the new StreamSection (added
 // autoscroll) when rendering the provider/client event streams, but never carried
