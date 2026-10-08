@@ -47,7 +47,7 @@ test("every x-loopback-only path matches a LOCAL_ONLY prefix or pattern in route
 test("GET /api/openapi/spec documents its conditional management auth contract", () => {
   const operation = paths["/api/openapi/spec"]?.get;
 
-  assert.deepEqual(operation?.security, [{ ManagementSessionAuth: [] }]);
+  assert.deepEqual(operation?.security, [{ ManagementSessionAuth: [] }, {}]);
   assert.match(operation?.description ?? "", /When `requireLogin` is enabled/);
   assert.equal(
     operation?.responses?.["401"]?.$ref,
@@ -63,7 +63,7 @@ test("POST /api/openapi/try documents its bounded management proxy contract", ()
   const operation = paths["/api/openapi/try"]?.post;
 
   assert.ok(operation, "POST /api/openapi/try must be present in docs/openapi.yaml");
-  assert.deepEqual(operation.security, [{ BearerAuth: [] }, { ManagementSessionAuth: [] }]);
+  assert.deepEqual(operation.security, [{ BearerAuth: [] }, { ManagementSessionAuth: [] }, {}]);
   assert.match(operation.description ?? "", /same-origin/);
   assert.match(operation.description ?? "", /When `requireLogin` is disabled/);
 
@@ -127,6 +127,21 @@ test("POST /api/openapi/try documents its bounded management proxy contract", ()
   );
   assert.equal(operation.responses?.["403"]?.$ref, "#/components/responses/ManagementInvalidToken");
   assert.equal(operation.responses?.["503"]?.$ref, "#/components/responses/InternalError");
+});
+
+test("configuration-gated model and routing catalogs document anonymous alternatives", () => {
+  const expected = [{ BearerAuth: [] }, { ManagementSessionAuth: [] }, {}];
+  for (const [pathStr, method] of [
+    ["/api/v1/models", "get"],
+    ["/api/v1/providers/{provider}/models", "get"],
+    ["/api/v1/combos", "get"],
+    ["/api/v1/explain/routing", "get"],
+  ] as const) {
+    const operation = paths[pathStr]?.[method];
+    assert.deepEqual(operation?.security, expected, `${method.toUpperCase()} ${pathStr}`);
+  }
+  assert.match(paths["/api/v1/models"]?.get?.description ?? "", /requireAuthForModels/);
+  assert.match(paths["/api/v1/combos"]?.get?.description ?? "", /REQUIRE_API_KEY/);
 });
 
 test("every x-always-protected path matches ALWAYS_PROTECTED_API_PATHS in routeGuard.ts", () => {
