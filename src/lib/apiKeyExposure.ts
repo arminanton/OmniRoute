@@ -15,5 +15,7 @@ export function isApiKeyRevealEnabled(): boolean {
 
 export function maskStoredApiKey(key: unknown): string | null {
   if (typeof key !== "string") return null;
+  // Do not reveal a complete short credential through overlapping prefix/suffix slices.
+  if (key.length <= 16) return "****";
   return key.slice(0, 8) + "****" + key.slice(-4);
 }

@@ -358,8 +358,52 @@ export function sanitizeProviderSpecificDataForResponse(value: unknown): JsonRec
   delete sanitized.codexClientIdentity;
   delete sanitized.codexOriginalIdentityHeaders;
   delete sanitized.codexTurnStateEcho;
+  if (Array.isArray(sanitized.extraApiKeys)) {
+    sanitized.extraApiKeys = sanitized.extraApiKeys
+      .filter((key): key is string => typeof key === "string")
+      .map((key, index) => maskExtraApiKey(key, index));
+  }
   if (sanitized.browserCdpEndpoint) sanitized.browserCdpEndpoint = "configured";
   return sanitized;
+}
+
+function maskExtraApiKey(key: string, index: number): string {
+  const preview = key.length <= 16 ? "****" : `${key.slice(0, 8)}****${key.slice(-4)}`;
+  return `${preview}#${index}`;
+}
+
+/**
+ * The dashboard round-trips masked `extraApiKeys` previews when saving other
+ * connection settings. Restore unchanged previews against the existing array
+ * before the partial update is persisted; newly entered values remain raw.
+ */
+export function restoreMaskedExtraApiKeys(incoming: unknown, existing: unknown): unknown {
+  if (!Array.isArray(incoming) || !Array.isArray(existing)) return incoming;
+  const remaining = existing.flatMap((key, index) =>
+    typeof key === "string" ? [{ key, index }] : []
+  );
+  return incoming.map((value) => {
+    if (typeof value !== "string") return value;
+    const separator = value.lastIndexOf("#");
+    if (separator >= 0) {
+      const indexText = value.slice(separator + 1);
+      const index = Number(indexText);
+      if (Number.isInteger(index) && index >= 0) {
+        const match = remaining.findIndex(
+          (entry) => entry.index === index && maskExtraApiKey(entry.key, entry.index) === value
+        );
+        if (match >= 0) return remaining.splice(match, 1)[0].key;
+      }
+    }
+
+    // Accept legacy prefix/suffix masks still held in an already-open editor.
+    const legacyMatch = remaining.findIndex(
+      (entry) =>
+        `${entry.key.slice(0, 8)}****${entry.key.slice(-4)}` === value
+    );
+    if (legacyMatch < 0) return value;
+    return remaining.splice(legacyMatch, 1)[0].key;
+  });
 }
 
 export function isOpenAIResponsesStoreEnabled(providerSpecificData: unknown): boolean {

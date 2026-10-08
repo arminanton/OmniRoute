@@ -137,3 +137,39 @@ test(
     assert.equal(rateLimitManager.isRateLimitEnabled(connection.id as string), true);
   }
 );
+
+test("PUT /api/providers/[id] restores unchanged masked extra-key previews before saving", async () => {
+  const rawExtraKeys = ["sk-extra-key-1111-aaaa", "sk-extra-key-2222-bbbb"];
+  const connection = (await createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: "OpenAI rotating keys",
+    apiKey: "sk-primary-key-value",
+    priority: 1,
+    isActive: true,
+    testStatus: "active",
+    providerSpecificData: { extraApiKeys: rawExtraKeys },
+  })) as Record<string, unknown>;
+  const mask = (key: string) => `${key.slice(0, 8)}****${key.slice(-4)}`;
+
+  // The safe provider-details API returns the retained entry as a masked
+  // preview. Removing the first key should preserve the second raw credential.
+  const request = await makeManagementSessionRequest(
+    `http://localhost/api/providers/${connection.id}`,
+    {
+      method: "PUT",
+      body: { providerSpecificData: { extraApiKeys: [mask(rawExtraKeys[1])] } },
+    }
+  );
+  const response = await providerByIdRoute.PUT(request, {
+    params: Promise.resolve({ id: connection.id as string }),
+  });
+  assert.equal(response.status, 200);
+
+  const persisted = (await getProviderConnectionById(connection.id as string)) as Record<
+    string,
+    unknown
+  >;
+  const providerSpecificData = persisted.providerSpecificData as Record<string, unknown>;
+  assert.deepEqual(providerSpecificData.extraApiKeys, [rawExtraKeys[1]]);
+});

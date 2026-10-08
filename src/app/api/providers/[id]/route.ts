@@ -14,6 +14,7 @@ import { updateProviderConnectionSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import {
   normalizeProviderSpecificData,
+  restoreMaskedExtraApiKeys,
   sanitizeProviderSpecificDataForResponse,
 } from "@/lib/providers/requestDefaults";
 import {
@@ -254,7 +255,14 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         existing.providerSpecificData && typeof existing.providerSpecificData === "object"
           ? existing.providerSpecificData
           : {};
-      const mergedPsd = { ...existingPsd, ...incomingPsd };
+      const incomingPsdForMerge = { ...(incomingPsd as Record<string, unknown>) };
+      if (Array.isArray(incomingPsdForMerge.extraApiKeys)) {
+        incomingPsdForMerge.extraApiKeys = restoreMaskedExtraApiKeys(
+          incomingPsdForMerge.extraApiKeys,
+          existingPsd.extraApiKeys
+        );
+      }
+      const mergedPsd = { ...existingPsd, ...incomingPsdForMerge };
       delete mergedPsd.validationId;
       delete mergedPsd.runtimeKey;
 
@@ -294,7 +302,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         // inserted or removed mid-list, so we clear ALL extra health entries
         // when the list actually changes and let the next health check regen.
         const existingExtras = existingPsd.extraApiKeys;
-        const incomingExtras = incomingPsd?.extraApiKeys;
+        const incomingExtras = incomingPsdForMerge.extraApiKeys;
         const extrasChanged =
           Array.isArray(incomingExtras) &&
           (!Array.isArray(existingExtras) ||

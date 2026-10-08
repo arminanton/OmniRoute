@@ -7,6 +7,7 @@ const {
   getClaudeCodeCompatibleRequestDefaults,
   normalizeCodexReasoningEffort,
   normalizeProviderSpecificData,
+  restoreMaskedExtraApiKeys,
   sanitizeProviderSpecificDataForResponse,
 } = await import("../../src/lib/providers/requestDefaults.ts");
 
@@ -146,11 +147,31 @@ test("sanitizeProviderSpecificDataForResponse removes credentials and quota scra
     ollamaCloudUsageCookie: "ollama-cookie",
     usageCookie: "fallback-cookie",
     consoleApiKey: "console-key",
+    extraApiKeys: ["sk-extra-abcdefgh-tail", "sk-more-qwerty-last"],
     tag: "primary",
   });
 
   assert.deepEqual(sanitized, {
     opencodeGoWorkspaceId: "workspace-123",
+    extraApiKeys: ["sk-extra****tail#0", "sk-more-****last#1"],
     tag: "primary",
   });
+});
+
+test("short stored API-key previews never reveal the complete key", async () => {
+  const { maskStoredApiKey } = await import("../../src/lib/apiKeyExposure.ts");
+  assert.equal(maskStoredApiKey("short-secret"), "****");
+});
+
+test("restoreMaskedExtraApiKeys preserves unchanged keys when a masked entry is removed", () => {
+  const existing = ["sk-first-12345678-abcd", "sk-second-87654321-wxyz", "sk-third-abcdef01-lmno"];
+  const masked = sanitizeProviderSpecificDataForResponse({ extraApiKeys: existing })
+    ?.extraApiKeys as string[];
+  const incoming = [masked[1], "sk-new-key", masked[2]];
+
+  assert.deepEqual(restoreMaskedExtraApiKeys(incoming, existing), [
+    existing[1],
+    "sk-new-key",
+    existing[2],
+  ]);
 });

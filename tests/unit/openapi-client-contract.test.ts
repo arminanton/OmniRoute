@@ -273,6 +273,7 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/models/catalog", "get", "GroupedModelCatalogResponse"],
     ["/api/providers", "get", "ProviderConnectionListResponse"],
     ["/api/providers", "post", "ProviderConnectionEnvelope"],
+    ["/api/providers/client", "get", "ProviderClientConnectionListResponse"],
     ["/api/providers/{id}", "get", "ProviderConnectionEnvelope"],
     ["/api/providers/{id}", "patch", "ProviderConnectionEnvelope"],
     ["/api/providers/{id}", "put", "ProviderConnectionEnvelope"],
@@ -338,6 +339,16 @@ test("model, provider, key, and combo management responses match their route pay
       >
     | undefined;
   assert.ok(schemas?.ProviderConnectionListResponse?.required?.includes("total"));
+  const providerClientConnection = schemas?.ProviderClientConnection?.properties;
+  assert.ok(providerClientConnection?.apiKey);
+  assert.equal("accessToken" in (providerClientConnection ?? {}), false);
+  assert.equal("refreshToken" in (providerClientConnection ?? {}), false);
+  assert.equal("idToken" in (providerClientConnection ?? {}), false);
+  assert.ok(schemas?.ProviderClientConnectionListResponse?.required?.includes("connections"));
+  const providerClientSecurity = operation("/api/providers/client", "get").security ?? [];
+  assert.ok(providerClientSecurity.some((requirement) => "BearerAuth" in requirement));
+  assert.ok(providerClientSecurity.some((requirement) => "ManagementSessionAuth" in requirement));
+  assert.ok(providerClientSecurity.some((requirement) => Object.keys(requirement).length === 0));
   const providerUpdate = schemas?.ProviderConnectionUpdate;
   assert.equal(providerUpdate?.minProperties, 1);
   const providerUpdateProperties = providerUpdate?.properties;

@@ -93,6 +93,20 @@ export interface EditConnectionModalProps {
   onClose: () => void;
 }
 const stringField = (value: unknown) => (typeof value === "string" ? value : "");
+
+function getExtraApiKeyPreview(value: string) {
+  const marker = /#\d+$/.exec(value);
+  const preview = marker ? value.slice(0, marker.index) : value;
+  const separator = preview.indexOf("****");
+  if (separator >= 0) {
+    return {
+      prefix: separator === 0 ? "****" : preview.slice(0, Math.min(6, separator)),
+      suffix: preview.slice(separator + 4, separator + 8),
+    };
+  }
+  return { prefix: preview.slice(0, 6), suffix: preview.slice(-4) };
+}
+
 export default function EditConnectionModal({
   isOpen,
   connection,
@@ -1499,6 +1513,7 @@ export default function EditConnectionModal({
             {extraApiKeys.length > 0 && (
               <div className="flex flex-col gap-1.5">
                 {extraApiKeys.map((key, idx) => {
+                  const preview = getExtraApiKeyPreview(key);
                   const keyId = `extra_${idx}`;
                   const health = apiKeyHealth[keyId];
                   const statusColor =
@@ -1528,8 +1543,8 @@ export default function EditConnectionModal({
                         {statusIcon}{" "}
                         {t("extraApiKeyMasked", {
                           index: idx + 2,
-                          prefix: key.slice(0, 6),
-                          suffix: key.slice(-4),
+                          prefix: preview.prefix,
+                          suffix: preview.suffix,
                         })}
                       </span>
                       <div className="flex items-center gap-1">

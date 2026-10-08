@@ -3186,10 +3186,39 @@ paths:
     get:
       operationId: getApiProvidersClient
       tags: [Providers]
-      summary: Get client-side provider info
+      summary: List safe provider metadata for dashboard widgets
+      description: >-
+        Returns connection metadata for dashboard client widgets. Primary API keys are masked,
+        OAuth tokens are omitted, and provider-specific credential fields are sanitized. Management
+        authentication is enforced when enabled by the deployment configuration; scoped Bearer
+        access tokens require admin scope, while API keys require manage/admin scope.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: Provider info for frontend
+          description: Safe provider connection list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderClientConnectionListResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to fetch providers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/providers/agy-auth/import:
     post:
@@ -20101,6 +20130,22 @@ components:
           type: [string, "null"]
         providerSpecificData:
           type: object
+          description: Sensitive credential fields are removed; extraApiKeys contains masked previews.
+          properties:
+            extraApiKeys:
+              type: array
+              items:
+                type: string
+                description: Masked key preview with a trailing index marker for safe update round-trips.
+          not:
+            anyOf:
+              - required: [apiKey]
+              - required: [accessToken]
+              - required: [refreshToken]
+              - required: [idToken]
+              - required: [sessionToken]
+              - required: [authCookie]
+              - required: [runtimeKey]
           additionalProperties: true
         rateLimitedUntil:
           type: [string, "null"]
@@ -20149,6 +20194,11 @@ components:
           type: [string, "null"]
         globalPriority:
           type: [integer, "null"]
+      not:
+        anyOf:
+          - required: [accessToken]
+          - required: [refreshToken]
+          - required: [idToken]
       additionalProperties: true
 
     ProviderConnectionListResponse:
@@ -20160,6 +20210,82 @@ components:
           items:
             $ref: "#/components/schemas/ProviderConnection"
         total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ProviderClientConnection:
+      type: object
+      description: >-
+        Safe projection used by dashboard widgets. The apiKey field is always a masked preview;
+        accessToken, refreshToken, and idToken are omitted. Extra API keys are masked in
+        providerSpecificData.
+      required: [id, provider]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        name: { type: [string, "null"] }
+        displayName: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        url: { type: string }
+        authType: { type: [string, "null"] }
+        isActive: { type: boolean }
+        apiKey:
+          type: string
+          description: Masked preview only; raw API key is never returned by this route.
+        defaultModel: { type: [string, "null"] }
+        providerSpecificData:
+          type: object
+          description: Sensitive credential values are stripped and extraApiKeys are masked.
+          properties:
+            tag: { type: string }
+            extraApiKeys:
+              type: array
+              items:
+                type: string
+                description: Masked key preview with a stable index marker; never the raw API key.
+          not:
+            anyOf:
+              - required: [apiKey]
+              - required: [accessToken]
+              - required: [refreshToken]
+              - required: [idToken]
+              - required: [sessionToken]
+              - required: [authCookie]
+              - required: [runtimeKey]
+          additionalProperties: true
+        rateLimitedUntil: { type: [string, "null"] }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        consecutiveUseCount: { type: integer, minimum: 0 }
+        maxConcurrent: { type: [integer, "null"], minimum: 0 }
+        priority: { type: integer }
+        testStatus: { type: [string, "null"] }
+        lastError: { type: [string, "null"] }
+        lastErrorType: { type: [string, "null"] }
+        lastErrorSource: { type: [string, "null"] }
+        errorCode: { type: [string, integer, "null"] }
+        backoffLevel: { type: integer, minimum: 0 }
+        quotaWindowThresholds:
+          type: [object, "null"]
+          additionalProperties: { type: number }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: [string, "null"] }
+        tokenExpiresAt: { type: [string, "null"] }
+        projectId: { type: [string, "null"] }
+        globalPriority: { type: [integer, "null"] }
+      not:
+        anyOf:
+          - required: [accessToken]
+          - required: [refreshToken]
+          - required: [idToken]
+      additionalProperties: true
+
+    ProviderClientConnectionListResponse:
+      type: object
+      required: [connections]
+      properties:
+        connections:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderClientConnection"
       additionalProperties: false
 
     ProviderConnectionEnvelope:

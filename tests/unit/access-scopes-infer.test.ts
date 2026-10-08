@@ -20,6 +20,7 @@ test("admin-prefix routes require admin for ANY method", () => {
   assert.equal(inferRequiredScope("POST", "/api/cli/tokens"), "admin");
   assert.equal(inferRequiredScope("DELETE", "/api/cli/tokens/tok_1"), "admin");
   assert.equal(inferRequiredScope("GET", "/api/oauth/start"), "admin");
+  assert.equal(inferRequiredScope("GET", "/api/providers/client"), "admin");
   assert.equal(inferRequiredScope("POST", "/api/auth/login"), "admin");
   assert.equal(inferRequiredScope("POST", "/api/policy"), "admin");
   assert.equal(inferRequiredScope("POST", "/api/services/foo/start"), "admin");
