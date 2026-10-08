@@ -391,7 +391,9 @@ test("bounded queue fails open and rate-limits saturation warnings", async () =>
   };
 
   try {
-    const writes = Array.from({ length: 131 }, (_, index) =>
+    // Saturate the writer's count ceiling in one synchronous burst; the
+    // weighted byte budget remains a separate limit.
+    const writes = Array.from({ length: 1027 }, (_, index) =>
       writeCallArtifactAsync(buildArtifact(`worker-overflow-${index}`))
     );
     assert.equal(warningCount, 1);

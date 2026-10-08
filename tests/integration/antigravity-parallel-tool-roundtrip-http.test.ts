@@ -323,9 +323,8 @@ test(
       assert.deepEqual(errors, []);
 
       if (captureCallLogs) {
-        const { closeCallLogArtifactWriter } =
-          await import("../../src/lib/usage/callLogArtifactWriter.ts");
-        await closeCallLogArtifactWriter();
+        const { closeCallLogSaves } = await import("../../src/lib/usage/callLogs.ts");
+        await closeCallLogSaves(60_000);
         const rows = core
           .getDbInstance()
           .prepare(
@@ -354,8 +353,14 @@ test(
         const pointerArtifacts = capturePrivateOverflow
           ? 0
           : artifactRows.length - fullArtifacts.length;
+        const missingArtifactErrors = rows.reduce<Record<string, number>>((counts, row) => {
+          if (row.artifact_relpath) return counts;
+          const label = row.error_summary || row.detail_state || "unknown";
+          counts[label] = (counts[label] ?? 0) + 1;
+          return counts;
+        }, {});
         console.log(
-          `ANTIGRAVITY_ARTIFACTS rows=${rows.length} stored=${artifactRows.length} full=${fullArtifacts.length} privateOnly=${capturePrivateOverflow ? artifactRows.length : 0} pointer=${pointerArtifacts} missing=${rows.length - artifactRows.length} stateCounts=${JSON.stringify(rows.reduce<Record<string, number>>((counts, row) => ((counts[row.detail_state] = (counts[row.detail_state] ?? 0) + 1), counts), {}))}`
+          `ANTIGRAVITY_ARTIFACTS rows=${rows.length} stored=${artifactRows.length} full=${fullArtifacts.length} privateOnly=${capturePrivateOverflow ? artifactRows.length : 0} pointer=${pointerArtifacts} missing=${rows.length - artifactRows.length} stateCounts=${JSON.stringify(rows.reduce<Record<string, number>>((counts, row) => ((counts[row.detail_state] = (counts[row.detail_state] ?? 0) + 1), counts), {}))} missingArtifactErrors=${JSON.stringify(missingArtifactErrors)}`
         );
         if (capturePrivateOverflow) {
           assert.equal(
@@ -495,9 +500,8 @@ test(
       await new Promise((resolve) => setImmediate(resolve));
       flushProxyLogsSync();
       if (captureCallLogs) {
-        const { closeCallLogArtifactWriter } =
-          await import("../../src/lib/usage/callLogArtifactWriter.ts");
-        await closeCallLogArtifactWriter();
+        const { closeCallLogSaves } = await import("../../src/lib/usage/callLogs.ts");
+        await closeCallLogSaves(60_000);
       }
       core.closeDbInstance({ checkpointMode: null });
       fs.rmSync(dataDir, { recursive: true, force: true });

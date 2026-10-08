@@ -11,7 +11,9 @@ import {
 } from "./callLogArtifacts.ts";
 import { projectDiagnosticOverflowReference } from "./diagnosticOverflowTypes";
 
-const MAX_QUEUED_JOBS = 128;
+// Keep a high count ceiling for small artifacts emitted by large concurrent
+// request bursts. The weighted footprint budget below is the memory bound.
+const MAX_QUEUED_JOBS = 1024;
 const MAX_QUEUED_DIAGNOSTIC_STUBS = 128;
 const MAX_QUEUED_DIAGNOSTIC_STUB_BYTES = 1024 * 1024;
 // The estimate reserves for the retained source value, its worker clone, and

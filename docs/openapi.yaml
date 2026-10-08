@@ -15460,19 +15460,110 @@ paths:
       operationId: getApiUsageComboForecast
       tags:
         - Usage
-      summary: "GET usage › combo forecast"
+      summary: Get combo usage and quota forecasts
+      description: Returns history-based request, token, cost, and quota forecasts for configured combos.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: range
+          in: query
+          required: false
+          description: Historical window used to calculate the forecast.
+          schema:
+            type: string
+            enum: [1h, 24h, 7d, 30d]
+            default: 7d
+        - name: horizon
+          in: query
+          required: false
+          description: Forecast horizon.
+          schema:
+            type: string
+            enum: [24h, 7d, 30d]
+            default: 30d
+        - name: comboId
+          in: query
+          required: false
+          description: Restrict the response to one combo.
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
-          description: OK
+          description: Combo usage and quota forecasts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComboForecastResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: The requested combo was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Forecast calculation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/combo-health:
     get:
       operationId: getApiUsageComboHealth
       tags:
         - Usage
-      summary: "GET usage › combo health"
+      summary: Get combo health metrics
+      parameters:
+        - name: range
+          in: query
+          required: true
+          description: Historical window used for combo health metrics.
+          schema:
+            type: string
+            enum: [1h, 24h, 7d, 30d]
+        - name: comboId
+          in: query
+          required: false
+          description: Restrict the response to one combo.
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
-          description: OK
+          description: Combo health and target metrics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComboHealthResponse"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: The requested combo was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Combo health calculation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/combo-health-autopilot:
     get:
       operationId: getApiUsageComboHealthAutopilot
@@ -15555,10 +15646,33 @@ paths:
       operationId: getApiUsageQuota
       tags:
         - Usage
-      summary: "GET usage › quota"
+      summary: Get active provider connection quota status
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          description: Filter quota entries by provider identifier.
+          schema:
+            type: string
+        - name: connectionId
+          in: query
+          required: false
+          description: Filter quota entries by provider connection identifier.
+          schema:
+            type: string
       responses:
         "200":
-          description: OK
+          description: Quota status for active provider connections
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QuotaResponse"
+        "500":
+          description: Quota data could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/requests-by-provider-date:
     get:
       operationId: getApiUsageRequestsByProviderDate
@@ -15588,35 +15702,147 @@ paths:
       operationId: deleteApiUsageTokenLimits
       tags:
         - Usage
-      summary: "DELETE usage › token limits"
+      summary: Delete a per-key token limit
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
       responses:
         "200":
-          description: OK
+          description: Whether the token limit was deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenLimitDeleteResponse"
+        "400":
+          description: The id query parameter is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: No token limit with this id was deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenLimitDeleteResponse"
+        "500":
+          description: Token limit deletion failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     get:
       operationId: getApiUsageTokenLimits
       tags:
         - Usage
-      summary: "GET usage › token limits"
+      summary: List per-key token limits and current usage
+      parameters:
+        - name: apiKeyId
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
       responses:
         "200":
-          description: OK
+          description: Token limits with current usage windows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenLimitListResponse"
+        "400":
+          description: The apiKeyId query parameter is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Token limit listing failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     post:
       operationId: postApiUsageTokenLimits
       tags:
         - Usage
-      summary: "POST usage › token limits"
+      summary: Create or update a per-key token limit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetTokenLimitRequest"
       responses:
         "200":
-          description: OK
+          description: Created or updated token limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenLimitUpsertResponse"
+        "400":
+          description: Invalid JSON or token-limit request
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "500":
+          description: Token limit update failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/usage/utilization:
     get:
       operationId: getApiUsageUtilization
       tags:
         - Usage
-      summary: "GET usage › utilization"
+      summary: Get provider quota utilization over time
+      parameters:
+        - name: range
+          in: query
+          required: true
+          description: Time range represented by the returned utilization points.
+          schema:
+            type: string
+            enum: [1h, 24h, 7d, 30d]
+        - name: provider
+          in: query
+          required: false
+          description: Filter utilization points by provider identifier.
+          schema:
+            type: string
+        - name: aggregateBy
+          in: query
+          required: false
+          description: The literal value `connection` groups by connection; every other or omitted value groups by provider.
+          schema:
+            type: string
       responses:
         "200":
-          description: OK
+          description: Provider utilization points and optional connection metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderUtilizationResponse"
+        "400":
+          description: Missing or unsupported range
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Utilization data could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/v1/{omnirouteCatchAll}:
     parameters:
       - name: omnirouteCatchAll
@@ -19410,6 +19636,7 @@ components:
 
     ValidationErrorResponse:
       type: object
+      required: [error]
       properties:
         error:
           type: object
@@ -19428,6 +19655,10 @@ components:
                     type: string
                   message:
                     type: string
+                  keys:
+                    type: array
+                    items:
+                      type: string
 
     PayloadRuleModelSpec:
       type: object
@@ -22817,6 +23048,415 @@ components:
               totalCost: { type: number, minimum: 0 }
             additionalProperties: false
       additionalProperties: true
+
+    ProviderUtilizationPoint:
+      type: object
+      required: [timestamp, provider, remainingPct, isExhausted, windowKey]
+      properties:
+        timestamp: { type: string, format: date-time }
+        provider: { type: string }
+        remainingPct: { type: number }
+        isExhausted: { type: boolean }
+        windowKey: { type: string }
+      additionalProperties: false
+
+    ProviderUtilizationConnectionMeta:
+      type: object
+      required: [email, name, displayName]
+      properties:
+        email: { type: [string, "null"] }
+        name: { type: [string, "null"] }
+        displayName: { type: [string, "null"] }
+      additionalProperties: false
+
+    ProviderUtilizationResponse:
+      type: object
+      required: [timeRange, bucketSizeMinutes, providers, data]
+      properties:
+        timeRange: { type: string, enum: [1h, 24h, 7d, 30d] }
+        bucketSizeMinutes: { type: integer, minimum: 1 }
+        providers:
+          type: array
+          items: { type: string }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderUtilizationPoint"
+        connectionMeta:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ProviderUtilizationConnectionMeta"
+      additionalProperties: false
+
+    QuotaProviderEntry:
+      type: object
+      required: [name, provider, connectionId, quotaUsed, quotaTotal, percentRemaining, resetAt, tokenStatus]
+      properties:
+        name: { type: string }
+        provider: { type: string }
+        connectionId: { type: string }
+        quotaUsed: { type: number, minimum: 0 }
+        quotaTotal: { type: [number, "null"], minimum: 0 }
+        percentRemaining: { type: number, minimum: 0, maximum: 100 }
+        resetAt: { type: [string, "null"], format: date-time }
+        tokenStatus: { type: string, enum: [valid, expiring, expired, refreshing] }
+      additionalProperties: false
+
+    QuotaResponse:
+      type: object
+      required: [providers, meta]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/QuotaProviderEntry"
+        meta:
+          type: object
+          required: [generatedAt, filters, totalProviders]
+          properties:
+            generatedAt: { type: string, format: date-time }
+            filters:
+              type: object
+              required: [provider, connectionId]
+              properties:
+                provider: { type: [string, "null"] }
+                connectionId: { type: [string, "null"] }
+              additionalProperties: false
+            totalProviders: { type: integer, minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
+
+    ComboHealthTargetHealth:
+      type: object
+      required: [executionKey, stepId, model, provider, connectionId, label, requests, successRate, avgLatencyMs, lastStatus, lastUsedAt, quotaRemainingPct, quotaIsExhausted, quotaTrend, quotaScope]
+      properties:
+        executionKey: { type: string }
+        stepId: { type: string }
+        model: { type: string }
+        provider: { type: string }
+        connectionId: { type: [string, "null"] }
+        label: { type: [string, "null"] }
+        requests: { type: number, minimum: 0 }
+        successRate: { type: number, minimum: 0, maximum: 1 }
+        avgLatencyMs: { type: number, minimum: 0 }
+        lastStatus: { type: [string, "null"], enum: [ok, error, null] }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        quotaRemainingPct: { type: [number, "null"], minimum: 0, maximum: 100 }
+        quotaIsExhausted: { type: [boolean, "null"] }
+        quotaTrend: { type: [string, "null"], enum: [improving, stable, declining, null] }
+        quotaScope: { type: string, enum: [connection, provider, none] }
+      additionalProperties: false
+
+    ComboHealthQuotaProvider:
+      type: object
+      required: [provider, remainingPct, isExhausted, trend]
+      properties:
+        provider: { type: string }
+        remainingPct: { type: number, minimum: 0, maximum: 100 }
+        isExhausted: { type: boolean }
+        trend: { type: string, enum: [improving, stable, declining] }
+      additionalProperties: false
+
+    ComboHealthUsageSkewModel:
+      type: object
+      required: [model, requestShare, tokenShare]
+      properties:
+        model: { type: string }
+        requestShare: { type: number, minimum: 0, maximum: 1 }
+        tokenShare: { type: number, minimum: 0, maximum: 1 }
+      additionalProperties: false
+
+    ComboHealthMetrics:
+      type: object
+      required: [comboId, comboName, strategy, models, quotaHealth, usageSkew, performance]
+      properties:
+        comboId: { type: string }
+        comboName: { type: string }
+        strategy: { type: string }
+        models:
+          type: array
+          items: { type: string }
+        targetHealth:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboHealthTargetHealth"
+        quotaHealth:
+          type: object
+          required: [providers, worstRemainingPct]
+          properties:
+            providers:
+              type: array
+              items:
+                $ref: "#/components/schemas/ComboHealthQuotaProvider"
+            worstRemainingPct: { type: number, minimum: 0, maximum: 100 }
+          additionalProperties: false
+        usageSkew:
+          type: object
+          required: [modelDistribution, giniCoefficient]
+          properties:
+            modelDistribution:
+              type: array
+              items:
+                $ref: "#/components/schemas/ComboHealthUsageSkewModel"
+            giniCoefficient: { type: number, minimum: 0, maximum: 1 }
+          additionalProperties: false
+        performance:
+          type: object
+          required: [avgLatencyMs, successRate, totalRequests]
+          properties:
+            avgLatencyMs: { type: number, minimum: 0 }
+            successRate: { type: number, minimum: 0, maximum: 1 }
+            totalRequests: { type: number, minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
+
+    ComboHealthResponse:
+      type: object
+      required: [timeRange, combos]
+      properties:
+        timeRange: { type: string, enum: [1h, 24h, 7d, 30d] }
+        combos:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboHealthMetrics"
+      additionalProperties: false
+
+    ComboForecastHistorySummary:
+      type: object
+      required: [requests, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, reasoningTokens, totalTokens, costUsd, avgDailyCostUsd]
+      properties:
+        requests: { type: number, minimum: 0 }
+        inputTokens: { type: number, minimum: 0 }
+        outputTokens: { type: number, minimum: 0 }
+        cacheReadTokens: { type: number, minimum: 0 }
+        cacheCreationTokens: { type: number, minimum: 0 }
+        reasoningTokens: { type: number, minimum: 0 }
+        totalTokens: { type: number, minimum: 0 }
+        costUsd: { type: number, minimum: 0 }
+        avgDailyCostUsd: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    ComboForecastProjection:
+      type: object
+      required: [projectedRequests, projectedTokens, projectedCostUsd]
+      properties:
+        projectedRequests: { type: number, minimum: 0 }
+        projectedTokens: { type: number, minimum: 0 }
+        projectedCostUsd: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    ComboForecastQuotaRisk:
+      type: object
+      required: [level, projectedWorstRemainingPct, timeToExhaustDays, worstTargetExecutionKey]
+      properties:
+        level: { type: string, enum: [low, medium, high, critical, unknown] }
+        projectedWorstRemainingPct: { type: [number, "null"] }
+        timeToExhaustDays: { type: [number, "null"] }
+        worstTargetExecutionKey: { type: [string, "null"] }
+      additionalProperties: false
+
+    ComboForecastTarget:
+      type: object
+      required: [executionKey, stepId, provider, model, connectionId, label, trafficShare, history, forecast, quota]
+      properties:
+        executionKey: { type: string }
+        stepId: { type: [string, "null"] }
+        provider: { type: string }
+        model: { type: string }
+        connectionId: { type: [string, "null"] }
+        label: { type: [string, "null"] }
+        trafficShare: { type: number, minimum: 0, maximum: 1 }
+        history:
+          type: object
+          required: [requests, costUsd, totalTokens]
+          properties:
+            requests: { type: number, minimum: 0 }
+            costUsd: { type: number, minimum: 0 }
+            totalTokens: { type: number, minimum: 0 }
+          additionalProperties: false
+        forecast:
+          type: object
+          required: [projectedRequests, projectedCostUsd, projectedTokens]
+          properties:
+            projectedRequests: { type: number, minimum: 0 }
+            projectedCostUsd: { type: number, minimum: 0 }
+            projectedTokens: { type: number, minimum: 0 }
+          additionalProperties: false
+        quota:
+          type: object
+          required: [scope, remainingPct, depletionPctPerDay, projectedRemainingPct, timeToExhaustDays, risk]
+          properties:
+            scope: { type: string, enum: [connection, provider, none] }
+            remainingPct: { type: [number, "null"] }
+            depletionPctPerDay: { type: [number, "null"] }
+            projectedRemainingPct: { type: [number, "null"] }
+            timeToExhaustDays: { type: [number, "null"] }
+            risk: { type: string, enum: [low, medium, high, critical, unknown] }
+          additionalProperties: false
+      additionalProperties: false
+
+    ComboForecastMetrics:
+      type: object
+      required: [comboId, comboName, strategy, confidence, history, forecast, quotaRisk, targets, dataQuality]
+      properties:
+        comboId: { type: string }
+        comboName: { type: string }
+        strategy: { type: string }
+        confidence: { type: string, enum: [high, medium, low, no_data] }
+        history:
+          $ref: "#/components/schemas/ComboForecastHistorySummary"
+        forecast:
+          $ref: "#/components/schemas/ComboForecastProjection"
+        quotaRisk:
+          $ref: "#/components/schemas/ComboForecastQuotaRisk"
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboForecastTarget"
+        dataQuality:
+          type: object
+          required: [pricingCoveragePct, quotaCoverage, notes]
+          properties:
+            pricingCoveragePct: { type: number, minimum: 0, maximum: 100 }
+            quotaCoverage: { type: string, enum: [connection, provider, partial, none] }
+            notes:
+              type: array
+              items: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+
+    ComboForecastResponse:
+      type: object
+      required: [timeRange, horizon, asOf, method, combos]
+      properties:
+        timeRange: { type: string, enum: [1h, 24h, 7d, 30d] }
+        horizon: { type: string, enum: [24h, 7d, 30d] }
+        asOf: { type: string, format: date-time }
+        method: { type: string, const: linear_history }
+        combos:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboForecastMetrics"
+      additionalProperties: false
+
+    TokenLimitScopeType:
+      type: string
+      enum: [model, provider, global]
+
+    BudgetResetInterval:
+      type: string
+      enum: [daily, weekly, monthly]
+
+    SetTokenLimitRequest:
+      type: object
+      required: [apiKeyId, scopeType, tokenLimit]
+      properties:
+        id: { type: string, minLength: 1 }
+        apiKeyId: { type: string, minLength: 1 }
+        scopeType:
+          $ref: "#/components/schemas/TokenLimitScopeType"
+        scopeValue:
+          type: string
+          default: ""
+          description: Required and non-empty for model and provider scopes; defaults to an empty string for global scope.
+        tokenLimit:
+          type: integer
+          minimum: 1
+          description: Coerced to a positive integer by the route validator.
+        resetInterval:
+          allOf:
+            - $ref: "#/components/schemas/BudgetResetInterval"
+          default: monthly
+        resetTime:
+          type: string
+          pattern: '^\d{2}:\d{2}$'
+          description: Optional daily reset time in HH:MM form.
+        enabled:
+          type: boolean
+          default: true
+
+    TokenLimit:
+      type: object
+      required: [id, apiKeyId, scopeType, scopeValue, tokenLimit, resetInterval, resetTime, enabled, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        apiKeyId: { type: string }
+        scopeType:
+          $ref: "#/components/schemas/TokenLimitScopeType"
+        scopeValue: { type: string }
+        tokenLimit: { type: integer, minimum: 1 }
+        resetInterval:
+          $ref: "#/components/schemas/BudgetResetInterval"
+        resetTime:
+          type: string
+          pattern: '^\d{2}:\d{2}$'
+        enabled: { type: boolean }
+        createdAt:
+          type: string
+          description: SQLite UTC datetime in YYYY-MM-DD HH:MM:SS form.
+        updatedAt:
+          type: string
+          description: SQLite UTC datetime in YYYY-MM-DD HH:MM:SS form.
+      additionalProperties: false
+
+    TokenLimitWithUsage:
+      type: object
+      required: [id, apiKeyId, scopeType, scopeValue, tokenLimit, resetInterval, resetTime, enabled, createdAt, updatedAt, tokensUsed, windowStart, periodStartAt, nextResetAt, remaining]
+      properties:
+        id: { type: string }
+        apiKeyId: { type: string }
+        scopeType:
+          $ref: "#/components/schemas/TokenLimitScopeType"
+        scopeValue: { type: string }
+        tokenLimit: { type: integer, minimum: 1 }
+        resetInterval:
+          $ref: "#/components/schemas/BudgetResetInterval"
+        resetTime:
+          type: string
+          pattern: '^\d{2}:\d{2}$'
+        enabled: { type: boolean }
+        createdAt:
+          type: string
+          description: SQLite UTC datetime in YYYY-MM-DD HH:MM:SS form.
+        updatedAt:
+          type: string
+          description: SQLite UTC datetime in YYYY-MM-DD HH:MM:SS form.
+        tokensUsed: { type: number, minimum: 0 }
+        windowStart:
+          type: string
+          pattern: '^\d+$'
+          description: Unix millisecond timestamp for the current window, encoded as a decimal string.
+        periodStartAt: { type: integer }
+        nextResetAt: { type: integer }
+        remaining: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    TokenLimitListResponse:
+      type: object
+      required: [apiKeyId, limits]
+      properties:
+        apiKeyId: { type: string }
+        limits:
+          type: array
+          items:
+            $ref: "#/components/schemas/TokenLimitWithUsage"
+      additionalProperties: false
+
+    TokenLimitUpsertResponse:
+      type: object
+      required: [success, limit]
+      properties:
+        success: { type: boolean, const: true }
+        limit:
+          $ref: "#/components/schemas/TokenLimit"
+      additionalProperties: false
+
+    TokenLimitDeleteResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean }
+      additionalProperties: false
 
     UsageBreakdown:
       type: object

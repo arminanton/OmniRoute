@@ -912,7 +912,9 @@ export async function waitForCallLogSaves(timeoutMs: number): Promise<boolean> {
   return true;
 }
 
-export async function closeCallLogSaves(timeoutMs = 2_000): Promise<void> {
+// Match the normal graceful-shutdown window. The artifact worker may need more
+// than two seconds for a cold start plus a burst of queued writes.
+export async function closeCallLogSaves(timeoutMs = 30_000): Promise<void> {
   callLogSavesClosing = true;
   const drained = await waitForCallLogSaves(timeoutMs);
   if (!drained) {

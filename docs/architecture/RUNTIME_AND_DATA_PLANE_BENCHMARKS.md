@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 189
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 213
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 199 operations have success
+contract is still stronger on route coverage than schema completeness: 206 operations have success
 response content schemas and 149 declare operation-level security. Of 1,004 operations with a
-non-`204` success status, 805 still lack an explicit success-body schema; 11 operations have no
+non-`204` success status, 798 still lack an explicit success-body schema; 11 operations have no
 declared `2xx` status, and 14 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -66,8 +66,10 @@ analytics/history/budget, and call-log summary/detail endpoints. It also types t
 provider suggestions/plugin manifest, and quota preflight. The OpenAI single-model response now
 describes provider context/input/output limits and capabilities. The Gemini v1beta model-list and
 generation routes also describe native request/response formats. The provider-client response now
-masks primary and rotating API keys and omits OAuth tokens. The spec has 189 component
-schemas. All 98 operations previously missing
+masks primary and rotating API keys and omits OAuth tokens. A subsequent usage-contract pass added
+typed schemas and query parameters for provider quota/utilization, combo health/forecast, and
+per-key token-limit CRUD, including its Zod-backed mutation body and validation errors. The spec has
+213 component schemas. All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
 
@@ -484,8 +486,9 @@ tool call/result round-trip. It runs phases at 1, 30, 70, and 100 simultaneous c
 conversation makes two completion requests. Half of the conversations use streaming responses.
 
 On Maria on 2026-10-08, the test passed all 402 completion requests across the four phases in 22.2s;
-`/usr/bin/time -v` measured 747,028 KiB maximum RSS for the combined in-process gateway, mock
-upstream, and client load. With `RUN_ANTIGRAVITY_CAPTURE_BENCH=1`, it enables detailed call logs,
+`/usr/bin/time -v` measured 747,028 KiB maximum RSS for the test process hosting the gateway route.
+The mock upstream and load client run as separate child processes and are not included in that
+process's RSS. With `RUN_ANTIGRAVITY_CAPTURE_BENCH=1`, it enables detailed call logs,
 stream chunks, 10 MiB per-artifact allowance, and 4 MiB client text retention. That variant passed
 all 402 requests in 24.2s, persisted 402/402 call-log artifacts, and read back provider/client stream
 chunks from a completed artifact. Peak RSS was 763,068 KiB. The test intentionally covers synthetic
@@ -493,6 +496,16 @@ responses and does not execute Prime's actual tools; it calls the production rou
 and does not pass through `src/proxy.ts`/Next middleware or the standalone server. It also disables
 compression and turns off `noLog` only in capture mode. This closes the provider tool-roundtrip and
 capture gap for the route handler, but the complete Prime/Next/container E2E remains open.
+
+A memory-sampled retest after the artifact-queue change completed in 20.97s and persisted all
+402/402 artifacts with provider and client stream channels. The gateway test process reached
+787,755,008 bytes (751.1 MiB) high-water RSS; sampled peak V8 heap-used was 382,052,728 bytes
+(364.4 MiB). The fixture client and mock provider were separate processes and measured about
+107.5 MiB and 66.8 MiB high-water RSS. The test's user-session cgroup sample is shared with other
+processes and is not attributable to OmniRoute. A 128-job count ceiling had dropped small artifacts
+during this burst even though the weighted memory reservations had room; it is now 1,024 jobs while
+the independent 128 MiB weighted reservation limit remains in force. The call-log shutdown drain
+default is 30 seconds to cover a cold worker start plus a write burst.
 
 Run the capture variant with:
 
