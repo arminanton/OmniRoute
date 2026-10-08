@@ -8110,6 +8110,7 @@ paths:
         otherwise it is available without authentication.
       security:
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Parsed OpenAPI catalog
@@ -8188,6 +8189,7 @@ paths:
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -8672,6 +8674,8 @@ paths:
         session; with `REQUIRE_API_KEY=false` anonymous reads are allowed.
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: limit
           in: query
@@ -13415,10 +13419,20 @@ paths:
     get:
       tags:
         - V1 Combos
-      summary: "GET combos"
+      summary: List public combo metadata
+      description: >-
+        Returns public combo metadata without internal routing details. When
+        `REQUIRE_API_KEY` is enabled, a valid Bearer API key or dashboard session is
+        required; when disabled, anonymous reads are allowed.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Public combo list
+        "401":
+          description: Authentication is required but missing or invalid
   /api/v1/completions:
     post:
       tags:
