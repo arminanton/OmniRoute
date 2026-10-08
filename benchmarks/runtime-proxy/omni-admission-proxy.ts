@@ -28,6 +28,34 @@ const [
 ]);
 console.log = originalConsoleLog;
 
+const admissionController = perConnectionAdmissionController.getController(
+  "omni-admission-benchmark"
+);
+const peakAdmission = {
+  activeHeavy: admissionController.activeHeavy,
+  activeHealthyHeadroom: admissionController.activeHealthyHeadroom,
+  inflightBytes: admissionController.inflightBytes,
+  queuedBytes: admissionController.queuedBytes,
+  waiting: admissionController.waitingCount,
+};
+const admissionSampler = setInterval(() => {
+  peakAdmission.activeHeavy = Math.max(
+    peakAdmission.activeHeavy,
+    admissionController.activeHeavy
+  );
+  peakAdmission.activeHealthyHeadroom = Math.max(
+    peakAdmission.activeHealthyHeadroom,
+    admissionController.activeHealthyHeadroom
+  );
+  peakAdmission.inflightBytes = Math.max(
+    peakAdmission.inflightBytes,
+    admissionController.inflightBytes
+  );
+  peakAdmission.queuedBytes = Math.max(peakAdmission.queuedBytes, admissionController.queuedBytes);
+  peakAdmission.waiting = Math.max(peakAdmission.waiting, admissionController.waitingCount);
+}, 10);
+admissionSampler.unref();
+
 const port = Number(process.env.PORT || 3901);
 const chunks = Number(process.env.CHUNKS || 20);
 const delayMs = Number(process.env.CHUNK_DELAY_MS || 3);
@@ -60,7 +88,10 @@ function makeSseResponse() {
         if (timer) clearTimeout(timer);
       },
     }),
-    { status: 200, headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } }
+    {
+      status: 200,
+      headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+    }
   );
 }
 
@@ -86,6 +117,7 @@ const server = http.createServer(async (incoming, outgoing) => {
         },
         ingestBudget: resolveIngestByteBudget(),
         admission: perConnectionAdmissionController.snapshot(),
+        peakAdmission,
       })
     );
     return;
