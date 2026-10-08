@@ -208,8 +208,7 @@ export function reserveCallLogArtifactPreparation(
     reservedArtifactFootprintBytes + estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
   ) {
     const reason =
-      !Number.isSafeInteger(estimatedBytes) ||
-      estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
+      !Number.isSafeInteger(estimatedBytes) || estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
         ? "single_artifact_budget"
         : "aggregate_reservation_budget";
     warnRateLimited(
@@ -444,12 +443,22 @@ function fileExistsAtRuntime(candidate: string): boolean {
   return Reflect.apply(fs.existsSync, fs, [candidate]) as boolean;
 }
 
-type WorkerResolutionContext = {
+export type WorkerResolutionContext = {
   moduleDir?: string;
   cwd?: string;
   entryFile?: string | null;
   fileExists?: (candidate: string) => boolean;
 };
+
+type ResolvedArtifactWorker = { workerFile: string; execArgv: string[] };
+let defaultArtifactWorkerResolution: ResolvedArtifactWorker | null = null;
+
+function resolveDefaultArtifactWorker(): ResolvedArtifactWorker {
+  if (!defaultArtifactWorkerResolution) {
+    defaultArtifactWorkerResolution = resolveCallLogArtifactWorker();
+  }
+  return defaultArtifactWorkerResolution;
+}
 
 export function resolveCallLogArtifactWorker(context: WorkerResolutionContext = {}): {
   workerFile: string;
@@ -482,6 +491,27 @@ export function resolveCallLogArtifactWorker(context: WorkerResolutionContext = 
   }
 
   return { workerFile: entryJs ?? cwdJs, execArgv: [] };
+}
+
+/**
+ * Probe the selected worker path before retaining/protecting large request bodies.
+ * When an image omitted this runtime-resolved file, detail capture cannot succeed;
+ * callers can still persist the small summary row without spending memory on a
+ * payload that the worker cannot write.
+ */
+export function isCallLogArtifactWorkerAvailable(context?: WorkerResolutionContext): boolean {
+  const resolution = context
+    ? resolveCallLogArtifactWorker(context)
+    : resolveDefaultArtifactWorker();
+  const exists = context?.fileExists ?? fileExistsAtRuntime;
+  const available = exists(resolution.workerFile);
+  if (!context && !available) {
+    warnRateLimited(
+      "[callLogs] Call-log artifact worker is missing; detail payload capture will be skipped.",
+      "worker_file_missing"
+    );
+  }
+  return available;
 }
 
 function clearIdleTimer(): void {
@@ -546,7 +576,7 @@ function failOpen(warn = false, reason = "worker_error"): void {
 function ensureWorker(): Worker {
   if (worker) return worker;
 
-  const { workerFile, execArgv } = resolveCallLogArtifactWorker();
+  const { workerFile, execArgv } = resolveDefaultArtifactWorker();
   // Reflect.construct keeps Next/Turbopack from interpreting the runtime-selected
   // worker path as a build-time glob and tracing tens of thousands of unrelated files.
   const created = Reflect.construct(Worker, [pathToFileURL(workerFile), { execArgv }]) as Worker;

@@ -48,6 +48,7 @@ import {
 } from "./callLogArtifacts";
 import {
   closeCallLogArtifactWriter,
+  isCallLogArtifactWorkerAvailable,
   releaseCallLogArtifactPreparation,
   reserveCallLogArtifactPreparation,
   writeCallArtifactAsync,
@@ -491,6 +492,32 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     const diagnosticOverflowReference = noLogEnabled
       ? undefined
       : projectDiagnosticOverflowReference(rawPipelineRecord?.diagnosticOverflow);
+    const rawDetailExpected =
+      !noLogEnabled &&
+      (rawRequestBody != null ||
+        rawResponseBody != null ||
+        rawPipelinePayloads != null ||
+        rawError != null);
+    const rawHasRequestBody = rawRequestBody != null;
+    const rawHasResponseBody = rawResponseBody != null;
+    const rawHasPipelineDetails = rawPipelinePayloads != null;
+    const rawHasError = rawError != null;
+    const rawProvider: string = entry.provider || "-";
+    const errorType = classifyCallLogError(entry.status, rawError, rawProvider);
+    const artifactWorkerUnavailable = rawDetailExpected && !isCallLogArtifactWorkerAvailable();
+    const unavailableWorkerErrorSummary =
+      artifactWorkerUnavailable && rawHasError ? toStoredErrorSummary(rawError) : null;
+    if (artifactWorkerUnavailable) {
+      // Do not compare, estimate, protect, or clone multi-megabyte request and
+      // response objects when the package cannot write the artifact. Keep the
+      // summary metadata and a bounded error summary, and let the call-log row
+      // report that detail is missing.
+      rawRequestBody = null;
+      rawResponseBody = null;
+      rawPipelinePayloads = null;
+      rawError = null;
+      rawPipelineRecord = null;
+    }
     const rawClientRequest =
       rawPipelineRecord?.clientRawRequest &&
       typeof rawPipelineRecord.clientRawRequest === "object" &&
@@ -523,17 +550,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       Object.hasOwn(rawClientResponse, "body") &&
       isDeepStrictEqual(rawResponseBody, rawClientResponse.body);
     rawPipelineRecord = null;
-    const rawDetailExpected =
-      !noLogEnabled &&
-      (rawRequestBody != null ||
-        rawResponseBody != null ||
-        rawPipelinePayloads != null ||
-        rawError != null);
-    const rawHasRequestBody = rawRequestBody != null;
-    const rawHasResponseBody = rawResponseBody != null;
-    const rawHasPipelineDetails = rawPipelinePayloads != null;
-    const rawHasError = rawError != null;
-    if (rawDetailExpected) {
+    if (rawDetailExpected && !artifactWorkerUnavailable) {
       preparationReservation = reserveCallLogArtifactPreparation({
         // Keep estimating every source snapshot: the parsed client body and
         // pipeline snapshot are both still live here. The persisted/protected
@@ -545,7 +562,8 @@ async function saveCallLogOperation(entry: any): Promise<void> {
         error: rawError,
       });
     }
-    const preparationRefused = rawDetailExpected && !preparationReservation;
+    const preparationRefused =
+      rawDetailExpected && (!preparationReservation || artifactWorkerUnavailable);
 
     let protectedRequestBody: unknown =
       noLogEnabled || preparationRefused || requestBodyMatchesPipeline
@@ -564,15 +582,12 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     let protectedError: unknown =
       noLogEnabled || preparationRefused ? null : sanitizeErrorForLog(rawError);
 
-    const rawProvider: string = entry.provider || "-";
     const rawRequestedModel: string | null = entry.requestedModel || null;
     const connectionId = entry.connectionId || null;
     const tokensReasoning = getReasoningTokensOrNull(entry.tokens);
     const reasoningObservation = preparationRefused
       ? { source: null, chars: null }
       : resolveReasoningObservation(tokensReasoning, rawResponseBody);
-    const errorType = classifyCallLogError(entry.status, rawError, rawProvider);
-
     // Keep only summary scalars while asynchronous account/provider lookups run.
     // The original entry may still reference large request and response bodies.
     entry = {
@@ -666,8 +681,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     };
 
     const protectedClientRequest = protectedPipelinePayloads?.clientRawRequest as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     const summaryRequestBody = requestBodyMatchesPipeline
       ? protectedClientRequest?.body
       : protectedRequestBody;
@@ -681,11 +695,13 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     const hasPipelineDetails = preparationRefused
       ? rawHasPipelineDetails
       : protectedPipelinePayloads !== null;
-    const errorSummary = preparationRefused
-      ? rawHasError
-        ? "Call-log detail omitted because the preparation memory budget was full."
-        : null
-      : toStoredErrorSummary(protectedError);
+    const errorSummary = artifactWorkerUnavailable
+      ? unavailableWorkerErrorSummary
+      : preparationRefused
+        ? rawHasError
+          ? "Call-log detail omitted because the preparation memory budget was full."
+          : null
+        : toStoredErrorSummary(protectedError);
     entry = null;
 
     let detailState: CallLogDetailState = "none";
@@ -697,7 +713,7 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       let artifactResult: Awaited<ReturnType<typeof writeCallArtifactAsync>>;
       if (preparationRefused) {
         requestSummary = null;
-        if (diagnosticOverflowReference) {
+        if (diagnosticOverflowReference && !artifactWorkerUnavailable) {
           const stubSummary = buildArtifact(logEntry, null, null, null, null).summary;
           artifactResult = await writeDiagnosticOverflowStubAsync(
             stubSummary,

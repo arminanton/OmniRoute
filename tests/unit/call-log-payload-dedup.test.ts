@@ -103,7 +103,10 @@ test("identical top-level and pipeline request/response payloads are stored once
   assert.equal(Object.hasOwn(roundTripped, "requestBodyRef"), false);
   assert.equal(Object.hasOwn(roundTripped, "responseBodyRef"), false);
   const legacyBytes = Buffer.byteLength(JSON.stringify(input));
-  assert.ok(sizeBytes <= 512 * 1024, "the deduplicated artifact should fit the default 512 KiB cap");
+  assert.ok(
+    sizeBytes <= 512 * 1024,
+    "the deduplicated artifact should fit the default 512 KiB cap"
+  );
   assert.ok(
     legacyBytes - sizeBytes > 450_000,
     `the on-disk artifact should omit the duplicate payload copies (saved ${legacyBytes - sizeBytes} bytes)`
@@ -252,6 +255,65 @@ test("saveCallLog reserves and protects a shared client request body only once",
   assert.equal(diskArtifact.responseBodyRef, "pipeline.clientResponse.body");
   assert.equal(Object.hasOwn(diskArtifact, "requestBody"), false);
   assert.equal(Object.hasOwn(diskArtifact, "responseBody"), false);
+});
+
+test("saveCallLog skips payload traversal when the artifact worker is missing", async () => {
+  let traversals = 0;
+  const largeText = "payload that cannot be persisted without the worker ".repeat(5_000);
+  const entries = Array.from({ length: 100 }, (_, index) => {
+    const requestBody = new Proxy(
+      { content: largeText },
+      {
+        ownKeys(target) {
+          traversals++;
+          return Reflect.ownKeys(target);
+        },
+      }
+    );
+    return {
+      id: `dedup-save-call-log-worker-missing-${index}`,
+      timestamp: new Date().toISOString(),
+      method: "POST",
+      path: "/v1/responses",
+      status: 200,
+      model: "codex/gpt-6.1-sol",
+      provider: "codex",
+      requestBody,
+      responseBody: { output: "response" },
+      pipelinePayloads: {
+        clientRawRequest: { endpoint: "/v1/responses", headers: {}, body: requestBody },
+      },
+    };
+  });
+  const originalExistsSync = fs.existsSync;
+  fs.existsSync = ((candidate: fs.PathLike) => {
+    const normalized = String(candidate).replaceAll("\\", "/");
+    if (
+      normalized.endsWith("/callLogArtifactWorker.js") ||
+      normalized.endsWith("/callLogArtifactWorker.ts")
+    ) {
+      return false;
+    }
+    return originalExistsSync.call(fs, candidate);
+  }) as typeof fs.existsSync;
+
+  try {
+    await Promise.all(entries.map((entry) => callLogs.saveCallLog(entry)));
+  } finally {
+    fs.existsSync = originalExistsSync;
+  }
+
+  assert.equal(traversals, 0, "unwritable payload objects should not be traversed");
+  const details = await Promise.all(
+    entries.map((entry) => callLogs.getCallLogById(String(entry.id)))
+  );
+  assert.equal(details.length, 100);
+  for (const detail of details) {
+    assert.equal(detail?.detailState, "missing");
+    assert.equal(detail?.artifactRelPath, null);
+    assert.equal(detail?.hasRequestBody, true);
+    assert.equal(detail?.hasPipelineDetails, true);
+  }
 });
 
 test.after(async () => {
