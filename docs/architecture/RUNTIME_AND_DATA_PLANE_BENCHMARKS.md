@@ -584,11 +584,12 @@ current builder.
 
 ## Remaining acceptance checks
 
-- Obtain a candidate-scoped management credential or add a safe internal V8 snapshot endpoint, then
-  sample the actual app PID's `heapUsed`, `external`, `arrayBuffers`, RSS, and cgroup data together.
-  The current `~/.omni-mg` credential receives 403 `Invalid management token` from
-  `/api/usage/call-logs`; `/api/monitoring/health` intentionally returns only public liveness after
-  failed authentication. The host sampler cannot identify retained V8 objects.
+- Query the new management-only pressure sample on `GET /api/monitoring/health` using a credential
+  accepted by the candidate. Blue now exposes V8 heap, process external/array-buffer/RSS, cgroup,
+  PSI, guard state, and sample age together. The current `~/.omni-mg` credential receives 403
+  `Invalid management token` from `/api/usage/call-logs`, so the running candidate only returns
+  public health. A heap snapshot or isolated allocation profile is still required to identify
+  retained V8 objects.
 - Fix the external candidate-image assembly so the artifact worker is present, then verify that
   pipeline artifacts are written and readable. The current image lost 118 detailed artifacts and
   no artifact file is newer than the image start; do not treat the `full-capture-v1` label as proof
