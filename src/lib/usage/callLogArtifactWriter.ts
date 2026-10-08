@@ -192,7 +192,7 @@ export function reserveCallLogArtifactPreparation(
   const estimate = estimateCallLogArtifactFootprint(rawPayloads);
   if (estimate.reason) {
     warnRateLimited(
-      `[callLogs] Call-log detail preparation refused (reason=${estimate.reason}, estimatedMiB=${(estimate.estimatedBytes / (1024 * 1024)).toFixed(1)}, reservedMiB=${(reservedArtifactFootprintBytes / (1024 * 1024)).toFixed(1)}).`,
+      `[callLogs] Call-log detail preparation refused (reason=${estimate.reason}, estimateMiB=${(estimate.estimatedBytes / (1024 * 1024)).toFixed(1)}, reservedMiB=${(reservedArtifactFootprintBytes / (1024 * 1024)).toFixed(1)}).`,
       `preparation_refused:${estimate.reason}`
     );
     return null;

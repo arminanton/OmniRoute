@@ -212,7 +212,7 @@ test("artifact preparation refusal logs a bounded reason and never the payload",
     const warning = warnings.find((message) => message.includes("preparation refused"));
     assert.ok(warning);
     assert.match(warning, /reason=single_artifact_budget/);
-    assert.match(warning, /estimatedMiB=/);
+    assert.match(warning, /estimateMiB=/);
     assert.doesNotMatch(warning, /private-body-marker/);
   } finally {
     console.warn = originalWarn;
