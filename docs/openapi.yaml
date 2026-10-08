@@ -2942,11 +2942,93 @@ paths:
       operationId: getApiProvidersByIdModels
       tags: [Providers]
       summary: List models for a provider
+      description: >-
+        Discovers or returns cached/local models for a provider connection. Results identify the
+        source and may include a warning when a fallback catalog is used.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
+        - name: excludeHidden
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Exclude models hidden in the dashboard.
+        - name: excludeCustom
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Exclude manually added custom models from discovery.
+        - name: refresh
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Force provider discovery instead of returning a cached result when available.
+        - name: chatOnly
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+          description: Return only models selectable for chat requests.
+        - name: x-omniroute-model-surface
+          in: header
+          required: false
+          schema: { type: string, enum: [chat] }
+          description: Equivalent to chatOnly=true when set to chat.
       responses:
         "200":
           description: Provider model list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionModelDiscoveryResponse"
+        "400":
+          description: Invalid connection/provider configuration or outbound URL was blocked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied discovery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "404":
+          description: Provider connection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "409":
+          description: Discovery is deferred while an exclusive session lease is active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "410":
+          description: Provider is retired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Provider model discovery failed unexpectedly
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "503":
+          description: Provider discovery returned an unavailable status or fallback result
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ProviderConnectionModelDiscoveryResponse"
+                  - $ref: "#/components/schemas/ProviderConnectionErrorResponse"
 
   /api/providers/cursor/agent-availability:
     get:
@@ -20322,6 +20404,22 @@ components:
         inconclusive: { type: boolean }
         unverified: { type: boolean }
         code: { type: string }
+      additionalProperties: true
+
+    ProviderConnectionModelDiscoveryResponse:
+      type: object
+      required: [provider, connectionId, models, source]
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/Model"
+        source: { type: string }
+        warning: { type: string }
+        intentional: { type: boolean }
+        authoritative: { type: boolean }
       additionalProperties: true
 
     ApiKey:

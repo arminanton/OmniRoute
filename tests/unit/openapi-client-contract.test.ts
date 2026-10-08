@@ -278,6 +278,7 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/providers/{id}", "put", "ProviderConnectionEnvelope"],
     ["/api/providers/{id}", "delete", "ProviderConnectionDeleteResponse"],
     ["/api/providers/{id}/test", "post", "ProviderConnectionTestResult"],
+    ["/api/providers/{id}/models", "get", "ProviderConnectionModelDiscoveryResponse"],
     ["/api/providers/cursor/agent-availability", "get", "CursorAgentAvailabilityResponse"],
     ["/api/providers/quota-windows", "get", "ProviderQuotaWindowsResponse"],
     ["/api/providers/web-session-contract", "get", "WebSessionContract"],
@@ -409,6 +410,27 @@ test("model, provider, key, and combo management responses match their route pay
   assert.ok(connectionTestSecurity.some((requirement) => Object.keys(requirement).length === 0));
   assert.ok(connectionTest.responses?.["404"]);
   assert.ok(connectionTest.responses?.["410"]);
+  const modelDiscovery = operation("/api/providers/{id}/models", "get");
+  const modelDiscoverySecurity = modelDiscovery.security ?? [];
+  assert.ok(modelDiscoverySecurity.some((requirement) => "BearerAuth" in requirement));
+  assert.ok(modelDiscoverySecurity.some((requirement) => "ManagementSessionAuth" in requirement));
+  assert.ok(modelDiscoverySecurity.some((requirement) => Object.keys(requirement).length === 0));
+  const modelDiscoveryParameters = modelDiscovery.parameters ?? [];
+  for (const parameterName of ["excludeHidden", "excludeCustom", "refresh", "chatOnly"]) {
+    assert.ok(
+      modelDiscoveryParameters.some(
+        (parameter) =>
+          parameter &&
+          typeof parameter === "object" &&
+          "name" in parameter &&
+          parameter.name === parameterName
+      ),
+      `provider model discovery query parameter ${parameterName}`
+    );
+  }
+  assert.ok(
+    schemas?.ProviderConnectionModelDiscoveryResponse?.required?.includes("source")
+  );
   assert.ok(schemas?.ApiKeyListResponse?.required?.includes("allowKeyReveal"));
   assert.ok(schemas?.ApiKeyCreateResponse?.required?.includes("key"));
   assert.equal(
