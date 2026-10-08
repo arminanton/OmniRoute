@@ -13093,10 +13093,57 @@ paths:
       operationId: getApiProvidersHealthMatrix
       tags:
         - Providers
-      summary: "GET providers › health matrix"
+      summary: Get the provider health matrix
+      description: >-
+        Returns provider, account, model, circuit-breaker, and web-session-pool health for the
+        requested time range. Sensitive connection labels are masked before returning.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string, minLength: 1 }
+          description: Restrict the report to one provider ID or alias.
+        - name: range
+          in: query
+          required: false
+          schema: { type: string, enum: [1h, 24h, 7d, 30d], default: 24h }
+        - name: includeHealthy
+          in: query
+          required: false
+          schema: { type: string, enum: ["true", "false", "1", "0"], default: "true" }
       responses:
         "200":
-          description: OK
+          description: Provider health report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderHealthMatrixResponse"
+        "400":
+          description: Invalid health matrix query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to build provider health matrix
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/providers/import:
     post:
       operationId: postApiProvidersImport
@@ -20421,6 +20468,204 @@ components:
         intentional: { type: boolean }
         authoritative: { type: boolean }
       additionalProperties: true
+
+    ProviderHealthMatrixModel:
+      type: object
+      required:
+        - model
+        - status
+        - isLockedOut
+        - lockoutReason
+        - lockoutRemainingMs
+        - requests
+        - successes
+        - successRate
+        - avgLatencyMs
+        - lastStatus
+        - lastErrorStatus
+        - lastRequestAt
+        - lastErrorAt
+      properties:
+        model: { type: string }
+        status: { type: string, enum: [healthy, degraded, error, locked, idle] }
+        isLockedOut: { type: boolean }
+        lockoutReason: { type: [string, "null"] }
+        lockoutRemainingMs: { type: number, minimum: 0 }
+        requests: { type: integer, minimum: 0 }
+        successes: { type: integer, minimum: 0 }
+        successRate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+          description: Success percentage from 0 to 100.
+        avgLatencyMs: { type: [number, "null"], minimum: 0 }
+        lastStatus: { type: [integer, "null"] }
+        lastErrorStatus: { type: [integer, "null"] }
+        lastRequestAt: { type: [string, "null"], format: date-time }
+        lastErrorAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+
+    ProviderHealthMatrixAccount:
+      type: object
+      required:
+        - connectionId
+        - label
+        - isSynthetic
+        - isActive
+        - state
+        - testStatus
+        - rateLimitedUntil
+        - cooldownRemainingMs
+        - lastErrorType
+        - errorCode
+        - backoffLevel
+        - modelCount
+        - issueCount
+        - models
+      properties:
+        connectionId: { type: [string, "null"] }
+        label: { type: string, maxLength: 80 }
+        isSynthetic: { type: boolean }
+        isActive: { type: boolean }
+        state: { type: string, enum: [healthy, degraded, down] }
+        testStatus: { type: [string, "null"] }
+        rateLimitedUntil: { type: [string, "null"], format: date-time }
+        cooldownRemainingMs: { type: number, minimum: 0 }
+        lastErrorType: { type: [string, "null"] }
+        errorCode: { type: [string, "null"] }
+        backoffLevel: { type: integer, minimum: 0 }
+        modelCount: { type: integer, minimum: 0 }
+        issueCount: { type: integer, minimum: 0 }
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderHealthMatrixModel"
+      additionalProperties: false
+
+    ProviderHealthMatrixProvider:
+      type: object
+      required:
+        - provider
+        - state
+        - score
+        - circuitBreaker
+        - connections
+        - modelLockoutCount
+        - requests
+        - successRate
+        - avgLatencyMs
+        - lastRequestAt
+        - lastErrorAt
+        - issueCount
+        - accounts
+      properties:
+        provider: { type: string }
+        state: { type: string, enum: [healthy, degraded, down] }
+        score: { type: number }
+        circuitBreaker:
+          oneOf:
+            - type: object
+              required: [state, failureCount, retryAfterMs, lastFailureTime]
+              properties:
+                state: { type: string }
+                failureCount: { type: integer, minimum: 0 }
+                retryAfterMs: { type: number, minimum: 0 }
+                lastFailureTime: { type: [number, "null"] }
+              additionalProperties: false
+            - { type: "null" }
+        connections:
+          type: object
+          required: [total, active, cooldown, inactive, terminal]
+          properties:
+            total: { type: integer, minimum: 0 }
+            active: { type: integer, minimum: 0 }
+            cooldown: { type: integer, minimum: 0 }
+            inactive: { type: integer, minimum: 0 }
+            terminal: { type: integer, minimum: 0 }
+          additionalProperties: false
+        modelLockoutCount: { type: integer, minimum: 0 }
+        requests: { type: integer, minimum: 0 }
+        successRate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 100
+          description: Success percentage from 0 to 100.
+        avgLatencyMs: { type: [number, "null"], minimum: 0 }
+        lastRequestAt: { type: [string, "null"], format: date-time }
+        lastErrorAt: { type: [string, "null"], format: date-time }
+        issueCount: { type: integer, minimum: 0 }
+        accounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderHealthMatrixAccount"
+      additionalProperties: false
+
+    ProviderHealthMatrixWebSessionPool:
+      type: object
+      required: [provider, health, pool, breaker, sessions, issues]
+      properties:
+        provider: { type: string }
+        health: { type: string, enum: [healthy, degraded, down] }
+        pool:
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: "null" }
+        breaker:
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: "null" }
+        sessions:
+          type: array
+          items: { type: object, additionalProperties: true }
+        issues:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    ProviderHealthMatrixResponse:
+      type: object
+      required: [checkedAt, range, cutoff, summary, providers, webSessionPools]
+      properties:
+        checkedAt: { type: string, format: date-time }
+        range: { type: string, enum: [1h, 24h, 7d, 30d] }
+        cutoff: { type: string, format: date-time }
+        summary:
+          type: object
+          required:
+            - providerCount
+            - connectionCount
+            - modelCount
+            - issueCount
+            - healthyCount
+            - degradedCount
+            - downCount
+          properties:
+            providerCount: { type: integer, minimum: 0 }
+            connectionCount: { type: integer, minimum: 0 }
+            modelCount: { type: integer, minimum: 0 }
+            issueCount: { type: integer, minimum: 0 }
+            healthyCount: { type: integer, minimum: 0 }
+            degradedCount: { type: integer, minimum: 0 }
+            downCount: { type: integer, minimum: 0 }
+          additionalProperties: false
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderHealthMatrixProvider"
+        webSessionPools:
+          type: object
+          required: [totalPools, healthyPools, degradedPools, downPools, pools]
+          properties:
+            totalPools: { type: integer, minimum: 0 }
+            healthyPools: { type: integer, minimum: 0 }
+            degradedPools: { type: integer, minimum: 0 }
+            downPools: { type: integer, minimum: 0 }
+            pools:
+              type: array
+              items:
+                $ref: "#/components/schemas/ProviderHealthMatrixWebSessionPool"
+          additionalProperties: false
+      additionalProperties: false
 
     ApiKey:
       type: object

@@ -279,6 +279,7 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/providers/{id}", "delete", "ProviderConnectionDeleteResponse"],
     ["/api/providers/{id}/test", "post", "ProviderConnectionTestResult"],
     ["/api/providers/{id}/models", "get", "ProviderConnectionModelDiscoveryResponse"],
+    ["/api/providers/health-matrix", "get", "ProviderHealthMatrixResponse"],
     ["/api/providers/cursor/agent-availability", "get", "CursorAgentAvailabilityResponse"],
     ["/api/providers/quota-windows", "get", "ProviderQuotaWindowsResponse"],
     ["/api/providers/web-session-contract", "get", "WebSessionContract"],
@@ -431,6 +432,26 @@ test("model, provider, key, and combo management responses match their route pay
   assert.ok(
     schemas?.ProviderConnectionModelDiscoveryResponse?.required?.includes("source")
   );
+  const healthMatrix = operation("/api/providers/health-matrix", "get");
+  const healthMatrixSecurity = healthMatrix.security ?? [];
+  assert.ok(healthMatrixSecurity.some((requirement) => "BearerAuth" in requirement));
+  assert.ok(healthMatrixSecurity.some((requirement) => "ManagementSessionAuth" in requirement));
+  assert.ok(healthMatrixSecurity.some((requirement) => Object.keys(requirement).length === 0));
+  assert.ok(schemas?.ProviderHealthMatrixResponse?.required?.includes("providers"));
+  assert.ok(schemas?.ProviderHealthMatrixResponse?.required?.includes("webSessionPools"));
+  const healthMatrixParameters = healthMatrix.parameters ?? [];
+  for (const parameterName of ["provider", "range", "includeHealthy"]) {
+    assert.ok(
+      healthMatrixParameters.some(
+        (parameter) =>
+          parameter &&
+          typeof parameter === "object" &&
+          "name" in parameter &&
+          parameter.name === parameterName
+      ),
+      `provider health matrix query parameter ${parameterName}`
+    );
+  }
   assert.ok(schemas?.ApiKeyListResponse?.required?.includes("allowKeyReveal"));
   assert.ok(schemas?.ApiKeyCreateResponse?.required?.includes("key"));
   assert.equal(
