@@ -214,6 +214,32 @@ write queue marks the capture incomplete if storage cannot keep up. The syntheti
 timeout, secret-redaction, and delayed-write tests pass. This does not capture Codex native WebSocket
 event bodies or prove full-app/provider reliability; those remain separate acceptance checks.
 
+## App stop caused by egress dependency failure (read-only)
+
+The current host has no OmniRoute app process/container to sample. Systemd reports
+`omni-local-next@app.service` inactive since 2026-10-08 18:16:26 UTC. The unit's `ExecMainStatus=15`
+is SIGTERM, its result is `success`, and the service log says it drained zero requests and checkpointed
+SQLite before exit. There is no current in-process V8 heap sample. The host currently has about 21 GiB
+available RAM and zero PSI pressure.
+
+PID 1's journal identifies the preceding failure: `omni-egress-controller.service` exited status 1
+at 18:16:21. Its Python traceback shows `TimeoutExpired` while opening the egress gate with a 3-second
+deadline; a second traceback hit the `ip netns exec omni-app readlink /proc/self/ns/net` identity
+probe after about 0.47 seconds. The displayed `FileNotFoundError: /opt/omni-egress/-m` came from the
+Apport exception hook while handling those timeouts; it is secondary. The systemd app has
+`BindsTo=omni-egress-controller.service`, so that fail-closed dependency exit sent SIGTERM to the app.
+The controller restarted three times and is active now; the same namespace readlink takes about
+0.01 seconds in three read-only probes.
+
+The app did not restart after the dependency recovered. Its unit has `Restart=on-failure`, while the
+dependency stop was recorded as a successful SIGTERM drain. The browser/Codex sidecars initially
+failed their stopped-role cleanup, then restarted at 18:17 on image revision
+`67503e560a1a26eb60f85be5108975679306b6eb`; the app container was removed. The unit description
+says “green app” and `6dd568ad10b4`, but the stopped app image labels identify slot `candidate` and
+revision `6c6e6b16539e7cf43398fba5dc9b2e5bf4a7eed3`. This is a deployment-state mismatch to resolve
+before claiming that the green app is serving traffic. No unit, egress process, container, or
+configuration was restarted or changed during this observation.
+
 ## Isolated streaming proxy results
 
 The harness in `benchmarks/runtime-proxy/` sends a small JSON request through each gateway to the
