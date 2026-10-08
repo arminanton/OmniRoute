@@ -7955,10 +7955,23 @@ paths:
       operationId: getApiMonitoringHealth
       tags: [System]
       summary: System health check
-      description: Returns system health including uptime, memory, circuit breakers, rate limits
+      description: >-
+        A valid management credential receives the full system, memory, provider, quota, session,
+        admission, and latest cached resource-pressure snapshot. Anonymous callers and credentials
+        that fail management auth receive only the public liveness view; the route returns HTTP 200
+        for both views. `system.resourcePressure.signals` is null until the pressure sampler has
+        produced its first sample; `sampleAgeMs` makes cached readings explicit.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: Health status
+          description: Public liveness response or authenticated system-health snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonitoringHealthResponse"
     delete:
       operationId: deleteApiMonitoringHealth
       tags: [System]
@@ -17774,6 +17787,146 @@ components:
             upstreamLeases: { type: [integer, "null"], minimum: 0 }
             diagnosticCaptureWork: { type: [integer, "null"], minimum: 0 }
             draining: { type: boolean }
+    MonitoringHealthResponse:
+      oneOf:
+        - $ref: "#/components/schemas/AuthenticatedSystemHealthResponse"
+        - $ref: "#/components/schemas/PublicHealthResponse"
+        - $ref: "#/components/schemas/DegradedHealthResponse"
+    AuthenticatedSystemHealthResponse:
+      type: object
+      required: [status, timestamp, system]
+      properties:
+        status: { type: string, const: healthy }
+        timestamp: { type: string, format: date-time }
+        system:
+          type: object
+          required: [version, nodeVersion, uptime, memoryUsage, resourcePressure, pid, platform]
+          properties:
+            version: { type: string }
+            buildSha: { type: string }
+            nodeVersion: { type: string }
+            uptime: { type: number, minimum: 0 }
+            pid: { type: integer, minimum: 1 }
+            platform: { type: string }
+            memoryUsage:
+              type: object
+              required: [rss, heapTotal, heapUsed, external, arrayBuffers]
+              properties:
+                rss: { type: number, minimum: 0 }
+                heapTotal: { type: number, minimum: 0 }
+                heapUsed: { type: number, minimum: 0 }
+                external: { type: number, minimum: 0 }
+                arrayBuffers: { type: number, minimum: 0 }
+              additionalProperties: true
+            resourcePressure:
+              $ref: "#/components/schemas/RuntimeMemoryPressureSnapshot"
+          additionalProperties: true
+        version: { type: string }
+        uptime: { type: number, minimum: 0 }
+        memoryUsage:
+          type: object
+          required: [rss, heapTotal, heapUsed, external, arrayBuffers]
+          properties:
+            rss: { type: number, minimum: 0 }
+            heapTotal: { type: number, minimum: 0 }
+            heapUsed: { type: number, minimum: 0 }
+            external: { type: number, minimum: 0 }
+            arrayBuffers: { type: number, minimum: 0 }
+          additionalProperties: true
+      additionalProperties: true
+    PublicHealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string }
+        setupComplete: { type: boolean }
+      additionalProperties: false
+    DegradedHealthResponse:
+      type: object
+      required: [status, timestamp, error]
+      properties:
+        status: { type: string, const: degraded }
+        timestamp: { type: string, format: date-time }
+        error: { type: string }
+      additionalProperties: true
+    RuntimeMemoryPressureSnapshot:
+      type: object
+      required: [state, sampleAgeMs, signals]
+      properties:
+        state:
+          type: object
+          required: [severity, reason, elevatedStreak, recoveryStreak, lastTransitionAtMs, observedAtMs]
+          properties:
+            severity: { type: string, enum: [normal, high, critical] }
+            reason:
+              type: string
+              enum: [none, v8_heap_ratio, v8_heap_absolute, cgroup_ratio, cgroup_high, psi_some, psi_full, oom_event]
+            elevatedStreak: { type: integer, minimum: 0 }
+            recoveryStreak: { type: integer, minimum: 0 }
+            lastTransitionAtMs: { type: number, minimum: 0 }
+            observedAtMs: { type: number, minimum: 0 }
+          additionalProperties: false
+        sampleAgeMs: { type: [number, "null"], minimum: 0 }
+        signals:
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [observedAtMs, v8, process, cgroup, psi]
+              properties:
+                observedAtMs: { type: number, minimum: 0 }
+                v8:
+                  type: object
+                  required: [heapUsedBytes, heapLimitBytes]
+                  properties:
+                    heapUsedBytes: { type: number, minimum: 0 }
+                    heapLimitBytes: { type: number, minimum: 0 }
+                  additionalProperties: false
+                process:
+                  type: object
+                  required: [rssBytes, externalBytes, arrayBuffersBytes, availableBytes, constrainedBytes]
+                  properties:
+                    rssBytes: { type: number, minimum: 0 }
+                    externalBytes: { type: number, minimum: 0 }
+                    arrayBuffersBytes: { type: number, minimum: 0 }
+                    availableBytes: { type: [number, "null"], minimum: 0 }
+                    constrainedBytes: { type: [number, "null"], minimum: 0 }
+                  additionalProperties: false
+                cgroup:
+                  type: object
+                  required: [currentBytes, maxBytes, highBytes, fileBytes, events]
+                  properties:
+                    currentBytes: { type: [number, "null"], minimum: 0 }
+                    maxBytes: { type: [number, "null"], minimum: 0 }
+                    highBytes: { type: [number, "null"], minimum: 0 }
+                    fileBytes: { type: [number, "null"], minimum: 0 }
+                    events:
+                      oneOf:
+                        - type: "null"
+                        - type: object
+                          required: [low, high, max, oom, oom_kill]
+                          properties:
+                            low: { type: [number, "null"], minimum: 0 }
+                            high: { type: [number, "null"], minimum: 0 }
+                            max: { type: [number, "null"], minimum: 0 }
+                            oom: { type: [number, "null"], minimum: 0 }
+                            oom_kill: { type: [number, "null"], minimum: 0 }
+                          additionalProperties: false
+                  additionalProperties: false
+                psi:
+                  oneOf:
+                    - type: "null"
+                    - type: object
+                      required: [someAvg10, someAvg60, someAvg300, fullAvg10, fullAvg60, fullAvg300]
+                      properties:
+                        someAvg10: { type: [number, "null"], minimum: 0 }
+                        someAvg60: { type: [number, "null"], minimum: 0 }
+                        someAvg300: { type: [number, "null"], minimum: 0 }
+                        fullAvg10: { type: [number, "null"], minimum: 0 }
+                        fullAvg60: { type: [number, "null"], minimum: 0 }
+                        fullAvg300: { type: [number, "null"], minimum: 0 }
+                      additionalProperties: false
+              additionalProperties: false
+      additionalProperties: false
     DiagnosticOverflowFile:
       type: object
       required: [state, complete, rawBytes, compressedBytes]

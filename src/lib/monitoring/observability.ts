@@ -3,6 +3,10 @@ import {
   getCodexParentAccountDiagnostic,
 } from "@omniroute/open-sse/services/codexAccount/index.ts";
 import type { AdaptiveAdmissionPublicSnapshot } from "@omniroute/open-sse/services/admission/runtime.ts";
+import {
+  getResourcePressureObservation,
+  type ResourcePressureObservation,
+} from "@omniroute/open-sse/utils/resourcePressure.ts";
 import type { PerConnectionAdmissionController } from "@/shared/middleware/chatBodyAdmission";
 import type { WalMaintenanceState } from "@/lib/db/walMaintenance";
 
@@ -85,6 +89,41 @@ export function projectChatAdmissionSummary(
     budgetSource: snapshot.budgetSource,
     pressureSeverity: snapshot.pressureSeverity,
     countCapEnabled: snapshot.countCapEnabled,
+  };
+}
+
+/**
+ * Management health projection of the latest pressure sample. It contains only
+ * numeric process/cgroup/PSI signals and the guard state; request or credential
+ * content never enters the health payload.
+ */
+export function projectResourcePressureObservation(
+  observation: ResourcePressureObservation | null | undefined,
+  nowMs = Date.now()
+): JsonRecord | null {
+  if (!observation || typeof observation !== "object") return null;
+  const signals = observation.signals;
+  return {
+    state: { ...observation.state },
+    sampleAgeMs:
+      signals && Number.isFinite(signals.observedAtMs)
+        ? Math.max(0, Math.round(nowMs - signals.observedAtMs))
+        : null,
+    signals: signals
+      ? {
+          observedAtMs: signals.observedAtMs,
+          v8: { ...signals.v8 },
+          process: { ...signals.process },
+          cgroup: {
+            currentBytes: signals.cgroup.currentBytes,
+            maxBytes: signals.cgroup.maxBytes,
+            highBytes: signals.cgroup.highBytes,
+            fileBytes: signals.cgroup.fileBytes,
+            events: signals.cgroup.events ? { ...signals.cgroup.events } : null,
+          },
+          psi: signals.psi ? { ...signals.psi } : null,
+        }
+      : null,
   };
 }
 
@@ -446,6 +485,7 @@ export function buildHealthPayload({
     nodeVersion: process.version,
     uptime: process.uptime(),
     memoryUsage: process.memoryUsage(),
+    resourcePressure: projectResourcePressureObservation(getResourcePressureObservation()),
     pid: process.pid,
     platform: process.platform,
   };

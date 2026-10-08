@@ -79,6 +79,9 @@ test("GET /api/monitoring/health returns the stale cached summary immediately", 
   const res = await GET(authedRequest());
   const elapsedMs = Date.now() - started;
   const body = (await res.json()) as {
+    system?: {
+      resourcePressure?: Record<string, unknown>;
+    };
     credentialHealth?: {
       total: number;
       healthy: number;
@@ -96,7 +99,24 @@ test("GET /api/monitoring/health returns the stale cached summary immediately", 
     unknown: 0,
     stale: 1,
   });
+  assert.deepEqual(Object.keys(body.system?.resourcePressure ?? {}).sort(), [
+    "sampleAgeMs",
+    "signals",
+    "state",
+  ]);
   assert.ok(elapsedMs < 2000, `stale summary must return immediately, took ${elapsedMs}ms`);
+});
+
+test("unauthenticated monitoring health returns only its public liveness projection", async () => {
+  __test_resetMonitoringHealthPayloadCache();
+  const res = await GET(new Request("http://localhost/api/monitoring/health"));
+  const body = (await res.json()) as Record<string, unknown>;
+
+  assert.equal(res.status, 200);
+  assert.ok(typeof body.status === "string");
+  assert.equal("system" in body, false);
+  assert.equal("memoryUsage" in body, false);
+  assert.equal("resourcePressure" in body, false);
 });
 
 test("monitoring health route never imports live credential probes", () => {

@@ -32,14 +32,16 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 195 operations have
-success response content schemas and 145 declare operation-level security. Another 823 operations
+contract is still stronger on route coverage than schema completeness: 196 operations have
+success response content schemas and 146 declare operation-level security. Another 822 operations
 still lack an explicit success-body schema after excluding intentional `204` responses; 11 of those
 have no declared `2xx` status. This pass added concrete schemas for provider-model lookup, pricing
-model catalogs, free-model budgets, conversation summaries, paginated conversation turns, and the
-management log-detail route's in-flight, in-memory, and persisted response variants. The conversation
-response documents that turn text/tool display fields are recovered from call-log artifacts and can
-be empty after details are unavailable. The remaining operations use redirects,
+model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
+management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
+liveness versus authenticated system/pressure snapshot responses. The health snapshot includes the
+latest cached V8/process/cgroup/PSI sample with age and pressure state. The conversation response
+documents that turn text/tool display fields are recovered from call-log artifacts and can be empty
+after details are unavailable. The remaining operations use redirects,
 WebSocket `101`, or
 intentional `404`/`405` HEAD/catch-all behavior and are being reviewed separately from JSON success
 schemas. The OpenAI chat, Anthropic
@@ -64,7 +66,7 @@ analytics/history/budget, and call-log summary/detail endpoints. It also types t
 provider suggestions/plugin manifest, and quota preflight. The OpenAI single-model response now
 describes provider context/input/output limits and capabilities. The Gemini v1beta model-list and
 generation routes also describe native request/response formats. The provider-client response now
-masks primary and rotating API keys and omits OAuth tokens. The spec has 172 component
+masks primary and rotating API keys and omits OAuth tokens. The spec has 177 component
 schemas. All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -559,7 +561,7 @@ current builder.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 195 operations with success-response content; 823
+- Continue the OpenAPI handler audit beyond the 196 operations with success-response content; 822
   operations still lack explicit success-body schemas. The path/method/security-tier inventory is
   complete, but remaining response schemas and conditional auth behavior have not all been
   source-verified.

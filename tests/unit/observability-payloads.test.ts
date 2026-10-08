@@ -7,8 +7,81 @@ import {
   buildTelemetryPayload,
   projectAdaptiveAdmissionSummary,
   projectChatAdmissionSummary,
+  projectResourcePressureObservation,
   projectWalMaintenanceSummary,
 } from "../../src/lib/monitoring/observability.ts";
+import type { ResourcePressureObservation } from "@omniroute/open-sse/utils/resourcePressure.ts";
+
+test("resource-pressure health projection exposes bounded memory signals and sample age", () => {
+  const observation: ResourcePressureObservation = {
+    signals: {
+      observedAtMs: 900,
+      v8: { heapUsedBytes: 101, heapLimitBytes: 202 },
+      process: {
+        rssBytes: 303,
+        externalBytes: 404,
+        arrayBuffersBytes: 505,
+        availableBytes: 606,
+        constrainedBytes: 707,
+      },
+      cgroup: {
+        currentBytes: 808,
+        maxBytes: 909,
+        highBytes: 1001,
+        fileBytes: 1102,
+        events: { low: 0, high: 1, max: 2, oom: 0, oom_kill: 0 },
+      },
+      psi: {
+        someAvg10: 0.1,
+        someAvg60: 0.2,
+        someAvg300: 0.3,
+        fullAvg10: 0,
+        fullAvg60: 0,
+        fullAvg300: 0,
+      },
+    },
+    state: {
+      severity: "critical",
+      reason: "v8_heap_absolute",
+      elevatedStreak: 2,
+      recoveryStreak: 0,
+      lastTransitionAtMs: 850,
+      observedAtMs: 900,
+    },
+  };
+
+  assert.deepEqual(
+    projectResourcePressureObservation(
+      { ...observation, privateValue: "must not escape" } as never,
+      1_000
+    ),
+    {
+      state: observation.state,
+      sampleAgeMs: 100,
+      signals: observation.signals,
+    }
+  );
+});
+
+test("resource-pressure health projection makes an absent sample explicit", () => {
+  const observation: ResourcePressureObservation = {
+    signals: null,
+    state: {
+      severity: "normal",
+      reason: "none",
+      elevatedStreak: 0,
+      recoveryStreak: 0,
+      lastTransitionAtMs: 0,
+      observedAtMs: 0,
+    },
+  };
+
+  assert.deepEqual(projectResourcePressureObservation(observation), {
+    state: observation.state,
+    sampleAgeMs: null,
+    signals: null,
+  });
+});
 
 test("buildSessionsSummary returns sticky counts and ordered top sessions", () => {
   const summary = buildSessionsSummary({
@@ -146,6 +219,11 @@ test("buildHealthPayload reports Codex persisted parents through aggregate child
   assert.equal(payload.quotaMonitor.active, 0);
   assert.ok(payload.sessions);
   assert.deepEqual(payload.rateLimitStatus, {});
+  assert.deepEqual(Object.keys(payload.system.resourcePressure ?? {}).sort(), [
+    "sampleAgeMs",
+    "signals",
+    "state",
+  ]);
 });
 
 test("buildHealthPayload keeps legacy aliases and adds session/quota observability blocks", () => {
