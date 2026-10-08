@@ -56,6 +56,17 @@ turns, tool calls, and tool results. The per-turn context is repeated 64 KiB tex
 transport stress case, not a token-equivalent prompt or real provider/tool execution. Results
 separate completed sessions, completed rounds, and request throughput.
 
+Exercise OmniRoute's actual TypeScript request-admission wrapper with the same deterministic
+multi-turn bodies and a local streaming response:
+
+```bash
+node --import tsx/esm benchmarks/runtime-proxy/chat-admission-sessions.ts --clients 100 --rounds 5
+```
+
+This covers request-body admission, correlation IDs, concurrency/byte leases, and release when SSE
+responses close. It does not run the Next production bundle, routing/database account selection,
+call-log artifact persistence, provider adapters, or real model/tool execution.
+
 Sweep `--clients 1,15,30,70,100` and repeat each point at least three times. The result reports
 header and first-body-byte latency, completion latency, successful streams, throughput, peak
 gateway RSS, and CPU time. Tune `--chunks`, `--chunk-delay-ms`, and `--chunk-bytes` to test other
