@@ -205,6 +205,17 @@ other in-flight reservations consume the same budget. It shows the existing refe
 reduces queue pressure as well as serialized bytes, without removing distinct reconstructed
 continuation inputs. This estimator run used Node 25.8.1 on the devvm, pinned to CPUs 2–3.
 
+Call-log artifact schema 6 now stores references instead of a second copy when the top-level
+request body exactly equals `pipeline.clientRawRequest.body`, or the top-level response equals
+`pipeline.clientResponse.body`. `readCallArtifact()` expands those references before returning
+data, so log detail and Responses continuation consumers keep their existing shape; distinct
+payloads and older schema-5 artifacts remain unchanged. A synthetic 500,000-character request
+round-tripped with the default 512 KiB artifact cap while omitting more than 450 KiB of duplicated
+JSON. The logger now skips a second protection clone when the client snapshot exactly matches the
+top-level request/response field; the conservative preparation reservation still accounts for
+both source snapshots that are already live. This reduces a later transient copy and stored bytes,
+but it does not eliminate the original parsed request plus the logger's bounded snapshot.
+
 ## Build/runtime evaluation
 
 The production Node image's exact base digest (`node:26.10.0-trixie-slim`) passed native dependency

@@ -9,6 +9,7 @@ import { publishSharedContinuation } from "../db/continuationHandoffBridge.ts";
 
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { RequestPipelinePayloads } from "@omniroute/open-sse/utils/requestLogger.ts";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/errorSanitization.ts";
 import { getDbInstance } from "../db/core";
@@ -233,7 +234,11 @@ function buildArtifact(
   requestBody: unknown,
   responseBody: unknown,
   error: unknown,
-  pipelinePayloads: RequestPipelinePayloads | null
+  pipelinePayloads: RequestPipelinePayloads | null,
+  duplicateBodyRefs: {
+    requestBody?: "pipeline.clientRawRequest.body";
+    responseBody?: "pipeline.clientResponse.body";
+  } = {}
 ): CallLogArtifact {
   return {
     schemaVersion: 6,
@@ -267,8 +272,10 @@ function buildArtifact(
       comboStepId: logEntry.comboStepId,
       comboExecutionKey: logEntry.comboExecutionKey,
     },
-    requestBody: requestBody ?? null,
-    responseBody: responseBody ?? null,
+    requestBody: duplicateBodyRefs.requestBody ? undefined : (requestBody ?? null),
+    responseBody: duplicateBodyRefs.responseBody ? undefined : (responseBody ?? null),
+    ...(duplicateBodyRefs.requestBody ? { requestBodyRef: duplicateBodyRefs.requestBody } : {}),
+    ...(duplicateBodyRefs.responseBody ? { responseBodyRef: duplicateBodyRefs.responseBody } : {}),
     error: error ?? null,
     ...(pipelinePayloads ? { pipeline: pipelinePayloads } : {}),
   };
@@ -484,6 +491,37 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     const diagnosticOverflowReference = noLogEnabled
       ? undefined
       : projectDiagnosticOverflowReference(rawPipelineRecord?.diagnosticOverflow);
+    const rawClientRequest =
+      rawPipelineRecord?.clientRawRequest &&
+      typeof rawPipelineRecord.clientRawRequest === "object" &&
+      !Array.isArray(rawPipelineRecord.clientRawRequest)
+        ? (rawPipelineRecord.clientRawRequest as Record<string, unknown>)
+        : null;
+    const rawClientResponse =
+      rawPipelineRecord?.clientResponse &&
+      typeof rawPipelineRecord.clientResponse === "object" &&
+      !Array.isArray(rawPipelineRecord.clientResponse)
+        ? (rawPipelineRecord.clientResponse as Record<string, unknown>)
+        : null;
+    // The request logger already owns a bounded client-body snapshot. When it
+    // exactly matches the legacy top-level field, reserve and protect it only
+    // once. The artifact reader later expands its storage reference.
+    const requestBodyMatchesPipeline =
+      rawRequestBody !== null &&
+      rawRequestBody !== undefined &&
+      rawClientRequest !== null &&
+      Object.hasOwn(rawClientRequest, "body") &&
+      isDeepStrictEqual(rawRequestBody, rawClientRequest.body);
+    // Failed responses use a stronger error-only top-level projection. Leave
+    // those independent snapshots untouched; successful response projections
+    // use the same protectPayloadForLog transformation on both copies.
+    const responseBodyMatchesPipeline =
+      !failedResponse &&
+      rawResponseBody !== null &&
+      rawResponseBody !== undefined &&
+      rawClientResponse !== null &&
+      Object.hasOwn(rawClientResponse, "body") &&
+      isDeepStrictEqual(rawResponseBody, rawClientResponse.body);
     rawPipelineRecord = null;
     const rawDetailExpected =
       !noLogEnabled &&
@@ -497,6 +535,10 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     const rawHasError = rawError != null;
     if (rawDetailExpected) {
       preparationReservation = reserveCallLogArtifactPreparation({
+        // Keep estimating every source snapshot: the parsed client body and
+        // pipeline snapshot are both still live here. The persisted/protected
+        // copies below will use a shared reference, but the reservation remains
+        // conservative about the source values that already occupy memory.
         requestBody: rawRequestBody,
         responseBody: rawResponseBody,
         pipeline: rawPipelinePayloads,
@@ -506,9 +548,11 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     const preparationRefused = rawDetailExpected && !preparationReservation;
 
     let protectedRequestBody: unknown =
-      noLogEnabled || preparationRefused ? null : protectPayloadForLog(rawRequestBody);
+      noLogEnabled || preparationRefused || requestBodyMatchesPipeline
+        ? null
+        : protectPayloadForLog(rawRequestBody);
     let protectedResponseBody: unknown =
-      noLogEnabled || preparationRefused
+      noLogEnabled || preparationRefused || responseBodyMatchesPipeline
         ? null
         : failedResponse
           ? protectErrorPayloadForLog(rawResponseBody)
@@ -621,15 +665,19 @@ async function saveCallLogOperation(entry: any): Promise<void> {
       videoContentRemoved: entry.videoContentRemoved ? 1 : 0,
     };
 
+    const protectedClientRequest = protectedPipelinePayloads?.clientRawRequest as
+      | Record<string, unknown>
+      | undefined;
+    const summaryRequestBody = requestBodyMatchesPipeline
+      ? protectedClientRequest?.body
+      : protectedRequestBody;
     let requestSummary =
       noLogEnabled || preparationRefused
         ? null
-        : buildRequestSummary(logEntry.requestType, protectedRequestBody);
+        : buildRequestSummary(logEntry.requestType, summaryRequestBody);
     const detailExpected = rawDetailExpected;
-    const hasRequestBody = preparationRefused ? rawHasRequestBody : protectedRequestBody !== null;
-    const hasResponseBody = preparationRefused
-      ? rawHasResponseBody
-      : protectedResponseBody !== null;
+    const hasRequestBody = rawHasRequestBody;
+    const hasResponseBody = rawHasResponseBody;
     const hasPipelineDetails = preparationRefused
       ? rawHasPipelineDetails
       : protectedPipelinePayloads !== null;
@@ -664,7 +712,15 @@ async function saveCallLogOperation(entry: any): Promise<void> {
           protectedRequestBody,
           protectedResponseBody,
           protectedError,
-          protectedPipelinePayloads
+          protectedPipelinePayloads,
+          {
+            ...(requestBodyMatchesPipeline
+              ? { requestBody: "pipeline.clientRawRequest.body" as const }
+              : {}),
+            ...(responseBodyMatchesPipeline
+              ? { responseBody: "pipeline.clientResponse.body" as const }
+              : {}),
+          }
         );
         const artifactWrite = writeCallArtifactAsync(artifact, preparationReservation);
         preparationReservation = null; // The writer now owns or has released the lease.
