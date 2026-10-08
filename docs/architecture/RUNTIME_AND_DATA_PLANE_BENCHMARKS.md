@@ -26,11 +26,13 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 Route coverage is stronger than schema completeness. All 1,029 operations still lack explicit
-`operationId` values, only 120 have response content schemas, and only 120 declare operation-level
+`operationId` values, only 120 have response content schemas, and 121 declare operation-level
 security. The next contract pass must compare authentication and request/response schemas with each
 handler before calling the entire OpenAPI document semantically complete. For routes with confirmed
 configuration-dependent access, the spec now includes anonymous alternatives where the handler
 allows them, including model discovery, combo/routing metadata, and the API Explorer endpoints.
+All 98 operations previously missing `x-loopback-only` under routeGuard's local-only prefixes are
+now annotated; the route-guard checker and unit test enforce those markers.
 
 ## Resource-pressure 503 path
 
