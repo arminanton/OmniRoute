@@ -2898,10 +2898,34 @@ paths:
       tags: [Providers]
       summary: Check cursor-agent availability
       description: "Credential-free, informational check for whether cursor-agent is installed and authenticated on this host — backs the dashboard's dismissible install-nudge banner. Returns only cursorAgentAvailable (boolean); never tokens or machineId."
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       x-loopback-only: true
       responses:
         "200":
           description: Availability result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CursorAgentAvailabilityResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Availability probe failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CursorAgentAvailabilityErrorResponse"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/providers/test-batch:
     post:
@@ -12859,10 +12883,37 @@ paths:
       operationId: getApiProvidersQuotaWindows
       tags:
         - Providers
-      summary: "GET providers › quota windows"
+      summary: List provider quota windows and cutoff defaults
+      description: >-
+        Returns the quota-window names registered by each provider and the resolved global and
+        provider-specific minimum-remaining percentage defaults used by quota preflight.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Registered provider windows and resolved cutoff defaults
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderQuotaWindowsResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to fetch provider quota windows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/providers/volcengine-plan/connect:
     post:
       operationId: postApiProvidersVolcenginePlanConnect
@@ -12958,10 +13009,29 @@ paths:
       operationId: getApiProvidersWebSessionContract
       tags:
         - Providers
-      summary: "GET providers › web session contract"
+      summary: Get the non-secret web-session credential contract
+      description: Returns provider login metadata and accepted credential shapes; never credential values.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Versioned web-session provider and credential contract
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebSessionContract"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/providers/zed/discover:
     post:
       operationId: postApiProvidersZedDiscover
@@ -19791,6 +19861,104 @@ components:
       required: [message]
       properties:
         message: { type: string, const: Connection deleted successfully }
+      additionalProperties: false
+
+    CursorAgentAvailabilityResponse:
+      type: object
+      required: [cursorAgentAvailable]
+      properties:
+        cursorAgentAvailable: { type: boolean }
+      additionalProperties: false
+
+    CursorAgentAvailabilityErrorResponse:
+      type: object
+      required: [cursorAgentAvailable, error]
+      properties:
+        cursorAgentAvailable: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
+
+    ProviderQuotaWindowsResponse:
+      type: object
+      required: [windows, defaults]
+      properties:
+        windows:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+        defaults:
+          type: object
+          required: [globalThresholdPercent, providerWindowDefaults]
+          properties:
+            globalThresholdPercent: { type: number }
+            providerWindowDefaults:
+              type: object
+              additionalProperties: { type: number }
+          additionalProperties: false
+      additionalProperties: false
+
+    WebSessionTokenSource:
+      oneOf:
+        - type: object
+          required: [type, name]
+          properties:
+            type: { type: string, const: cookie }
+            name: { type: string }
+            domain: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [type, key]
+          properties:
+            type: { type: string, const: localStorage }
+            key: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [type, key]
+          properties:
+            type: { type: string, const: sessionStorage }
+            key: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [type, name]
+          properties:
+            type: { type: string, const: header }
+            name: { type: string }
+          additionalProperties: false
+
+    WebSessionContractProvider:
+      type: object
+      required: [providerId, displayName, loginUrl, homeUrl, tokenSources, credential]
+      properties:
+        providerId: { type: string }
+        displayName: { type: string }
+        loginUrl: { type: string, format: uri }
+        homeUrl: { type: string, format: uri }
+        tokenSources:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebSessionTokenSource"
+        credential:
+          type: object
+          required: [kind, storageKeys, acceptsFullCookieHeader]
+          properties:
+            kind: { type: string, enum: [cookie, token] }
+            storageKeys:
+              type: array
+              items: { type: string }
+            acceptsFullCookieHeader: { type: boolean }
+          additionalProperties: false
+      additionalProperties: false
+
+    WebSessionContract:
+      type: object
+      required: [version, providers]
+      properties:
+        version: { type: integer, const: 1 }
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebSessionContractProvider"
       additionalProperties: false
 
     ApiKey:

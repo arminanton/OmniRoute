@@ -277,6 +277,9 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/providers/{id}", "patch", "ProviderConnectionEnvelope"],
     ["/api/providers/{id}", "put", "ProviderConnectionEnvelope"],
     ["/api/providers/{id}", "delete", "ProviderConnectionDeleteResponse"],
+    ["/api/providers/cursor/agent-availability", "get", "CursorAgentAvailabilityResponse"],
+    ["/api/providers/quota-windows", "get", "ProviderQuotaWindowsResponse"],
+    ["/api/providers/web-session-contract", "get", "WebSessionContract"],
     ["/api/keys", "get", "ApiKeyListResponse"],
     ["/api/keys", "post", "ApiKeyCreateResponse"],
     ["/api/combos", "get", "ComboListResponse"],
@@ -347,6 +350,20 @@ test("model, provider, key, and combo management responses match their route pay
       ?.schema?.$ref,
     "#/components/schemas/ProviderConnectionErrorResponse"
   );
+  for (const pathname of [
+    "/api/providers/cursor/agent-availability",
+    "/api/providers/quota-windows",
+    "/api/providers/web-session-contract",
+  ]) {
+    const security = operation(pathname, "get").security ?? [];
+    assert.ok(security.some((requirement) => "BearerAuth" in requirement), pathname);
+    assert.ok(security.some((requirement) => "ManagementSessionAuth" in requirement), pathname);
+    assert.ok(security.some((requirement) => Object.keys(requirement).length === 0), pathname);
+  }
+  const cursorAvailability = schemas?.CursorAgentAvailabilityResponse?.properties;
+  assert.ok(cursorAvailability?.cursorAgentAvailable);
+  assert.ok(schemas?.ProviderQuotaWindowsResponse?.required?.includes("defaults"));
+  assert.ok(schemas?.WebSessionContract?.required?.includes("providers"));
   assert.ok(schemas?.ApiKeyListResponse?.required?.includes("allowKeyReveal"));
   assert.ok(schemas?.ApiKeyCreateResponse?.required?.includes("key"));
   assert.equal(
