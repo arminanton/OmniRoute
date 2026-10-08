@@ -17,12 +17,15 @@ Build the Rust candidate once:
 cargo build --release --manifest-path benchmarks/runtime-proxy/Cargo.toml
 ```
 
-Run one runtime at a time. `BUN_BIN` can point at a specific Bun binary; `--runtime bun-smol`
-enables Bun's lower-memory, more-frequent-GC mode.
+Run one runtime at a time. Container modes use the pinned official Node/Bun images and sample the
+container process RSS; local modes use binaries already installed on the host. `bun-smol` enables
+Bun's lower-memory, more-frequent-GC mode.
 
 ```bash
-python3 benchmarks/runtime-proxy/run_bench.py --runtime node --clients 100
-python3 benchmarks/runtime-proxy/run_bench.py --runtime bun --bun-bin /tmp/bun-1.4.2/bun --clients 100
+python3 benchmarks/runtime-proxy/run_bench.py --runtime node26-container --clients 100
+python3 benchmarks/runtime-proxy/run_bench.py --runtime bun140-container --clients 100
+python3 benchmarks/runtime-proxy/run_bench.py --runtime bun142-container --clients 100
+python3 benchmarks/runtime-proxy/run_bench.py --runtime bun142-smol-container --clients 100
 python3 benchmarks/runtime-proxy/run_bench.py --runtime bun-smol --bun-bin /tmp/bun-1.4.2/bun --clients 100
 python3 benchmarks/runtime-proxy/run_bench.py --runtime rust --clients 100
 ```

@@ -15,6 +15,7 @@ import urllib.request
 
 
 ROOT = pathlib.Path(__file__).resolve().parent
+NODE_IMAGE = "docker.io/library/node:26.10.0-trixie-slim@sha256:ec7758ee051e457b468b32bde57b0879010b325bb9862718e9615225ce4aaae1"
 
 
 def read_process_metrics(pid):
@@ -38,7 +39,15 @@ async def wait_for_server(url, process, timeout=20):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process.poll() is not None:
-            raise RuntimeError(f"server exited early with status {process.returncode}")
+            details = ""
+            if process.stderr:
+                try:
+                    details = process.stderr.read()[-1000:]
+                except Exception:
+                    pass
+            raise RuntimeError(
+                f"server exited early with status {process.returncode}: {details}"
+            )
         try:
             with urllib.request.urlopen(url, timeout=1) as response:
                 if response.status == 200:
@@ -78,21 +87,73 @@ def sample_metrics(pid, stop):
     }
 
 
-def runtime_command(runtime, bun_bin, rust_bin):
+def runtime_command(runtime, bun_bin, rust_bin, gateway_port, upstream_url, max_inflight):
     if runtime == "node":
-        return ["node", str(ROOT / "proxy-node.mjs")]
+        return ["node", str(ROOT / "proxy-node.mjs")], None
     if runtime == "bun":
-        return [bun_bin, str(ROOT / "proxy-bun.ts")]
+        return [bun_bin, str(ROOT / "proxy-bun.ts")], None
     if runtime == "bun-smol":
-        return [bun_bin, "--smol", str(ROOT / "proxy-bun.ts")]
+        return [bun_bin, "--smol", str(ROOT / "proxy-bun.ts")], None
     if runtime == "rust":
-        return [rust_bin]
+        return [rust_bin], None
+    if runtime in {"node26-container", "bun140-container", "bun142-container", "bun142-smol-container"}:
+        image, command = {
+            "node26-container": (NODE_IMAGE, ["node", "/bench/proxy-node.mjs"]),
+            "bun140-container": (
+                "docker.io/oven/bun:1.4.0-slim",
+                ["bun", "/bench/proxy-bun.ts"],
+            ),
+            "bun142-container": (
+                "docker.io/oven/bun:1.4.2-slim",
+                ["bun", "/bench/proxy-bun.ts"],
+            ),
+            "bun142-smol-container": (
+                "docker.io/oven/bun:1.4.2-slim",
+                ["bun", "--smol", "/bench/proxy-bun.ts"],
+            ),
+        }[runtime]
+        container_name = "omni-proxy-bench-%s-%s" % (runtime, os.getpid())
+        return [
+            "podman",
+            "run",
+            "--rm",
+            "--name",
+            container_name,
+            "--network=host",
+            "--memory=512m",
+            "-v",
+            "%s:/bench:ro" % ROOT,
+            "-w",
+            "/bench",
+            "-e",
+            "PORT=%s" % gateway_port,
+            "-e",
+            "UPSTREAM_URL=%s" % upstream_url,
+            "-e",
+            "MAX_INFLIGHT=%s" % max_inflight,
+            "-e",
+            "MAX_BODY_BYTES=%s" % (4 * 1024 * 1024),
+            image,
+        ] + command, container_name
     raise ValueError(f"unknown runtime: {runtime}")
 
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--runtime", choices=["node", "bun", "bun-smol", "rust"], required=True)
+    parser.add_argument(
+        "--runtime",
+        choices=[
+            "node",
+            "bun",
+            "bun-smol",
+            "rust",
+            "node26-container",
+            "bun140-container",
+            "bun142-container",
+            "bun142-smol-container",
+        ],
+        required=True,
+    )
     parser.add_argument("--clients", type=int, default=100)
     parser.add_argument("--chunks", type=int, default=50)
     parser.add_argument("--chunk-delay-ms", type=int, default=10)
@@ -130,10 +191,19 @@ async def main():
         universal_newlines=True,
     )
     gateway = None
+    gateway_container_name = None
     try:
         await wait_for_server(f"http://127.0.0.1:{args.upstream_port}/health", upstream)
+        command, gateway_container_name = runtime_command(
+            args.runtime,
+            args.bun_bin,
+            args.rust_bin,
+            args.gateway_port,
+            gateway_env["UPSTREAM_URL"],
+            args.max_inflight,
+        )
         gateway = subprocess.Popen(
-            runtime_command(args.runtime, args.bun_bin, args.rust_bin),
+            command,
             cwd=ROOT,
             env=gateway_env,
             stdout=subprocess.DEVNULL,
@@ -142,10 +212,31 @@ async def main():
         )
         await wait_for_server(f"http://127.0.0.1:{args.gateway_port}/health", gateway)
 
+        metrics_pid = gateway.pid
+        if gateway_container_name:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                try:
+                    raw_pid = subprocess.check_output(
+                        [
+                            "podman",
+                            "inspect",
+                            "--format",
+                            "{{.State.Pid}}",
+                            gateway_container_name,
+                        ],
+                        stderr=subprocess.DEVNULL,
+                    ).strip()
+                    metrics_pid = int(raw_pid)
+                    if metrics_pid > 0:
+                        break
+                except Exception:
+                    time.sleep(0.05)
+
         stop = threading.Event()
         metrics = {}
         sampler = threading.Thread(
-            target=lambda: metrics.update(sample_metrics(gateway.pid, stop)),
+            target=lambda: metrics.update(sample_metrics(metrics_pid, stop)),
             daemon=True,
         )
         sampler.start()
@@ -181,6 +272,14 @@ async def main():
         if result["failed"]:
             raise SystemExit(1)
     finally:
+        if gateway_container_name:
+            subprocess.run(
+                ["podman", "stop", "--time", "3", gateway_container_name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
         for process in (gateway, upstream):
             if process is None:
                 continue
