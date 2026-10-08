@@ -201,6 +201,24 @@ test("artifact footprint estimation rejects accessors without invoking them", ()
   assert.equal(getterInvoked, false);
 });
 
+test("artifact preparation refusal logs a bounded reason and never the payload", () => {
+  const secretLike = `private-body-marker-${"x".repeat(7 * 1024 * 1024)}`;
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+  try {
+    const reservation = reserveCallLogArtifactPreparation({ requestBody: secretLike });
+    assert.equal(reservation, null);
+    const warning = warnings.find((message) => message.includes("preparation refused"));
+    assert.ok(warning);
+    assert.match(warning, /reason=single_artifact_budget/);
+    assert.match(warning, /estimatedMiB=/);
+    assert.doesNotMatch(warning, /private-body-marker/);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 test("aggregate artifact budget includes active writes and releases reservations on completion", async () => {
   const largePayload = "x".repeat(2_000_000);
   const writes = Array.from({ length: 7 }, (_, index) => {

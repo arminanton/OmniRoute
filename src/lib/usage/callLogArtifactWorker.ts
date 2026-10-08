@@ -1,6 +1,7 @@
 import { parentPort } from "node:worker_threads";
 
 import {
+  CALL_LOGS_DIR,
   writeCallArtifact,
   type CallLogArtifact,
   type CallLogArtifactWriteResult,
@@ -19,6 +20,7 @@ type WriteRequest = {
 type WriteReply = {
   id: number;
   result: CallLogArtifactWriteResult | null;
+  failureReason?: "storage_unavailable" | "build_phase" | "write_failed" | "worker_exception";
 };
 
 function applyWriteEnvironment(environment: WriteRequest["environment"]): void {
@@ -36,6 +38,7 @@ function applyWriteEnvironment(environment: WriteRequest["environment"]): void {
 parentPort?.on("message", (request: WriteRequest) => {
   const originalConsoleError = console.error;
   let result: CallLogArtifactWriteResult | null = null;
+  let failureReason: WriteReply["failureReason"];
 
   try {
     // The writer reads these options lazily; mirror the caller's per-write environment snapshot.
@@ -43,15 +46,29 @@ parentPort?.on("message", (request: WriteRequest) => {
     // writeCallArtifact's legacy error includes filesystem paths. Keep worker failures generic.
     console.error = () => {};
     result = writeCallArtifact(request.artifact);
+    if (!result) {
+      if (!CALL_LOGS_DIR) failureReason = "storage_unavailable";
+      else if (
+        process.env.NEXT_PHASE === "phase-production-build" ||
+        process.env.OMNIROUTE_BUILDING === "1"
+      ) {
+        failureReason = "build_phase";
+      } else failureReason = "write_failed";
+    }
   } catch {
     result = null;
+    failureReason = "worker_exception";
   } finally {
     console.error = originalConsoleError;
   }
 
   try {
-    parentPort?.postMessage({ id: request.id, result } satisfies WriteReply);
+    parentPort?.postMessage({ id: request.id, result, failureReason } satisfies WriteReply);
   } catch {
-    parentPort?.postMessage({ id: request.id, result: null } satisfies WriteReply);
+    parentPort?.postMessage({
+      id: request.id,
+      result: null,
+      failureReason: "worker_exception",
+    } satisfies WriteReply);
   }
 });

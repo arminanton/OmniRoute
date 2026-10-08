@@ -23,6 +23,7 @@ const WARNING_INTERVAL_MS = 30_000;
 type WorkerReply = {
   id: number;
   result: CallLogArtifactWriteResult | null;
+  failureReason?: string;
 };
 
 type QueueItem = {
@@ -189,7 +190,13 @@ export function reserveCallLogArtifactPreparation(
   rawPayloads: unknown
 ): CallLogArtifactReservation | null {
   const estimate = estimateCallLogArtifactFootprint(rawPayloads);
-  if (estimate.reason) return null;
+  if (estimate.reason) {
+    warnRateLimited(
+      `[callLogs] Call-log detail preparation refused (reason=${estimate.reason}, estimatedMiB=${(estimate.estimatedBytes / (1024 * 1024)).toFixed(1)}, reservedMiB=${(reservedArtifactFootprintBytes / (1024 * 1024)).toFixed(1)}).`,
+      `preparation_refused:${estimate.reason}`
+    );
+    return null;
+  }
 
   // The base estimate covers source, a worker clone, and JSON output. Double it
   // to cover the protection projection made before the artifact reaches worker
@@ -199,8 +206,18 @@ export function reserveCallLogArtifactPreparation(
     !Number.isSafeInteger(estimatedBytes) ||
     estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES ||
     reservedArtifactFootprintBytes + estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
-  )
+  ) {
+    const reason =
+      !Number.isSafeInteger(estimatedBytes) ||
+      estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
+        ? "single_artifact_budget"
+        : "aggregate_reservation_budget";
+    warnRateLimited(
+      `[callLogs] Call-log detail preparation refused (reason=${reason}, estimateMiB=${(estimatedBytes / (1024 * 1024)).toFixed(1)}, reservedMiB=${(reservedArtifactFootprintBytes / (1024 * 1024)).toFixed(1)}, capMiB=${(MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES / (1024 * 1024)).toFixed(0)}).`,
+      `preparation_refused:${reason}`
+    );
     return null;
+  }
 
   const reservation: CallLogArtifactReservation = { estimatedBytes };
   reservationStates.set(reservation, { estimatedBytes, state: "reserved" });
@@ -494,15 +511,26 @@ function scheduleIdleTermination(): void {
   idleTimer.unref?.();
 }
 
-function warnRateLimited(message: string): void {
+function warnRateLimited(message: string, key = message): void {
   const now = Date.now();
-  if (now - (lastWarningAt.get(message) ?? 0) < WARNING_INTERVAL_MS) return;
-  lastWarningAt.set(message, now);
+  if (now - (lastWarningAt.get(key) ?? 0) < WARNING_INTERVAL_MS) return;
+  lastWarningAt.set(key, now);
   console.warn(message);
 }
 
-function failOpen(warn = false): void {
-  if (warn) warnRateLimited("[callLogs] Call-log artifact worker failed; detail omitted.");
+function safeWorkerFailureReason(error: unknown): string {
+  if (!error || typeof error !== "object") return "worker_error";
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && /^[A-Z0-9_]{2,64}$/.test(code) ? code : "worker_error";
+}
+
+function failOpen(warn = false, reason = "worker_error"): void {
+  if (warn) {
+    warnRateLimited(
+      `[callLogs] Call-log artifact worker failed (reason=${reason}); detail omitted.`,
+      `worker_failure:${reason}`
+    );
+  }
   const failed = active
     ? [active, ...queue, ...diagnosticStubQueue]
     : [...queue, ...diagnosticStubQueue];
@@ -528,6 +556,13 @@ function ensureWorker(): Worker {
     const completed = active;
     active = null;
     releaseReservation(completed);
+    if (!reply.result) {
+      const reason = reply.failureReason ?? "no_result";
+      warnRateLimited(
+        `[callLogs] Call-log artifact worker returned no stored artifact (reason=${reason}).`,
+        `write_no_result:${reason}`
+      );
+    }
     completed.resolve(
       reply.result && completed.reservationClass === "diagnostic_stub"
         ? { ...reply.result, diagnosticOverflowStub: true }
@@ -535,12 +570,12 @@ function ensureWorker(): Worker {
     );
     pump();
   });
-  created.on("error", () => failOpen(true));
-  created.on("messageerror", () => failOpen(true));
+  created.on("error", (error) => failOpen(true, safeWorkerFailureReason(error)));
+  created.on("messageerror", () => failOpen(true, "worker_message_error"));
   created.on("exit", (code) => {
     if (worker !== created) return;
     worker = null;
-    if (code !== 0 || active) failOpen(true);
+    if (code !== 0 || active) failOpen(true, code === 0 ? "worker_unexpected_exit" : "worker_exit");
   });
   return created;
 }
@@ -562,8 +597,8 @@ function pump(): void {
       artifact: next.artifact,
       environment: next.environment,
     });
-  } catch {
-    failOpen(true);
+  } catch (error) {
+    failOpen(true, safeWorkerFailureReason(error));
   }
 }
 
