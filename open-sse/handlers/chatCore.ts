@@ -574,7 +574,13 @@ async function handleChatCoreOwned({
   const resilienceSettings = resolveResilienceSettings(cachedSettings);
   if (!skipResourcePressureGuard) {
     try {
-      const pressureGuard = checkResourcePressureGuard({ correlationId });
+      const pressureGuard = checkResourcePressureGuard({
+        correlationId,
+        endpoint:
+          typeof clientRawRequest?.endpoint === "string" ? clientRawRequest.endpoint : null,
+        provider: typeof provider === "string" ? provider : null,
+        model: typeof model === "string" ? model : null,
+      });
       if (pressureGuard) return pressureGuard;
     } catch {
       /* fail open */

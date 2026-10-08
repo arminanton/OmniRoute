@@ -96,7 +96,12 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
     console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
     try {
       const correlationId = "550e8400-e29b-41d4-a716-446655440000";
-      const guard = runtime.check({ correlationId });
+      const guard = runtime.check({
+        correlationId,
+        endpoint: "/api/v1/vscode/path-token-must-not-be-logged/v1/responses?api_key=secret",
+        provider: "codex",
+        model: "gpt-6-luna-max",
+      });
       assert.ok(guard);
       assert.equal(guard.status, 503);
       assert.equal(guard.response.headers.get("x-request-id"), correlationId);
@@ -112,6 +117,11 @@ describe("ResourcePressureRuntime stale-while-revalidate cache", () => {
       assert.match(diagnostic, /sampleAgeMs=1/);
       assert.match(diagnostic, /pid=\d+/);
       assert.match(diagnostic, /loggedAt=/);
+      assert.match(diagnostic, /route=responses/);
+      assert.match(diagnostic, /provider=codex/);
+      assert.match(diagnostic, /model=gpt-6-luna-max/);
+      assert.equal(diagnostic.includes("path-token-must-not-be-logged"), false);
+      assert.equal(diagnostic.includes("api_key=secret"), false);
       assert.match(diagnostic, new RegExp(`correlationId=${correlationId}`));
 
       const payload = await guard.response.json();

@@ -33,6 +33,9 @@ export type ResourcePressureObservation = {
 
 export type ResourcePressureRequestContext = {
   correlationId?: string | null;
+  endpoint?: string | null;
+  provider?: string | null;
+  model?: string | null;
 };
 
 export type ResourcePressureRuntimeOptions = {
@@ -102,6 +105,40 @@ export function sanitizeResourcePressureCorrelationId(
   return uuidPattern.test(value) ? value : null;
 }
 
+function sanitizePressureLabel(value: string | null | undefined, maxLength = 128): string | null {
+  if (typeof value !== "string") return null;
+  const bounded = value.trim();
+  return bounded.length > 0 && bounded.length <= maxLength && /^[A-Za-z0-9._:+/-]+$/.test(bounded)
+    ? bounded
+    : null;
+}
+
+function pressureRequestDetail(
+  context: ResourcePressureRequestContext | undefined
+): Record<string, string> {
+  if (!context) return {};
+  const endpoint = typeof context.endpoint === "string" ? context.endpoint.split(/[?#]/, 1)[0] : "";
+  const normalized = endpoint.toLowerCase();
+  const route = normalized.endsWith("/v1/chat/completions")
+    ? "chat_completions"
+    : normalized.endsWith("/v1/completions")
+      ? "completions"
+      : normalized.endsWith("/v1/responses")
+        ? "responses"
+        : normalized.endsWith("/v1/messages")
+          ? "messages"
+          : normalized.endsWith("/api/chat") || normalized.endsWith("/v1/api/chat")
+            ? "ollama_chat"
+            : "other_chat_route";
+  const provider = sanitizePressureLabel(context.provider, 64);
+  const model = sanitizePressureLabel(context.model);
+  return {
+    route,
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+  };
+}
+
 function pressureSampleDetail(
   signals: ResourceSignals | null,
   sampleAgeMs: number
@@ -139,12 +176,15 @@ function describeCachedPressure(params: {
   signals: ResourceSignals | null;
   recoveryStreak: number;
   cacheAgeMs: number;
-  correlationId?: string | null;
+  requestContext?: ResourcePressureRequestContext;
 }): Record<string, number | string | null> {
   return {
     ...pressureSampleDetail(params.signals, params.cacheAgeMs),
     recoveryStreak: params.recoveryStreak,
-    ...(params.correlationId ? { correlationId: params.correlationId } : {}),
+    ...pressureRequestDetail(params.requestContext),
+    ...(params.requestContext?.correlationId
+      ? { correlationId: params.requestContext.correlationId }
+      : {}),
   };
 }
 
@@ -198,6 +238,7 @@ function immediateHeapGuard(
     immediateHeapUsedMb: Math.round(heapUsedMb),
     thresholdMb: Math.round(thresholdMb),
     ...pressureSampleDetail(signals, sampleAgeMs),
+    ...pressureRequestDetail(context),
     ...(correlationId ? { correlationId } : {}),
   });
 }
@@ -309,7 +350,10 @@ export function createResourcePressureRuntime(
           signals: lastSignals,
           recoveryStreak: state.recoveryStreak,
           cacheAgeMs: cacheAge,
-          correlationId: sanitizeResourcePressureCorrelationId(context?.correlationId),
+          requestContext: {
+            ...context,
+            correlationId: sanitizeResourcePressureCorrelationId(context?.correlationId),
+          },
         })
       );
     },
