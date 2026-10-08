@@ -434,18 +434,21 @@ does not remove distinct prompt or response text.
 
 The writer-capacity harness exercises production `saveCallLog()` and the artifact worker against a
 temporary SQLite database: 100 simultaneous saves, 100 synthetic chunks on each of three stream
-tracks, and a 10 MiB per-artifact cap. Reproduce with
+tracks, and a 10 MiB per-artifact cap. Imports and temporary-database initialization are reported as
+`setupMs` outside the timed save phase; first artifact-worker startup remains inside the timed phase.
+Reproduce with
 `node --import tsx/esm scripts/perf/bench-call-log-artifact-capacity.mjs 100 262144` or
 `bun scripts/perf/bench-call-log-artifact-capacity.mjs 100 262144`; replace `262144` with `1311987`
 for the larger-request case. Each configuration ran three times. Values below are medians; RSS is
-the process high-water mark reported by the operating system.
+sampled every 10 ms during the concurrent save phase. The benchmark reports temporary-database and
+module setup separately as `setupMs`; process high-water RSS is also included in each JSON result.
 
-| Runtime      | Target request bytes | Detailed artifacts ready | Summary rows retained | Median save time | Median peak RSS | Artifact bytes written |
-| ------------ | -------------------: | -----------------------: | --------------------: | ---------------: | --------------: | ---------------------: |
-| Node 24.21.0 |              262,144 |                   23/100 |               100/100 |           746 ms |       253.3 MiB |                6.52 MB |
-| Bun 1.4.0    |              262,144 |                   23/100 |               100/100 |           427 ms |       153.4 MiB |                6.52 MB |
-| Node 24.21.0 |            1,311,987 |                    5/100 |               100/100 |           641 ms |       478.7 MiB |                6.67 MB |
-| Bun 1.4.0    |            1,311,987 |                    5/100 |               100/100 |           489 ms |       185.4 MiB |                6.67 MB |
+| Runtime      | Target request bytes | Detailed artifacts ready | Summary rows retained | Median save time | Median load peak RSS | Artifact bytes written |
+| ------------ | -------------------: | -----------------------: | --------------------: | ---------------: | -------------------: | ---------------------: |
+| Node 24.21.0 |              262,144 |                   23/100 |               100/100 |           711 ms |            246.4 MiB |                6.52 MB |
+| Bun 1.4.0    |              262,144 |                   23/100 |               100/100 |           392 ms |            148.9 MiB |                6.52 MB |
+| Node 24.21.0 |            1,311,987 |                    5/100 |               100/100 |           587 ms |            464.6 MiB |                6.67 MB |
+| Bun 1.4.0    |            1,311,987 |                    5/100 |               100/100 |           412 ms |            168.9 MiB |                6.67 MB |
 
 The chunk-text dictionary increased successful detail capture from 20 to 23 per 100 at 262 KiB,
 and from 4 to 5 per 100 at 1.31 MiB, compared with the same harness before text compaction. All
@@ -455,6 +458,54 @@ uses `better-sqlite3`; Bun uses `bun:sqlite`, so the writer timings compare both
 driver. This excludes Next routes, authentication, account routing, provider execution, and tool
 cycles. The Bun result is not evidence that the full Next app is ready to run on Bun; the production
 image runs Node 26.10.0 and this harness uses Node 24.21.0.
+
+## Request-logger lifecycle stress
+
+The writer-only benchmark above starts from an already-built log payload. A second harness now
+creates the production `RequestLogger`, records client/OpenAI/provider request and response stages,
+appends 100 chunks to each stream track, and calls production `saveCallLog()` concurrently. This
+includes the logger's default 64 KiB text-preview limit, protected snapshots, request-summary rows,
+reservation estimator, SQLite writes, and artifact worker. Reproduce with
+`node --import tsx/esm scripts/perf/bench-call-log-lifecycle.mjs 100 262144 65536` or
+`bun scripts/perf/bench-call-log-lifecycle.mjs 100 262144 65536`; replace `262144` with `1311987`
+for the larger request shape. The byte argument is an approximate JSON body target; the JSON
+envelope and per-session label add a small amount. `setupMs` separates imports and temporary SQLite
+migrations from the timed save phase, while peak RSS is sampled every 10 ms during concurrent saves.
+Each runtime/size ran three times.
+
+| Runtime      | Target request bytes | Detailed artifacts ready | Summary rows retained | Median save time | Median load peak RSS | Artifact bytes written |
+| ------------ | -------------------: | -----------------------: | --------------------: | ---------------: | -------------------: | ---------------------: |
+| Node 24.21.0 |              262,144 |                   18/100 |               100/100 |           798 ms |            304.4 MiB |                6.32 MB |
+| Bun 1.4.0    |              262,144 |                   18/100 |               100/100 |           469 ms |            242.5 MiB |                6.32 MB |
+| Node 24.21.0 |            1,311,987 |                    4/100 |               100/100 |           682 ms |            548.2 MiB |                5.60 MB |
+| Bun 1.4.0    |            1,311,987 |                    4/100 |               100/100 |           477 ms |            477.2 MiB |                5.60 MB |
+
+At both request sizes, the existing 128 MiB aggregate reservation budget kept every summary row
+but omitted most detailed artifacts. The full logger path retained fewer artifacts and used more
+RSS than the writer-only path, which means that writer-only throughput is not a reliable estimate
+for OmniRoute's in-flight logging cost. Bun's lower time/RSS here is confounded by its `bun:sqlite`
+driver versus Node's `better-sqlite3`. The harness still omits Next routing/authentication, provider
+execution, account scheduling, actual tool cycles, and real upstream streams; it does **not** prove
+70–100-agent end-to-end capacity.
+
+The full logger harness also compared a 1.31 MiB request with the text preview limit left at its
+64 KiB default versus both `CHAT_LOG_TEXT_LIMIT` and `CHAT_LOG_CLIENT_TEXT_LIMIT` set to 1,311,987
+bytes. The per-artifact cap and concurrency stayed the same:
+
+| Runtime      | Text preview limit | Detailed artifacts ready | Median save time | Median load peak RSS | Artifact bytes written |
+| ------------ | -----------------: | -----------------------: | ---------------: | -------------------: | ---------------------: |
+| Node 24.21.0 |             65,536 |                    4/100 |           682 ms |            548.2 MiB |                5.60 MB |
+| Node 24.21.0 |          1,311,987 |                    5/100 |           641 ms |            389.2 MiB |                6.68 MB |
+| Bun 1.4.0    |             65,536 |                    4/100 |           477 ms |            477.2 MiB |                5.60 MB |
+| Bun 1.4.0    |          1,311,987 |                    5/100 |           403 ms |            305.5 MiB |                6.68 MB |
+
+In this synthetic body shape, matching the logger's client/OpenAI/provider snapshots to the full
+request changed the save path so it could reuse the request body instead of retaining a separate
+full raw body alongside a 64 KiB stage preview. The sampled peak fell 29% on Node and 36% on Bun,
+with one more detailed artifact retained per 100 saves. This is an inference from the current copy
+and equality checks plus this synthetic benchmark, not a production-route result; the larger text
+limits also retain more prompt text in intermediate logs, so they remain opt-in pending live-sized
+privacy and memory tests.
 
 ## Build/runtime evaluation
 

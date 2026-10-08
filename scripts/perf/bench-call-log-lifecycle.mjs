@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * Exercise the production call-log save/worker path without a provider or Next build.
- * All artifacts are written under a fresh temporary DATA_DIR and removed on exit.
- * Run with: node --import tsx/esm scripts/perf/bench-call-log-artifact-capacity.mjs
+ * Exercise the production request logger, call-log preparation, SQLite summary,
+ * and artifact worker together. All state is isolated in a temporary DATA_DIR.
+ * Run with: node --import tsx/esm scripts/perf/bench-call-log-lifecycle.mjs 100 262144
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -12,22 +12,26 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const clients = parsePositiveInt(process.argv[2], 100);
 const requestBytes = parsePositiveInt(process.argv[3], 262_144);
-if (clients > 1_000 || requestBytes > 4 * 1024 * 1024) {
-  throw new RangeError("benchmark limits are 1,000 clients and 4 MiB per request");
+const textLimitBytes = parsePositiveInt(process.argv[4], 64 * 1024);
+if (clients > 1_000 || requestBytes > 4 * 1024 * 1024 || textLimitBytes > 4 * 1024 * 1024) {
+  throw new RangeError("benchmark limits are 1,000 clients and 4 MiB per body/text limit");
 }
 
-const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omni-call-log-capacity-"));
+const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omni-call-log-lifecycle-"));
 process.env.DATA_DIR = dataDir;
 process.env.OMNIROUTE_MIGRATIONS_DIR = path.join(root, "src/lib/db/migrations");
 process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
 process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = "10240";
 process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS = "true";
 process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = "256";
+process.env.CHAT_LOG_TEXT_LIMIT = String(textLimitBytes);
+process.env.CHAT_LOG_CLIENT_TEXT_LIMIT = String(textLimitBytes);
 process.env.NODE_ENV = "test";
 
 let closeCallLogSaves;
 let getCallLogById;
 let saveCallLog;
+let createRequestLogger;
 let resetDbInstance;
 let ensureDbInitialized;
 let callLogsDir;
@@ -43,29 +47,27 @@ try {
     { CALL_LOGS_DIR: callLogsDir },
     callLogArtifactWriter,
     { resetDbInstance, ensureDbInitialized },
+    { createRequestLogger },
   ] = await Promise.all([
     import("../../src/lib/usage/callLogs.ts"),
     import("../../src/lib/usage/callLogArtifacts.ts"),
     import("../../src/lib/usage/callLogArtifactWriter.ts"),
     import("../../src/lib/db/core.ts"),
+    import("../../open-sse/utils/requestLogger.ts"),
   ]);
 
   await ensureDbInitialized();
   const setupMs = Math.round(performance.now() - setupStartedAt);
 
-  const textBytes = Math.max(0, requestBytes - 2_048);
-  const sharedHistory = "agent context with prior tool calls and results "
-    .repeat(Math.ceil(textBytes / 48))
-    .slice(0, textBytes);
-  const responseBody = {
-    id: "resp_benchmark",
-    output: [{ type: "message", content: [{ type: "output_text", text: "mock response" }] }],
-  };
   const streamChunks = Array.from(
     { length: 100 },
     (_, index) =>
       `data: {"type":"response.output_text.delta","index":${index},"delta":"${"x".repeat(128)}"}\n\n`
   );
+  const responseBody = {
+    id: "resp_lifecycle_benchmark",
+    output: [{ type: "message", content: [{ type: "output_text", text: "mock response" }] }],
+  };
   peakLoadRssBytes = process.memoryUsage().rss;
   loadSampler = setInterval(() => {
     peakLoadRssBytes = Math.max(peakLoadRssBytes, process.memoryUsage().rss);
@@ -75,23 +77,39 @@ try {
 
   await Promise.all(
     Array.from({ length: clients }, async (_, index) => {
-      const id = `call-log-capacity-${index}`;
+      const id = `call-log-lifecycle-${index}`;
       ids.push(id);
+      const model = "codex/gpt-6.1-sol";
+      const textBytes = Math.max(0, requestBytes - 2_048);
       const body = {
-        model: "codex/gpt-6.1-sol",
+        model,
         input: [
-          { role: "user", content: `session ${index} ${sharedHistory}` },
+          {
+            role: "user",
+            content: `session ${index} ${"agent context and completed tool results "
+              .repeat(Math.ceil(textBytes / 38))
+              .slice(0, textBytes)}`,
+          },
           { type: "function_call", call_id: `tool-${index}`, name: "read_file", arguments: "{}" },
           { type: "function_call_output", call_id: `tool-${index}`, output: "mock tool result" },
         ],
       };
-      const pipelineBodySnapshot = structuredClone(body);
-      const pipelineResponseSnapshot = structuredClone(responseBody);
-      const providerResponse = {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-        body: pipelineResponseSnapshot,
-      };
+      const logger = await createRequestLogger("openai-responses", "openai-responses", model, {
+        enabled: true,
+        captureStreamChunks: true,
+        maxStreamChunkBytes: 256 * 1024,
+        provider: "codex",
+      });
+      logger.logClientRawRequest("/v1/responses", body, { "content-type": "application/json" });
+      logger.logOpenAIRequest(body);
+      logger.logTargetRequest("https://mock.invalid/v1/responses", {}, body);
+      logger.logProviderResponse(200, "OK", { "content-type": "application/json" }, responseBody);
+      logger.logConvertedResponse(responseBody);
+      for (const chunk of streamChunks) {
+        logger.appendProviderChunk(chunk);
+        logger.appendOpenAIChunk(chunk);
+        logger.appendConvertedChunk(chunk);
+      }
 
       await saveCallLog({
         id,
@@ -99,8 +117,8 @@ try {
         method: "POST",
         path: "/v1/responses",
         status: 200,
-        model: body.model,
-        requestedModel: body.model,
+        model,
+        requestedModel: model,
         provider: "codex",
         account: `benchmark-${index % 4}`,
         connectionId: null,
@@ -114,25 +132,7 @@ try {
         requestBody: body,
         responseBody,
         error: null,
-        pipelinePayloads: {
-          clientRawRequest: {
-            endpoint: "/v1/responses",
-            headers: { "content-type": "application/json" },
-            body: pipelineBodySnapshot,
-          },
-          openaiRequest: { body: pipelineBodySnapshot },
-          providerRequest: { body: pipelineBodySnapshot },
-          providerResponse,
-          clientResponse: {
-            timestamp: new Date().toISOString(),
-            body: pipelineResponseSnapshot,
-          },
-          streamChunks: {
-            provider: streamChunks,
-            openai: streamChunks.slice(),
-            client: streamChunks.slice(),
-          },
-        },
+        pipelinePayloads: logger.getPipelinePayloads(),
       });
     })
   );
@@ -157,7 +157,8 @@ try {
       runtime: process.versions.bun ? `bun-${process.versions.bun}` : process.version,
       clients,
       targetRequestBytes: requestBytes,
-      streamChunkCount: streamChunks.length,
+      capturedTextLimitBytes: textLimitBytes,
+      streamChunkCountPerTrack: streamChunks.length,
       completedSaves: ids.length,
       states,
       artifactBytes,
