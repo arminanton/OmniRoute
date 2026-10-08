@@ -62,11 +62,12 @@ The history snapshot at 05:11 recorded a 4 GiB app cgroup at 3.56 GiB, zero OOM 
 `NODE_OPTIONS=--max-old-space-size=2048`, while detailed capture was enabled. This is consistent
 with a process nearing its configured V8 heap ceiling while the cgroup still had some headroom; it
 does not prove logging caused the heap rise. The heap-shed warning in the feature branch now records
-PID/time, immediate heap/threshold, and the most recent numeric V8/RSS/external/array-buffer/cgroup/
-PSI sample with its age. Logs include a validated UUID correlation ID, and the rejected response
-returns it in `x-request-id`; malformed caller values are replaced with a generated UUID. No prompt,
-body, header, or credential data is added. If no sample exists on a first-request trip, sample
-fields are explicitly `null`; cached cgroup/PSI values can be up to one second old.
+PID/time, route family, resolved provider/model labels, immediate heap/threshold, and the most recent
+numeric V8/RSS/external/array-buffer/cgroup/PSI sample with its age. Logs include a validated UUID
+correlation ID, and the rejected response returns it in `x-request-id`; malformed caller values are
+replaced with a generated UUID. Route labels are allowlisted families, and no prompt, raw path,
+header, or credential data is added. If no sample exists on a first-request trip, sample fields are
+explicitly `null`; cached cgroup/PSI values can be up to one second old.
 
 ## Read-only observation of the running candidate
 
