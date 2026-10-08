@@ -2980,9 +2980,69 @@ paths:
       operationId: postApiProvidersValidate
       tags: [Providers]
       summary: Validate provider credentials
+      description: >-
+        Performs a provider-specific credential probe. Successful HTTP responses may still have
+        valid=false. Provider HTTP failures preserve their status code and return a sanitized error.
+        Supplying cx is required when provider is google-pse-search.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderValidationRequest"
       responses:
         "200":
-          description: Validation result
+          description: Provider validation result; valid=false is a normal result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderValidationResponse"
+        "400":
+          description: Invalid request or validation is not supported for this provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderValidationErrorResponse"
+        "401":
+          description: Management authentication failed or provider rejected credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderValidationErrorResponse"
+        "403":
+          description: Management credential lacks scope or provider denied validation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderValidationErrorResponse"
+        "404":
+          description: Compatible provider node not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderValidationErrorResponse"
+        "500":
+          description: Provider validation failed unexpectedly
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderValidationErrorResponse"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderValidationErrorResponse"
+        default:
+          description: Provider validation returned another provider-specific failure status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderValidationErrorResponse"
 
   /api/providers/client:
     get:
@@ -20088,6 +20148,72 @@ components:
             failed: { type: integer, minimum: 0 }
           additionalProperties: false
       additionalProperties: false
+
+    ProviderValidationRequest:
+      type: object
+      required: [provider]
+      description: >-
+        Provider-specific credential probe. A Google Programmable Search Engine validation also
+        requires cx when provider is google-pse-search. Unknown properties are ignored by the
+        request validator.
+      properties:
+        provider: { type: string, minLength: 1 }
+        apiKey: { type: string }
+        validationModelId: { type: string }
+        customUserAgent: { type: string, maxLength: 500 }
+        baseUrl: { type: string, format: uri }
+        region: { type: string, maxLength: 64 }
+        accessKeyId: { type: string, maxLength: 500 }
+        sessionToken: { type: string, maxLength: 5000 }
+        cx: { type: string, maxLength: 500 }
+        runtimeKey: { type: string, maxLength: 65536 }
+        tunnelId: { type: string, maxLength: 128 }
+        connectorName: { type: string, maxLength: 200 }
+      additionalProperties: true
+
+    ProviderValidationResponse:
+      type: object
+      required: [valid, error, warning, method, capabilities, providerSpecificData]
+      properties:
+        valid: { type: boolean }
+        error: { type: [string, "null"] }
+        warning: { type: [string, "null"] }
+        method: { type: [string, "null"] }
+        capabilities:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - { type: "null" }
+        providerSpecificData:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - { type: "null" }
+      additionalProperties: true
+
+    ProviderValidationErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          oneOf:
+            - { type: string }
+            - type: object
+              properties:
+                message: { type: string }
+                type: { type: string }
+                code: { type: string }
+                details:
+                  type: array
+                  items: { type: object, additionalProperties: true }
+              additionalProperties: true
+        valid: { type: boolean }
+        unsupported: { type: boolean }
+        skipped: { type: boolean }
+        inconclusive: { type: boolean }
+        unverified: { type: boolean }
+        code: { type: string }
+      additionalProperties: true
 
     ApiKey:
       type: object

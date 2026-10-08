@@ -281,6 +281,7 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/providers/quota-windows", "get", "ProviderQuotaWindowsResponse"],
     ["/api/providers/web-session-contract", "get", "WebSessionContract"],
     ["/api/providers/test-batch", "post", "ProviderBatchTestResponse"],
+    ["/api/providers/validate", "post", "ProviderValidationResponse"],
     ["/api/keys", "get", "ApiKeyListResponse"],
     ["/api/keys", "post", "ApiKeyCreateResponse"],
     ["/api/combos", "get", "ComboListResponse"],
@@ -376,6 +377,22 @@ test("model, provider, key, and combo management responses match their route pay
   assert.ok(batchTestSecurity.some((requirement) => "BearerAuth" in requirement));
   assert.ok(batchTestSecurity.some((requirement) => "ManagementSessionAuth" in requirement));
   assert.ok(batchTestSecurity.some((requirement) => Object.keys(requirement).length === 0));
+  const validationRequest = requestContent(
+    operation("/api/providers/validate", "post"),
+    "application/json"
+  ).schema;
+  assert.equal(validationRequest.$ref, "#/components/schemas/ProviderValidationRequest");
+  assert.ok(schemas?.ProviderValidationRequest?.required?.includes("provider"));
+  assert.ok(schemas?.ProviderValidationResponse?.required?.includes("valid"));
+  const validationSecurity = operation("/api/providers/validate", "post").security ?? [];
+  assert.ok(validationSecurity.some((requirement) => "BearerAuth" in requirement));
+  assert.ok(validationSecurity.some((requirement) => "ManagementSessionAuth" in requirement));
+  assert.ok(validationSecurity.some((requirement) => Object.keys(requirement).length === 0));
+  const validationResponses = operation("/api/providers/validate", "post").responses;
+  assert.ok(validationResponses?.["400"]);
+  assert.ok(validationResponses?.["401"]);
+  assert.ok(validationResponses?.["403"]);
+  assert.ok(validationResponses?.default);
   assert.ok(schemas?.ApiKeyListResponse?.required?.includes("allowKeyReveal"));
   assert.ok(schemas?.ApiKeyCreateResponse?.required?.includes("key"));
   assert.equal(
