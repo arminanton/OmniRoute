@@ -76,7 +76,10 @@ export const MAX_INJECTION_SCAN_BYTES = 16 * 1024;
 const PII_PATTERNS = [
   {
     name: "email",
-    pattern: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g,
+    // Bound both sides of `@`: the unbounded local-part `+` makes V8 retry a
+    // long code/context string from many word boundaries when it contains no
+    // email, turning PII detection into quadratic work on large prompts.
+    pattern: /\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b/g,
     replacement: "[EMAIL_REDACTED]",
   },
   {
@@ -225,8 +228,12 @@ function detectInjection(text) {
 function processPII(text, redact = false) {
   const detections = [];
   let processed = text;
+  const hasEmailCandidate = text.includes("@");
 
   for (const rule of PII_PATTERNS) {
+    // Most prompts and source files contain no email candidate; don't run the
+    // email expression across their full text when this sentinel is absent.
+    if (rule.name === "email" && !hasEmailCandidate) continue;
     const matches = text.match(rule.pattern);
     if (matches && matches.length > 0) {
       detections.push({ type: rule.name, count: matches.length });
