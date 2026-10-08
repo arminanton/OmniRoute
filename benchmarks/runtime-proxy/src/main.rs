@@ -1,6 +1,5 @@
 use std::{
-    env,
-    io,
+    env, io,
     pin::Pin,
     sync::{
         Arc,
@@ -84,7 +83,10 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
         .and_then(|value| value.parse::<usize>().ok())
         .is_some_and(|length| length > state.max_body_bytes)
     {
-        return error_response(StatusCode::PAYLOAD_TOO_LARGE, "request body exceeds benchmark limit");
+        return error_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "request body exceeds benchmark limit",
+        );
     }
 
     let path_and_query = request
@@ -99,19 +101,20 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
 
     let body_stream = request.into_body().into_data_stream();
     let max_body_bytes = state.max_body_bytes;
-    let bounded_body: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> =
-        Box::pin(async_stream::try_stream! {
-        let mut total = 0usize;
-        let mut stream = body_stream;
-        while let Some(next) = stream.next().await {
-            let chunk = next.map_err(|error| io::Error::other(error.to_string()))?;
-            total = total.saturating_add(chunk.len());
-            if total > max_body_bytes {
-                Err(io::Error::new(io::ErrorKind::InvalidData, "request body exceeds benchmark limit"))?;
+    let bounded_body: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(
+        async_stream::try_stream! {
+            let mut total = 0usize;
+            let mut stream = body_stream;
+            while let Some(next) = stream.next().await {
+                let chunk = next.map_err(|error| io::Error::other(error.to_string()))?;
+                total = total.saturating_add(chunk.len());
+                if total > max_body_bytes {
+                    Err(io::Error::new(io::ErrorKind::InvalidData, "request body exceeds benchmark limit"))?;
+                }
+                yield chunk;
             }
-            yield chunk;
-        }
-    });
+        },
+    );
 
     let active = ActiveGuard::new(state.active.clone());
     let upstream = match state
@@ -126,8 +129,8 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
         Err(_) => return error_response(StatusCode::BAD_GATEWAY, "mock upstream unavailable"),
     };
 
-    let status = StatusCode::from_u16(upstream.status().as_u16())
-        .unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut response_headers = HeaderMap::new();
     for name in ["content-type", "cache-control", "x-request-id"] {
         if let Some(value) = upstream.headers().get(name) {
@@ -143,14 +146,14 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
     let upstream_stream = upstream.bytes_stream();
     let response_stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> =
         Box::pin(async_stream::try_stream! {
-        let _permit = permit;
-        let _active = active;
-        let mut stream = upstream_stream;
-        while let Some(next) = stream.next().await {
-            let chunk = next.map_err(|error| io::Error::other(error.to_string()))?;
-            yield chunk;
-        }
-    });
+            let _permit = permit;
+            let _active = active;
+            let mut stream = upstream_stream;
+            while let Some(next) = stream.next().await {
+                let chunk = next.map_err(|error| io::Error::other(error.to_string()))?;
+                yield chunk;
+            }
+        });
     let body = Body::from_stream(response_stream);
     let mut builder = Response::builder().status(status);
     if let Some(headers) = builder.headers_mut() {
@@ -163,7 +166,10 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let port = env::var("PORT").ok().and_then(|value| value.parse().ok()).unwrap_or(3901);
+    let port = env::var("PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3901);
     let max_inflight = env::var("MAX_INFLIGHT")
         .ok()
         .and_then(|value| value.parse().ok())
