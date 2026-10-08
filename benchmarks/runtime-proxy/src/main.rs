@@ -1,6 +1,7 @@
 use std::{
     env,
     io,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -15,7 +16,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use reqwest::Client;
 use tokio::{net::TcpListener, sync::Semaphore};
 
@@ -97,7 +98,8 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
 
     let body_stream = request.into_body().into_data_stream();
     let max_body_bytes = state.max_body_bytes;
-    let bounded_body = async_stream::try_stream! {
+    let bounded_body: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> =
+        Box::pin(async_stream::try_stream! {
         let mut total = 0usize;
         let mut stream = body_stream;
         while let Some(next) = stream.next().await {
@@ -108,7 +110,7 @@ async fn proxy(State(state): State<AppState>, request: Request) -> Response {
             }
             yield chunk;
         }
-    };
+    });
 
     let active = ActiveGuard::new(state.active.clone());
     let upstream = match state
