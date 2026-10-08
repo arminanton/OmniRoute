@@ -107,7 +107,7 @@
     "eval:router:search": "node --import tsx scripts/router-eval/search.ts",
     "eval:router:trends": "node --import tsx scripts/router-eval/trends.ts",
     "release:sync-changelog-i18n": "node scripts/release/sync-changelog-i18n.mjs",
-    "prebuild": "npm run check:native-deps && node scripts/docs/sync-public-openapi.mjs --check",
+    "prebuild": "node scripts/check/check-native-deps.mjs && node scripts/docs/sync-public-openapi.mjs --check",
     "build": "node scripts/build/build-next-isolated.mjs",
     "build:secure": "OMNIROUTE_BUILD_PROFILE=minimal node scripts/build/build-next-isolated.mjs",
     "build:backend": "cross-env OMNIROUTE_BUILD_BACKEND_ONLY=1 node scripts/build/build-next-isolated.mjs",
