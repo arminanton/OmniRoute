@@ -1,3 +1,9 @@
+---
+title: "Runtime and Inference Data Plane Investigation"
+version: 3.8.51
+lastUpdated: 2026-10-08
+---
+
 # Runtime and inference data-plane investigation
 
 **Status:** Active evaluation on `feat/inference-runtime-reliability`. These are isolated benchmark
@@ -407,6 +413,28 @@ original object layout. No substring, approximate, or lossy text deduplication o
 their body-bearing pipeline is omitted. The focused artifact-cap/worker/drain suites passed 28/28.
 
 ## Build/runtime evaluation
+
+Next.js 16 lists Node.js 20.9+ as its runtime requirement and makes Turbopack the default
+production bundler. Turbopack's implementation is Rust, but that does not make the Next.js server a
+Rust runtime or establish that Bun is a supported production runtime. Bun's current compatibility
+guide says common frameworks including Next.js work, while also documenting gaps in Node-compatible
+APIs: `AsyncLocalStorage` does not propagate into `MessagePort`/worker events, `node:worker_threads`
+ignores `resourceLimits`, and `node:v8` reports JavaScriptCore heap statistics rather than V8
+statistics. OmniRoute uses `AsyncLocalStorage` for transport/retry/request context, `worker_threads`
+for call-log and compression workers, and `node:v8` in its pressure guard. Those behaviors require
+direct parity tests before a Bun runtime can be considered for the full application. Sources:
+[Next.js 16 runtime and Turbopack changes](https://nextjs.org/docs/app/guides/upgrading/version-16),
+[Bun Node.js compatibility](https://bun.sh/docs/runtime/nodejs-compat), and
+[Bun Workers](https://bun.sh/docs/runtime/workers).
+
+A focused compatibility smoke on the installed Bun 1.4.0 ran the existing transport-telemetry and
+call-log-artifact-worker suites: 23/23 tests passed, including SSE cancellation, redacted transport
+observations, a real worker write, and 100 concurrent artifact preparations under the shared
+reservation budget. A direct `AsyncLocalStorage.snapshot()` context probe also passed under Bun.
+This is useful evidence for the exercised libraries; it does not cover the full Next server, Bun
+heap-guard semantics under the deployed container limits, account routing, SQLite-backed usage,
+provider tools, or production traffic. Bun's `node:test` implementation is also documented as
+partial, so these focused runs are a compatibility probe rather than an alternate CI test runner.
 
 The production Node image's exact base digest (`node:26.10.0-trixie-slim`) passed native dependency
 validation after `npm ci --include=optional --ignore-scripts` installed 2,529 packages in about 40
