@@ -556,17 +556,48 @@ writes, then removed its temporary data directory; free root disk remained about
 private capture can create substantial write traffic, so scope it to the diagnostic window and keep
 the configured aggregate-size budget and retention policy in view.
 
-Three verification reruns after the schema-9 text-dedup change passed all 402 requests and finalized
+Five verification reruns after the schema-9 text-dedup change passed all 402 requests and finalized
 402/402 traces each. All ordinary artifacts were metadata-only (`full=0`, `privateOnly=402`); the
 private traces held the request and response bytes. Each run measured a 1,311,796-byte maximum
-request and completed in 83.22–83.24 seconds wall time, with peak RSS ranging from 2,624,508 to
-2,811,080 KiB and filesystem output ranging from 1,910,192 to 1,911,176 KiB before cleanup. The
+request and completed in 82.42–83.24 seconds wall time, with peak RSS ranging from 2,624,508 to
+2,811,080 KiB and filesystem output ranging from 1,909,536 to 1,911,176 KiB before cleanup. The
 text-table scan optimizations did not materially change end-to-end wall time or RSS in this route
 test; that points to request parsing, private gzip capture, and disk writes dominating its cost. This
 corpus uses high-entropy random context, five 256 KiB user messages per session, and 1.31 MiB
 requests; its timing should not be compared directly with the earlier 22–24 second low-context
 runs. It validates the 100-session route/capture path, not sustained production throughput or a real
 provider.
+
+`ANTIGRAVITY_CAPTURE_MEMORY_BENCH=1` emits a sanitized `ANTIGRAVITY_MEMORY` line with separate
+snapshots for the route/test process, parent test runner, client process, mock upstream, and their
+current cgroup-v2 scope. Process snapshots include Node heap/RSS/external/array-buffer values, V8
+heap statistics, `/proc` high-water RSS, and `smaps_rollup` PSS/private/shared pages. The cgroup
+snapshot includes current/peak/max, memory.stat, events, and pressure. A user-session cgroup may also
+include sibling processes and charged page cache; use its membership and stat breakdown before
+attributing the aggregate to the gateway.
+
+In the memory-enabled rerun, the route/test process's post-load snapshot showed 2,617,737,216 bytes
+RSS, 1,819,397,456 bytes of V8 heap used against a 2,348,810,240-byte heap limit, 235,918,720 bytes
+external memory, and 206,936,034 array-buffer bytes. Its process high-water RSS was 2,707,226,624
+bytes (2,643,776 KiB), `smaps_rollup` PSS was 2,586,703,872 bytes, and private dirty pages were
+2,549,506,048 bytes; process swap was zero. It accumulated 105.36 seconds of user CPU and 10.13
+seconds of system CPU. Across the two memory-enabled runs, the synthetic client peaked at 570–584
+MiB RSS and mock upstream at 191–198 MiB. At that request-completion sample, before artifact/trace drain, V8 heap use was
+about 91% of the 1,904 MiB immediate-shed threshold, below it; no `resource_pressure` rejection
+occurred. The one-second sampler collected 61 points over 74.57 seconds and observed peak V8
+`heapUsed` of 1,853,346,912 bytes (1,767.5 MiB, 92.8% of the threshold) at 71.6 seconds, about
+136.5 MiB below the 503 threshold. At the same sample it recorded
+peak RSS 2,699,513,856 bytes (2,574.5 MiB), external memory 397,431,525 bytes (379 MiB), and
+array-buffer memory 357,986,324 bytes (341.4 MiB). External and array-buffer use then fell before
+the end snapshot, so that transient buffering is visible in RSS but not as retained V8 heap. The
+10.29 GiB cgroup current sample had
+2.77 GiB anon, 5.81 GiB file, and 1.71 GiB kernel charge; events showed no high/max/OOM, and PSI
+averages were zero. That cgroup was the shared user-session scope (`memory.max=max`), and its
+14.41 GiB `memory.peak` predates this test's peak; neither aggregate value can be attributed to the
+OmniRoute route process. The interval sampler is best-effort and can miss brief event-loop stalls;
+process `VmHWM`/`resourceUsage.maxRSS` supplies the process-wide high-water, while heapUsed peaks are
+sampled rather than exact allocation maxima. This profile narrows the memory mix but does not identify
+retained object types; a heap allocation profile remains necessary.
 
 The Logs detail modal reads the trace manifest and exposes downloads for the compressed client
 request and each provider request/response, including partial-state labels. This makes the private
@@ -585,6 +616,7 @@ RUN_ANTIGRAVITY_CAPTURE_BENCH=1 \
 ANTIGRAVITY_CAPTURE_OVERFLOW_BENCH=1 \
 ANTIGRAVITY_CAPTURE_CONTEXT_BYTES=262144 \
 ANTIGRAVITY_CAPTURE_REQUEST_TIMEOUT_MS=120000 \
+ANTIGRAVITY_CAPTURE_MEMORY_BENCH=1 \
 DISABLE_SQLITE_AUTO_BACKUP=true \
 node --max-old-space-size=2048 --import tsx/esm \
   --import ./open-sse/utils/setupPolyfill.ts \

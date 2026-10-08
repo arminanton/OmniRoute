@@ -1,4 +1,5 @@
 import http from "node:http";
+import { snapshotProcessMemory } from "./process-memory-snapshot.mjs";
 
 const identities = new Map();
 const phases = new Map();
@@ -22,6 +23,10 @@ const server = http.createServer(async (incoming, outgoing) => {
         phases: Object.fromEntries(phases),
         profiles: [...profiles].sort(),
         errors,
+        processMemory:
+          process.env.ANTIGRAVITY_CAPTURE_MEMORY_BENCH === "1"
+            ? snapshotProcessMemory()
+            : undefined,
       })
     );
     return;

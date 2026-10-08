@@ -9,6 +9,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { gunzipSync } from "node:zlib";
 import { fetch as clientFetch } from "undici";
+import {
+  createProcessMemorySampler,
+  snapshotCgroupMemory,
+  snapshotProcessMemory,
+} from "../fixtures/process-memory-snapshot.mjs";
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omni-antigravity-parallel-e2e-"));
 process.env.DATA_DIR = dataDir;
@@ -176,6 +181,10 @@ test(
     const errors: string[] = [];
     let upstreamFixture: Awaited<ReturnType<typeof startMockUpstream>> | null = null;
     let clientFixture: ReturnType<typeof spawnFixture> | null = null;
+    const captureMemoryBench = process.env.ANTIGRAVITY_CAPTURE_MEMORY_BENCH === "1";
+    const memorySampler = captureMemoryBench ? createProcessMemorySampler(1_000) : null;
+    let clientMemorySnapshot: Record<string, unknown> | null = null;
+    let upstreamMemorySnapshot: Record<string, unknown> | null = null;
     const gateway = http.createServer(async (incoming, outgoing) => {
       try {
         let requestBytes = 0;
@@ -281,6 +290,7 @@ test(
       });
       const clientOutput = await runFixture(clientFixture);
       const clientResult = JSON.parse(clientOutput.trim().split("\n").at(-1) ?? "{}");
+      clientMemorySnapshot = clientResult.processMemory ?? null;
       assert.equal(clientResult.completedRequests, expectedRequests);
       assert.equal(maxClientRequestBytes, clientResult.maxClientRequestBytes);
       assert.deepEqual(errors, []);
@@ -292,10 +302,20 @@ test(
         phases: Record<string, string[]>;
         profiles: string[];
         errors: string[];
+        processMemory?: Record<string, unknown>;
       };
+      upstreamMemorySnapshot = upstreamStats.processMemory ?? null;
       assert.equal(upstreamStats.received, expectedRequests);
       assert.deepEqual(upstreamStats.errors, []);
-      assert.deepEqual(upstreamStats.profiles, ["cli", "ide"]);
+      if (captureCallLogs && process.env.ANTIGRAVITY_CAPTURE_SINGLE_SESSION === "1") {
+        assert.equal(
+          upstreamStats.profiles.length,
+          1,
+          "single-session capture mode exercises exactly one selected client profile"
+        );
+      } else {
+        assert.deepEqual(upstreamStats.profiles, ["cli", "ide"]);
+      }
       for (const value of Object.values(upstreamStats.phases)) {
         assert.deepEqual(value, ["tool", "answer"]);
       }
@@ -463,6 +483,11 @@ test(
       }
     } finally {
       restoreUrl();
+      if (memorySampler) {
+        console.log(
+          `ANTIGRAVITY_MEMORY gateway=${JSON.stringify(snapshotProcessMemory())} testRunner=${JSON.stringify(snapshotProcessMemory(process.ppid))} client=${JSON.stringify(clientMemorySnapshot)} upstream=${JSON.stringify(upstreamMemorySnapshot)} cgroup=${JSON.stringify(snapshotCgroupMemory())} series=${JSON.stringify(memorySampler.finish())}`
+        );
+      }
       await stopFixture(clientFixture?.child ?? null);
       gateway.closeAllConnections();
       if (gateway.listening) await new Promise<void>((resolve) => gateway.close(() => resolve()));

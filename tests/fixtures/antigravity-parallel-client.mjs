@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
+import { snapshotProcessMemory } from "./process-memory-snapshot.mjs";
 
 const gatewayUrl = process.env.ANTIGRAVITY_GATEWAY_URL;
 const apiKey = process.env.ANTIGRAVITY_TEST_API_KEY;
@@ -129,6 +130,9 @@ try {
       maxClientRequestBytes,
       elapsedMs: Math.round(performance.now() - startedAt),
       clientRssBytes: process.memoryUsage().rss,
+      ...(process.env.ANTIGRAVITY_CAPTURE_MEMORY_BENCH === "1"
+        ? { processMemory: snapshotProcessMemory() }
+        : {}),
       counts: sessionCounts,
     }) + "\n"
   );
