@@ -108,6 +108,72 @@ test("resource-pressure body shed keeps the request ID in the response", async (
   assert.equal((await result.response.json()).error.code, "resource_pressure");
 });
 
+test("normal-pressure byte admission waits for the configured queue window", async () => {
+  const controller = new ChatAdmissionController(2, undefined, 0, () => {}, {
+    maxInflightBytes: 150_000,
+    maxQueuedBytes: 150_000,
+    budgetSource: "override",
+    checkPressureSeverity: () => "normal",
+  });
+  const body = byteHeavyBody(90_000);
+  const options = { controller, largeBodyBytes: 64 * 1024, hardMaxBytes: 512 * 1024, queueMs: 1_000 };
+  const first = await admitChatRequest(responsesRequest(body), options);
+  assert.equal(first.admit, true);
+  if (!first.admit) return;
+
+  let secondSettled = false;
+  const secondPromise = admitChatRequest(responsesRequest(body), options).then((result) => {
+    secondSettled = true;
+    return result;
+  });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(secondSettled, false, "the byte-stage waiter must survive the old 250ms cutoff");
+    assert.ok(controller.byteBudgetQueuedBytes > 0);
+    first.lease?.release();
+    const second = await secondPromise;
+    assert.equal(second.admit, true);
+    if (second.admit) second.lease?.release();
+    assert.equal(controller.byteBudgetQueuedBytes, 0);
+    assert.equal(controller.inflightBytes, 0);
+  } finally {
+    first.lease?.release();
+  }
+});
+
+test("normal-pressure byte waiter budget bounds queued ingest bytes", async () => {
+  const controller = new ChatAdmissionController(4, undefined, 0, () => {}, {
+    maxInflightBytes: 100_000,
+    maxQueuedBytes: 50_000,
+    budgetSource: "override",
+    checkPressureSeverity: () => "normal",
+  });
+  const largeOptions = { controller, largeBodyBytes: 8 * 1024, hardMaxBytes: 512 * 1024, queueMs: 1_000 };
+  const first = await admitChatRequest(responsesRequest(byteHeavyBody(90_000)), largeOptions);
+  assert.equal(first.admit, true);
+  if (!first.admit) return;
+
+  const secondPromise = admitChatRequest(responsesRequest(byteHeavyBody(30_000)), largeOptions);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.ok(controller.byteBudgetQueuedBytes > 0);
+    const third = await admitChatRequest(responsesRequest(byteHeavyBody(30_000)), largeOptions);
+    assert.equal(third.admit, false);
+    if (!third.admit) {
+      assert.equal(third.response.status, 503);
+      assert.equal((await third.response.json()).error.code, "chat_admission_busy");
+    }
+    first.lease?.release();
+    const second = await secondPromise;
+    assert.equal(second.admit, true);
+    if (second.admit) second.lease?.release();
+    assert.equal(controller.byteBudgetQueuedBytes, 0);
+    assert.equal(controller.inflightBytes, 0);
+  } finally {
+    first.lease?.release();
+  }
+});
+
 test("OMNIROUTE_CHAT_LARGE_BODY_BYTES default threshold takes the heavyweight lease and healthy-headroom", async () => {
   const controller = new ChatAdmissionController(1, undefined, 1);
   const body = byteHeavyBody(CHAT_LARGE_BODY_BYTES);

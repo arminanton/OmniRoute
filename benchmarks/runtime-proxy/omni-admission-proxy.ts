@@ -19,7 +19,13 @@ const originalConsoleLog = console.log;
 console.log = () => {};
 const [
   { withChatAdmission },
-  { perConnectionAdmissionController },
+  {
+    perConnectionAdmissionController,
+    CHAT_ADMISSION_QUEUE_MAX_MS,
+    CHAT_ADMISSION_MAX_QUEUED_BYTES,
+    CHAT_LARGE_BODY_BYTES,
+    CHAT_HARD_MAX_BODY_BYTES,
+  },
   { resolveIngestByteBudget },
 ] = await Promise.all([
   import("../../src/shared/middleware/withChatAdmission.ts"),
@@ -35,6 +41,7 @@ const peakAdmission = {
   activeHeavy: admissionController.activeHeavy,
   activeHealthyHeadroom: admissionController.activeHealthyHeadroom,
   inflightBytes: admissionController.inflightBytes,
+  byteBudgetQueuedBytes: admissionController.byteBudgetQueuedBytes,
   queuedBytes: admissionController.queuedBytes,
   waiting: admissionController.waitingCount,
 };
@@ -50,6 +57,10 @@ const admissionSampler = setInterval(() => {
   peakAdmission.inflightBytes = Math.max(
     peakAdmission.inflightBytes,
     admissionController.inflightBytes
+  );
+  peakAdmission.byteBudgetQueuedBytes = Math.max(
+    peakAdmission.byteBudgetQueuedBytes,
+    admissionController.byteBudgetQueuedBytes
   );
   peakAdmission.queuedBytes = Math.max(peakAdmission.queuedBytes, admissionController.queuedBytes);
   peakAdmission.waiting = Math.max(peakAdmission.waiting, admissionController.waitingCount);
@@ -116,6 +127,13 @@ const server = http.createServer(async (incoming, outgoing) => {
           arrayBuffers: memory.arrayBuffers,
         },
         ingestBudget: resolveIngestByteBudget(),
+        runtimeLimits: {
+          queueWaitMs: CHAT_ADMISSION_QUEUE_MAX_MS,
+          maxQueuedBytes: CHAT_ADMISSION_MAX_QUEUED_BYTES,
+          largeBodyBytes: CHAT_LARGE_BODY_BYTES,
+          hardMaxBodyBytes: CHAT_HARD_MAX_BODY_BYTES,
+          maxHeavyInFlight: perConnectionAdmissionController.maxHeavyInFlight,
+        },
         admission: perConnectionAdmissionController.snapshot(),
         peakAdmission,
       })

@@ -28,18 +28,26 @@ export type IngestBudgetAcquireResult =
 
 export interface IngestByteAdmissionOptions {
   maxInflightBytes?: number;
+  maxQueuedBytes?: number;
+  reserveQueuedBytes?: (bytes: number) => boolean;
+  releaseQueuedBytes?: (bytes: number) => void;
   budgetSource?: IngestBudgetSource;
   checkPressureSeverity?: (correlationId?: string | null) => PressureSeverity;
   onShed: (reason: "body_exceeds_budget" | "inflight_bytes_budget", lane: string) => void;
 }
 
 interface BudgetWaiter {
+  bytes: number;
   resolve: () => void;
 }
 
 export class IngestByteAdmissionController {
   #inflightBytes = 0;
+  #queuedBytes = 0;
   readonly maxInflightBytes: number;
+  readonly maxQueuedBytes: number;
+  readonly #reserveQueuedBytes?: IngestByteAdmissionOptions["reserveQueuedBytes"];
+  readonly #releaseQueuedBytes?: IngestByteAdmissionOptions["releaseQueuedBytes"];
   readonly budgetSource: IngestBudgetSource;
   readonly #checkPressureSeverity: (correlationId?: string | null) => PressureSeverity;
   readonly #onShed: IngestByteAdmissionOptions["onShed"];
@@ -49,6 +57,9 @@ export class IngestByteAdmissionController {
 
   constructor(options: IngestByteAdmissionOptions) {
     this.maxInflightBytes = options.maxInflightBytes ?? Number.MAX_SAFE_INTEGER;
+    this.maxQueuedBytes = options.maxQueuedBytes ?? Number.MAX_SAFE_INTEGER;
+    this.#reserveQueuedBytes = options.reserveQueuedBytes;
+    this.#releaseQueuedBytes = options.releaseQueuedBytes;
     this.budgetSource = options.budgetSource ?? "v8_heap";
     this.#checkPressureSeverity = options.checkPressureSeverity ?? (() => "normal");
     this.#onShed = options.onShed;
@@ -56,6 +67,10 @@ export class IngestByteAdmissionController {
 
   get inflightBytes(): number {
     return this.#inflightBytes;
+  }
+
+  get queuedBytes(): number {
+    return this.#queuedBytes;
   }
 
   pressureSeverity(correlationId?: string | null): PressureSeverity {
@@ -88,12 +103,14 @@ export class IngestByteAdmissionController {
     bytes: number,
     timeoutMs: number,
     signal?: AbortSignal,
-    sessionKey = "default"
+    sessionKey = "default",
+    queueChargeBytes = bytes
   ): Promise<IngestBudgetAcquireResult> {
     if (!this.canFit(bytes)) {
       this.#onShed("body_exceeds_budget", sessionKey);
       return { status: "body_exceeds_budget" };
     }
+    const queueCharge = normalizeCharge(queueChargeBytes);
     const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
     for (;;) {
       if (signal?.aborted) return { status: "unavailable" };
@@ -101,6 +118,11 @@ export class IngestByteAdmissionController {
       if (lease) return { status: "acquired", lease };
       const remaining = deadline - Date.now();
       if (remaining <= 0) return this.#timeout(sessionKey);
+      if (this.#reserveQueuedBytes) {
+        if (!this.#reserveQueuedBytes(queueCharge)) return this.#timeout(sessionKey);
+      } else if (this.#queuedBytes + queueCharge > this.maxQueuedBytes) {
+        return this.#timeout(sessionKey);
+      }
 
       let queue = this.#queues.get(sessionKey);
       if (!queue) {
@@ -109,10 +131,11 @@ export class IngestByteAdmissionController {
         this.#fairKeys.push(sessionKey);
       }
       let resolveParked: (() => void) | null = null;
-      const waiter = { resolve: () => resolveParked?.() };
+      const waiter = { bytes: queueCharge, resolve: () => resolveParked?.() };
       const parked = new Promise<void>((resolve) => {
         resolveParked = resolve;
         queue.push(waiter);
+        this.#queuedBytes += queueCharge;
       });
       let timer: ReturnType<typeof setTimeout> | null = null;
       const races: Array<Promise<boolean>> = [
@@ -151,7 +174,10 @@ export class IngestByteAdmissionController {
     const queue = this.#queues.get(key);
     if (!queue) return;
     const index = queue.indexOf(waiter);
-    if (index >= 0) queue.splice(index, 1);
+    if (index >= 0) {
+      queue.splice(index, 1);
+      this.#releaseQueueCharge(waiter.bytes);
+    }
     if (queue.length === 0) this.#removeFairKey(key);
   }
 
@@ -172,10 +198,16 @@ export class IngestByteAdmissionController {
       const queue = this.#queues.get(key);
       if (!queue || queue.length === 0) continue;
       const waiter = queue.shift() as BudgetWaiter;
+      this.#releaseQueueCharge(waiter.bytes);
       if (queue.length === 0) this.#removeFairKey(key);
       waiter.resolve();
       return;
     }
+  }
+
+  #releaseQueueCharge(bytes: number): void {
+    this.#queuedBytes = Math.max(0, this.#queuedBytes - bytes);
+    this.#releaseQueuedBytes?.(bytes);
   }
 }
 

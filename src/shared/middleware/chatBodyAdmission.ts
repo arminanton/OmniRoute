@@ -296,10 +296,11 @@ export class ChatAdmissionController {
   readonly #onShed: ChatAdmissionShedSink;
 
   readonly #ingestBudget: IngestByteAdmissionController;
+  #queuedBytesLimit = 0;
 
   constructor(
     readonly maxHeavyInFlight = 1,
-    readonly maxQueuedBytes = CHAT_ADMISSION_MAX_QUEUED_BYTES,
+    maxQueuedBytes = CHAT_ADMISSION_MAX_QUEUED_BYTES,
     /** #10437: bounded extra capacity for the healthy-heap fast path. `0` disables
      * the bypass entirely — every busy request then falls through to the same
      * bounded-wait/shed path used under real heap pressure. */
@@ -310,6 +311,7 @@ export class ChatAdmissionController {
     /** #503-fanout: see the field-level comment above `#inflightBytes`. */
     budgetOptions: {
       maxInflightBytes?: number;
+      maxQueuedBytes?: number;
       budgetSource?: IngestBudgetSource;
       checkPressureSeverity?: (correlationId?: string | null) => PressureSeverity;
     } = {}
@@ -323,11 +325,33 @@ export class ChatAdmissionController {
     if (!Number.isSafeInteger(healthyHeadroom) || healthyHeadroom < 0) {
       throw new RangeError("healthyHeadroom must be a non-negative integer");
     }
+    const byteQueueLimit = budgetOptions.maxQueuedBytes ?? maxQueuedBytes;
+    if (!Number.isSafeInteger(byteQueueLimit) || byteQueueLimit < 0) {
+      throw new RangeError("budget maxQueuedBytes must be a non-negative integer");
+    }
+    this.#queuedBytesLimit = Math.min(maxQueuedBytes, byteQueueLimit);
     this.#onShed = onShed;
     this.#ingestBudget = new IngestByteAdmissionController({
       ...budgetOptions,
+      maxQueuedBytes: this.#queuedBytesLimit,
+      reserveQueuedBytes: (bytes) => this.#reserveQueuedBytes(bytes),
+      releaseQueuedBytes: (bytes) => this.#releaseQueuedBytes(bytes),
       onShed: (reason, lane) => this.recordShed(reason, lane),
     });
+  }
+
+  get maxQueuedBytes(): number {
+    return this.#queuedBytesLimit;
+  }
+
+  #reserveQueuedBytes(bytes: number): boolean {
+    if (this.#queuedBytes + bytes > this.#queuedBytesLimit) return false;
+    this.#queuedBytes += bytes;
+    return true;
+  }
+
+  #releaseQueuedBytes(bytes: number): void {
+    this.#queuedBytes = Math.max(0, this.#queuedBytes - bytes);
   }
 
   get activeHeavy(): number {
@@ -611,6 +635,10 @@ export class ChatAdmissionController {
     return this.#ingestBudget.maxInflightBytes;
   }
 
+  get byteBudgetQueuedBytes(): number {
+    return this.#ingestBudget.queuedBytes;
+  }
+
   get budgetSource(): IngestBudgetSource {
     return this.#ingestBudget.budgetSource;
   }
@@ -631,9 +659,10 @@ export class ChatAdmissionController {
     bytes: number,
     timeoutMs: number,
     signal?: AbortSignal,
-    sessionKey = "default"
+    sessionKey = "default",
+    queueChargeBytes = bytes
   ): Promise<IngestBudgetAcquireResult> {
-    return this.#ingestBudget.acquireWithin(bytes, timeoutMs, signal, sessionKey);
+    return this.#ingestBudget.acquireWithin(bytes, timeoutMs, signal, sessionKey, queueChargeBytes);
   }
 }
 
@@ -681,6 +710,7 @@ export class PerConnectionAdmissionController {
       onShed?: ChatAdmissionShedSink;
       budget?: {
         maxInflightBytes?: number;
+        maxQueuedBytes?: number;
         budgetSource?: IngestBudgetSource;
         checkPressureSeverity?: (correlationId?: string | null) => PressureSeverity;
       };
@@ -715,6 +745,8 @@ export class PerConnectionAdmissionController {
     shedsByReason: Record<string, number>;
     /** #503-fanout: live ingest bytes reserved through the byte-budget gate. */
     inflightBytes: number;
+    /** #503-fanout: queued body bytes waiting for a byte-budget lease. */
+    byteBudgetQueuedBytes: number;
     /** #503-fanout: the auto-derived (or overridden) budget ceiling. */
     maxInflightBytes: number;
     /** #503-fanout: which signal the budget was derived from. */
@@ -734,6 +766,7 @@ export class PerConnectionAdmissionController {
       shedTotal: this.#controller.shedTotal,
       shedsByReason: this.#controller.shedsByReason,
       inflightBytes: this.#controller.inflightBytes,
+      byteBudgetQueuedBytes: this.#controller.byteBudgetQueuedBytes,
       maxInflightBytes: this.#controller.maxInflightBytes,
       budgetSource: this.#controller.budgetSource,
       pressureSeverity: this.#controller.pressureSeverity(),
@@ -781,6 +814,7 @@ export const perConnectionAdmissionController = new PerConnectionAdmissionContro
   {
     budget: {
       maxInflightBytes: productionIngestBudget.bytes,
+      maxQueuedBytes: CHAT_ADMISSION_MAX_QUEUED_BYTES,
       budgetSource: productionIngestBudget.source,
       checkPressureSeverity: defaultPressureSeverity,
     },
@@ -794,7 +828,10 @@ export type ChatRequestAdmission =
 export type ChatStructureAdmission =
   { admit: true; lease: ChatAdmissionLease | null } | { admit: false; response: Response };
 
-const INGEST_NORMAL_MAX_WAIT_MS = 250;
+// Known-length requests are still unread while waiting for a byte lease.
+// Unknown-length bodies can have reached the large-body threshold plus one
+// stream chunk; account for that bounded read-ahead in the queue ceiling.
+const INGEST_BYTE_QUEUE_READ_AHEAD_BYTES = 256 * 1024;
 
 export async function admitChatStructure(
   body: unknown,
@@ -1039,35 +1076,49 @@ export async function admitChatRequest(
   let lease: ChatAdmissionLease | null = null;
   // #10437: busy primary + healthy heap uses tryAcquireHealthyHeadroom; else queue/shed.
   // Bodies at/above OMNIROUTE_CHAT_LARGE_BODY_BYTES take this same heavyweight lease.
-  const reserve = async (bytes = 0): Promise<boolean> => {
-    if (lease) return true;
+  type ReserveResult = "acquired" | "busy" | "resource_pressure";
+  const reserve = async (bytes = 0, queueChargeBytes = bytes): Promise<ReserveResult> => {
+    if (lease) return "acquired";
     const countLease =
       controller.tryAcquireHeavy() ??
       (!heapPressureCheck() ? controller.tryAcquireHealthyHeadroom() : null) ??
       (await controller.acquireHeavyWithin(queueMs, request.signal, bytes, sessionId));
-    if (!countLease) return false;
+    if (!countLease) return "busy";
 
     // Additive ingest byte-budget gate (#503-fanout), layered on top of the
     // legacy count gate above. `maxInflightBytes` defaults to unlimited for
     // every controller a test constructs directly, so this resolves
     // synchronously true there — only the production singleton (built with a
     // real host-derived budget) is ever actually gated by it.
-    const severity = controller.pressureSeverity(correlationId);
-    const budgetWaitMs =
-      severity === "high" ? queueMs : Math.min(queueMs, INGEST_NORMAL_MAX_WAIT_MS);
+    if (controller.pressureSeverity(correlationId) === "critical") {
+      countLease.release();
+      return "resource_pressure";
+    }
+    // Honor the configured burst queue for normal/high pressure. The single
+    // shared queued-byte ceiling bounds parked ingest and structural waiters;
+    // an extra fixed 250ms cap dropped healthy agents while SSE leases were
+    // still occupied and contradicted the configured queue window.
     const budgetResult = await controller.acquireBudgetWithin(
       bytes,
-      budgetWaitMs,
+      queueMs,
       request.signal,
-      sessionId
+      sessionId,
+      queueChargeBytes
     );
     if (budgetResult.status !== "acquired") {
       countLease.release();
-      return false;
+      return controller.pressureSeverity(correlationId) === "critical"
+        ? "resource_pressure"
+        : "busy";
+    }
+    if (controller.pressureSeverity(correlationId) === "critical") {
+      budgetResult.lease.release();
+      countLease.release();
+      return "resource_pressure";
     }
 
     lease = composeAdmissionLease(countLease, budgetResult.lease);
-    return true;
+    return "acquired";
   };
 
   // #12135: the capacity 503 advertises an occupancy-derived Retry-After.
@@ -1076,12 +1127,15 @@ export async function admitChatRequest(
 
   // A known-large declaration can reserve before ingestion. Unknown lengths are boundedly
   // sniffed below; this avoids consuming scarce heavyweight capacity for small chunked bodies.
-  if (
-    contentLength !== null &&
-    contentLength >= largeBodyBytes &&
-    !(await reserve(Math.min(contentLength, hardMaxBytes)))
-  ) {
-    return { admit: false, response: busyResponse() };
+  if (contentLength !== null && contentLength >= largeBodyBytes) {
+    const reserveResult = await reserve(
+      Math.min(contentLength, hardMaxBytes),
+      Math.min(contentLength, largeBodyBytes + INGEST_BYTE_QUEUE_READ_AHEAD_BYTES)
+    );
+    if (reserveResult === "resource_pressure") {
+      return { admit: false, response: resourcePressureRejectionResponse(correlationId) };
+    }
+    if (reserveResult !== "acquired") return { admit: false, response: busyResponse() };
   }
 
   const reader = request.body?.getReader();
@@ -1105,9 +1159,16 @@ export async function admitChatRequest(
         lease?.release();
         return { admit: false, response: bodyExceedsBudgetResponse(controller.maxInflightBytes) };
       }
-      if (totalBytes >= largeBodyBytes && !(await reserve(totalBytes))) {
-        await reader.cancel("chat admission capacity unavailable").catch(() => undefined);
-        return { admit: false, response: busyResponse() };
+      if (totalBytes >= largeBodyBytes) {
+        const reserveResult = await reserve(totalBytes, totalBytes);
+        if (reserveResult === "resource_pressure") {
+          await reader.cancel("resource pressure reached during chat admission").catch(() => undefined);
+          return { admit: false, response: resourcePressureRejectionResponse(correlationId) };
+        }
+        if (reserveResult !== "acquired") {
+          await reader.cancel("chat admission capacity unavailable").catch(() => undefined);
+          return { admit: false, response: busyResponse() };
+        }
       }
       chunks.push(value);
     }
