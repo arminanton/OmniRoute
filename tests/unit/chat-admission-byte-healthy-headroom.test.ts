@@ -79,6 +79,35 @@ test("byte-heavy admitChatRequest: a pressured heap still 503s the second concur
   for (const result of admitted) if (result.admit) result.lease?.release();
 });
 
+test("resource-pressure body shed keeps the request ID in the response", async () => {
+  const requestId = "550e8400-e29b-41d4-a716-446655440000";
+  let checkedId: string | null | undefined;
+  const controller = new ChatAdmissionController(1, undefined, 1, undefined, {
+    checkPressureSeverity: (correlationId) => {
+      checkedId = correlationId;
+      return "critical";
+    },
+  });
+  const body = byteHeavyBody();
+  const request = new Request("http://x/v1/responses", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "content-length": String(body.length),
+      "x-request-id": requestId,
+    },
+    body,
+  });
+
+  const result = await admitChatRequest(request, { controller });
+  assert.equal(result.admit, false);
+  if (result.admit) return;
+  assert.equal(result.response.status, 503);
+  assert.equal(checkedId, requestId);
+  assert.equal(result.response.headers.get("x-request-id"), requestId);
+  assert.equal((await result.response.json()).error.code, "resource_pressure");
+});
+
 test("OMNIROUTE_CHAT_LARGE_BODY_BYTES default threshold takes the heavyweight lease and healthy-headroom", async () => {
   const controller = new ChatAdmissionController(1, undefined, 1);
   const body = byteHeavyBody(CHAT_LARGE_BODY_BYTES);

@@ -40,7 +40,8 @@ The observed `resource_pressure` response is generated locally before provider d
 calls `checkResourcePressureGuard()` at request setup; the chat-body admission layer uses the same
 guard before reading large request bodies. The immediate check compares `process.memoryUsage().heapUsed`
 with `HEAP_PRESSURE_THRESHOLD_MB`, calculated as 85% of `v8.heap_size_limit` with a 400 MiB floor
-unless an explicit environment override is set. It returns 503 with `Retry-After: 5` when crossed.
+unless an explicit environment override is set. It returns 503 with `Retry-After: 5` at chat core;
+the pre-body admission wrapper maps the same critical state to `Retry-After: 2`.
 The 2026-10-08 04:51–05:00 warnings recorded 1,823–1,935 MiB against 1,822 MiB. That threshold
 matches the 85%-of-heap rule for the configured 2 GiB old-space limit. The 503 therefore confirms
 that the local JavaScript heap guard fired; it does not identify what raised heap use.
@@ -58,11 +59,12 @@ The history snapshot at 05:11 recorded a 4 GiB app cgroup at 3.56 GiB, zero OOM 
 with a process nearing its configured V8 heap ceiling while the cgroup still had some headroom; it
 does not prove logging caused the heap rise. The heap-shed warning now records PID/time, immediate
 heap/threshold, and the most recent numeric V8/RSS/external/array-buffer/cgroup/PSI sample with its
-age. If no sample exists on a first-request trip, those sample fields are explicitly `null`. It
-still has no request correlation ID, and cached cgroup/PSI values can be up to one second old, so
-the exact object growth and triggering request remain unknown. The current shell has no listener on
-port 20128 or OmniRoute app container to sample live now; the host-level snapshots below are not
-substituted for process-level measurements.
+age. Logs now include a validated UUID correlation ID, and the rejected response returns it in
+`x-request-id`; malformed caller values are replaced with a generated UUID. No prompt, body, header,
+or credential data is added. If no sample exists on a first-request trip, sample fields are
+explicitly `null`; cached cgroup/PSI values can be up to one second old. The exact object growth
+remains unknown. The current shell has no listener on port 20128 or OmniRoute app container to
+sample live now; the host-level snapshots below are not substituted for process-level measurements.
 
 The full-capture path does bounded synchronous work before handing an artifact to a worker. The
 writer's weighted queue is capped at 128 MiB and serializes one artifact at a time; `reserveCallLogArtifactPreparation`
