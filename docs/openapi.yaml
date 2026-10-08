@@ -2381,12 +2381,24 @@ paths:
       operationId: getApiV1
       tags: [System]
       summary: API v1 root endpoint
-      description: Returns basic API info and status.
+      description: OpenAI-compatible model catalog served by the shared v1 catalog builder.
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: API info
+          description: OpenAI-compatible model list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelListResponse"
+        "401":
+          description: Authentication is required but missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/v1/models:
     head:
@@ -2429,6 +2441,10 @@ paths:
                       $ref: "#/components/schemas/Model"
         "401":
           description: Authentication is required but missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/v1/providers/{provider}/models:
     get:
@@ -2471,6 +2487,10 @@ paths:
           description: Unknown provider
         "401":
           description: Authentication is required but missing or invalid for the selected catalog path
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/models:
     get:
@@ -4171,15 +4191,45 @@ paths:
       tags: [Usage]
       summary: Get usage analytics
       parameters:
-        - name: period
+        - name: range
           in: query
           schema:
             type: string
-            enum: [day, week, month]
-            default: day
+            enum: [1d, 7d, 30d, 90d, 180d, 365d, ytd, all]
+            default: 30d
+        - name: startDate
+          in: query
+          description: Inclusive custom range start; overrides the range start when present.
+          schema: { type: string, format: date-time }
+        - name: endDate
+          in: query
+          description: Inclusive custom range end.
+          schema: { type: string, format: date-time }
+        - name: apiKeyIds
+          in: query
+          description: Comma-separated API key IDs or historical key names to include.
+          schema: { type: string }
+        - name: includeFlatRateEstimates
+          in: query
+          description: Include token-price estimates for flat-rate subscription providers.
+          schema: { type: boolean, default: false }
+        - name: presets
+          in: query
+          description: Comma-separated preset ranges for additional cost summaries.
+          schema: { type: string }
       responses:
         "200":
           description: Usage analytics data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageAnalyticsResponse"
+        "500":
+          description: Analytics query failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/usage/call-logs:
     get:
@@ -4191,15 +4241,67 @@ paths:
           in: query
           schema:
             type: integer
-            default: 50
+            default: 200
         - name: offset
           in: query
           schema:
             type: integer
             default: 0
+        - name: status
+          in: query
+          description: Filter by `error`, `ok`, or a numeric HTTP status.
+          schema: { type: string }
+        - name: model
+          in: query
+          schema: { type: string }
+        - name: provider
+          in: query
+          schema: { type: string }
+        - name: account
+          in: query
+          schema: { type: string }
+        - name: apiKey
+          in: query
+          schema: { type: string }
+        - name: combo
+          in: query
+          schema: { type: string }
+        - name: search
+          in: query
+          schema: { type: string }
+        - name: correlationId
+          in: query
+          schema: { type: string }
+        - name: excludeTests
+          in: query
+          description: Set to `1` to exclude connection-test probe rows.
+          schema: { type: string, enum: ["1"] }
       responses:
         "200":
-          description: Paginated call logs
+          description: >-
+            An array of active, recently completed in-memory, and persisted call-log summaries.
+            The persisted portion is paginated by limit and offset; in-memory requests are merged
+            into the same array.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallLogListResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential is invalid or lacks the required scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: Call-log query failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/usage/call-logs/{id}:
     get:
@@ -4211,6 +4313,32 @@ paths:
       responses:
         "200":
           description: Call log detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CallLogDetailResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential is invalid or lacks the required scope
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "404":
+          description: Call log was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Call-log detail query failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/usage/{connectionId}:
     get:
@@ -4235,6 +4363,10 @@ paths:
       responses:
         "200":
           description: Historical usage data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageStatsResponse"
 
   /api/usage/logs:
     get:
@@ -4276,9 +4408,24 @@ paths:
       tags: [Usage]
       summary: Get usage budget status
       description: Returns current budget limits and consumption.
+      parameters:
+        - name: apiKeyId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
           description: Budget status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageBudgetStatusResponse"
+        "400":
+          description: API key ID query parameter is missing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
     post:
       operationId: postApiUsageBudget
       tags: [Usage]
@@ -4289,10 +4436,16 @@ paths:
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/SetUsageBudgetRequest"
       responses:
         "200":
           description: Updated budget configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageBudgetMutationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /api/usage/cache-health:
     get:
@@ -8132,21 +8285,44 @@ paths:
       operationId: getApiV1betaModels
       tags: [Models]
       summary: List models (Gemini format)
-      description: Returns models in Gemini v1beta format for native SDK compatibility
+      description: >-
+        Returns Gemini-compatible model metadata filtered to providers with active connections.
+        Authentication follows the configured client/catalog policy; anonymous listing is allowed
+        when policy permits it.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Model list in Gemini format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeminiModelListResponse"
+        "500":
+          description: Model catalog could not be constructed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/v1beta/models/{path}:
     post:
       operationId: postApiV1betaModelsByPath
       tags: [Models]
       summary: Gemini generateContent
-      description: Gemini-compatible generateContent endpoint
+      description: >-
+        Gemini-compatible generation endpoint. Use `:generateContent` for JSON or
+        `:streamGenerateContent` for Gemini SSE chunks.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: path
           in: path
@@ -8158,10 +8334,22 @@ paths:
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/GeminiGenerateContentRequest"
       responses:
         "200":
           description: Generated content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GeminiGenerateContentResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: Gemini SSE records, one JSON GenerateContentResponse per event.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   # ─── AgentBridge ──────────────────────────────────────────────
 
@@ -9588,27 +9776,75 @@ paths:
         API, used by the dashboard to suggest models for a media provider kind
         without exposing an HF token client-side. Never accepts or returns
         credentials.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: type
           in: query
           schema:
             type: string
-          description: Media kind to search for (e.g. `image`, `audio`, `video`).
+            enum: [image]
+            default: image
+          description: Media kind to search; currently only image suggestions are supported.
+        - name: sortBy
+          in: query
+          schema: { type: string, enum: [downloads, likes], default: downloads }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
       responses:
         "200":
           description: List of suggested HuggingFace Hub models.
-        "500":
-          $ref: "#/components/responses/InternalError"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuggestedModelsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Authentication is required but missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "502":
+          description: HuggingFace Hub search request failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/v1/provider-plugin-manifest:
     get:
       operationId: getApiV1ProviderPluginManifest
       tags:
         - Providers
       summary: Provider plugin manifest
-      description: Returns the manifest describing installed provider plugins.
+      description: >-
+        Returns the provider registry manifest augmented with enabled service-backend models.
+        The ETag is calculated from the manifest body; matching If-None-Match yields a 304.
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: { type: string }
       responses:
         "200":
           description: Provider plugin manifest.
+          headers:
+            ETag:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderPluginManifest"
+        "304":
+          description: Manifest has not changed; no response body.
         "500":
           $ref: "#/components/responses/InternalError"
   /api/keys/{id}/devices:
@@ -15176,7 +15412,17 @@ paths:
       summary: "GET models › <model>"
       responses:
         "200":
-          description: OK
+          description: OpenAI-compatible model metadata, including available context and output limits.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Model"
+        "404":
+          description: Model is not present in the caller-visible catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     head:
       operationId: headApiV1ModelsByModel
       tags: [V1 Models]
@@ -15242,9 +15488,41 @@ paths:
       tags:
         - V1 Quotas
       summary: "GET quotas › check"
+      description: >-
+        Checks whether a registered provider/account quota permits issuing another key.
+        Authentication follows the client API-key policy.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: provider
+          in: query
+          schema: { type: string }
+        - name: accountId
+          in: query
+          schema: { type: string }
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RegisteredKeyQuotaCheckResponse"
+        "401":
+          description: Authentication is required but missing or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Quota check failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/v1/registered-keys:
     get:
       operationId: getApiV1RegisteredKeys
@@ -18690,6 +18968,62 @@ components:
           example: model
         owned_by:
           type: string
+        name:
+          type: string
+          description: Display name when model names are enabled for the catalog.
+        root:
+          type: string
+        type:
+          type: string
+          description: Model surface such as chat, embedding, image, audio, or rerank.
+        context_length:
+          type: number
+          minimum: 1
+          description: Effective context window in tokens when known.
+        max_input_tokens:
+          type: number
+          minimum: 1
+        max_output_tokens:
+          type: number
+          minimum: 1
+        input_modalities:
+          type: array
+          items: { type: string }
+        output_modalities:
+          type: array
+          items: { type: string }
+        supported_endpoints:
+          type: array
+          items: { type: string }
+        capabilities:
+          type: object
+          properties:
+            vision: { type: boolean }
+            tool_calling: { type: boolean }
+            reasoning: { type: boolean }
+            thinking: { type: boolean }
+            supportsThinking: { type: boolean }
+            effort_tiers:
+              type: array
+              items: { type: string }
+            structured_output: { type: boolean }
+            temperature: { type: boolean }
+            attachment: { type: boolean }
+          additionalProperties: true
+        pricing:
+          type: object
+          additionalProperties:
+            oneOf:
+              - type: number
+              - type: string
+        family: { type: string }
+        status: { type: string }
+        knowledge_cutoff: { type: string }
+        release_date: { type: string }
+        last_updated: { type: string }
+        open_weights: { type: boolean }
+        billing_metadata: { type: object, additionalProperties: true }
+        lifecycle_notice: { type: object, additionalProperties: true }
       additionalProperties: true
 
     ModelListResponse:
@@ -18807,6 +19141,235 @@ components:
                   $ref: "#/components/schemas/ModelCatalogEntry"
             additionalProperties: false
         catalogVersion: { type: [string, "null"] }
+      additionalProperties: false
+
+    GeminiModelListResponse:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            type: object
+            required: [name, displayName, supportedGenerationMethods, inputTokenLimit, outputTokenLimit]
+            properties:
+              name: { type: string, description: Fully qualified Gemini model name. }
+              displayName: { type: string }
+              description: { type: string }
+              supportedGenerationMethods:
+                type: array
+                items: { type: string, enum: [generateContent] }
+              inputTokenLimit: { type: integer, minimum: 0 }
+              outputTokenLimit: { type: integer, minimum: 0 }
+              thinking: { type: boolean }
+            additionalProperties: false
+      additionalProperties: false
+
+    GeminiGenerateContentRequest:
+      type: object
+      anyOf:
+        - required: [contents]
+        - required: [systemInstruction]
+      properties:
+        contents:
+          type: array
+          items:
+            type: object
+            properties:
+              role: { type: string }
+              parts:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    text: { type: string }
+                  additionalProperties: true
+            additionalProperties: true
+        systemInstruction:
+          type: object
+          properties:
+            parts:
+              type: array
+              items:
+                type: object
+                properties:
+                  text: { type: string }
+                additionalProperties: true
+          additionalProperties: true
+        generationConfig:
+          type: object
+          properties:
+            stream: { type: boolean }
+            maxOutputTokens: { type: integer, minimum: 1 }
+            temperature: { type: number }
+            topP: { type: number }
+          additionalProperties: true
+      additionalProperties: true
+
+    GeminiGenerateContentResponse:
+      type: object
+      required: [candidates]
+      properties:
+        candidates:
+          type: array
+          items:
+            type: object
+            required: [content, index]
+            properties:
+              content:
+                type: object
+                required: [role, parts]
+                properties:
+                  role: { type: string, const: model }
+                  parts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        text: { type: string }
+                        thought: { type: boolean }
+                        functionCall:
+                          type: object
+                          properties:
+                            name: { type: string }
+                            args: { type: object, additionalProperties: true }
+                          additionalProperties: false
+                      additionalProperties: true
+                additionalProperties: false
+              finishReason: { type: string }
+              index: { type: integer, minimum: 0 }
+            additionalProperties: true
+        modelVersion: { type: string }
+        usageMetadata:
+          type: object
+          properties:
+            promptTokenCount: { type: integer, minimum: 0 }
+            candidatesTokenCount: { type: integer, minimum: 0 }
+            totalTokenCount: { type: integer, minimum: 0 }
+            thoughtsTokenCount: { type: integer, minimum: 0 }
+          additionalProperties: true
+      additionalProperties: true
+
+    SuggestedModel:
+      type: object
+      required: [id, likes, downloads]
+      properties:
+        id: { type: string }
+        likes: { type: number, minimum: 0 }
+        downloads: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    SuggestedModelsResponse:
+      type: object
+      required: [object, type, pipeline_tag, data]
+      properties:
+        object: { type: string, const: list }
+        type: { type: string, const: image }
+        pipeline_tag: { type: string, const: text-to-image }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SuggestedModel"
+      additionalProperties: false
+
+    ProviderPluginModel:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        contextLength: { type: number, minimum: 1 }
+        maxOutputTokens: { type: number, minimum: 1 }
+        toolCalling: { type: boolean }
+        supportsReasoning: { type: boolean }
+        supportsVision: { type: boolean }
+        supportsVideo: { type: boolean }
+        unsupportedParams:
+          type: array
+          items: { type: string }
+        targetFormat: { type: string }
+      additionalProperties: false
+
+    ProviderPluginManifestEntry:
+      type: object
+      required: [id, format, executor, auth, endpoints, capabilities, passthroughModels, models, sidecar]
+      properties:
+        id: { type: string }
+        alias: { type: string }
+        format: { type: string }
+        executor: { type: string }
+        auth:
+          type: object
+          required: [type, header]
+          properties:
+            type: { type: string }
+            header: { type: string }
+            prefix: { type: string }
+          additionalProperties: false
+        endpoints:
+          type: object
+          properties:
+            baseUrl: { type: string }
+            baseUrls:
+              type: array
+              items: { type: string }
+            responsesBaseUrl: { type: string }
+            chatPath: { type: string }
+            modelsUrl: { type: string }
+          additionalProperties: false
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum:
+              - apikey
+              - custom-executor
+              - oauth
+              - passthrough-models
+              - responses
+              - sidecar-candidate
+              - usage-fetch
+              - usage-supported
+        passthroughModels: { type: boolean }
+        defaultContextLength: { type: number, minimum: 1 }
+        timeoutMs: { type: number, minimum: 0 }
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderPluginModel"
+        sidecar:
+          type: object
+          required: [eligible, reasons]
+          properties:
+            eligible: { type: boolean }
+            reasons:
+              type: array
+              items: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+
+    ProviderPluginManifest:
+      type: object
+      required: [schemaVersion, generatedFrom, providers]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        generatedFrom: { type: string, const: open-sse/config/providers }
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderPluginManifestEntry"
+      additionalProperties: false
+
+    RegisteredKeyQuotaCheckResponse:
+      type: object
+      required: [allowed, provider, accountId, checkedAt]
+      properties:
+        allowed: { type: boolean }
+        errorCode: { type: string }
+        reason: { type: string }
+        provider: { type: [string, "null"] }
+        accountId: { type: [string, "null"] }
+        checkedAt: { type: string, format: date-time }
       additionalProperties: false
 
     ProxySubscription:
@@ -19118,6 +19681,489 @@ components:
         streamDefaultMode: { type: string, const: legacy }
         compressionEnabled: { type: boolean }
         cacheDefaultMode: { type: string, const: legacy }
+      additionalProperties: false
+
+    CallLogSummary:
+      type: object
+      required: [id, timestamp, method, path, status, model, provider, duration, tokens]
+      properties:
+        id: { type: string }
+        timestamp: { type: string, format: date-time }
+        method: { type: string }
+        path: { type: string }
+        status: { type: integer }
+        model: { type: string }
+        requestedModel: { type: [string, "null"] }
+        provider: { type: [string, "null"] }
+        providerDisplay: { type: [string, "null"] }
+        account: { type: [string, "null"] }
+        connectionId: { type: [string, "null"] }
+        duration: { type: number, minimum: 0 }
+        tokens:
+          type: object
+          required: [in, out]
+          properties:
+            in: { type: number, minimum: 0 }
+            out: { type: number, minimum: 0 }
+            cacheRead: { type: [number, "null"], minimum: 0 }
+            cacheWrite: { type: [number, "null"], minimum: 0 }
+            reasoning: { type: [number, "null"], minimum: 0 }
+            compressed: { type: [number, "null"], minimum: 0 }
+          additionalProperties: true
+        cacheSource: { type: [string, "null"] }
+        requestType: { type: [string, "null"] }
+        sourceFormat: { type: [string, "null"] }
+        targetFormat: { type: [string, "null"] }
+        apiKeyId: { type: [string, "null"] }
+        apiKeyName: { type: [string, "null"] }
+        comboName: { type: [string, "null"] }
+        comboStepId: { type: [string, "null"] }
+        comboExecutionKey: { type: [string, "null"] }
+        error:
+          description: Error summary text or a structured sanitized provider error.
+        detailState:
+          type: string
+          enum: [none, ready, missing, corrupt, legacy-inline, in-memory]
+        artifactRelPath: { type: [string, "null"] }
+        artifactSizeBytes: { type: [integer, "null"], minimum: 0 }
+        artifactSha256: { type: [string, "null"] }
+        requestSummary:
+          description: Bounded request preview decoded from the stored summary.
+          nullable: true
+        hasRequestBody: { type: boolean }
+        hasResponseBody: { type: boolean }
+        hasPipelineDetails: { type: boolean }
+        correlationId: { type: [string, "null"] }
+        modelPinned: { type: boolean }
+        sessionTag: { type: [string, "null"] }
+        active: { type: boolean }
+        completed: { type: boolean }
+        completedAt: { type: [string, "null"], format: date-time }
+      additionalProperties: true
+
+    CallLogListResponse:
+      type: array
+      items:
+        $ref: "#/components/schemas/CallLogSummary"
+
+    CallLogDetailResponse:
+      allOf:
+        - $ref: "#/components/schemas/CallLogSummary"
+        - type: object
+          properties:
+            requestBody:
+              description: Raw request payload when detail capture is available.
+            responseBody:
+              description: Raw response payload when detail capture is available.
+            pipelinePayloads:
+              type: object
+              additionalProperties: true
+          additionalProperties: true
+
+    UsageAnalyticsResponse:
+      type: object
+      required:
+        - summary
+        - dailyTrend
+        - activityMap
+        - byModel
+        - byProvider
+        - byApiKey
+        - byAccount
+        - byServiceTier
+        - weeklyPattern
+        - weeklyTokens
+        - weeklyCounts
+        - dailyByModel
+        - modelNames
+        - errorBreakdown
+        - range
+        - includesFlatRateEstimates
+      properties:
+        summary:
+          type: object
+          required:
+            - totalRequests
+            - promptTokens
+            - completionTokens
+            - totalTokens
+            - uniqueModels
+            - uniqueAccounts
+            - uniqueApiKeys
+            - successfulRequests
+            - successRatePct
+            - avgLatencyMs
+            - totalCost
+            - fallbackCount
+            - fastRequests
+            - standardRequests
+            - flexRequests
+            - fastCost
+            - standardCost
+            - flexCost
+            - flexSavings
+            - flexUsageSavingsTokens
+            - fastRequestSharePct
+            - fallbackRatePct
+            - requestedModelCoveragePct
+            - streak
+          properties:
+            totalRequests: { type: number, minimum: 0 }
+            promptTokens: { type: number, minimum: 0 }
+            completionTokens: { type: number, minimum: 0 }
+            totalTokens: { type: number, minimum: 0 }
+            uniqueModels: { type: number, minimum: 0 }
+            uniqueAccounts: { type: number, minimum: 0 }
+            uniqueApiKeys: { type: number, minimum: 0 }
+            successfulRequests: { type: number, minimum: 0 }
+            successRatePct: { type: number, minimum: 0, maximum: 100 }
+            avgLatencyMs: { type: number, minimum: 0 }
+            totalCost: { type: number, minimum: 0 }
+            firstRequest: { type: string }
+            lastRequest: { type: string }
+            fallbackCount: { type: number, minimum: 0 }
+            fastRequests: { type: number, minimum: 0 }
+            standardRequests: { type: number, minimum: 0 }
+            flexRequests: { type: number, minimum: 0 }
+            fastCost: { type: number, minimum: 0 }
+            standardCost: { type: number, minimum: 0 }
+            flexCost: { type: number, minimum: 0 }
+            flexSavings: { type: number, minimum: 0 }
+            flexUsageSavingsTokens: { type: number, minimum: 0 }
+            fastRequestSharePct: { type: number, minimum: 0, maximum: 100 }
+            fallbackRatePct: { type: number, minimum: 0, maximum: 100 }
+            requestedModelCoveragePct: { type: number, minimum: 0, maximum: 100 }
+            streak: { type: integer, minimum: 0 }
+          additionalProperties: true
+        dailyTrend:
+          type: array
+          items:
+            type: object
+            required: [date, requests, promptTokens, completionTokens, totalTokens, cost]
+            properties:
+              date: { type: string, format: date }
+              requests: { type: number, minimum: 0 }
+              promptTokens: { type: number, minimum: 0 }
+              completionTokens: { type: number, minimum: 0 }
+              totalTokens: { type: number, minimum: 0 }
+              cost: { type: number, minimum: 0 }
+            additionalProperties: false
+        activityMap:
+          type: object
+          additionalProperties: { type: number, minimum: 0 }
+        byModel:
+          type: array
+          items:
+            type: object
+            properties:
+              model: { type: string }
+              provider: { type: string }
+              rawModel: { type: string }
+              requests: { type: number, minimum: 0 }
+              promptTokens: { type: number, minimum: 0 }
+              completionTokens: { type: number, minimum: 0 }
+              totalTokens: { type: number, minimum: 0 }
+              avgLatencyMs: { type: number, minimum: 0 }
+              successRatePct:
+                oneOf:
+                  - { type: number, minimum: 0, maximum: 100 }
+                  - { type: string }
+              lastUsed: { type: string }
+              cost: { type: number, minimum: 0 }
+            additionalProperties: true
+        byProvider:
+          type: array
+          items: { type: object, additionalProperties: true }
+        byApiKey:
+          type: array
+          items:
+            type: object
+            properties:
+              apiKey: { type: string }
+              apiKeyId: { type: [string, "null"] }
+              apiKeyName: { type: string }
+              historicalApiKeyNames:
+                type: array
+                items: { type: string }
+              requests: { type: number, minimum: 0 }
+              promptTokens: { type: number, minimum: 0 }
+              completionTokens: { type: number, minimum: 0 }
+              totalTokens: { type: number, minimum: 0 }
+              cost: { type: number, minimum: 0 }
+            additionalProperties: true
+        byAccount:
+          type: array
+          items:
+            type: object
+            properties:
+              account: { type: string }
+              requests: { type: number, minimum: 0 }
+              promptTokens: { type: number, minimum: 0 }
+              completionTokens: { type: number, minimum: 0 }
+              totalTokens: { type: number, minimum: 0 }
+              avgLatencyMs: { type: integer, minimum: 0 }
+              lastUsed: { type: [string, "null"] }
+              cost: { type: number, minimum: 0 }
+            additionalProperties: true
+        byServiceTier:
+          type: array
+          items:
+            type: object
+            properties:
+              serviceTier:
+                type: string
+                enum: [standard, priority, flex]
+              label: { type: string }
+              requests: { type: number, minimum: 0 }
+              promptTokens: { type: number, minimum: 0 }
+              completionTokens: { type: number, minimum: 0 }
+              totalTokens: { type: number, minimum: 0 }
+              cost: { type: number, minimum: 0 }
+              savings: { type: number, minimum: 0 }
+              usageSavingsTokens: { type: integer, minimum: 0 }
+            additionalProperties: true
+        weeklyPattern:
+          type: array
+          items:
+            type: object
+            required: [day, avgTokens, totalTokens]
+            properties:
+              day: { type: string, enum: [Sun, Mon, Tue, Wed, Thu, Fri, Sat] }
+              avgTokens: { type: integer, minimum: 0 }
+              totalTokens: { type: integer, minimum: 0 }
+            additionalProperties: false
+        weeklyTokens:
+          type: array
+          minItems: 7
+          maxItems: 7
+          items: { type: integer, minimum: 0 }
+        weeklyCounts:
+          type: array
+          minItems: 7
+          maxItems: 7
+          items: { type: integer, minimum: 0 }
+        dailyByModel:
+          type: array
+          items:
+            type: object
+            required: [date]
+            properties:
+              date: { type: string, format: date }
+            additionalProperties: { type: number, minimum: 0 }
+        modelNames:
+          type: array
+          items: { type: string }
+        errorBreakdown:
+          type: array
+          items:
+            type: object
+            required: [errorType, count]
+            properties:
+              errorType: { type: string }
+              count: { type: number, minimum: 0 }
+            additionalProperties: false
+        range:
+          type: string
+          description: Requested range value echoed by the route.
+        includesFlatRateEstimates: { type: boolean }
+        presetSummaries:
+          type: object
+          additionalProperties:
+            type: object
+            required: [totalCost]
+            properties:
+              totalCost: { type: number, minimum: 0 }
+            additionalProperties: false
+      additionalProperties: true
+
+    UsageBreakdown:
+      type: object
+      required: [requests, promptTokens, completionTokens, cost]
+      properties:
+        requests: { type: number, minimum: 0 }
+        promptTokens: { type: number, minimum: 0 }
+        completionTokens: { type: number, minimum: 0 }
+        cost: { type: number, minimum: 0 }
+        rawModel: { type: string }
+        provider: { type: string }
+        lastUsed: { type: string, format: date-time }
+        connectionId: { type: string }
+        accountName: { type: string }
+        apiKeyId: { type: [string, "null"] }
+        apiKeyName: { type: string }
+        historicalApiKeyNames:
+          type: array
+          items: { type: string }
+      additionalProperties: true
+
+    UsageBucket:
+      type: object
+      required: [requests, promptTokens, completionTokens, cost]
+      properties:
+        requests: { type: number, minimum: 0 }
+        promptTokens: { type: number, minimum: 0 }
+        completionTokens: { type: number, minimum: 0 }
+        cost: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    UsageStatsResponse:
+      type: object
+      required:
+        - totalRequests
+        - totalPromptTokens
+        - totalCompletionTokens
+        - totalCost
+        - byProvider
+        - byModel
+        - byAccount
+        - byApiKey
+        - last10Minutes
+        - pending
+        - activeRequests
+      properties:
+        totalRequests: { type: number, minimum: 0 }
+        totalPromptTokens: { type: number, minimum: 0 }
+        totalCompletionTokens: { type: number, minimum: 0 }
+        totalCost: { type: number, minimum: 0 }
+        byProvider:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UsageBreakdown"
+        byModel:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UsageBreakdown"
+        byAccount:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UsageBreakdown"
+        byApiKey:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UsageBreakdown"
+        last10Minutes:
+          type: array
+          minItems: 10
+          maxItems: 10
+          items:
+            $ref: "#/components/schemas/UsageBucket"
+        pending:
+          type: object
+          required: [byModel, byAccount]
+          properties:
+            byModel:
+              type: object
+              additionalProperties: { type: number, minimum: 0 }
+            byAccount:
+              type: object
+              additionalProperties:
+                type: object
+                additionalProperties: { type: number, minimum: 0 }
+          additionalProperties: false
+        activeRequests:
+          type: array
+          items:
+            type: object
+            required: [model, provider, account, count]
+            properties:
+              model: { type: string }
+              provider: { type: string }
+              account: { type: string }
+              count: { type: number, minimum: 0 }
+            additionalProperties: false
+      additionalProperties: false
+
+    UsageBudgetConfig:
+      type: object
+      properties:
+        dailyLimitUsd: { type: number, minimum: 0 }
+        weeklyLimitUsd: { type: number, minimum: 0 }
+        monthlyLimitUsd: { type: number, minimum: 0 }
+        warningThreshold: { type: number, minimum: 0, maximum: 1 }
+        resetInterval: { type: string, enum: [daily, weekly, monthly] }
+        resetTime: { type: string, pattern: '^\\d{2}:\\d{2}$' }
+        budgetResetAt: { type: [integer, "null"] }
+        lastBudgetResetAt: { type: [integer, "null"] }
+        warningEmittedAt: { type: [integer, "null"] }
+        warningPeriodStart: { type: [integer, "null"] }
+      additionalProperties: false
+
+    UsageBudgetCheck:
+      type: object
+      required: [allowed, dailyUsed, dailyLimit, warningReached, remaining, periodUsed, activeLimitUsd]
+      properties:
+        allowed: { type: boolean }
+        reason: { type: string }
+        dailyUsed: { type: number, minimum: 0 }
+        dailyLimit: { type: number, minimum: 0 }
+        warningReached: { type: boolean }
+        remaining: { type: number, minimum: 0 }
+        periodUsed: { type: number, minimum: 0 }
+        activeLimitUsd: { type: number, minimum: 0 }
+        resetInterval: { type: [string, "null"], enum: [daily, weekly, monthly, null] }
+        resetTime: { type: [string, "null"] }
+        budgetResetAt: { type: [integer, "null"] }
+        lastBudgetResetAt: { type: [integer, "null"] }
+        periodStartAt: { type: [integer, "null"] }
+      additionalProperties: false
+
+    UsageBudgetStatusResponse:
+      type: object
+      required: [budgetCheck, dailyTotal, monthlyTotal, totalEntries, totalCostToday, totalCostMonth, totalCostPeriod, activeLimitUsd]
+      properties:
+        budgetCheck:
+          $ref: "#/components/schemas/UsageBudgetCheck"
+        dailyTotal: { type: number, minimum: 0 }
+        monthlyTotal: { type: number, minimum: 0 }
+        totalEntries: { type: integer, minimum: 0 }
+        budget:
+          oneOf:
+            - $ref: "#/components/schemas/UsageBudgetConfig"
+            - type: "null"
+        totalCostToday: { type: number, minimum: 0 }
+        totalCostMonth: { type: number, minimum: 0 }
+        totalCostPeriod: { type: number, minimum: 0 }
+        activeLimitUsd: { type: number, minimum: 0 }
+        resetInterval: { type: [string, "null"], enum: [daily, weekly, monthly, null] }
+        resetTime: { type: [string, "null"] }
+        budgetResetAt: { type: [integer, "null"] }
+        lastBudgetResetAt: { type: [integer, "null"] }
+        periodStartAt: { type: [integer, "null"] }
+        nextResetAt: { type: [integer, "null"] }
+        dailyLimitUsd: { type: number, minimum: 0 }
+        weeklyLimitUsd: { type: number, minimum: 0 }
+        monthlyLimitUsd: { type: number, minimum: 0 }
+        warningThreshold: { type: [number, "null"], minimum: 0, maximum: 1 }
+      additionalProperties: true
+
+    SetUsageBudgetRequest:
+      type: object
+      required: [apiKeyId]
+      properties:
+        apiKeyId: { type: string, minLength: 1 }
+        dailyLimitUsd: { type: number, minimum: 0 }
+        weeklyLimitUsd: { type: number, minimum: 0 }
+        monthlyLimitUsd: { type: number, minimum: 0 }
+        warningThreshold: { type: number, minimum: 0, maximum: 1 }
+        resetInterval: { type: string, enum: [daily, weekly, monthly] }
+        resetTime: { type: string, pattern: '^\\d{2}:\\d{2}$' }
+      additionalProperties: true
+
+    UsageBudgetMutationResponse:
+      type: object
+      required: [success, apiKeyId, budget]
+      properties:
+        success: { type: boolean, const: true }
+        apiKeyId: { type: string }
+        budget:
+          $ref: "#/components/schemas/UsageBudgetConfig"
+      additionalProperties: false
+
+    StringErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
       additionalProperties: false
 
     ComboCreate:

@@ -9,6 +9,7 @@ type OpenApiMedia = { schema: Record<string, unknown>; [key: string]: unknown };
 type OpenApiResponse = { content?: Record<string, OpenApiMedia> };
 type OpenApiOperation = {
   responses?: Record<string, OpenApiResponse>;
+  parameters?: unknown[];
   requestBody?: { content?: Record<string, OpenApiMedia> };
   security?: Array<Record<string, unknown>>;
 };
@@ -149,6 +150,39 @@ test("primary inference operations describe their JSON and streaming wire format
   );
 });
 
+test("Gemini-compatible model discovery and generation describe the native wire shape", () => {
+  assert.equal(
+    successContent(operation("/api/v1beta/models", "get"), "application/json").schema.$ref,
+    "#/components/schemas/GeminiModelListResponse"
+  );
+  assert.equal(
+    requestContent(operation("/api/v1beta/models/{path}", "post"), "application/json").schema
+      .$ref,
+    "#/components/schemas/GeminiGenerateContentRequest"
+  );
+  const generate = operation("/api/v1beta/models/{path}", "post");
+  assert.equal(
+    successContent(generate, "application/json").schema.$ref,
+    "#/components/schemas/GeminiGenerateContentResponse"
+  );
+  assert.ok(successContent(generate, "text/event-stream"));
+});
+
+test("OpenAI model catalog responses document provider context and output limits", () => {
+  assert.equal(
+    successContent(operation("/api/v1/models/{model}", "get"), "application/json").schema.$ref,
+    "#/components/schemas/Model"
+  );
+  const schemas = spec.components?.schemas as
+    | Record<string, { properties?: Record<string, unknown> }>
+    | undefined;
+  const modelProperties = schemas?.Model?.properties;
+  assert.ok(modelProperties?.context_length);
+  assert.ok(modelProperties?.max_input_tokens);
+  assert.ok(modelProperties?.max_output_tokens);
+  assert.ok(modelProperties?.capabilities);
+});
+
 test("client inference auth reflects key, session, and configured anonymous access", () => {
   const guardedOperations = [
     ["/api/v1/chat/completions", "post"],
@@ -233,6 +267,7 @@ test("chat routes document local pressure errors, retry timing, and correlation"
 
 test("model, provider, key, and combo management responses match their route payloads", () => {
   const responseRefs = [
+    ["/api/v1", "get", "ModelListResponse"],
     ["/api/models", "get", "ManagementModelListResponse"],
     ["/api/models/alias", "get", "ModelAliasLookupResponse"],
     ["/api/models/catalog", "get", "GroupedModelCatalogResponse"],
@@ -241,10 +276,22 @@ test("model, provider, key, and combo management responses match their route pay
     ["/api/keys", "get", "ApiKeyListResponse"],
     ["/api/keys", "post", "ApiKeyCreateResponse"],
     ["/api/combos", "get", "ComboListResponse"],
+    ["/api/usage/analytics", "get", "UsageAnalyticsResponse"],
+    ["/api/usage/history", "get", "UsageStatsResponse"],
+    ["/api/usage/budget", "get", "UsageBudgetStatusResponse"],
+    ["/api/usage/budget", "post", "UsageBudgetMutationResponse"],
+    ["/api/v1/providers/suggested-models", "get", "SuggestedModelsResponse"],
+    ["/api/v1/provider-plugin-manifest", "get", "ProviderPluginManifest"],
+    ["/api/v1/quotas/check", "get", "RegisteredKeyQuotaCheckResponse"],
+    ["/api/usage/call-logs", "get", "CallLogListResponse"],
+    ["/api/usage/call-logs/{id}", "get", "CallLogDetailResponse"],
   ] as const;
   for (const [pathname, method, schema] of responseRefs) {
-    const status = method === "post" && pathname === "/api/providers" ? "201" :
-      method === "post" && pathname === "/api/keys" ? "201" : "200";
+    const status =
+      (method === "post" && pathname === "/api/providers") ||
+      (method === "post" && pathname === "/api/keys")
+        ? "201"
+        : "200";
     const response = operation(pathname, method).responses?.[status] as
       | { content?: Record<string, { schema?: Record<string, unknown> }> }
       | undefined;
@@ -268,6 +315,63 @@ test("model, provider, key, and combo management responses match their route pay
   assert.ok(schemas?.ProviderConnectionListResponse?.required?.includes("total"));
   assert.ok(schemas?.ApiKeyListResponse?.required?.includes("allowKeyReveal"));
   assert.ok(schemas?.ApiKeyCreateResponse?.required?.includes("key"));
+  assert.equal(
+    (schemas?.UsageAnalyticsResponse?.properties?.errorBreakdown as { type?: unknown })?.type,
+    "array"
+  );
+  assert.ok(schemas?.UsageStatsResponse?.required?.includes("activeRequests"));
+  assert.ok(schemas?.UsageBudgetStatusResponse?.required?.includes("budgetCheck"));
+  assert.ok(operation("/api/v1/provider-plugin-manifest", "get").responses?.["304"]);
+  const analyticsParameters = operation("/api/usage/analytics", "get").parameters ?? [];
+  assert.ok(
+    analyticsParameters.some(
+      (parameter) =>
+        parameter &&
+        typeof parameter === "object" &&
+        "name" in parameter &&
+        parameter.name === "range"
+    )
+  );
+  assert.equal(
+    analyticsParameters.some(
+      (parameter) =>
+        parameter &&
+        typeof parameter === "object" &&
+        "name" in parameter &&
+        parameter.name === "period"
+    ),
+    false
+  );
+  const budgetGet = operation("/api/usage/budget", "get");
+  assert.ok(
+    budgetGet.parameters?.some(
+      (parameter) =>
+        parameter &&
+        typeof parameter === "object" &&
+        "name" in parameter &&
+        parameter.name === "apiKeyId" &&
+        "required" in parameter &&
+        parameter.required === true
+    )
+  );
+  const budgetRequest = requestContent(operation("/api/usage/budget", "post"), "application/json")
+    .schema;
+  assert.equal(budgetRequest.$ref, "#/components/schemas/SetUsageBudgetRequest");
+  assert.deepEqual(schemas?.SetUsageBudgetRequest?.required, ["apiKeyId"]);
+  const callLogList = operation("/api/usage/call-logs", "get");
+  const callLogLimit = callLogList.parameters?.find(
+    (parameter: unknown) =>
+      parameter && typeof parameter === "object" && "name" in parameter && parameter.name === "limit"
+  ) as { schema?: { default?: unknown } } | undefined;
+  assert.equal(callLogLimit?.schema?.default, 200);
+  const callLogDetail = operation("/api/usage/call-logs/{id}", "get");
+  const notFound = callLogDetail.responses?.["404"] as
+    | { content?: Record<string, { schema?: Record<string, unknown> }> }
+    | undefined;
+  assert.equal(
+    notFound?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/StringErrorResponse"
+  );
 });
 
 test("all local OpenAPI references resolve", () => {
