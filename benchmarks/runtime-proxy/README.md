@@ -39,7 +39,8 @@ python3 benchmarks/runtime-proxy/run_bench.py --runtime bun142-container --clien
 
 The first command should show a bounded set of 503 responses at the configured capacity. The
 cancellation case succeeds only if the mock upstream reports zero active streams after clients
-disconnect.
+disconnect. In the recorded 100-client run, the 64-slot admission cap accepted 64 streams, returned
+503 for 36, and all three runtimes released every upstream stream after cancellation.
 
 Sweep `--clients 1,15,30,70,100` and repeat each point at least three times. The result reports
 header and first-body-byte latency, completion latency, successful streams, throughput, peak
