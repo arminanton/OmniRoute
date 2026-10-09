@@ -649,7 +649,7 @@ requests; its timing should not be compared directly with the earlier 22–24 se
 runs. It validates the 100-session route/capture path, not sustained production throughput or a real
 provider.
 
-`ANTIGRAVITY_CAPTURE_MEMORY_BENCH=1` emits a sanitized `ANTIGRAVITY_MEMORY` line with separate
+`ANTIGRAVITY_CAPTURE_MEMORY_BENCH=1` emits a sanitized memory-diagnostics record with separate
 snapshots for the route/test process, parent test runner, client process, mock upstream, and their
 current cgroup-v2 scope. Process snapshots include Node heap/RSS/external/array-buffer values, V8
 heap statistics, `/proc` high-water RSS, and `smaps_rollup` PSS/private/shared pages. The cgroup
@@ -786,19 +786,41 @@ complete serialized JSON becomes smaller, and the reader expands the table befor
 or UI consumer sees it. Stream chunks continue to use their own encoding, and no table is shared
 across API keys or requests. On 100 synthetic artifacts already
 compacted for duplicate stage bodies, the extra text table reduced serialized size from 13,063,780
-bytes to 1,782,080 bytes (86.36%); the latest rerun measured a transform median of 0.173 ms and
-p95 of 0.266 ms per artifact on this host. A separate 100-artifact check with five unique 256 KiB
-context strings per artifact made no representation changes; its median scan was 0.021 ms and p95
-was 0.044 ms. Re-run
+bytes to 1,782,080 bytes (86.36%); the latest bounded-pass rerun measured a transform median of
+0.163 ms and p95 of 0.231 ms per artifact on this host. A separate 100-artifact check with five
+unique 256 KiB context strings per artifact made no representation changes; its median scan was
+0.019 ms and p95 was 0.053 ms. Re-run
 with `npm run bench:call-log-text-dedup`. These are sequential synthetic microbenchmarks. They
 measure disk representation and the dedup scan, not request heap reduction or real-prompt
 compression. A separate complete `writeCallArtifact()` sweep of 100 synthetic artifacts stored
 1,847,880 bytes instead of 50,537,450 bytes (96.34%); the latest run measured median write time of
-0.505 ms and p95 of 1.355 ms. That comparison includes the
+0.483 ms and p95 of 1.029 ms. That comparison includes the
 existing request/response stage references as well as the new text table, so it must not be
 attributed to the new table alone. The dictionaries are local to each artifact: cross-request blob
 sharing remains unimplemented, avoiding shared ownership, retention-reference, and cross-key
 deduplication concerns.
+
+The optional exact-text pass fails open when it sees accessors, unsupported object graphs, more than
+100,000 visited values, arrays longer than 100,000 entries, more than 4,096 unique candidate strings,
+over 8 Mi UTF-16 code units of 256–65,536-unit candidate text, or a JSON-escaped dictionary over
+4 MiB. The reader rejects table expansions over 100,000 values or 16 Mi UTF-16 code units. That is
+an in-memory character-count limit, not a serialized JSON-byte ceiling: escaped control characters
+can take up to six bytes per code unit. The normal artifact writer separately enforces its configured
+serialized-size cap. This bounds hash/transform work and protects against compact files expanding
+into very large in-memory objects; tests cover custom-prototype objects, 100-million-slot sparse and
+100,001-element dense arrays, non-enumerable array-index round-tripping, a wide plain object, the
+candidate/dictionary/expansion budgets, and a pipeline accessor. Artifacts outside these limits use
+the existing size-limit path, so this optimization can reduce detail retention under extreme/high-
+cardinality payloads. Private overflow captures are separate and retain exact bytes subject to their
+own limits.
+
+Structured `error`/`fatal` repeat suppression is a different mechanism. It scopes the 5-second
+deduplication key to severity and component, does not retain messages over 4,096 characters, expires
+stale keys on each error call, caps the key map at 500, and carries duplicate/rate-limit counts as
+`logSuppression` metadata on the next emitted error. If no later error is emitted, those in-memory
+counts do not reach disk. `CHAT_DEBUG_FILE=true` and `APP_LOG_LEVEL=debug` intentionally bypass the
+artifact text table and artifact-size cap to write pretty, untruncated JSON; keep that forensic mode
+short-lived because its disk and serialization costs are not bounded by the normal artifact budget.
 
 The writer-capacity harness exercises production `saveCallLog()` and the artifact worker against a
 temporary SQLite database: 100 simultaneous saves, 100 synthetic chunks on each of three stream
@@ -961,6 +983,15 @@ rose from 1.7 to 4.0 GiB over a 30-second sample. I interrupted it at that safet
 standalone output or image was produced. After the interruption, the devvm recovered to 8.7 GiB
 available RAM. The host-only memory ceiling prevents a valid completed build comparison here.
 
+For the next controlled Node build, use Next.js's `--experimental-debug-memory-usage` path on a
+dedicated builder and preserve its periodic heap/GC output; the official guide says it can take heap
+snapshots near the configured limit and respond to `SIGUSR2` with a snapshot. It is not compatible
+with Next's Webpack build worker, so first reconcile that setting with this checkout's build config.
+The stopped Bun trial above did not emit equivalent V8 data; Bun documents its `node:v8` statistics
+as JavaScriptCore heap statistics. No heap snapshot was produced in these constrained build tests.
+Sources: [Next.js memory guide](https://nextjs.org/docs/app/guides/memory-usage) and
+[Bun Node.js compatibility](https://bun.sh/docs/runtime/nodejs-compat).
+
 The repository's `Dockerfile.bun` path was tested with the pinned Bun 1.4.0 image and the same 5 GiB
 limit. Its install resolved 9,470 package entries and installed 2,405 packages in about 50 seconds.
 The image passed the `wreq-js` and `bun:sqlite` smoke checks. Bun emitted nested-override and peer
@@ -979,11 +1010,24 @@ static test protects that wiring; the full Bun build with this change still need
 
 The Bun base image has a `node` compatibility fallback but no `npm` executable. The package
 `prebuild` hook originally invoked `npm run check:native-deps`, so the hook was changed to call the
-Node script directly; the Bun builder then passed that hook and the docs sync check. There is no
-checked-in `bun.lock`, and `Dockerfile.bun` installs before copying `package-lock.json`, so a clean
-Bun build resolves package ranges independently from the npm lock. Add a Bun lockfile and compare
-its resolved graph before considering that image reproducible. Bun 1.4.2's stream-proxy microbench
-was close to 1.4.0; a full Bun 1.4.2 application build was not run.
+Node script directly; the Bun builder then passed that hook and the docs sync check. The earlier
+image test had no checked-in `bun.lock` and installed before copying `package-lock.json`, so that
+test resolved ranges independently of npm's lock. The current blue branch now checks in a Bun lock,
+copies it before dependency installation, uses frozen installs, and supports Bun 1.4.0 and 1.4.2.
+Frozen-lock checks passed on both versions; an actual Bun 1.4.2 install completed 2,204 packages in
+59.46 seconds. Bun still warns that it applies only one level of nested npm overrides, so the lock
+file makes resolution repeatable but does not erase that compatibility limitation.
+
+A later `Dockerfile.bun` debug-builder run used Bun 1.4.2, `workerThreads`, full Turbopack memory
+eviction, a one-CPU `taskset` affinity, and an 8 GiB no-swap container limit. After 3m06s it was
+still in optimized compilation. The highest sampled `podman stats` usage was 7.612 GB of the 8.59 GB
+reported container limit; host available RAM had fallen from about 11 GiB to 3.9 GiB. The run was
+deliberately stopped to protect active Prime workloads; the container exited 143 with
+`OOMKilled=false` and produced no build output. Host available RAM recovered to about 11 GiB. This
+is not a Bun runtime failure or a completed-build comparison: it shows that these settings did not
+keep the compile peak low enough to safely finish on the shared devvm. `workerThreads` avoids the
+separate `pool_entry` process tree seen with the default child-process strategy, but this trial does
+not show a lower peak-memory result.
 
 ### Maria host build comparison
 
@@ -1059,10 +1103,10 @@ no-auth catalog filter with the optional model ID shape.
 - Keep the passing `typecheck:core` target in the validation set. If a broader whole-app typecheck is
   required, first build a smaller project graph or use a builder with an explicit memory budget; the
   earlier broad no-emit attempts exhausted 4 GiB and 3 GiB without reporting source diagnostics.
-- Complete the `Dockerfile.bun` application build with a locked Bun dependency graph and on both
-  1.4.0 and 1.4.2; the Maria Bun/Turbopack runtime isolation run reused npm `node_modules` and was
-  stopped at the host-memory safety floor before compilation completed. Record native-module,
-  database, streaming, and shutdown differences.
+- Complete production builds and runtime smokes for the locked `Dockerfile.bun` path on Bun 1.4.0
+  and 1.4.2 using a dedicated builder; the current 1.4.2 Turbopack trial stopped at 3m06s for host
+  memory safety before compilation completed. Record native-module, database, streaming, and
+  shutdown differences.
 - Exercise the full OmniRoute app with mock provider credentials at 70 and 100 active sessions,
   including actual tool-call cycles, authentication, account-level limits, and verified artifact
   capture. The current long-stream test covers only the production admission middleware plus mock
@@ -1072,8 +1116,7 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 263 operations with success-response content; 741
+- Continue the OpenAPI handler audit beyond the 293 operations with success-response content; 711
   of 1,004 non-`204` success operations still lack explicit success-body schemas. The
-  path/method/security-tier inventory is
-  complete, but remaining response schemas and conditional auth behavior have not all been
-  source-verified.
+  path/method inventory covers 705/705 routes and 236 operations now declare security alternatives;
+  remaining response schemas and conditional auth behavior have not all been source-verified.
