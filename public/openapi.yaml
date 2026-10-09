@@ -21250,17 +21250,60 @@ paths:
       tags:
         - Settings
       summary: "GET settings › reasoning routing rules"
+      description: Returns routing rules ordered by specificity, priority, creation time, and ID.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Ordered rule list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReasoningRoutingRuleListResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsReasoningRoutingRules
       tags:
         - Settings
       summary: "POST settings › reasoning routing rules"
+      description: Creates a validated routing rule; scope-specific references must resolve to existing records.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReasoningRoutingRuleCreateRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Created rule.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReasoningRoutingRuleEnvelope" }
+        "400":
+          description: Invalid fields, inconsistent rule settings, or unresolved references.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/reasoning-routing-rules/{id}:
     parameters:
       - name: id
@@ -21273,34 +21316,137 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › reasoning routing rules › <id>"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Rule deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "404":
+          description: Rule does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiSettingsReasoningRoutingRulesById
       tags:
         - Settings
       summary: "GET settings › reasoning routing rules › <id>"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Requested rule.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReasoningRoutingRuleEnvelope" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "404":
+          description: Rule does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiSettingsReasoningRoutingRulesById
       tags:
         - Settings
       summary: "PATCH settings › reasoning routing rules › <id>"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReasoningRoutingRulePatchRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated rule.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReasoningRoutingRuleEnvelope" }
+        "400":
+          description: Invalid or inconsistent rule fields, or unresolved references.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "404":
+          description: Rule does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/reasoning-routing-rules/simulate:
     post:
       operationId: postApiSettingsReasoningRoutingRulesSimulate
       tags:
         - Settings
       summary: "POST settings › reasoning routing rules › simulate"
+      description: Evaluates the same policy without sending a request to the target provider.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReasoningRoutingSimulationRequest" }
       responses:
         "200":
-          description: OK
+          description: Whether a rule matched, its proposed decision, and policy/transport errors.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReasoningRoutingSimulationResponse" }
+        "400":
+          description: Invalid simulation parameters.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "404":
+          description: Specified API key does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/task-routing:
     get:
       operationId: getApiSettingsTaskRouting
@@ -39252,6 +39398,206 @@ components:
       oneOf:
         - $ref: "#/components/schemas/QuotaResetExpiredResponse"
         - $ref: "#/components/schemas/QuotaClearConnectionResponse"
+
+    ReasoningRoutingEffort:
+      type: string
+      enum: [none, low, medium, high, xhigh, max, ultra]
+
+    ReasoningRoutingSourceEffort:
+      type: string
+      enum: [any, missing, none, low, medium, high, xhigh, max, ultra]
+
+    ReasoningRoutingRule:
+      type: object
+      required:
+        [
+          id,
+          name,
+          description,
+          scope,
+          apiKeyId,
+          comboId,
+          connectionId,
+          modelPattern,
+          sourceEffort,
+          requestTags,
+          tagMatchMode,
+          effortMode,
+          targetEffort,
+          targetKind,
+          targetModel,
+          targetComboId,
+          budgetAction,
+          budgetTokens,
+          priority,
+          enabled,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        scope: { type: string, enum: [global, apiKey, combo, model, connection] }
+        apiKeyId: { type: [string, "null"] }
+        comboId: { type: [string, "null"] }
+        connectionId: { type: [string, "null"] }
+        modelPattern: { type: [string, "null"] }
+        sourceEffort: { $ref: "#/components/schemas/ReasoningRoutingSourceEffort" }
+        requestTags:
+          type: array
+          items: { type: string }
+        tagMatchMode: { type: string, enum: [any, all] }
+        effortMode: { type: string, enum: [inherit, default, force] }
+        targetEffort:
+          oneOf:
+            - { $ref: "#/components/schemas/ReasoningRoutingEffort" }
+            - { type: "null" }
+        targetKind: { type: string, enum: [keep, model, combo] }
+        targetModel: { type: [string, "null"] }
+        targetComboId: { type: [string, "null"] }
+        budgetAction: { type: string, enum: [preserve, remove, set] }
+        budgetTokens: { type: [integer, "null"], minimum: 1, maximum: 10000000 }
+        priority: { type: integer, minimum: -1000000, maximum: 1000000 }
+        enabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ReasoningRoutingRuleFields:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 1000, default: "" }
+        scope: { type: string, enum: [global, apiKey, combo, model, connection] }
+        apiKeyId: { type: [string, "null"], minLength: 1 }
+        comboId: { type: [string, "null"], minLength: 1 }
+        connectionId: { type: [string, "null"], minLength: 1 }
+        modelPattern: { type: [string, "null"], minLength: 1, maxLength: 500 }
+        sourceEffort:
+          allOf:
+            - { $ref: "#/components/schemas/ReasoningRoutingSourceEffort" }
+          default: any
+        requestTags:
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 100 }
+          default: []
+        tagMatchMode: { type: string, enum: [any, all], default: any }
+        effortMode: { type: string, enum: [inherit, default, force], default: inherit }
+        targetEffort:
+          oneOf:
+            - { $ref: "#/components/schemas/ReasoningRoutingEffort" }
+            - { type: "null" }
+        targetKind: { type: string, enum: [keep, model, combo], default: keep }
+        targetModel: { type: [string, "null"], minLength: 1, maxLength: 500 }
+        targetComboId: { type: [string, "null"], minLength: 1 }
+        budgetAction: { type: string, enum: [preserve, remove, set], default: preserve }
+        budgetTokens: { type: [integer, "null"], minimum: 1, maximum: 10000000 }
+        priority: { type: integer, minimum: -1000000, maximum: 1000000, default: 0 }
+        enabled: { type: boolean, default: true }
+
+    ReasoningRoutingRuleCreateRequest:
+      type: object
+      description: >-
+        Cross-field validation is applied after defaults: apiKey, combo, model, and connection scopes
+        require their matching reference/pattern; connection rules require targetKind keep; non-inherit
+        effort requires targetEffort; model/combo targets require their target value; budgetAction set
+        requires positive budgetTokens; and targetEffort none cannot use budgetAction set.
+      allOf:
+        - { $ref: "#/components/schemas/ReasoningRoutingRuleFields" }
+        - type: object
+          required: [name, scope]
+
+    ReasoningRoutingRulePatchRequest:
+      type: object
+      description: >-
+        At least one property is required. The patch is merged into the stored rule and checked against
+        all create-time cross-field constraints before persistence.
+      allOf:
+        - { $ref: "#/components/schemas/ReasoningRoutingRuleFields" }
+      minProperties: 1
+
+    ReasoningRoutingRuleEnvelope:
+      type: object
+      required: [rule]
+      properties:
+        rule: { $ref: "#/components/schemas/ReasoningRoutingRule" }
+      additionalProperties: false
+
+    ReasoningRoutingRuleListResponse:
+      type: object
+      required: [rules]
+      properties:
+        rules:
+          type: array
+          items: { $ref: "#/components/schemas/ReasoningRoutingRule" }
+      additionalProperties: false
+
+    ReasoningRoutingSimulationRequest:
+      type: object
+      required: [model]
+      properties:
+        model: { type: string, minLength: 1, maxLength: 500 }
+        effort:
+          type: string
+          enum: [any, missing, none, low, medium, high, xhigh, max, ultra, signal]
+          default: missing
+        thinkingBudgetTokens: { type: [integer, "null"], minimum: 1, maximum: 10000000 }
+        apiKeyId: { type: [string, "null"], minLength: 1 }
+        requestTags:
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 100 }
+          default: []
+        transport: { type: string, enum: [http, codex-ws], default: http }
+
+    ReasoningRoutingDecision:
+      type: object
+      required:
+        [
+          rule,
+          sourceModel,
+          sourceEffort,
+          targetModel,
+          targetCombo,
+          targetEffort,
+          capability,
+          requiresReasoning,
+          warnings,
+        ]
+      properties:
+        rule: { $ref: "#/components/schemas/ReasoningRoutingRule" }
+        sourceModel: { type: string }
+        sourceEffort:
+          type: string
+          enum: [missing, signal, none, low, medium, high, xhigh, max, ultra]
+        targetModel: { type: string }
+        targetCombo: { type: [object, "null"], additionalProperties: true }
+        targetEffort:
+          oneOf:
+            - { $ref: "#/components/schemas/ReasoningRoutingEffort" }
+            - { type: "null" }
+        capability: { type: string, enum: [supported, unsupported, unknown] }
+        requiresReasoning: { type: boolean }
+        warnings:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    ReasoningRoutingSimulationResponse:
+      type: object
+      required: [matched, decision, errors]
+      properties:
+        matched: { type: boolean }
+        decision:
+          oneOf:
+            - { $ref: "#/components/schemas/ReasoningRoutingDecision" }
+            - { type: "null" }
+        errors:
+          type: array
+          items: { type: string }
+      additionalProperties: false
 
     RestartResponse:
       type: object
