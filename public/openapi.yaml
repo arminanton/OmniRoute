@@ -20521,18 +20521,66 @@ paths:
       operationId: getApiV1AccountsByIdLimits
       tags:
         - V1 Accounts
-      summary: "GET accounts › <id> › limits"
+      summary: Get registered-key issuance limits for an account
+      description: >-
+        Returns configured issuance limits and current hourly/daily counters, or `limits: null` when
+        no account override exists. Authentication is required when `REQUIRE_API_KEY` is enabled;
+        otherwise anonymous requests are allowed.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Account issuance limits and counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1AccountKeyLimitsResponse" }
+        "401":
+          description: Authentication is required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     put:
       operationId: putApiV1AccountsByIdLimits
       tags:
         - V1 Accounts
-      summary: "PUT accounts › <id> › limits"
+      summary: Set registered-key issuance limits for an account
+      description: >-
+        Updates any supplied positive integer limit or sets it to null to remove that limit. Omitted
+        fields are left unchanged. Authentication is required when `REQUIRE_API_KEY` is enabled.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/V1RegisteredKeyLimitsUpdate" }
       responses:
         "200":
-          description: OK
+          description: Updated account issuance limits and counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1AccountKeyLimitsResponse" }
+        "400":
+          description: Invalid JSON or limit fields.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          description: Authentication is required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/agents/credentials:
     get:
       operationId: getApiV1AgentsCredentials
@@ -22013,18 +22061,66 @@ paths:
       operationId: getApiV1ProvidersByProviderLimits
       tags:
         - V1 Providers
-      summary: "GET providers › <provider> › limits"
+      summary: Get registered-key issuance limits for a provider
+      description: >-
+        Returns configured issuance limits and current hourly/daily counters, or `limits: null` when
+        no provider override exists. Authentication is required when `REQUIRE_API_KEY` is enabled;
+        otherwise anonymous requests are allowed.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Provider issuance limits and counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1ProviderKeyLimitsResponse" }
+        "401":
+          description: Authentication is required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     put:
       operationId: putApiV1ProvidersByProviderLimits
       tags:
         - V1 Providers
-      summary: "PUT providers › <provider> › limits"
+      summary: Set registered-key issuance limits for a provider
+      description: >-
+        Updates any supplied positive integer limit or sets it to null to remove that limit. Omitted
+        fields are left unchanged. Authentication is required when `REQUIRE_API_KEY` is enabled.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/V1RegisteredKeyLimitsUpdate" }
       responses:
         "200":
-          description: OK
+          description: Updated provider issuance limits and counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1ProviderKeyLimitsResponse" }
+        "400":
+          description: Invalid JSON or limit fields.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          description: Authentication is required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/quotas/check:
     get:
       operationId: getApiV1QuotasCheck
@@ -25169,6 +25265,57 @@ components:
       required: [success]
       properties:
         success: { type: boolean, const: true }
+      additionalProperties: false
+    V1AccountKeyLimits:
+      type: object
+      required: [accountId, maxActiveKeys, dailyIssueLimit, hourlyIssueLimit, dailyIssued, hourlyIssued, updatedAt]
+      properties:
+        accountId: { type: string }
+        maxActiveKeys: { type: [integer, "null"], minimum: 1 }
+        dailyIssueLimit: { type: [integer, "null"], minimum: 1 }
+        hourlyIssueLimit: { type: [integer, "null"], minimum: 1 }
+        dailyIssued: { type: integer, minimum: 0 }
+        hourlyIssued: { type: integer, minimum: 0 }
+        updatedAt: { type: string }
+      additionalProperties: false
+    V1ProviderKeyLimits:
+      type: object
+      required: [provider, maxActiveKeys, dailyIssueLimit, hourlyIssueLimit, dailyIssued, hourlyIssued, updatedAt]
+      properties:
+        provider: { type: string }
+        maxActiveKeys: { type: [integer, "null"], minimum: 1 }
+        dailyIssueLimit: { type: [integer, "null"], minimum: 1 }
+        hourlyIssueLimit: { type: [integer, "null"], minimum: 1 }
+        dailyIssued: { type: integer, minimum: 0 }
+        hourlyIssued: { type: integer, minimum: 0 }
+        updatedAt: { type: string }
+      additionalProperties: false
+    V1RegisteredKeyLimitsUpdate:
+      type: object
+      properties:
+        maxActiveKeys: { type: [integer, "null"], minimum: 1 }
+        dailyIssueLimit: { type: [integer, "null"], minimum: 1 }
+        hourlyIssueLimit: { type: [integer, "null"], minimum: 1 }
+      additionalProperties: true
+    V1AccountKeyLimitsResponse:
+      type: object
+      required: [accountId, limits]
+      properties:
+        accountId: { type: string }
+        limits:
+          oneOf:
+            - $ref: "#/components/schemas/V1AccountKeyLimits"
+            - type: "null"
+      additionalProperties: false
+    V1ProviderKeyLimitsResponse:
+      type: object
+      required: [provider, limits]
+      properties:
+        provider: { type: string }
+        limits:
+          oneOf:
+            - $ref: "#/components/schemas/V1ProviderKeyLimits"
+            - type: "null"
       additionalProperties: false
     CanaryReadiness:
       type: object
