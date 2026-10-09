@@ -147,9 +147,12 @@ test("private CLI config, backup and log surfaces stay authenticated with login 
     "/api/cli-tools/openclaw/auto-order",
     "/api/cli-tools/config",
     "/api/cli-tools/guide-settings-extra",
+    "/api/cli-tools/guide-settings-extra/continue",
+    "/api/cli-tools/guide-settings",
   ]) {
     assert.equal(isAlwaysProtectedPath(path), false, `${path} remains Tier 3`);
   }
+  assert.equal(isAlwaysProtectedPath("/api/cli-tools/guide-settings/continue"), true);
 });
 
 test("isAlwaysProtectedPath: ordinary settings routes are not always protected", () => {
