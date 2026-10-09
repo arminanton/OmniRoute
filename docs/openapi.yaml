@@ -20750,35 +20750,105 @@ paths:
       operationId: deleteApiSettingsOneproxy
       tags:
         - Settings
-      summary: "DELETE settings › oneproxy"
+      summary: Redirect the legacy OneProxy delete route to free proxies
+      description: This compatibility route no longer deletes records; it redirects to the replacement free-proxy resource.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
-        "200":
-          description: OK
+        "308":
+          description: Permanent redirect to the free-proxy collection.
+          headers:
+            Location:
+              description: Relative path to the replacement endpoint.
+              schema: { type: string, format: uri-reference, const: /api/settings/free-proxies }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiSettingsOneproxy
       tags:
         - Settings
-      summary: "GET settings › oneproxy"
+      summary: Redirect the legacy OneProxy read route to free proxies
+      description: This compatibility route no longer lists records; it redirects to the replacement free-proxy resource.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
-        "200":
-          description: OK
+        "308":
+          description: Permanent redirect to the free-proxy collection.
+          headers:
+            Location:
+              description: Relative path to the replacement endpoint.
+              schema: { type: string, format: uri-reference, const: /api/settings/free-proxies }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsOneproxy
       tags:
         - Settings
-      summary: "POST settings › oneproxy"
+      summary: Redirect the legacy OneProxy sync route to free-proxy sync
+      description: This compatibility route no longer starts a OneProxy sync; it redirects to the replacement sync endpoint.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
-        "200":
-          description: OK
+        "308":
+          description: Permanent redirect to the free-proxy sync endpoint.
+          headers:
+            Location:
+              description: Relative path to the replacement endpoint.
+              schema:
+                { type: string, format: uri-reference, const: /api/settings/free-proxies/sync }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/oneproxy/rotate:
     post:
       operationId: postApiSettingsOneproxyRotate
       tags:
         - Settings
-      summary: "POST settings › oneproxy › rotate"
+      summary: Redirect the retired OneProxy rotate route to free-proxy sync
+      description: >-
+        This compatibility route no longer rotates OneProxy credentials. After management
+        authentication and the runtime proxy-policy check, it redirects to free-proxy sync.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
-        "200":
-          description: OK
+        "308":
+          description: Permanent redirect to the free-proxy sync endpoint.
+          headers:
+            Location:
+              description: Relative path to the replacement endpoint.
+              schema:
+                { type: string, format: uri-reference, const: /api/settings/free-proxies/sync }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential is invalid or runtime proxy policy blocks the redirect.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies:
     delete:
       operationId: deleteApiSettingsProxies

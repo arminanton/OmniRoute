@@ -33,9 +33,9 @@ the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
 contract is still stronger on route coverage than schema completeness: 550 operations have success
-response content schemas and 464 declare operation-level security. Of 991 operations with a
-non-`204` success status, 441 have no explicit response content; two are intentional bodyless `HEAD`
-probes, leaving 439 non-`HEAD` operations whose successful response shape remains undocumented.
+response content schemas and 468 declare operation-level security. Of 987 operations with a
+non-`204` success status, 437 have no explicit response content; two are intentional bodyless `HEAD`
+probes, leaving 435 non-`HEAD` operations whose successful response shape remains undocumented.
 Eighteen operations have no declared `2xx` status, and 15 return only an intentional `204`. This
 pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
@@ -160,7 +160,7 @@ the actual `201` create response. Model-alias settings now describe built-in/cus
 replace/add/remove bodies, persistence, and the self-healing GET behavior. The history-cleanup pass
 documents destructive scope, period choices, row/artifact counts, and each endpoint's distinct error
 behavior; its handlers are tested only against isolated temporary databases. The current spec
-inventory is 884 schemas, 550 success-body operations, and 464 security declarations; 441 non-`204`
+inventory is 884 schemas, 550 success-body operations, and 468 security declarations; 437 non-`204`
 success operations have no explicit response content, including two intentional bodyless `HEAD`
 probes. The
 versioned read-contract pass now describes the public combo projection, auto-combo candidate state,
@@ -169,9 +169,10 @@ documents the correlation ID shape emitted by the authorization middleware. The 
 ingress now types both nested and direct Cloud Code request envelopes, the wrapped response body, and
 its JSON/SSE media variants. The local-corpus settings pass documents the canonical filesystem root,
 bounded indexing status, validation failures, and that disconnecting never deletes source files.
-The latest versioned inference pass adds provider-native issue-report, music/video generation,
+The latest inference pass adds provider-native issue-report, music/video generation,
 search-analytics, web-fetch, and Video Bridge drill-down contracts. Both the root and versioned API
-catch-alls now document their actual JSON 404 behavior instead of placeholder 200 responses.
+catch-alls now document their actual JSON 404 behavior instead of placeholder 200 responses. Four
+legacy OneProxy methods now document their real empty 308 redirects and fixed relative `Location`.
 The provider-node management pass types list pagination, preset-aware create, update/delete
 envelopes, node fields, and outbound validation results and errors. Every non-HEAD inference success
 under `/api/v1/` and `/api/v1beta/` now has a response schema; the two model-catalog HEAD probes are
@@ -1511,9 +1512,9 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 550 operations with success-response content; 441
-  of 991 non-`204` success operations still lack explicit success-body schemas, including the two
-  intentional bodyless `HEAD` probes (439 non-HEAD shapes remain). Twenty-three operations have no
+- Continue the OpenAPI handler audit beyond the 550 operations with success-response content; 437
+  of 987 non-`204` success operations still lack explicit success-body schemas, including the two
+  intentional bodyless `HEAD` probes (435 non-HEAD shapes remain). Twenty-seven operations have no
   declared `2xx` status and 15 have only an intentional `204`. The path/method inventory covers
-  705/705 routes and 464 operations declare security alternatives; remaining response schemas and
+  705/705 routes and 468 operations declare security alternatives; remaining response schemas and
   conditional auth behavior have not all been source-verified.
