@@ -2637,6 +2637,14 @@ paths:
       operationId: patchApiProviders
       tags: [Providers]
       summary: Batch-update provider connection activation
+      description: >-
+        Management auth is required when enabled by the local auth configuration. In standalone
+        mode with management login disabled, anonymous management calls may be permitted.
+        IDs not found are reported in `notFound`; other IDs are updated independently.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -2650,13 +2658,46 @@ paths:
               additionalProperties: false
       responses:
         "200":
-          description: Provider connections updated
+          description: Activation results, including IDs that no longer exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionsBatchUpdateResponse"
         "400":
           description: Invalid connection IDs or activation state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "410":
+          description: A retired provider cannot be activated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Batch activation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiProviders
       tags: [Providers]
       summary: Delete provider connections in a batch
+      description: >-
+        Management auth is required when enabled by the local auth configuration. In standalone
+        mode with management login disabled, anonymous management calls may be permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -2669,9 +2710,29 @@ paths:
               additionalProperties: false
       responses:
         "200":
-          description: Provider connections deleted
+          description: Number of deleted provider connections.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionsBatchDeleteResponse"
         "400":
           description: Invalid or oversized connection ID list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Batch deletion failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/providers/{id}:
     get:
@@ -3502,19 +3563,54 @@ paths:
       operationId: getApiKeysById
       tags: [API Keys]
       summary: Get API key
+      description: >-
+        Returns key metadata with the key value masked as `first8****last4` (or null if no
+        key value is stored). Full key material is available only through the separately
+        protected reveal or regenerate operations. Management auth is required when enabled
+        by the local auth configuration; standalone mode may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
           description: API key metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKey"
         "401":
-          description: Authentication required
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: Key not found
+          description: Key not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to fetch key metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiKeysById
       tags: [API Keys]
       summary: Update API key
+      description: >-
+        Partial update. The validator accepts only the documented fields and strips unknown
+        object properties. `connectionAccessMode` controls allowed-connection behavior but is
+        not echoed in the response. Management auth is required when enabled by local policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       requestBody:
@@ -3522,30 +3618,76 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: "#/components/schemas/ApiKeyPermissionsUpdate"
       responses:
         "200":
           description: API key settings updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyPermissionsUpdateResponse"
         "400":
-          description: Invalid update request
+          description: Invalid JSON, invalid fields, incompatible access settings, or policy invariant.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
         "401":
-          description: Authentication required
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: Key not found
+          description: Key not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to update key settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiKeysById
       tags: [API Keys]
       summary: Delete API key
+      description: Management auth is required when enabled by the local auth configuration.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
           description: Key deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyDeleteResponse"
         "401":
-          description: Authentication required
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: Key not found
+          description: Key not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to delete key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/combos:
     get:
@@ -10988,7 +11130,12 @@ paths:
         Lists the distinct devices (masked IP + User-Agent fingerprints)
         tracked for an API key by the in-memory device tracker. IPs are masked
         before storage; the route never sees the raw client IP.
+        Management auth is required when enabled by the local auth configuration.
       x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -10998,10 +11145,28 @@ paths:
       responses:
         "200":
           description: Distinct devices seen for the API key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyDevicesResponse"
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          $ref: "#/components/responses/NotFound"
+          description: Key not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Failed to fetch device activity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/purge-usage-history:
     post:
       operationId: postApiSettingsPurgeUsageHistory
@@ -12900,9 +13065,44 @@ paths:
       tags:
         - Keys
       summary: "POST keys › <id> › regenerate"
+      description: >-
+        Invalidates the old key immediately and returns the new full key value once. Management
+        auth is required when enabled by the local auth configuration.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Newly generated key. Store the returned secret securely.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyRegenerateResponse"
+        "400":
+          description: Key ID is missing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Key not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to regenerate key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/keys/{id}/reveal:
     parameters:
       - name: id
@@ -12915,9 +13115,44 @@ paths:
       tags:
         - Keys
       summary: "GET keys › <id> › reveal"
+      description: >-
+        Returns the full API key only when key reveal is enabled by the operator. Management
+        auth is required when enabled by the local auth configuration.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Full API key value. Treat it as a secret.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeySecretResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential is invalid or key reveal is disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Key not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to reveal key.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/keys/{id}/usage-limits:
     parameters:
       - name: id
@@ -12930,119 +13165,501 @@ paths:
       tags:
         - Keys
       summary: "GET keys › <id> › usage limits"
+      description: Management auth is required when enabled by the local auth configuration.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Configured daily/weekly limits and current spend/reset status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyUsageLimitsResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Key not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to fetch key usage limits.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/keys/groups:
     get:
       operationId: getApiKeysGroups
       tags:
         - Keys
       summary: "GET keys › groups"
+      description: >-
+        Lists API-key groups. These endpoints are classified as management routes by the central
+        auth pipeline; management authentication is required when enabled by local policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: API-key group list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyGroupListResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to list API-key groups.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiKeysGroups
       tags:
         - Keys
       summary: "POST keys › groups"
+      description: >-
+        Creates a group. Missing `description` is stored as the empty string. Malformed JSON is
+        handled by the route's generic catch and currently returns 500. Management auth is
+        configuration-dependent through the central management-route policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApiKeyGroupCreate"
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Created group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyGroupEnvelope"
+        "400":
+          description: Group fields failed validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Malformed JSON or failed to create the group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/keys/groups/{id}:
     parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
+      - $ref: "#/components/parameters/ResourceId"
     delete:
       operationId: deleteApiKeysGroupsById
       tags:
         - Keys
       summary: "DELETE keys › groups › <id>"
+      description: Central management-route authentication applies when enabled by local policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Group deleted; cascading deletion removes its members and permissions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Group not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to delete the group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiKeysGroupsById
       tags:
         - Keys
       summary: "GET keys › groups › <id>"
+      description: Returns group details, permissions, member count, and member rows.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Group details and its members.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyGroupDetailsResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Group not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to get the group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiKeysGroupsById
       tags:
         - Keys
       summary: "PUT keys › groups › <id>"
+      description: >-
+        Updates one or more group fields. At least one of `name`, `description`, or `isActive`
+        must be supplied. Malformed JSON currently returns 500 through the route's generic catch.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApiKeyGroupUpdate"
       responses:
         "200":
-          description: OK
+          description: Updated group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyGroupEnvelope"
+        "400":
+          description: Invalid group fields or empty update.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Group not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Malformed JSON or failed to update the group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/keys/groups/{id}/keys:
     parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
+      - $ref: "#/components/parameters/ResourceId"
     delete:
       operationId: deleteApiKeysGroupsByIdKeys
       tags:
         - Keys
       summary: "DELETE keys › groups › <id> › keys"
+      description: Requires `keyId`; removes that API key from the group.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: keyId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: OK
+          description: Member removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Missing keyId query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Key is not a member of the group.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to remove group member.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiKeysGroupsByIdKeys
       tags:
         - Keys
       summary: "GET keys › groups › <id> › keys"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Key-group member rows.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyGroupMembersResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Group not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to list group members.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiKeysGroupsByIdKeys
       tags:
         - Keys
       summary: "POST keys › groups › <id> › keys"
+      description: >-
+        Adds the specified API key. Duplicate membership is idempotent in storage but is still
+        reported with HTTP 201. The route checks group existence before reading JSON; malformed
+        JSON is caught by its generic error path and currently returns 500.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApiKeyGroupMemberCreate"
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Member added (or already present).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid keyId.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Group not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Malformed JSON or failed to add group member.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/keys/groups/{id}/permissions:
     parameters:
-      - name: id
-        in: path
-        required: true
-        schema:
-          type: string
+      - $ref: "#/components/parameters/ResourceId"
     delete:
       operationId: deleteApiKeysGroupsByIdPermissions
       tags:
         - Keys
       summary: "DELETE keys › groups › <id> › permissions"
+      description: >-
+        Requires `permissionId`. The current handler deletes by that ID and does not verify it
+        belongs to `{id}`; pass a permission ID returned by this group's permissions list.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: permissionId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: OK
+          description: Permission removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Missing permissionId query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Permission not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to remove group permission.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiKeysGroupsByIdPermissions
       tags:
         - Keys
       summary: "GET keys › groups › <id> › permissions"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Group permission rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyGroupPermissionsResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Group not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to list group permissions.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiKeysGroupsByIdPermissions
       tags:
         - Keys
       summary: "POST keys › groups › <id> › permissions"
+      description: >-
+        Adds a model allow/deny rule. The route checks group existence before reading JSON;
+        malformed JSON is caught by its generic error path and currently returns 500.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApiKeyGroupPermissionCreate"
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Created permission rule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyGroupPermissionEnvelope"
+        "400":
+          description: Invalid permission fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Group not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Malformed JSON or failed to add group permission.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/local/redis/start:
     post:
       operationId: postApiLocalRedisStart
@@ -13444,42 +14061,203 @@ paths:
       tags:
         - Model capability overrides
       summary: "DELETE model capability overrides"
+      description: >-
+        Removes the selected override if present and returns the current merged override list.
+        `target` must be a public `provider/model` target; internal provider-node IDs are rejected.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: target
+          in: query
+          required: true
+          schema: { type: string, minLength: 3 }
+        - name: key
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [context_length, max_input_tokens, max_output_tokens, reasoning_efforts]
       responses:
         "200":
-          description: OK
+          description: Current public override list after removal.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCapabilityOverridesResponse"
+        "400":
+          description: Missing or invalid target/key, or ambiguous provider prefix.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: The provider-prefix index or override store could not be read.
     get:
       operationId: getApiModelCapabilityOverrides
       tags:
         - Model capability overrides
       summary: "GET model capability overrides"
+      description: >-
+        Lists numeric capability and context-window overrides plus reasoning-effort overrides.
+        Compatible provider nodes are represented by their public prefix; generated internal node
+        IDs are not exposed. Management auth is required when enabled by the local policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Overrides sorted newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCapabilityOverridesResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: The provider-prefix index or override store could not be read.
     patch:
       operationId: patchApiModelCapabilityOverrides
       tags:
         - Model capability overrides
       summary: "PATCH model capability overrides"
+      description: >-
+        Upserts one override. Numeric capability values are positive integers; `reasoning_efforts`
+        accepts a comma-separated string of unique native effort names. Targets use public
+        `provider/model` IDs and ambiguous compatible-node prefixes are rejected.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelCapabilityOverrideUpsertRequest"
       responses:
         "200":
-          description: OK
+          description: Current public override list after the upsert.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelCapabilityOverridesResponse"
+        "400":
+          description: Malformed JSON, invalid value, or invalid/ambiguous model target.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ModelCapabilityOverrideValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: The provider-prefix index or override store could not be read.
   /api/model-combo-mappings:
     get:
       operationId: getApiModelComboMappings
       tags:
         - Model combo mappings
       summary: "GET model combo mappings"
+      description: Management auth is required when enabled by the local authentication policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Maximum rows; coerced to an integer from 0 through 200.
+          schema: { type: integer, minimum: 0, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          description: Number of rows to skip; coerced to a non-negative integer.
+          schema: { type: integer, minimum: 0 }
       responses:
         "200":
-          description: OK
+          description: Paginated model-to-combo mappings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelComboMappingListResponse"
+        "400":
+          description: Invalid pagination parameters.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to list model-combo mappings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiModelComboMappings
       tags:
         - Model combo mappings
       summary: "POST model combo mappings"
+      description: Management auth is required when enabled by the local authentication policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelComboMappingCreate"
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Created model-combo mapping.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelComboMappingEnvelope"
+        "400":
+          description: Invalid JSON or mapping fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to create model-combo mapping.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/model-combo-mappings/{id}:
     parameters:
       - name: id
@@ -13492,25 +14270,121 @@ paths:
       tags:
         - Model combo mappings
       summary: "DELETE model combo mappings › <id>"
+      description: Management auth is required when enabled by the local authentication policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: True when the mapping was deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Mapping not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to delete model-combo mapping.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiModelComboMappingsById
       tags:
         - Model combo mappings
       summary: "GET model combo mappings › <id>"
+      description: Management auth is required when enabled by the local authentication policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Mapping details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelComboMappingEnvelope"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Mapping not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to get model-combo mapping.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiModelComboMappingsById
       tags:
         - Model combo mappings
       summary: "PUT model combo mappings › <id>"
+      description: >-
+        Partial update; omitted fields keep their stored values. An empty object is accepted by
+        the route. Malformed JSON is caught by the route's generic catch and returns 500.
+        Management auth is required when enabled by the local authentication policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelComboMappingUpdate"
       responses:
         "200":
-          description: OK
+          description: Updated model-combo mapping.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelComboMappingEnvelope"
+        "400":
+          description: Invalid mapping fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Mapping not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Malformed JSON or failed to update model-combo mapping.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/models/openrouter-catalog:
     get:
       operationId: getApiModelsOpenrouterCatalog
@@ -13526,18 +14400,99 @@ paths:
       tags:
         - Models
       summary: "POST models › test"
+      description: >-
+        Runs one provider/model probe. A model-test failure is returned using the provider-derived
+        HTTP status and a `status: error` JSON body; test calls are management-authenticated when
+        enabled by local policy. Paid-model policy may also return 403.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelTestRequest"
       responses:
         "200":
-          description: OK
+          description: The model produced a test response.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelTestSuccessResponse"
+        "400":
+          description: Invalid JSON or model-test request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelTestErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Paid-model policy denied the probe or management credentials are invalid.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ModelTestErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Unexpected model-test failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelTestErrorResponse"
+        default:
+          description: Provider/model probe failure using the upstream-derived HTTP status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelTestErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/models/test-all:
     post:
       operationId: postApiModelsTestAll
       tags:
         - Models
       summary: "POST models › test all"
+      description: >-
+        Tests model IDs sequentially and stops early after consecutive rate limits or bot blocks.
+        Per-model failures are returned inside the HTTP 200 result map; paid models skipped by
+        policy are represented as error entries and are not dispatched. Management auth is
+        required when enabled by local policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelTestBatchRequest"
       responses:
         "200":
-          description: OK
+          description: Per-model results, with optional early-stop metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelTestBatchResponse"
+        "400":
+          description: Invalid JSON or batch request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelTestBatchValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: An uncaught batch-test failure occurred; framework error serialization applies.
   /api/network/info:
     get:
       operationId: getApiNetworkInfo
@@ -19890,6 +20845,12 @@ components:
               message: Invalid management token
               type: invalid_request
             requestId: 1b6a6ff8-d60c-4900-8d0a-25f81749f0a3
+    ManagementAuthUnavailable:
+      description: The management-authentication service is temporarily unavailable.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
     ValidationError:
       description: Request body failed validation
       content:
@@ -23988,8 +24949,10 @@ components:
         name:
           type: string
         key:
-          type: string
-          description: Masked key preview; the raw key is not returned by the list route.
+          type: [string, "null"]
+          description: >-
+            Masked key preview in the `first8****last4` form. The single-key detail route may
+            return null when a key value is unavailable; the raw key is never returned here.
         machineId:
           type: [string, "null"]
         modelAccessMode:
@@ -24112,6 +25075,251 @@ components:
         streamDefaultMode: { type: string, const: legacy }
         compressionEnabled: { type: boolean }
         cacheDefaultMode: { type: string, const: legacy }
+      additionalProperties: false
+
+    ProviderConnectionsBatchUpdateResponse:
+      type: object
+      required: [message, updated, notFound]
+      properties:
+        message: { type: string }
+        updated: { type: integer, minimum: 0 }
+        notFound:
+          type: array
+          description: Requested IDs that did not identify an existing connection.
+          items: { type: string }
+      additionalProperties: false
+
+    ProviderConnectionsBatchDeleteResponse:
+      type: object
+      required: [message, deleted]
+      properties:
+        message: { type: string }
+        deleted: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ApiKeyPermissionsUpdate:
+      type: object
+      minProperties: 1
+      description: >-
+        Partial update accepted by `updateKeyPermissionsSchema`. Unknown properties are stripped
+        by the validator. The server enforces the model-access and connection-access consistency
+        rules; `connectionAccessMode` is a control field and is not echoed in the response.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        modelAccessMode: { type: string, enum: [all, restricted] }
+        connectionAccessMode: { type: string, enum: [all, restricted] }
+        allowedModels:
+          type: array
+          maxItems: 1000
+          items: { type: string, minLength: 1 }
+        blockedModels:
+          type: array
+          items: { type: string }
+        allowedCombos:
+          type: array
+          maxItems: 500
+          items: { type: string, minLength: 1, maxLength: 200 }
+        allowedConnections:
+          type: array
+          maxItems: 100
+          items: { type: string, format: uuid }
+        noLog: { type: boolean }
+        autoResolve: { type: boolean }
+        isActive: { type: boolean }
+        throttleDelayMs: { type: integer, minimum: 0, maximum: 300000 }
+        isBanned: { type: boolean }
+        expiresAt: { type: [string, "null"], format: date-time }
+        maxSessions: { type: integer, minimum: 0, maximum: 10000 }
+        accessSchedule:
+          oneOf:
+            - $ref: "#/components/schemas/ApiKeyAccessSchedule"
+            - type: "null"
+        rateLimits:
+          oneOf:
+            - type: array
+              maxItems: 50
+              items:
+                type: object
+                required: [limit, window]
+                properties:
+                  limit: { type: integer, minimum: 1 }
+                  window: { type: integer, minimum: 1 }
+                additionalProperties: false
+            - type: "null"
+        scopes:
+          type: array
+          maxItems: 32
+          items: { type: string, minLength: 1, maxLength: 64 }
+        allowedEndpoints:
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 64 }
+        streamDefaultMode: { type: string, enum: [legacy, json] }
+        compressionEnabled: { type: boolean }
+        cacheDefaultMode: { type: string, enum: [legacy, bypass] }
+        disableNonPublicModels: { type: boolean }
+        allowUsageCommand: { type: boolean }
+        usageLimitEnabled: { type: boolean }
+        dailyUsageLimitUsd: { type: [number, "null"], minimum: 0 }
+        weeklyUsageLimitUsd: { type: [number, "null"], minimum: 0 }
+        chaosModeEnabled: { type: boolean }
+      additionalProperties: true
+
+    ApiKeyPermissionsUpdateResponse:
+      type: object
+      required: [message]
+      description: >-
+        The handler returns the success message and only the fields explicitly included in the
+        update request. `connectionAccessMode` is applied to allowedConnections but is not echoed.
+      properties:
+        message: { type: string, const: "API key settings updated successfully" }
+        name: { type: string }
+        modelAccessMode: { type: string, enum: [all, restricted] }
+        allowedModels: { type: array, items: { type: string } }
+        blockedModels: { type: array, items: { type: string } }
+        allowedCombos: { type: array, items: { type: string } }
+        allowedConnections: { type: array, items: { type: string, format: uuid } }
+        noLog: { type: boolean }
+        autoResolve: { type: boolean }
+        isActive: { type: boolean }
+        throttleDelayMs: { type: integer, minimum: 0, maximum: 300000 }
+        isBanned: { type: boolean }
+        expiresAt: { type: [string, "null"], format: date-time }
+        maxSessions: { type: integer, minimum: 0, maximum: 10000 }
+        accessSchedule:
+          oneOf:
+            - $ref: "#/components/schemas/ApiKeyAccessSchedule"
+            - type: "null"
+        rateLimits:
+          type: [array, "null"]
+          items:
+            type: object
+            required: [limit, window]
+            properties:
+              limit: { type: integer, minimum: 1 }
+              window: { type: integer, minimum: 1 }
+            additionalProperties: false
+        scopes: { type: array, items: { type: string } }
+        allowedEndpoints: { type: array, items: { type: string } }
+        streamDefaultMode: { type: string, enum: [legacy, json] }
+        compressionEnabled: { type: boolean }
+        cacheDefaultMode: { type: string, enum: [legacy, bypass] }
+        disableNonPublicModels: { type: boolean }
+        allowUsageCommand: { type: boolean }
+        usageLimitEnabled: { type: boolean }
+        dailyUsageLimitUsd: { type: [number, "null"], minimum: 0 }
+        weeklyUsageLimitUsd: { type: [number, "null"], minimum: 0 }
+        chaosModeEnabled: { type: boolean }
+      additionalProperties: false
+
+    ApiKeyAccessSchedule:
+      type: object
+      required: [enabled, from, until, days, tz]
+      properties:
+        enabled: { type: boolean }
+        from: { type: string, pattern: "^\\d{2}:\\d{2}$" }
+        until: { type: string, pattern: "^\\d{2}:\\d{2}$" }
+        days:
+          type: array
+          minItems: 1
+          maxItems: 7
+          items: { type: integer, minimum: 0, maximum: 6 }
+        tz: { type: string, minLength: 1, maxLength: 100 }
+      additionalProperties: false
+
+    ApiKeyDeleteResponse:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, const: "Key deleted successfully" }
+      additionalProperties: false
+
+    ApiKeyRegenerateResponse:
+      type: object
+      required: [message, key, id]
+      description: >-
+        Contains the new full API-key secret. Regeneration invalidates the old key immediately;
+        store the returned key securely because it is not returned again by detail/list APIs.
+      properties:
+        message: { type: string, const: "API key regenerated successfully" }
+        key: { type: string, minLength: 1, readOnly: true }
+        id: { type: string }
+      additionalProperties: false
+
+    ApiKeySecretResponse:
+      type: object
+      required: [key]
+      description: Full API key secret, returned only when operator key-reveal policy permits it.
+      properties:
+        key: { type: string, minLength: 1, readOnly: true }
+      additionalProperties: false
+
+    ApiKeyDeviceDetail:
+      type: object
+      required: [fingerprint, ip, userAgent, lastSeen]
+      description: The fingerprint is truncated and IP is masked before it is stored.
+      properties:
+        fingerprint: { type: string, minLength: 1, maxLength: 12 }
+        ip: { type: string }
+        userAgent: { type: string }
+        lastSeen: { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+      additionalProperties: false
+
+    ApiKeyDevicesResponse:
+      type: object
+      required: [keyId, name, count, devices]
+      properties:
+        keyId: { type: string }
+        name: { type: string }
+        count: { type: integer, minimum: 0 }
+        devices:
+          type: array
+          items: { $ref: "#/components/schemas/ApiKeyDeviceDetail" }
+      additionalProperties: false
+
+    ApiKeyUsageLimitStatus:
+      type: object
+      required:
+        - enabled
+        - dailyLimitUsd
+        - weeklyLimitUsd
+        - dailySpentUsd
+        - weeklySpentUsd
+        - dailyWindowStartIso
+        - dailyResetAtIso
+        - weeklyWindowStartIso
+        - weeklyResetAtIso
+        - dailyExceeded
+        - weeklyExceeded
+      properties:
+        enabled: { type: boolean }
+        dailyLimitUsd: { type: [number, "null"], minimum: 0 }
+        weeklyLimitUsd: { type: [number, "null"], minimum: 0 }
+        dailySpentUsd: { type: number, minimum: 0 }
+        weeklySpentUsd: { type: number, minimum: 0 }
+        dailyWindowStartIso: { type: string, format: date-time }
+        dailyResetAtIso: { type: string, format: date-time }
+        weeklyWindowStartIso: { type: string, format: date-time }
+        weeklyResetAtIso: { type: [string, "null"], format: date-time }
+        dailyExceeded: { type: boolean }
+        weeklyExceeded: { type: boolean }
+      additionalProperties: false
+
+    ApiKeyUsageLimitsResponse:
+      type: object
+      required: [key, status]
+      properties:
+        key:
+          type: object
+          required: [id, name, usageLimitEnabled, dailyUsageLimitUsd, weeklyUsageLimitUsd]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            usageLimitEnabled: { type: boolean }
+            dailyUsageLimitUsd: { type: [number, "null"], minimum: 0 }
+            weeklyUsageLimitUsd: { type: [number, "null"], minimum: 0 }
+          additionalProperties: false
+        status: { $ref: "#/components/schemas/ApiKeyUsageLimitStatus" }
       additionalProperties: false
 
     CallLogSummary:
@@ -27334,3 +28542,395 @@ components:
             additionalProperties: true
         total: { type: integer, minimum: 0 }
       additionalProperties: false
+
+    ModelCapabilityOverrideNumeric:
+      type: object
+      required: [provider, modelId, target, key, value, refreshedAt]
+      properties:
+        provider:
+          type: string
+          description: Public provider ID or configured compatible-node prefix.
+        modelId: { type: string }
+        target: { type: string, description: Public `provider/model` target. }
+        key:
+          type: string
+          enum: [context_length, max_input_tokens, max_output_tokens, max_token]
+          description: "Legacy read-only max_token entries may appear in stored rows; current writes do not accept this key."
+        value: { type: integer, minimum: 1 }
+        refreshedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ModelCapabilityOverrideReasoningEfforts:
+      type: object
+      required: [provider, modelId, target, key, value, refreshedAt]
+      properties:
+        provider:
+          type: string
+          description: Public provider ID or configured compatible-node prefix.
+        modelId: { type: string }
+        target: { type: string, description: Public `provider/model` target. }
+        key: { type: string, const: reasoning_efforts }
+        value:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [none, low, medium, high, xhigh, max, ultra]
+        refreshedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ModelCapabilityOverride:
+      oneOf:
+        - $ref: "#/components/schemas/ModelCapabilityOverrideNumeric"
+        - $ref: "#/components/schemas/ModelCapabilityOverrideReasoningEfforts"
+
+    ModelCapabilityOverridesResponse:
+      type: object
+      required: [overrides]
+      properties:
+        overrides:
+          type: array
+          description: Merged capability and context overrides, newest first.
+          items: { $ref: "#/components/schemas/ModelCapabilityOverride" }
+      additionalProperties: false
+
+    ModelCapabilityOverrideUpsertRequest:
+      oneOf:
+        - type: object
+          required: [target, key, value]
+          properties:
+            target: { type: string, minLength: 3, description: Public `provider/model` target. }
+            key:
+              type: string
+              enum: [context_length, max_input_tokens, max_output_tokens]
+            value:
+              type: [integer, string]
+              description: Coerced to a positive integer by the route before persistence.
+          additionalProperties: true
+        - type: object
+          required: [target, key, value]
+          properties:
+            target: { type: string, minLength: 3, description: Public `provider/model` target. }
+            key: { type: string, const: reasoning_efforts }
+            value:
+              type: string
+              minLength: 1
+              description: >-
+                Comma-separated, case-insensitive, unique effort names: none, low, medium, high,
+                xhigh, max, or ultra. Only ASCII commas are accepted.
+          additionalProperties: true
+
+    ModelCapabilityOverrideValidationIssue:
+      type: object
+      required: [code, path, message]
+      properties:
+        code: { type: string }
+        path:
+          type: array
+          items: { type: [string, integer] }
+        message: { type: string }
+      additionalProperties: true
+
+    ModelCapabilityOverrideValidationErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: array
+          items: { $ref: "#/components/schemas/ModelCapabilityOverrideValidationIssue" }
+      additionalProperties: false
+
+    ModelComboMapping:
+      type: object
+      required: [id, pattern, comboId, priority, enabled, description, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        pattern: { type: string, minLength: 1, maxLength: 500 }
+        comboId: { type: string, minLength: 1 }
+        comboName: { type: string }
+        priority: { type: integer }
+        enabled: { type: boolean }
+        description: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ModelComboMappingListResponse:
+      type: object
+      required: [mappings, total]
+      properties:
+        mappings:
+          type: array
+          items: { $ref: "#/components/schemas/ModelComboMapping" }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ModelComboMappingEnvelope:
+      type: object
+      required: [mapping]
+      properties:
+        mapping: { $ref: "#/components/schemas/ModelComboMapping" }
+      additionalProperties: false
+
+    ModelComboMappingCreate:
+      type: object
+      required: [pattern, comboId]
+      properties:
+        pattern: { type: string, minLength: 1, maxLength: 500 }
+        comboId: { type: string, minLength: 1 }
+        priority: { type: integer, default: 0 }
+        enabled: { type: boolean, default: true }
+        description: { type: string, maxLength: 1000, default: "" }
+      additionalProperties: true
+
+    ModelComboMappingUpdate:
+      type: object
+      description: All fields are optional; an empty object is accepted by the route.
+      properties:
+        pattern: { type: string, minLength: 1, maxLength: 500 }
+        comboId: { type: string, minLength: 1 }
+        priority: { type: integer }
+        enabled: { type: boolean }
+        description: { type: string, maxLength: 1000 }
+      additionalProperties: true
+
+    ModelTestRequest:
+      type: object
+      required: [providerId, modelId]
+      properties:
+        providerId: { type: string, minLength: 1 }
+        modelId: { type: string, minLength: 1 }
+        connectionId: { type: string, minLength: 1 }
+      additionalProperties: true
+
+    ModelTestSuccessResponse:
+      type: object
+      required: [status, latencyMs]
+      properties:
+        status: { type: string, const: ok }
+        latencyMs: { type: number, minimum: 0 }
+        responseText: { type: string }
+      additionalProperties: false
+
+    ModelTestErrorResponse:
+      type: object
+      required: [status, error]
+      description: >-
+        Model test failures use `status: error`; provider-derived failures may also include
+        measured latency, upstream status, rate-limit indication, and retry delay.
+      properties:
+        status: { type: string, const: error }
+        latencyMs: { type: number, minimum: 0 }
+        error: { type: string }
+        statusCode: { type: integer, minimum: 100, maximum: 599 }
+        rateLimited: { type: boolean, const: true }
+        retryAfter: { type: number, minimum: 0, description: Retry delay in seconds. }
+      additionalProperties: false
+
+    ModelTestBatchRequest:
+      type: object
+      required: [providerId, modelIds]
+      properties:
+        providerId: { type: string, minLength: 1 }
+        modelIds:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, minLength: 1 }
+        connectionId: { type: string }
+        respectRateLimit: { type: boolean, default: true }
+        autoHideFailed: { type: boolean, default: false }
+      additionalProperties: true
+
+    ModelTestBatchEntry:
+      type: object
+      required: [status, latencyMs]
+      properties:
+        status: { type: string, enum: [ok, error, slow] }
+        latencyMs: { type: number, minimum: 0 }
+        responseText: { type: string }
+        error: { type: string }
+        statusCode: { type: integer, minimum: 100, maximum: 599 }
+        rateLimited: { type: boolean, const: true }
+        isTransient: { type: boolean, const: true }
+        isQuota: { type: boolean, const: true }
+        hidden: { type: boolean, const: true }
+        isTimeout: { type: boolean, const: true }
+      additionalProperties: false
+
+    ModelTestBatchResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: object
+          description: Map from requested model ID to its individual test result.
+          additionalProperties:
+            $ref: "#/components/schemas/ModelTestBatchEntry"
+        stoppedEarly: { type: boolean, const: true }
+        stopReason:
+          type: string
+          enum: [consecutive_rate_limits, consecutive_bot_blocks]
+      additionalProperties: false
+
+    ModelTestBatchValidationErrorResponse:
+      type: object
+      required: [error]
+      description: Zod's formatted validation error tree is returned as the `error` object.
+      properties:
+        error: { type: object, additionalProperties: true }
+      additionalProperties: false
+
+    ApiKeyGroup:
+      type: object
+      required: [id, name, description, isActive, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        isActive: { type: boolean }
+        createdAt:
+          type: string
+          description: Timestamp text as stored; legacy rows may use SQLite datetime format.
+        updatedAt:
+          type: string
+          description: Timestamp text as stored; updates use SQLite datetime format.
+      additionalProperties: false
+
+    ApiKeyGroupWithPermissions:
+      type: object
+      required: [id, name, description, isActive, createdAt, updatedAt, permissions, memberCount]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        isActive: { type: boolean }
+        createdAt:
+          type: string
+          description: Timestamp text as stored; legacy rows may use SQLite datetime format.
+        updatedAt:
+          type: string
+          description: Timestamp text as stored; updates use SQLite datetime format.
+        permissions:
+          type: array
+          items: { $ref: "#/components/schemas/ApiKeyGroupPermission" }
+        memberCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ApiKeyGroupPermission:
+      type: object
+      required: [id, groupId, modelPattern, provider, accessType, createdAt]
+      properties:
+        id: { type: string }
+        groupId: { type: string }
+        modelPattern: { type: string }
+        provider: { type: [string, "null"] }
+        accessType: { type: string, enum: [allow, deny] }
+        createdAt:
+          type: string
+          description: Timestamp text as stored; legacy rows may use SQLite datetime format.
+      additionalProperties: false
+
+    ApiKeyGroupMember:
+      type: object
+      required: [keyId, groupId, createdAt]
+      properties:
+        keyId: { type: string }
+        groupId: { type: string }
+        createdAt:
+          type: string
+          description: Timestamp text as stored; membership rows use SQLite datetime format.
+      additionalProperties: false
+
+    ApiKeyGroupListResponse:
+      type: object
+      required: [groups]
+      properties:
+        groups:
+          type: array
+          items: { $ref: "#/components/schemas/ApiKeyGroup" }
+      additionalProperties: false
+
+    ApiKeyGroupEnvelope:
+      type: object
+      required: [group]
+      properties:
+        group: { $ref: "#/components/schemas/ApiKeyGroup" }
+      additionalProperties: false
+
+    ApiKeyGroupDetailsResponse:
+      type: object
+      required: [group, members]
+      properties:
+        group: { $ref: "#/components/schemas/ApiKeyGroupWithPermissions" }
+        members:
+          type: array
+          items: { $ref: "#/components/schemas/ApiKeyGroupMember" }
+      additionalProperties: false
+
+    ApiKeyGroupMembersResponse:
+      type: object
+      required: [members]
+      properties:
+        members:
+          type: array
+          items: { $ref: "#/components/schemas/ApiKeyGroupMember" }
+      additionalProperties: false
+
+    ApiKeyGroupPermissionsResponse:
+      type: object
+      required: [permissions]
+      properties:
+        permissions:
+          type: array
+          items: { $ref: "#/components/schemas/ApiKeyGroupPermission" }
+      additionalProperties: false
+
+    ApiKeyGroupPermissionEnvelope:
+      type: object
+      required: [permission]
+      properties:
+        permission: { $ref: "#/components/schemas/ApiKeyGroupPermission" }
+      additionalProperties: false
+
+    ApiKeyGroupCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1 }
+        description: { type: string, default: "" }
+      description: >-
+        `name` is trimmed before validation and persistence; an omitted description defaults to
+        the empty string. Unknown keys are stripped by Zod.
+      additionalProperties: true
+
+    ApiKeyGroupUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        description: { type: string }
+        isActive: { type: boolean }
+      description: >-
+        At least one field is required. `name` is trimmed before validation; unknown keys are
+        stripped by Zod.
+      additionalProperties: true
+
+    ApiKeyGroupMemberCreate:
+      type: object
+      required: [keyId]
+      properties:
+        keyId: { type: string, minLength: 1 }
+      description: keyId is trimmed and must not be empty.
+      additionalProperties: true
+
+    ApiKeyGroupPermissionCreate:
+      type: object
+      required: [modelPattern, accessType]
+      properties:
+        modelPattern: { type: string, minLength: 1 }
+        accessType: { type: string, enum: [allow, deny] }
+        provider: { type: string, minLength: 1 }
+      description: modelPattern and provider are trimmed; provider is optional.
+      additionalProperties: true
