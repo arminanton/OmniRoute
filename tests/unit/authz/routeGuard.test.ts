@@ -118,13 +118,38 @@ test("isAlwaysProtectedPath: legacy settings export/import-json are always prote
   assert.equal(isAlwaysProtectedPath("/api/settings/proxy"), false);
 });
 
-test("isAlwaysProtectedPath: CLI credential detection and Codex settings stay authenticated with login disabled", () => {
-  assert.equal(isAlwaysProtectedPath("/api/cli-tools/detect"), true);
-  assert.equal(isAlwaysProtectedPath("/api/cli-tools/codex-settings"), true);
-  // Keep the hardening exact; ordinary status/settings siblings remain Tier 3.
-  assert.equal(isAlwaysProtectedPath("/api/cli-tools/status"), false);
-  assert.equal(isAlwaysProtectedPath("/api/cli-tools/all-statuses"), false);
-  assert.equal(isAlwaysProtectedPath("/api/cli-tools/claude-settings"), false);
+test("private CLI config, backup and log surfaces stay authenticated with login disabled", () => {
+  for (const path of [
+    "/api/cli-tools/detect",
+    "/api/cli-tools/all-statuses",
+    "/api/cli-tools/apply",
+    "/api/cli-tools/backups",
+    "/api/cli-tools/claude-settings",
+    "/api/cli-tools/cline-settings",
+    "/api/cli-tools/codewhale-settings",
+    "/api/cli-tools/codex-settings",
+    "/api/cli-tools/crush-settings",
+    "/api/cli-tools/deepseek-tui-settings",
+    "/api/cli-tools/droid-settings",
+    "/api/cli-tools/guide-settings/continue",
+    "/api/cli-tools/hermes-agent-settings",
+    "/api/cli-tools/kilo-settings",
+    "/api/cli-tools/logs",
+    "/api/cli-tools/openclaw-settings",
+    "/api/cli-tools/pi-settings",
+    "/api/cli-tools/smelt-settings",
+  ]) {
+    assert.equal(isAlwaysProtectedPath(path), true, `${path} must require identity`);
+  }
+  // Keep ordinary status, auto-order and caller-key-generated config flows in Tier 3.
+  for (const path of [
+    "/api/cli-tools/status",
+    "/api/cli-tools/openclaw/auto-order",
+    "/api/cli-tools/config",
+    "/api/cli-tools/guide-settings-extra",
+  ]) {
+    assert.equal(isAlwaysProtectedPath(path), false, `${path} remains Tier 3`);
+  }
 });
 
 test("isAlwaysProtectedPath: ordinary settings routes are not always protected", () => {

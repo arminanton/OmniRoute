@@ -7004,20 +7004,66 @@ paths:
       operationId: getApiCliToolsBackups
       tags: [CLI Tools]
       summary: List CLI tool backups
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        List CLI tool backups This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires read scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Backup list
+          x-sensitive: true
     post:
       operationId: postApiCliToolsBackups
       tags: [CLI Tools]
       summary: Create CLI tool backup
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Create CLI tool backup This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Backup created
     delete:
       operationId: deleteApiCliToolsBackups
       tags: [CLI Tools]
       summary: Delete a CLI tool backup
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Delete a CLI tool backup This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       requestBody:
         required: true
         content:
@@ -7033,6 +7079,12 @@ paths:
                 - required: [tool]
                 - required: [toolId]
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: CLI tool backup deleted
         "400":
@@ -7096,16 +7148,19 @@ paths:
       operationId: getApiCliToolsGuideSettingsByToolId
       tags: [CLI Tools]
       summary: Reject guide settings reads
-      description: >-
-        This route does not implement reads. Every request that passes the management gate returns HTTP 400 with
-        `{error: "GET not supported for this tool"}`. Use POST to save supported guide-based CLI
-        configuration. Management authentication depends on deployment settings; a valid local
-        CLI token is accepted only from loopback.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
-        - {}
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        This route does not implement reads. Every request that passes the management gate returns HTTP
+        400 with `{error: "GET not supported for this tool"}`. Use POST to save supported guide-based CLI
+        configuration. This operation is always-protected, including when requireLogin=false. An oma_live_
+        Access Token requires read scope for this operation. Bearer API keys require manage or admin.
+        Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted; anonymous
+        access is not.
       parameters:
         - name: toolId
           in: path
@@ -7129,15 +7184,16 @@ paths:
       operationId: postApiCliToolsGuideSettingsByToolId
       tags: [CLI Tools]
       summary: Save CLI tool guide settings
-      description: >-
-        Writes supported connection settings to the selected CLI tool's configuration file.
-        Management authentication depends on deployment settings; a valid local CLI token is
-        accepted only from loopback.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
-        - {}
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Writes supported connection settings to the selected CLI tool's configuration file. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write
+        scope for this operation. Bearer API keys require manage or admin. Dashboard sessions and trusted
+        loopback CLI/internal-service credentials are accepted; anonymous access is not.
       parameters:
         - name: toolId
           in: path
@@ -7382,19 +7438,19 @@ paths:
       operationId: getApiCliToolsClaudeSettings
       tags: [CLI Tools]
       summary: Read Claude CLI status and settings
-      description: >-
-        Probes whether the local Claude CLI is installed/runnable and returns its settings file.
-        The raw `settings` object can include `ANTHROPIC_AUTH_TOKEN` and other environment values,
-        so treat the response as sensitive. This route is management-classified but is not marked
-        LOCAL_ONLY or ALWAYS_PROTECTED; an unlocked install with `requireLogin=false` may permit
-        anonymous access. Protected profiles accept a `read` Access Token, a `manage` or `admin` API
-        key, a dashboard session, or trusted loopback CLI/internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
+      description: >-
+        Probes whether the local Claude CLI is installed/runnable and returns its settings file. The raw
+        `settings` object can include `ANTHROPIC_AUTH_TOKEN` and other environment values, so treat the
+        response as sensitive. This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires read scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
         "200":
           description: Claude CLI runtime status and, when readable, the full settings object.
@@ -7417,21 +7473,20 @@ paths:
       operationId: postApiCliToolsClaudeSettings
       tags: [CLI Tools]
       summary: Write Claude CLI environment settings
-      description: >-
-        Merges `env` into the local `~/.claude/settings.json` (or configured Claude settings path).
-        A supplied `keyId` is resolved to its full API-key value and written as
-        `ANTHROPIC_AUTH_TOKEN`; otherwise values from `env` are used. The file write requires CLI
-        config writes to be enabled. This route is not ALWAYS_PROTECTED; an unlocked
-        `requireLogin=false` install may permit anonymous access, including writes to the local
-        Claude settings file. Treat the request as sensitive. Protected profiles accept a `write`
-        Access Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
-        CLI/internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
+      description: >-
+        Merges `env` into the local `~/.claude/settings.json` (or configured Claude settings path). A
+        supplied `keyId` is resolved to its full API-key value and written as `ANTHROPIC_AUTH_TOKEN`;
+        otherwise values from `env` are used. The file write requires CLI config writes to be enabled.
+        This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token
+        requires write scope for this operation. Bearer API keys require manage or admin. Dashboard
+        sessions and trusted loopback CLI/internal-service credentials are accepted; anonymous access is
+        not.
       requestBody:
         required: true
         x-sensitive: true
@@ -7471,20 +7526,20 @@ paths:
       operationId: deleteApiCliToolsClaudeSettings
       tags: [CLI Tools]
       summary: Remove Claude authentication and routing environment settings
-      description: >-
-        Removes the listed Anthropic auth, base URL, model-alias, timeout, and API-key environment
-        variables from the local Claude settings file while preserving other settings. If no
-        settings file exists, returns success with a no-op message. The operation requires CLI
-        config writes to be enabled. This route is not ALWAYS_PROTECTED; an unlocked
-        `requireLogin=false` install may permit anonymous access. Protected profiles accept a
-        `write` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted
-        loopback CLI/internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
+      description: >-
+        Removes the listed Anthropic auth, base URL, model-alias, timeout, and API-key environment
+        variables from the local Claude settings file while preserving other settings. If no settings file
+        exists, returns success with a no-op message. The operation requires CLI config writes to be
+        enabled. This operation is always-protected, including when requireLogin=false. An oma_live_ Access
+        Token requires write scope for this operation. Bearer API keys require manage or admin. Dashboard
+        sessions and trusted loopback CLI/internal-service credentials are accepted; anonymous access is
+        not.
       responses:
         "200":
           description: Settings were reset or no settings file was present.
@@ -7514,19 +7569,17 @@ paths:
       operationId: getApiCliToolsClineSettings
       tags: [CLI Tools]
       summary: Get Cline CLI runtime status and settings
-      description: >-
-        Probes the local Cline executable and returns selected `globalState.json` settings and
-        their paths; the API-key value from `secrets.json` is not returned. This route is
-        management-classified but is not marked LOCAL_ONLY or ALWAYS_PROTECTED; an unlocked
-        install with `requireLogin=false` may permit anonymous access. Protected profiles accept a
-        `read` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
-        CLI/internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
+      description: >-
+        Probes the local Cline executable and returns selected `globalState.json` settings and their
+        paths; the API-key value from `secrets.json` is not returned. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires read scope for this
+        operation. Bearer API keys require manage or admin. Dashboard sessions and trusted loopback
+        CLI/internal-service credentials are accepted; anonymous access is not.
       responses:
         "200":
           description: Cline runtime status, selected settings, and configuration-file paths.
@@ -7549,22 +7602,21 @@ paths:
       operationId: postApiCliToolsClineSettings
       tags: [CLI Tools]
       summary: Configure Cline to use OmniRoute
-      description: >-
-        Writes OpenAI-compatible provider settings to Cline's `globalState.json` and stores the
-        resolved API key (or the `sk_omniroute` placeholder) in `secrets.json`. A supplied `keyId`
-        resolves to the full API-key value; otherwise `apiKey` is used. `reasoningEffort`, `wireApi`,
-        and `modelMappings` are accepted by the shared schema but ignored by this route. The
-        operation requires CLI-config writes to be enabled. This route is not ALWAYS_PROTECTED; an
-        unlocked `requireLogin=false` install may permit anonymous access and writes to local Cline
-        configuration. Treat the request as sensitive. Protected profiles accept a `write` Access
-        Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
-        CLI/internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
+      description: >-
+        Writes OpenAI-compatible provider settings to Cline's `globalState.json` and stores the resolved
+        API key (or the `sk_omniroute` placeholder) in `secrets.json`. A supplied `keyId` resolves to the
+        full API-key value; otherwise `apiKey` is used. `reasoningEffort`, `wireApi`, and `modelMappings`
+        are accepted by the shared schema but ignored by this route. The operation requires CLI-config
+        writes to be enabled. This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       requestBody:
         required: true
         x-sensitive: true
@@ -7604,20 +7656,19 @@ paths:
       operationId: deleteApiCliToolsClineSettings
       tags: [CLI Tools]
       summary: Remove OmniRoute provider settings from Cline
-      description: >-
-        If `globalState.json` exists, removes the OpenAI model/base-URL fields and resets the
-        provider to Cline when act mode currently uses OpenAI, then removes `openAiApiKey` from
-        `secrets.json`. If `globalState.json` is absent, returns a no-op success before processing
-        `secrets.json`. The operation requires CLI-config writes to be enabled. This route is not
-        ALWAYS_PROTECTED; an unlocked `requireLogin=false` install may permit anonymous access and
-        local file writes. Protected profiles accept a `write` Access Token, a `manage` or `admin`
-        API key, a dashboard session, or trusted loopback CLI/internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
+      description: >-
+        If `globalState.json` exists, removes the OpenAI model/base-URL fields and resets the provider to
+        Cline when act mode currently uses OpenAI, then removes `openAiApiKey` from `secrets.json`. If
+        `globalState.json` is absent, returns a no-op success before processing `secrets.json`. The
+        operation requires CLI-config writes to be enabled. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer
+        API keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
         "200":
           description: Settings were reset, or no globalState file was present.
@@ -7983,19 +8034,22 @@ paths:
       operationId: getApiCliToolsDroidSettings
       tags: [CLI Tools]
       summary: Get Droid CLI runtime status and settings
-      description: >-
-        Probes the local Factory Droid executable and returns the full parsed settings file, which
-        may contain API keys in OmniRoute `customModels`. This response is sensitive. The route is
-        management-classified but is not marked LOCAL_ONLY or ALWAYS_PROTECTED; an unlocked
-        install with `requireLogin=false` may permit anonymous access. Protected profiles accept a
-        `read` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
-        CLI/internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
+      description: >-
+        Probes the local Factory Droid executable and returns the full parsed settings file, which may
+        contain API keys in OmniRoute `customModels`. This response is sensitive. The route is
+        management-classified but is not marked LOCAL_ONLY or ALWAYS_PROTECTED; an unlocked install with
+        `requireLogin=false` may permit anonymous access. Protected profiles accept a `read` Access Token,
+        a `manage` or `admin` API key, a dashboard session, or trusted loopback CLI/internal-service
+        credentials. This operation is always-protected, including when requireLogin=false. An oma_live_
+        Access Token requires read scope for this operation. Bearer API keys require manage or admin.
+        Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted; anonymous
+        access is not.
       responses:
         "200":
           description: Droid runtime status and, when readable, the full settings object.
@@ -8018,21 +8072,20 @@ paths:
       operationId: postApiCliToolsDroidSettings
       tags: [CLI Tools]
       summary: Add OmniRoute custom models to Droid
-      description: >-
-        Merges OmniRoute model entries into `~/.factory/settings.json` while preserving other
-        settings and custom models. The resolved API key (or `your_api_key` placeholder) is embedded
-        in each new model entry. `keyId` is resolved before schema validation; `reasoningEffort`,
-        `wireApi`, and `modelMappings` are accepted by the shared schema but ignored by this route.
-        The operation requires CLI-config writes to be enabled. This route is not ALWAYS_PROTECTED;
-        an unlocked `requireLogin=false` install may permit anonymous access and local file writes.
-        Treat the request as sensitive. Protected profiles accept a `write` Access Token, a `manage`
-        or `admin` API key, a dashboard session, or trusted loopback CLI/internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
+      description: >-
+        Merges OmniRoute model entries into `~/.factory/settings.json` while preserving other settings and
+        custom models. The resolved API key (or `your_api_key` placeholder) is embedded in each new model
+        entry. `keyId` is resolved before schema validation; `reasoningEffort`, `wireApi`, and
+        `modelMappings` are accepted by the shared schema but ignored by this route. The operation
+        requires CLI-config writes to be enabled. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       requestBody:
         required: true
         x-sensitive: true
@@ -8072,19 +8125,18 @@ paths:
       operationId: deleteApiCliToolsDroidSettings
       tags: [CLI Tools]
       summary: Remove OmniRoute custom models from Droid
-      description: >-
-        Removes only custom models whose ids begin with `custom:OmniRoute`, preserving other Droid
-        settings and custom models. If the settings file is absent, returns a no-op success. The
-        operation requires CLI-config writes to be enabled. This route is not ALWAYS_PROTECTED; an
-        unlocked `requireLogin=false` install may permit anonymous access and local file writes.
-        Protected profiles accept a `write` Access Token, a `manage` or `admin` API key, a dashboard
-        session, or trusted loopback CLI/internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
+      description: >-
+        Removes only custom models whose ids begin with `custom:OmniRoute`, preserving other Droid
+        settings and custom models. If the settings file is absent, returns a no-op success. The operation
+        requires CLI-config writes to be enabled. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
         "200":
           description: OmniRoute models were removed or no settings file was present.
@@ -8114,13 +8166,41 @@ paths:
       operationId: getApiCliToolsKiloSettings
       tags: [CLI Tools]
       summary: Get Kilo CLI settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Get Kilo CLI settings This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires read scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Kilo CLI configuration
     post:
       operationId: postApiCliToolsKiloSettings
       tags: [CLI Tools]
       summary: Apply Kilo CLI settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Apply Kilo CLI settings This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       requestBody:
         required: true
         content:
@@ -8128,13 +8208,36 @@ paths:
             schema:
               type: object
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Kilo CLI settings applied
     delete:
       operationId: deleteApiCliToolsKiloSettings
       tags: [CLI Tools]
       summary: Reset Kilo CLI settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Reset Kilo CLI settings This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Kilo CLI settings reset
 
@@ -8143,13 +8246,42 @@ paths:
       operationId: getApiCliToolsOpenclawSettings
       tags: [CLI Tools]
       summary: Get OpenClaw CLI settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Get OpenClaw CLI settings This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires read scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
+          x-sensitive: true
           description: OpenClaw CLI configuration
     post:
       operationId: postApiCliToolsOpenclawSettings
       tags: [CLI Tools]
       summary: Apply OpenClaw CLI settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Apply OpenClaw CLI settings This operation is always-protected, including when requireLogin=false.
+        An oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage
+        or admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       requestBody:
         required: true
         content:
@@ -8157,13 +8289,36 @@ paths:
             schema:
               type: object
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OpenClaw CLI settings applied
     delete:
       operationId: deleteApiCliToolsOpenclawSettings
       tags: [CLI Tools]
       summary: Reset OpenClaw CLI settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Reset OpenClaw CLI settings This operation is always-protected, including when requireLogin=false.
+        An oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage
+        or admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OpenClaw CLI settings reset
 
@@ -15216,19 +15371,48 @@ paths:
       tags:
         - CLI Tools
       summary: Read Crush CLI OmniRoute config
-      description: Local-only. Reads the OmniRoute provider block in Crush's config.
-      x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Reads the OmniRoute provider block in Crush's config. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires read scope for this operation. Bearer
+        API keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
+          x-sensitive: true
           description: Current Crush config state.
     post:
       operationId: postApiCliToolsCrushSettings
       tags:
         - CLI Tools
       summary: Write Crush CLI OmniRoute config
-      description: Local-only. Registers OmniRoute as an `openai-compat` provider in Crush's config.
-      x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Registers OmniRoute as an `openai-compat` provider in Crush's config. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for
+        this operation. Bearer API keys require manage or admin. Dashboard sessions and trusted loopback
+        CLI/internal-service credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Crush config updated.
     delete:
@@ -15236,9 +15420,23 @@ paths:
       tags:
         - CLI Tools
       summary: Remove OmniRoute from Crush CLI config
-      description: Local-only. Removes the OmniRoute provider block from Crush's config.
-      x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Removes the OmniRoute provider block from Crush's config. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this
+        operation. Bearer API keys require manage or admin. Dashboard sessions and trusted loopback
+        CLI/internal-service credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Crush config entry removed.
   /api/cli-tools/codewhale-settings:
@@ -15247,22 +15445,50 @@ paths:
       tags:
         - CLI Tools
       summary: Read CodeWhale CLI OmniRoute config
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
       description: >-
-        Local-only. Reads the OmniRoute config block from
-        `~/.codewhale/config.toml` (with `~/.deepseek/config.toml` legacy
-        fallback).
-      x-internal: true
+        Reads the OmniRoute config block from `~/.codewhale/config.toml` (with `~/.deepseek/config.toml`
+        legacy fallback). This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires read scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
+          x-sensitive: true
           description: Current CodeWhale config state.
     post:
       operationId: postApiCliToolsCodewhaleSettings
       tags:
         - CLI Tools
       summary: Write CodeWhale CLI OmniRoute config
-      description: Local-only. Writes the OmniRoute config block in CodeWhale TOML format.
-      x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Writes the OmniRoute config block in CodeWhale TOML format. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this
+        operation. Bearer API keys require manage or admin. Dashboard sessions and trusted loopback
+        CLI/internal-service credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: CodeWhale config updated.
     delete:
@@ -15270,9 +15496,23 @@ paths:
       tags:
         - CLI Tools
       summary: Remove OmniRoute from CodeWhale CLI config
-      description: Local-only. Removes the OmniRoute config block from CodeWhale's config.
-      x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Removes the OmniRoute config block from CodeWhale's config. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this
+        operation. Bearer API keys require manage or admin. Dashboard sessions and trusted loopback
+        CLI/internal-service credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: CodeWhale config entry removed.
 
@@ -16123,16 +16363,17 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › all statuses"
-      description: >-
-        Returns a per-tool snapshot with runtime detection and configuration status. Management
-        authentication is required when management login is enabled; a valid local CLI token is
-        accepted only from loopback, and deployments that disable management login may allow
-        anonymous access. This handler reads local config files and probes CLI runtime status.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
-        - {}
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        Returns a per-tool snapshot with runtime detection and configuration status. This handler reads
+        local config files and probes CLI runtime status. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires read scope for this operation. Bearer
+        API keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       parameters:
         - name: refresh
           in: query
@@ -16142,6 +16383,7 @@ paths:
       responses:
         "200":
           description: Runtime and configuration status keyed by CLI tool id.
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -16164,9 +16406,27 @@ paths:
       tags:
         - Cli tools
       summary: "POST cli tools › apply"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        POST cli tools › apply This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires admin scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
+          x-sensitive: true
   /api/cli-tools/config:
     get:
       operationId: getApiCliToolsConfig
@@ -16190,7 +16450,23 @@ paths:
       tags:
         - Cli tools
       summary: "DELETE cli tools › deepseek tui settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        DELETE cli tools › deepseek tui settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
     get:
@@ -16198,15 +16474,48 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › deepseek tui settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        GET cli tools › deepseek tui settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires read scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
+          x-sensitive: true
           description: OK
     post:
       operationId: postApiCliToolsDeepseekTuiSettings
       tags:
         - Cli tools
       summary: "POST cli tools › deepseek tui settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        POST cli tools › deepseek tui settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
   /api/cli-tools/detect:
@@ -16322,7 +16631,23 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › hermes agent settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        GET cli tools › hermes agent settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires read scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
     post:
@@ -16330,7 +16655,23 @@ paths:
       tags:
         - Cli tools
       summary: "POST cli tools › hermes agent settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        POST cli tools › hermes agent settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
   /api/cli-tools/jcode-settings:
@@ -16431,8 +16772,26 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › logs"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        GET cli tools › logs This operation is always-protected, including when requireLogin=false. An
+        oma_live_ Access Token requires read scope for this operation. Bearer API keys require manage or
+        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
+          x-sensitive: true
           description: OK
   /api/cli-tools/omp-settings:
     delete:
@@ -16477,7 +16836,23 @@ paths:
       tags:
         - Cli tools
       summary: "DELETE cli tools › pi settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        DELETE cli tools › pi settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
     get:
@@ -16485,15 +16860,50 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › pi settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        GET cli tools › pi settings This operation is always-protected, including when requireLogin=false.
+        An oma_live_ Access Token requires read scope for this operation. Bearer API keys require manage
+        or admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
+          x-sensitive: true
           description: OK
     post:
       operationId: postApiCliToolsPiSettings
       tags:
         - Cli tools
       summary: "POST cli tools › pi settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        POST cli tools › pi settings This operation is always-protected, including when requireLogin=false.
+        An oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage
+        or admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
+        anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
   /api/cli-tools/qwen-settings:
@@ -16530,7 +16940,23 @@ paths:
       tags:
         - Cli tools
       summary: "DELETE cli tools › smelt settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        DELETE cli tools › smelt settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
     get:
@@ -16538,15 +16964,48 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › smelt settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        GET cli tools › smelt settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires read scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
+          x-sensitive: true
           description: OK
     post:
       operationId: postApiCliToolsSmeltSettings
       tags:
         - Cli tools
       summary: "POST cli tools › smelt settings"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
+      description: >-
+        POST cli tools › smelt settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer API
+        keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
   /api/cli-tools/status:

@@ -47,6 +47,37 @@ const HARD_GATED_INVENTORY: ReadonlyArray<{ path: string; why: string }> = [
     path: "/api/cli-tools/codex-settings",
     why: "returns local Codex configuration and writes the API key into auth.json",
   },
+  { path: "/api/cli-tools/all-statuses", why: "reads host CLI configuration endpoints and status" },
+  { path: "/api/cli-tools/apply", why: "writes caller-supplied credentials into host CLI files" },
+  { path: "/api/cli-tools/backups", why: "restores or deletes local CLI config/auth backups" },
+  {
+    path: "/api/cli-tools/claude-settings",
+    why: "returns Claude settings that can contain auth tokens",
+  },
+  { path: "/api/cli-tools/cline-settings", why: "writes the Cline secrets file" },
+  { path: "/api/cli-tools/codewhale-settings", why: "reads and writes a raw TOML API-key config" },
+  { path: "/api/cli-tools/crush-settings", why: "reads and writes provider api_key config" },
+  {
+    path: "/api/cli-tools/deepseek-tui-settings",
+    why: "reads and writes a raw TOML API-key config",
+  },
+  {
+    path: "/api/cli-tools/droid-settings",
+    why: "returns settings that can contain custom-model API keys",
+  },
+  {
+    path: "/api/cli-tools/guide-settings/continue",
+    why: "writes host CLI config with a resolved or generated API key",
+  },
+  {
+    path: "/api/cli-tools/hermes-agent-settings",
+    why: "writes Hermes config and API-key metadata",
+  },
+  { path: "/api/cli-tools/kilo-settings", why: "writes Kilo auth.json and extension settings" },
+  { path: "/api/cli-tools/logs", why: "returns private application log entries" },
+  { path: "/api/cli-tools/openclaw-settings", why: "reads and writes provider API-key config" },
+  { path: "/api/cli-tools/pi-settings", why: "reads and writes local config containing apiKey" },
+  { path: "/api/cli-tools/smelt-settings", why: "reads and writes local config containing apiKey" },
   {
     path: "/api/cli-tools/keys",
     why: "returns every stored API key in rawKey to CLI-tools consumers",

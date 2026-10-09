@@ -50,7 +50,7 @@ test("Claude settings operations match the management route and conditional auth
     const upper = method.toUpperCase();
     const op = operation(method);
     assert.equal(classifyRoute(ROUTE, upper).routeClass, "MANAGEMENT");
-    assert.equal(isAlwaysProtectedPath(ROUTE), false);
+    assert.equal(isAlwaysProtectedPath(ROUTE), true);
     assert.equal(isLocalOnlyPath(ROUTE, upper), false);
     assert.equal(inferRequiredScope(upper, ROUTE), method === "get" ? "read" : "write");
     for (const scheme of [
@@ -64,11 +64,12 @@ test("Claude settings operations match the management route and conditional auth
         `${upper} must document ${scheme}`
       );
     }
+    assert.equal(op["x-always-protected"], true);
     assert.ok(
-      op.security?.some((entry: Record<string, unknown>) => Object.keys(entry).length === 0),
-      `${upper} may be anonymous when requireLogin=false`
+      !op.security?.some((entry: Record<string, unknown>) => Object.keys(entry).length === 0),
+      `${upper} must not document anonymous access`
     );
-    assert.match(op.description ?? "", /requireLogin=false/);
+    assert.match(op.description ?? "", /always-protected.*requireLogin=false/s);
     assert.ok(op.responses?.["401"] && op.responses?.["403"] && op.responses?.["503"]);
   }
 });
@@ -119,7 +120,7 @@ test("Claude settings schemas document raw settings exposure, key resolution, an
   assert.ok(getSource.includes("hasOmniRoute: hasOmniRoute"));
   assert.ok(getSource.includes("settingsPath: getClaudeSettingsPath()"));
   assert.doesNotMatch(getSource, /\b(?:requiresBinary|version):/);
-  assert.match(read.description, /not marked LOCAL_ONLY or ALWAYS_PROTECTED/i);
+  assert.match(read.description, /always-protected.*requireLogin=false/s);
 
   const write = operation("post");
   assert.equal(

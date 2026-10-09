@@ -133,15 +133,29 @@ test("managementPolicy: CLI key listing still requires management auth when logi
   }
 });
 
-test("managementPolicy: CLI secret/config surfaces still require credentials when login is disabled", async () => {
+test("managementPolicy: gated CLI config surfaces reject anonymous no-login requests", async () => {
   await settingsDb.updateSettings({ requireLogin: false, password: null });
   const policy = await loadPolicy();
-  const targets = [
-    ["GET", "/api/cli-tools/detect"],
-    ["GET", "/api/cli-tools/codex-settings"],
-    ["POST", "/api/cli-tools/codex-settings"],
-    ["DELETE", "/api/cli-tools/codex-settings"],
-  ] as const;
+  const targets = Object.entries({
+    "/api/cli-tools/detect": ["GET"],
+    "/api/cli-tools/all-statuses": ["GET"],
+    "/api/cli-tools/apply": ["POST"],
+    "/api/cli-tools/backups": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/claude-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/cline-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/codewhale-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/codex-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/crush-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/deepseek-tui-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/droid-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/guide-settings/continue": ["GET", "POST"],
+    "/api/cli-tools/hermes-agent-settings": ["GET", "POST"],
+    "/api/cli-tools/kilo-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/logs": ["GET"],
+    "/api/cli-tools/openclaw-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/pi-settings": ["GET", "POST", "DELETE"],
+    "/api/cli-tools/smelt-settings": ["GET", "POST", "DELETE"],
+  }).flatMap(([path, methods]) => methods.map((method) => [method, path] as const));
 
   for (const [method, path] of targets) {
     for (const context of [
@@ -149,31 +163,6 @@ test("managementPolicy: CLI secret/config surfaces still require credentials whe
       remoteCtx(new Headers(), method, path),
     ]) {
       const out = await policy.evaluate(context);
-      assert.equal(out.allow, false, `${method} ${path} must reject anonymous access`);
-      if (!out.allow) {
-        assert.equal(out.status, 401);
-        assert.equal(out.code, "AUTH_001");
-      }
-    }
-  }
-});
-
-test("managementPolicy: sensitive CLI detection and Codex settings reject anonymous no-login requests", async () => {
-  await settingsDb.updateSettings({ requireLogin: false, password: null });
-  const policy = await loadPolicy();
-  const targets = [
-    ["GET", "/api/cli-tools/detect"],
-    ["GET", "/api/cli-tools/codex-settings"],
-    ["POST", "/api/cli-tools/codex-settings"],
-    ["DELETE", "/api/cli-tools/codex-settings"],
-  ] as const;
-
-  for (const [method, path] of targets) {
-    for (const requestContext of [
-      ctx(new Headers(), method, path),
-      remoteCtx(new Headers(), method, path),
-    ]) {
-      const out = await policy.evaluate(requestContext);
       assert.equal(out.allow, false, `${method} ${path} must reject anonymous access`);
       if (!out.allow) {
         assert.equal(out.status, 401);

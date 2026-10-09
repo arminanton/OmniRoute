@@ -153,6 +153,23 @@ export const ALWAYS_PROTECTED_API_PATHS: ReadonlyArray<string> = [
   // Codex settings reads local config and writes auth.json/config.toml. Keep the
   // complete settings lifecycle behind an identity even when login is disabled.
   "/api/cli-tools/codex-settings",
+  // Sensitive CLI settings/config files and restore surfaces must not be exposed
+  // or mutated anonymously when management login is disabled.
+  "/api/cli-tools/all-statuses",
+  "/api/cli-tools/apply",
+  "/api/cli-tools/backups",
+  "/api/cli-tools/claude-settings",
+  "/api/cli-tools/cline-settings",
+  "/api/cli-tools/codewhale-settings",
+  "/api/cli-tools/crush-settings",
+  "/api/cli-tools/deepseek-tui-settings",
+  "/api/cli-tools/droid-settings",
+  "/api/cli-tools/hermes-agent-settings",
+  "/api/cli-tools/kilo-settings",
+  "/api/cli-tools/logs",
+  "/api/cli-tools/openclaw-settings",
+  "/api/cli-tools/pi-settings",
+  "/api/cli-tools/smelt-settings",
   // Bulk log export: call_logs carries prompts and responses, proxy_logs carries
   // client/public IPs, and the handler only calls requireManagementAuth() with no
   // alwaysRequireAuth. Found sweeping the GHSA-5926-2w35-7h4q class.
@@ -189,6 +206,9 @@ export const ALWAYS_PROTECTED_API_PATTERNS: ReadonlyArray<RegExp> = [
   // closes the anonymous hole without breaking an operator driving the dashboard
   // through a tunnel.
   /^\/api\/providers\/[^/]+\/(claude|codex)-auth\/(export|apply-local)\/?$/,
+  // The route has one dynamic tool-id segment. Match that exact shape without
+  // turning similarly named CLI routes into protected-prefix children.
+  /^\/api\/cli-tools\/guide-settings\/[^/]+$/,
 ];
 
 export function isLoopbackHost(hostHeader: string | null): boolean {

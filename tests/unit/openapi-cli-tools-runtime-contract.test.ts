@@ -77,18 +77,18 @@ test("CLI tools status endpoints match their source response contracts and auth 
     "#/components/schemas/CliToolsDetectResponse"
   );
 
-  for (const route of [
-    "/api/cli-tools/status",
-    "/api/cli-tools/all-statuses",
-    "/api/cli-tools/detect",
-  ]) {
+  const status = operation("/api/cli-tools/status", "get");
+  assert.equal(isAnonymousAlternative(status), true, "ordinary status remains Tier 3");
+  assert.match(status.description ?? "", /management login is enabled/i);
+  assert.ok(status.responses?.["401"]);
+  assert.ok(status.responses?.["403"]);
+  assert.ok(status.responses?.["503"]);
+
+  for (const route of ["/api/cli-tools/all-statuses", "/api/cli-tools/detect"]) {
     const op = operation(route, "get");
-    assert.equal(
-      isAnonymousAlternative(op),
-      true,
-      `${route} documents the requireLogin=false case`
-    );
-    assert.match(op.description ?? "", /management login is enabled/i);
+    assert.equal(isAnonymousAlternative(op), false, `${route} must not allow anonymous access`);
+    assert.equal(op["x-always-protected"], true);
+    assert.match(op.description ?? "", /always-protected, including when `?requireLogin=false`?/);
     assert.ok(op.responses?.["401"]);
     assert.ok(op.responses?.["403"]);
     assert.ok(op.responses?.["503"]);
