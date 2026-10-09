@@ -676,6 +676,23 @@ test(
           await import("../../src/lib/usage/callLogArtifactWriter.ts");
         const writerSnapshot = getCallLogArtifactWriterSnapshot();
         console.log(`ANTIGRAVITY_ARTIFACT_WRITER ${JSON.stringify(writerSnapshot)}`);
+        if (process.env.ANTIGRAVITY_CAPTURE_REFUSAL_GAUGE_BENCH === "1") {
+          const refusalGauges = {
+            total: writerSnapshot.preparationRefusalsTotal,
+            invalidEstimate: writerSnapshot.preparationRefusalsInvalidEstimateTotal,
+            singleArtifactBudget: writerSnapshot.preparationRefusalsSingleArtifactBudgetTotal,
+            aggregateReservationBudget:
+              writerSnapshot.preparationRefusalsAggregateReservationBudgetTotal,
+          };
+          assert.equal(
+            refusalGauges.total,
+            refusalGauges.invalidEstimate +
+              refusalGauges.singleArtifactBudget +
+              refusalGauges.aggregateReservationBudget,
+            "preparation refusal total must equal the sum of its reason-specific counters"
+          );
+          console.log(`ANTIGRAVITY_PREPARATION_REFUSAL_GAUGES ${JSON.stringify(refusalGauges)}`);
+        }
         assert.equal(writerSnapshot.activeJobs, 0, "artifact writer should have no active jobs");
         assert.equal(writerSnapshot.queuedArtifacts, 0, "artifact writer queue should drain");
         assert.equal(writerSnapshot.queuedDiagnosticStubs, 0, "diagnostic stub queue should drain");
