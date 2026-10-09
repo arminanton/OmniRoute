@@ -7381,30 +7381,133 @@ paths:
     get:
       operationId: getApiCliToolsClaudeSettings
       tags: [CLI Tools]
-      summary: Get Claude CLI settings
+      summary: Read Claude CLI status and settings
+      description: >-
+        Probes whether the local Claude CLI is installed/runnable and returns its settings file.
+        The raw `settings` object can include `ANTHROPIC_AUTH_TOKEN` and other environment values,
+        so treat the response as sensitive. This route is management-classified but is not marked
+        LOCAL_ONLY or ALWAYS_PROTECTED; an unlocked install with `requireLogin=false` may permit
+        anonymous access. Protected profiles accept a `read` Access Token, a `manage` or `admin` API
+        key, a dashboard session, or trusted loopback CLI/internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Claude CLI configuration
+          description: Claude CLI runtime status and, when readable, the full settings object.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClaudeCliSettingsStatusResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Runtime status or settings read failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCliToolsClaudeSettings
       tags: [CLI Tools]
-      summary: Apply Claude CLI settings
+      summary: Write Claude CLI environment settings
+      description: >-
+        Merges `env` into the local `~/.claude/settings.json` (or configured Claude settings path).
+        A supplied `keyId` is resolved to its full API-key value and written as
+        `ANTHROPIC_AUTH_TOKEN`; otherwise values from `env` are used. The file write requires CLI
+        config writes to be enabled. This route is not ALWAYS_PROTECTED; an unlocked
+        `requireLogin=false` install may permit anonymous access, including writes to the local
+        Claude settings file. Treat the request as sensitive. Protected profiles accept a `write`
+        Access Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
+        CLI/internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/ClaudeSettingsUpdateRequest"
       responses:
         "200":
-          description: Claude CLI settings applied
+          description: Settings file was updated; no raw credential is returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClaudeSettingsUpdateResponse" }
+        "400":
+          description: Invalid JSON body or env mapping failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Authentication was rejected or CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Settings file could not be read or written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiCliToolsClaudeSettings
       tags: [CLI Tools]
-      summary: Reset Claude CLI settings
+      summary: Remove Claude authentication and routing environment settings
+      description: >-
+        Removes the listed Anthropic auth, base URL, model-alias, timeout, and API-key environment
+        variables from the local Claude settings file while preserving other settings. If no
+        settings file exists, returns success with a no-op message. The operation requires CLI
+        config writes to be enabled. This route is not ALWAYS_PROTECTED; an unlocked
+        `requireLogin=false` install may permit anonymous access. Protected profiles accept a
+        `write` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted
+        loopback CLI/internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Claude CLI settings reset
+          description: Settings were reset or no settings file was present.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClaudeSettingsResetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Authentication was rejected or CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Settings file could not be read or written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/cli-tools/cline-settings:
     get:
@@ -35794,6 +35897,70 @@ components:
       properties:
         success: { type: boolean, const: true }
         message: { type: string }
+      additionalProperties: false
+    ClaudeCliSettingsStatusResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, settings]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        settings:
+          type: [object, "null"]
+          x-sensitive: true
+          description: >-
+            Parsed Claude settings file. May include full ANTHROPIC_AUTH_TOKEN and other environment
+            values; JSONC parse errors produce null.
+          additionalProperties: true
+        hasOmniRoute: { type: boolean }
+        settingsPath: { type: [string, "null"] }
+        message: { type: string }
+      additionalProperties: false
+    ClaudeSettingsUpdateRequest:
+      type: object
+      x-sensitive: true
+      required: [env]
+      properties:
+        keyId:
+          type: string
+          description: Optional API-key record id; when found, its full key replaces env.ANTHROPIC_AUTH_TOKEN.
+        env:
+          type: object
+          minProperties: 1
+          propertyNames:
+            type: string
+            minLength: 1
+            maxLength: 120
+            pattern: "^[A-Z_][A-Z0-9_]*$"
+          additionalProperties:
+            oneOf:
+              - { type: string, minLength: 1, maxLength: 10000 }
+              - { type: number }
+              - { type: boolean }
+      description: >-
+        Environment values are converted to strings before merging into the settings file. Unknown
+        top-level fields are accepted and stripped, except `keyId`, which the handler reads before
+        validation. This configuration can contain API credentials.
+      additionalProperties: true
+    ClaudeSettingsUpdateResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Settings updated successfully }
+      additionalProperties: false
+    ClaudeSettingsResetResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          enum: [Settings reset successfully, No settings file to reset]
       additionalProperties: false
     A2ATaskState:
       type: string
