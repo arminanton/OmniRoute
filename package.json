@@ -101,6 +101,7 @@
     "bench:routing-events": "node --import tsx/esm scripts/perf/routing-events-bench.ts",
     "bench:highwatermark": "node --import tsx/esm scripts/perf/benchmark-highwatermark.ts",
     "bench:call-log-text-dedup": "node --import tsx/esm scripts/perf/bench-call-log-text-dedup.mjs 100",
+    "bench:next-http-tool-roundtrip": "node --import tsx/esm scripts/perf/bench-next-http-tool-roundtrip.mjs",
     "eval:compression": "node --import tsx scripts/compression-eval/index.ts",
     "eval:router": "node --import tsx scripts/router-eval/index.ts",
     "eval:router:compare": "node --import tsx scripts/router-eval/compare.ts",

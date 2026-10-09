@@ -946,6 +946,54 @@ teardown. It uses a fake Antigravity upstream, separate CLI/IDE connection profi
 synthetic tool round trip. It does not run Next middleware/standalone image code, execute a real
 tool, or verify real provider quota behavior; it is not a production 100-agent capacity claim.
 
+### Next.js HTTP path and API-key queue A/B
+
+`scripts/perf/bench-next-http-tool-roundtrip.mjs` launches the actual Next 16 development HTTP server
+with Turbopack, a temporary database and dist directory, and a localhost fake OpenAI-compatible
+upstream. Each independent conversation sends a streamed tool-call turn, receives the tool call,
+then sends a separate tool-result turn. Four prior user/assistant messages contribute 4 KiB each.
+The runner also checks that each upstream call produces a call-log row and artifact file. All paths
+are on localhost; it sends no requests to an actual model provider.
+
+With the default automatic API-key request limiter active, one conversation completed in 0.60 s and
+30 conversations (60 chat requests) took 59.61 s. The 70-conversation phase did not finish: a request
+hit the harness's 90 s deadline. Per-request logs showed many requests taking about 11.2 s even though
+the mock upstream returns immediately. The code defaults for API-key providers are 60 requests/minute,
+350 ms minimum spacing, and six concurrent requests (`open-sse/config/constants.ts`). The timing is
+consistent with that local limiter being the throughput ceiling in this mock test; provider latency
+and quota were removed from the experiment.
+
+With `RATE_LIMIT_AUTO_ENABLE=false` applied only to the isolated test process, the same HTTP/tool
+workload completed through 100 concurrent conversations:
+
+| Concurrent conversations | Completed | Chat requests | Wall time | Conversations/second | Round-trip p95 |
+| -----------------------: | --------: | ------------: | --------: | -------------------: | -------------: |
+|                        1 |       1/1 |             2 |    0.33 s |                 2.99 |         0.33 s |
+|                       30 |     30/30 |            60 |    4.24 s |                 7.07 |         4.21 s |
+|                       70 |     70/70 |           140 |    8.98 s |                 7.79 |         8.90 s |
+|                      100 |   100/100 |           200 |   12.35 s |                 8.10 |        12.17 s |
+
+The measured cgroup peak was 4.66 GiB under a 6 GiB memory cap and a 2-CPU quota. The 100-session
+phase's stream-first-body p50/p95 were 5.77/7.16 s; aggregate round-trip p95 was 11.78 s and
+aggregate stream-first-body p95 was 6.17 s.
+All 402 benchmark requests completed; including the warmup, all 403 upstream requests produced 403
+call-log rows and 403 artifact files. These timings include Next dev/Turbopack and 4 KiB history turns, so they are not a
+production server estimate. This identifies a significant local queue limit for API-key providers;
+it does not establish behavior of the OAuth Codex path or Antigravity account quota. Keep provider
+rate-limit policy separate from connection-capacity scheduling and do not disable this protection in
+production based on this mock benchmark.
+
+Reproduce the bounded comparison with:
+
+```bash
+systemd-run --user --scope --property=MemoryMax=6G --property=CPUQuota=200% \
+  nice -n 10 npm run bench:next-http-tool-roundtrip -- --rate-limit=unlimited
+```
+
+The script removes its temporary database, data directory, and Next dist directory on exit. The
+`unlimited` mode disables only automatic API-key limiting in that temporary server; it does not
+change persisted settings or the live instance.
+
 ## Repeated request-log payload
 
 The call-log path stores both the client request body and a reconstructed `effectiveInput`. For an
