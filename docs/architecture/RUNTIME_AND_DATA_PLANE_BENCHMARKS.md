@@ -1547,6 +1547,28 @@ reported existing warnings for `fumadocs-mdx` cache dependency parsing and a dyn
 `maxaiTransport.ts`; neither blocked the build. Both `.build/next` and the temporary runtime were
 removed after recording these measurements.
 
+#### Full blue-candidate build and standalone worker smoke (2026-10-09)
+
+After the stream-readiness, artifact-worker, backup, Rust-prototype, and OpenAPI changes, the current
+blue source at `c46921e181` completed a fresh Node 26.10.0/Next 16.3.8 Webpack `npm run build` in
+739 s (12m19s), including worker co-location. It used one page-data worker, two CPUs, a 16 GiB
+`MemoryHigh`, 17 GiB `MemoryMax`, 1 GiB swap ceiling, and I/O weight initially 50. The cgroup peak
+was 17,002,369,024 bytes (about 15.8 GiB); all memory `high`, `max`, and OOM counters remained zero,
+and host memory PSI stayed at zero. Host available RAM sampled as low as about 10 GiB. A cold-build
+host I/O PSI burst reached roughly 59% `full avg10`; reducing the build's I/O weight to 10 and then
+5 brought it back down while the process continued. Disk free space fell from 20 GiB to 14 GiB
+during the build.
+
+The output was 999 MiB standalone plus a 5.1 GiB Next cache. Postbuild copied the 90.2 KiB call-log
+artifact worker, compression worker, optional SLM worker and ESM package scopes into standalone.
+The bundle started under Node 26.10.0 with synthetic secrets and an isolated `/tmp` data directory;
+`/api/health/ping` returned HTTP 200 and graceful shutdown checkpointed SQLite. A second isolated
+worker smoke loaded the co-located artifact worker, wrote a 724-byte synthetic call-log artifact,
+and read its request/response payloads back. The build emitted the existing Fumadocs dynamic-import
+cache warning and `maxaiTransport.ts` dynamic-`require` warning; static generation also fell back to
+dynamic rendering for the AgentBridge page when its local API was absent. No OCI image was assembled
+or deployed. The `.build` output and temporary smoke data were removed after verification.
+
 This establishes that Webpack can complete on this host when its page-data worker count and build
 cgroup are controlled, while showing that cold compilation can still consume about 16 GiB and take
 over 12 minutes. Cache state alone reduced elapsed time by roughly five minutes. The Bun/Turbopack run below also completes, but uses Bun's separate lockfile and different pressure
@@ -1607,18 +1629,20 @@ no-auth catalog filter with the optional model ID shape.
   `Invalid management token` from `/api/usage/call-logs`, so the running candidate only returns
   public health. A heap snapshot or isolated allocation profile is still required to identify
   retained V8 objects.
-- Fix the external candidate-image assembly so the artifact worker is present, then verify that
-  pipeline artifacts are written and readable. The current image lost 118 detailed artifacts and
-  no artifact file is newer than the image start; do not treat the `full-capture-v1` label as proof
-  that capture works. The new tiny-stub fallback only links a private-overflow trace that was
-  already captured; it cannot restore those missing historical artifacts.
+- Assemble a canary OCI image from the now-passing blue standalone build and verify a complete
+  request artifact through that container. The earlier captured candidate-image incident lost 118
+  detailed artifacts and had no artifact file newer than image start; do not treat the
+  `full-capture-v1` label as proof that capture works. The source standalone tree now contains a
+  worker that successfully wrote/read a synthetic artifact, but the full packaged app route has not
+  yet exercised it inside an OCI image. The tiny-stub fallback only links an overflow trace that was
+  already captured; it cannot restore missing historical artifacts.
 - Reproduce heap growth from a clean start with capture on/off and optional subsystems isolated;
   test that the local pressure guard recovers without restarting after pressure clears. No heap
   snapshot or controlled recovery result exists yet.
 - Build and smoke the production OCI image on a dedicated builder with enough memory and native
-  overlay; Maria completed and smoke-tested the Node/Webpack standalone path, but no OCI image was
-  assembled. Preserve `memory.peak`, `memory.events`, wall time, and output size for each next build;
-  the full Turbopack runs on Maria did not complete under 14 GiB.
+  overlay. The latest Node/Webpack source build and standalone health/worker smokes pass, but no OCI
+  image was assembled. Preserve `memory.peak`, `memory.events`, wall time, and output size for the
+  image build; the full Turbopack runs on Maria did not complete under 14 GiB.
 - TPROXY is a small first-party C Node-API addon in `src/mitm/tproxy/native/transparent.c`, not an
   installed package dependency. The upstream TPROXY notes say its `build/` and `prebuilds/`
   directories are ignored and the binary is built from source; the loader can probe a prebuild, but
