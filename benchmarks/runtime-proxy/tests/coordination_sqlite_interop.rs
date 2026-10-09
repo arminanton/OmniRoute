@@ -2,12 +2,20 @@
 mod coordination_sqlite;
 
 use coordination_sqlite::{CoordinationRequirement, FencedLease, SqliteCoordinator};
+#[path = "../src/shared_dispatch_lease.rs"]
+mod shared_dispatch_lease;
+
+use rusqlite::Connection;
 use serde_json::Value;
+use shared_dispatch_lease::{DispatchAcquireError, DispatchLeaseTiming, SharedDispatchAdmission};
 use std::{
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::Arc,
+    time::Duration,
 };
+use tokio::sync::watch;
 use uuid::Uuid;
 
 const PROBE: &str = env!("CARGO_BIN_EXE_omniroute-coordination-probe");
@@ -358,4 +366,201 @@ fn lease_json(lease: &FencedLease) -> String {
         "expiresAt": lease.expires_at,
     })
     .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rust_dispatch_facade_cancels_renews_and_reclaims_ts_leases() {
+    let temporary = TempDirectory::new();
+    let db_path = temporary.db_path();
+
+    // TypeScript holds the same global/provider/account gates that production supplies after
+    // selection. Rust's waiter must remain queued without consuming a partial reservation.
+    let held_by_ts = run_typescript_probe(
+        db_path.as_path(),
+        "ts-dispatch-holder",
+        r#"
+          const c = new SqliteCoordinator(process.env.TEST_COORDINATION_DB,
+            process.env.TEST_COORDINATION_OWNER);
+          const now = Date.now();
+          const resources = [
+            { key: "global", limit: 1 },
+            { key: "provider:codex", limit: 1 },
+            { key: "account:opaque-candidate", limit: 1 },
+          ];
+          const id = c.enqueue(resources, now + 30000, 20, now);
+          const lease = c.tryAcquire(id, 30000, now);
+          c.close();
+          console.log(JSON.stringify(lease));
+        "#,
+    );
+    let ts_lease = parse_lease(&held_by_ts);
+    let db = db_path.to_str().expect("UTF-8 temp DB path");
+    let coordinator = Arc::new(
+        SqliteCoordinator::open(db, "rust-dispatch-facade")
+            .expect("open the TypeScript-created coordination DB"),
+    );
+    let timing = DispatchLeaseTiming {
+        lease_ttl_ms: 1_200,
+        renew_every: Duration::from_millis(200),
+        poll_every: Duration::from_millis(20),
+    };
+    let service = SharedDispatchAdmission::with_timing(Arc::clone(&coordinator), timing)
+        .expect("valid test lease timing");
+    let requirements = vec![
+        gate("global", 1),
+        gate("provider:codex", 1),
+        gate("account:opaque-candidate", 1),
+    ];
+
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    let waiting_service = service.clone();
+    let waiting_requirements = requirements.clone();
+    let waiter_task = tokio::spawn(async move {
+        waiting_service
+            .acquire_many(
+                &waiting_requirements,
+                Duration::from_secs(5),
+                20,
+                Some(cancel_rx),
+            )
+            .await
+    });
+    wait_for_waiter_count(db_path.as_path(), 1).await;
+    cancel_tx.send(true).expect("signal waiter abort");
+    assert!(matches!(
+        waiter_task.await.unwrap(),
+        Err(DispatchAcquireError::Cancelled)
+    ));
+    assert_eq!(shared_waiter_count(db_path.as_path()), 0);
+
+    // Cancellation removes the wait record; releasing the TypeScript lease lets the Rust facade
+    // claim every gate in one transaction. A TypeScript contender observes the Rust lease.
+    let released_ts = run_typescript_probe(
+        db_path.as_path(),
+        "ts-dispatch-holder",
+        &format!(
+            "const c=new SqliteCoordinator(process.env.TEST_COORDINATION_DB, process.env.TEST_COORDINATION_OWNER); c.release({}); c.close(); console.log(JSON.stringify({{released:true}}));",
+            lease_json(&ts_lease)
+        ),
+    );
+    assert_eq!(released_ts["released"], true);
+
+    let rust_lease = service
+        .acquire_many(&requirements, Duration::from_secs(2), 20, None)
+        .await
+        .expect("Rust acquires all shared gates after TypeScript releases");
+    tokio::time::sleep(Duration::from_millis(1_450)).await;
+    assert!(!rust_lease.is_lost(), "renewal should keep the lease alive");
+    let denied_ts = run_typescript_probe(
+        db_path.as_path(),
+        "ts-dispatch-contender",
+        r#"
+          const c = new SqliteCoordinator(process.env.TEST_COORDINATION_DB,
+            process.env.TEST_COORDINATION_OWNER);
+          const now = Date.now();
+          const resources = [
+            { key: "global", limit: 1 },
+            { key: "provider:codex", limit: 1 },
+            { key: "account:opaque-candidate", limit: 1 },
+          ];
+          const id = c.enqueue(resources, now + 5000, 20, now);
+          const denied = c.tryAcquire(id, 1000, now) === null;
+          c.cancel(id);
+          c.close();
+          console.log(JSON.stringify({ denied }));
+        "#,
+    );
+    assert_eq!(denied_ts["denied"], true);
+    rust_lease
+        .release()
+        .await
+        .expect("release Rust dispatch lease");
+    let accepted_ts = run_typescript_probe(
+        db_path.as_path(),
+        "ts-dispatch-after-release",
+        r#"
+          const c = new SqliteCoordinator(process.env.TEST_COORDINATION_DB,
+            process.env.TEST_COORDINATION_OWNER);
+          const now = Date.now();
+          const id = c.enqueue([{key:"global", limit:1}], now + 5000, 20, now);
+          const lease = c.tryAcquire(id, 1000, now);
+          if (lease) c.release(lease);
+          c.close();
+          console.log(JSON.stringify({ acquired: lease !== null }));
+        "#,
+    );
+    assert_eq!(accepted_ts["acquired"], true);
+
+    // Lease loss is surfaced to the request owner. As in TypeScript, capacity is not proactively
+    // released by the lost lease; the SQLite TTL is the recovery bound.
+    let loss_lease = service
+        .acquire_many(&[gate("loss-probe", 1)], Duration::from_secs(2), 20, None)
+        .await
+        .expect("acquire lease-loss probe");
+    let mut lost = loss_lease.lost_receiver().expect("lease loss receiver");
+    let stolen = loss_lease.fenced_lease().expect("fenced lease").clone();
+    coordinator
+        .release(&stolen)
+        .expect("simulate fenced lease loss");
+    tokio::time::timeout(Duration::from_secs(2), lost.changed())
+        .await
+        .expect("heartbeat detects lost lease")
+        .expect("lease-loss signal remains connected");
+    assert!(loss_lease.is_lost());
+    loss_lease
+        .release()
+        .await
+        .expect("lost lease leaves capacity to TTL recovery");
+
+    // A TypeScript lease with an already-expired wall-clock TTL is pruned by the Rust facade on
+    // acquisition. This exercises the same lease expiry semantics through the dispatch wrapper.
+    let stale_ts = run_typescript_probe(
+        db_path.as_path(),
+        "ts-expired-holder",
+        r#"
+          const c = new SqliteCoordinator(process.env.TEST_COORDINATION_DB,
+            process.env.TEST_COORDINATION_OWNER);
+          const now = Date.now() - 5000;
+          const id = c.enqueue([{key:"expired-resource", limit:1}], now + 4000, 20, now);
+          const lease = c.tryAcquire(id, 1000, now);
+          c.close();
+          console.log(JSON.stringify(lease));
+        "#,
+    );
+    let stale_lease = parse_lease(&stale_ts);
+    let expired_recovered = service
+        .acquire_many(
+            &[gate("expired-resource", 1)],
+            Duration::from_secs(2),
+            20,
+            None,
+        )
+        .await
+        .expect("expired TypeScript lease is reclaimed");
+    assert!(expired_recovered.fenced_lease().unwrap().fence > stale_lease.fence);
+    expired_recovered
+        .release()
+        .await
+        .expect("release recovered lease");
+}
+
+fn shared_waiter_count(path: &Path) -> usize {
+    let db = Connection::open(path).expect("open waiter-count probe");
+    db.query_row("SELECT COUNT(*) FROM coordination_waiters", [], |row| {
+        row.get::<_, usize>(0)
+    })
+    .expect("read shared waiter count")
+}
+
+async fn wait_for_waiter_count(path: &Path, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if shared_waiter_count(path) == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("wait for durable waiter registration");
 }

@@ -114,6 +114,21 @@ not implement account scheduling, distributed quotas, provider retries, compress
 capture, or response protocol translation. The benchmark runner supplies synthetic credentials; do
 not use real secrets for this harness. It binds to loopback and is not a deployable replacement.
 
+### Shared dispatch lease interop probe
+
+`src/shared_dispatch_lease.rs` is a benchmark-only asynchronous facade over the existing
+`omni-coordination/v1` SQLite/WAL lease protocol. It accepts caller-supplied, already-approved
+global/provider/account gate requirements, registers and polls one atomic multi-gate waiter, and
+renews the returned fenced lease for the caller-managed stream lifetime. Explicit release is the
+normal completion path; a lease-loss signal is exposed to the caller, but this facade does not
+automatically abort upstream work on lease loss. It issues no explicit release after a failed
+heartbeat because the lease may already be gone or held by another dispatcher. If a transient
+coordination error leaves the row valid, TTL expiry bounds recovery; the caller must abort its
+upstream task when the loss signal fires. The prototype does not implement authentication, account
+selection, provider routing, model/key policy, or quota/cache logic. Its interop test exercises
+behavior with the TypeScript coordinator and a temporary local SQLite database; it makes no
+throughput or production-readiness claim.
+
 ### Synthetic account scheduler contention
 
 Run the isolated scheduler exercise with:
