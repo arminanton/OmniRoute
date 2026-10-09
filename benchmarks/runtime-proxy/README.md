@@ -388,6 +388,17 @@ before using the documented UPSERT. It covers only `(api_key_id, dimension_key, 
 storage and current/previous bucket reads. It does not select SQLite versus Redis, read key/account
 policy, resolve pools/plans, calculate fair-share, or enforce quota decisions.
 
+### Quota fair-share decision vectors
+
+`src/quota_fair_share.rs` is a pure benchmark-only port of `src/lib/quota/fairShare.ts::decideFairShare`.
+The shared `fixtures/quota-fair-share-v1.json` vectors are consumed by the focused TypeScript test
+and a focused Rust unit test. They compare normalized `{kind, reason, penalized}` decisions for
+hard/soft/burst policies, multiple dimensions, absolute caps, global saturation, threshold and
+equality boundaries, and unknown policies treated as hard. The Rust function receives already-
+resolved policy inputs; it does not read quota rows, resolve pools/plans, choose SQLite or Redis, or
+reproduce `enforceQuotaShare()`'s surrounding fail-open behavior. This is decision-function parity,
+not end-to-end quota enforcement parity.
+
 ```bash
 python3 benchmarks/runtime-proxy/run_bench.py \
   --runtime rust-chat-gateway --api-path chat-completions --model cx/gpt-5.6 \

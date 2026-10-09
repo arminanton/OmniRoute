@@ -1,7 +1,7 @@
 /**
  * tests/unit/quota-fair-share.test.ts
  *
- * 10 scenarios covering src/lib/quota/fairShare.ts:
+ * Focused behavior coverage for src/lib/quota/fairShare.ts:
  *   1. Generous mode, key under fair_share → allow:ok
  *   2. Generous mode, key over fair_share, policy=burst → allow:ok
  *   3. Generous mode, key over fair_share, policy=hard, total under limit → allow:ok
@@ -16,6 +16,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 const { decideFairShare } = await import("../../src/lib/quota/fairShare.ts");
 
@@ -42,11 +43,18 @@ function dim(opts: {
   };
 }
 
-function alloc(weight: number, policy: "hard" | "soft" | "burst", capValue?: number, capUnit?: string) {
+function alloc(
+  weight: number,
+  policy: "hard" | "soft" | "burst",
+  capValue?: number,
+  capUnit?: string
+) {
   return {
     weight,
     policy,
-    ...(capValue !== undefined ? { capValue, capUnit: (capUnit ?? "tokens") as "tokens" | "requests" | "percent" | "usd" } : {}),
+    ...(capValue !== undefined
+      ? { capValue, capUnit: (capUnit ?? "tokens") as "tokens" | "requests" | "percent" | "usd" }
+      : {}),
   };
 }
 
@@ -246,4 +254,32 @@ test("fairShare: GUARD-A generous mode, unknown policy → hard semantics (no so
   });
   assert.equal(result.kind, "allow");
   assert.equal(result.penalized, undefined, "unknown policy must not get soft penalize semantics");
+});
+
+test("fairShare decisions match the shared Rust/TypeScript vectors", () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL("../../benchmarks/runtime-proxy/fixtures/quota-fair-share-v1.json", import.meta.url),
+      "utf8"
+    )
+  ) as {
+    schemaVersion: number;
+    vectors: Array<{
+      name: string;
+      input: Parameters<typeof decideFairShare>[0];
+      expected: { kind: string; reason: string; penalized: boolean };
+    }>;
+  };
+
+  assert.equal(fixture.schemaVersion, 1);
+  assert.ok(fixture.vectors.length >= 18);
+  for (const vector of fixture.vectors) {
+    const decision = decideFairShare(vector.input);
+    const normalized = {
+      kind: decision.kind,
+      reason: decision.reason,
+      penalized: decision.penalized === true,
+    };
+    assert.deepEqual(normalized, vector.expected, `vector: ${vector.name}`);
+  }
 });

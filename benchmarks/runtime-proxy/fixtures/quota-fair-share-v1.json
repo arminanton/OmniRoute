@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "vectors": [
+    {
+      "name": "generous-hard-under-share-allows",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 200, "globalUsedPercent": 0.2 }],
+        "allocation": { "weight": 50, "policy": "hard" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 200 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": false }
+    },
+    {
+      "name": "generous-burst-over-share-allows-with-headroom",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 600, "globalUsedPercent": 0.3 }],
+        "allocation": { "weight": 50, "policy": "burst" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": false }
+    },
+    {
+      "name": "generous-hard-can-borrow-over-fair-share",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 600, "globalUsedPercent": 0.4 }],
+        "allocation": { "weight": 50, "policy": "hard" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": false }
+    },
+    {
+      "name": "strict-hard-over-fair-share-blocks",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 700, "globalUsedPercent": 0.6 }],
+        "allocation": { "weight": 50, "policy": "hard" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "block", "reason": "fair-share", "penalized": false }
+    },
+    {
+      "name": "strict-hard-under-fair-share-allows",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 700, "globalUsedPercent": 0.7 }],
+        "allocation": { "weight": 50, "policy": "hard" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 300 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": false }
+    },
+    {
+      "name": "absolute-cap-blocks-even-for-burst",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 100, "globalUsedPercent": 0.1 }],
+        "allocation": { "weight": 50, "policy": "burst", "capValue": 100, "capUnit": "tokens" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 100 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "block", "reason": "cap-absolute", "penalized": false }
+    },
+    {
+      "name": "multi-dimension-cap-blocks-after-earlier-dimension-passes",
+      "input": {
+        "dimensions": [
+          { "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 200, "globalUsedPercent": 0.2 },
+          { "key": { "poolId": "pool1", "unit": "requests", "window": "hourly" }, "limit": 100, "consumedTotal": 50, "globalUsedPercent": 0.2 }
+        ],
+        "allocation": { "weight": 50, "policy": "burst", "capValue": 10, "capUnit": "requests" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 100, "pool1:requests:hourly": 10 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "block", "reason": "cap-absolute", "penalized": false }
+    },
+    {
+      "name": "soft-over-share-penalizes-with-headroom",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 600, "globalUsedPercent": 0.3 }],
+        "allocation": { "weight": 50, "policy": "soft" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": true }
+    },
+    {
+      "name": "global-limit-equality-blocks-burst",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 1000, "globalUsedPercent": 1 }],
+        "allocation": { "weight": 50, "policy": "burst" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 500 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "block", "reason": "global-saturated", "penalized": false }
+    },
+    {
+      "name": "empty-dimensions-allow",
+      "input": {
+        "dimensions": [],
+        "allocation": { "weight": 50, "policy": "hard" },
+        "consumedByThisKey": {},
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": false }
+    },
+    {
+      "name": "unknown-policy-over-share-in-strict-mode-uses-hard",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 700, "globalUsedPercent": 0.6 }],
+        "allocation": { "weight": 50, "policy": "bogus" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "block", "reason": "fair-share", "penalized": false }
+    },
+    {
+      "name": "unknown-policy-under-share-in-strict-mode-uses-hard",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 700, "globalUsedPercent": 0.7 }],
+        "allocation": { "weight": 50, "policy": "garbage" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 300 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": false }
+    },
+    {
+      "name": "unknown-policy-with-headroom-over-share-uses-hard-without-penalty",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 600, "globalUsedPercent": 0.3 }],
+        "allocation": { "weight": 50, "policy": "weird" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": false }
+    },
+    {
+      "name": "threshold-equality-enters-strict-mode",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 700, "globalUsedPercent": 0.5 }],
+        "allocation": { "weight": 50, "policy": "hard" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 500 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "block", "reason": "fair-share", "penalized": false }
+    },
+    {
+      "name": "just-below-threshold-keeps-generous-borrowing",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 700, "globalUsedPercent": 0.499999 }],
+        "allocation": { "weight": 50, "policy": "hard" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": false }
+    },
+    {
+      "name": "fair-share-equality-blocks-hard-in-strict-mode",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 700, "globalUsedPercent": 0.6 }],
+        "allocation": { "weight": 50, "policy": "hard" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 500 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "block", "reason": "fair-share", "penalized": false }
+    },
+    {
+      "name": "key-at-global-limit-blocks-hard-in-generous-mode",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 800, "globalUsedPercent": 0.1 }],
+        "allocation": { "weight": 50, "policy": "hard" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 1000 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "block", "reason": "global-saturated", "penalized": false }
+    },
+    {
+      "name": "absolute-cap-unit-mismatch-does-not-block",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 600, "globalUsedPercent": 0.3 }],
+        "allocation": { "weight": 50, "policy": "hard", "capValue": 100, "capUnit": "requests" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": false }
+    },
+    {
+      "name": "soft-over-share-penalizes-at-threshold-equality",
+      "input": {
+        "dimensions": [{ "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 700, "globalUsedPercent": 0.5 }],
+        "allocation": { "weight": 50, "policy": "soft" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": true }
+    },
+    {
+      "name": "soft-policy-penalty-aggregates-across-dimensions",
+      "input": {
+        "dimensions": [
+          { "key": { "poolId": "pool1", "unit": "tokens", "window": "hourly" }, "limit": 1000, "consumedTotal": 600, "globalUsedPercent": 0.3 },
+          { "key": { "poolId": "pool1", "unit": "requests", "window": "hourly" }, "limit": 100, "consumedTotal": 20, "globalUsedPercent": 0.2 }
+        ],
+        "allocation": { "weight": 50, "policy": "soft" },
+        "consumedByThisKey": { "pool1:tokens:hourly": 600, "pool1:requests:hourly": 20 },
+        "saturationThreshold": 0.5
+      },
+      "expected": { "kind": "allow", "reason": "ok", "penalized": true }
+    }
+  ]
+}
