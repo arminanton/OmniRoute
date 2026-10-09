@@ -57,7 +57,8 @@ type RequestLogger = {
     endpoint: unknown,
     body: unknown,
     headers?: HeaderInput,
-    effectiveInput?: unknown
+    effectiveInput?: unknown,
+    bodyAlreadyBounded?: boolean
   ) => void;
   logRouteDecision: (decision: unknown) => void;
   logOpenAIRequest: (body: unknown) => void;
@@ -282,7 +283,8 @@ export function cloneBoundedForLog(
  */
 export function cloneClientRawRequestPayloadForLog(
   body: unknown,
-  effectiveInput: unknown
+  effectiveInput: unknown,
+  bodyAlreadyBounded = false
 ): JsonRecord {
   // Normal Responses requests carry the same input at both capture points.
   // Avoid building a second bounded object tree when the two logging policies
@@ -299,7 +301,13 @@ export function cloneClientRawRequestPayloadForLog(
     Array.isArray(effectiveInput) &&
     (bodyInput === effectiveInput ||
       (sameTextLimit && isDeepStrictEqual(bodyInput, effectiveInput)));
-  const bodySnapshot = cloneBoundedForLog(body, 0, null, getChatLogClientTextLimit());
+  // Chat's clientRawRequest producer already owns a bounded, isolated snapshot.
+  // Reuse it when explicitly signaled; generic logger callers keep the defensive
+  // clone/bounding pass. This function only replaces the wrapper's `body` field
+  // below, so the supplied nested snapshot is read-only after handoff.
+  const bodySnapshot = bodyAlreadyBounded
+    ? body
+    : cloneBoundedForLog(body, 0, null, getChatLogClientTextLimit());
   if (effectiveInput === undefined) return { body: bodySnapshot };
 
   if (identicalInputBeforeSnapshot && sameTextLimit) {
@@ -668,7 +676,7 @@ export async function createRequestLogger(
     diagnosticOverflowOnly,
     sessionPath: null,
 
-    logClientRawRequest(endpoint, body, headers = {}, effectiveInput) {
+    logClientRawRequest(endpoint, body, headers = {}, effectiveInput, bodyAlreadyBounded = false) {
       if (diagnosticOverflowOnly) {
         payloads.clientRawRequest = {
           timestamp: new Date().toISOString(),
@@ -677,7 +685,7 @@ export async function createRequestLogger(
         };
         return;
       }
-      const cloned = cloneClientRawRequestPayloadForLog(body, effectiveInput);
+      const cloned = cloneClientRawRequestPayloadForLog(body, effectiveInput, bodyAlreadyBounded);
       cloned.body = reuseEqualBodySnapshot(cloned.body, [
         bodySnapshot(payloads.openaiRequest),
         bodySnapshot(payloads.providerRequest),

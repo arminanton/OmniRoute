@@ -24,6 +24,8 @@
  *   npm run bench:heap-body                          # the #7847 incident shape
  *   npm run bench:heap-body -- --messages 800 --tools 120
  *   npm run bench:heap-body -- --concurrency 16      # simulate overlapping requests
+ *   npm run bench:heap-body -- --concurrency 100 --client-snapshot-mode current
+ *   npm run bench:heap-body -- --concurrency 100 --client-snapshot-mode prebounded
  *   npm run bench:heap-body -- --json                # machine-readable
  *   npm run bench:heap-body -- --pipeline-mode legacy # compare pre-dedup retention
  *   npm run bench:heap-body -- --max-retained-mib 64 # non-zero exit if exceeded (regression gate)
@@ -45,13 +47,11 @@ const { buildAgentPayload, INCIDENT_SHAPE } = await import("./agentPayloadCorpus
 
 const realLog = console.log;
 console.log = () => {};
-const { cloneBoundedForLog, cloneClientRawRequestPayloadForLog } = await import(
-  "../../open-sse/utils/requestLogger.ts"
-);
+const { cloneBoundedForLog, cloneClientRawRequestPayloadForLog } =
+  await import("../../open-sse/utils/requestLogger.ts");
 const { getChatLogClientTextLimit } = await import("../../src/lib/logEnv.ts");
-const { estimateCallLogArtifactFootprint } = await import(
-  "../../src/lib/usage/callLogArtifactWriter.ts"
-);
+const { estimateCallLogArtifactFootprint } =
+  await import("../../src/lib/usage/callLogArtifactWriter.ts");
 console.log = realLog;
 
 // ── CLI ──────────────────────────────────────────────────────────────────────
@@ -80,6 +80,14 @@ const PIPELINE_MODE = (() => {
   }
   return value;
 })();
+const CLIENT_SNAPSHOT_MODE = (() => {
+  const index = process.argv.indexOf("--client-snapshot-mode");
+  const value = index < 0 ? "current" : process.argv[index + 1];
+  if (value !== "current" && value !== "prebounded") {
+    throw new Error("--client-snapshot-mode must be current or prebounded");
+  }
+  return value;
+})();
 
 const MIB = 1024 * 1024;
 const fmt = (bytes: number) => (bytes / MIB).toFixed(2);
@@ -96,13 +104,25 @@ function settle(): void {
  * Retained heap of whatever `produce` returns, while it stays reachable.
  * This is the number that maps to the incident: many concurrent requests each holding copies.
  */
-function measureRetained<T>(produce: () => T): { bytes: number; value: T } {
+function measureRetained<T>(produce: () => T): {
+  bytes: number;
+  rssBeforeBytes: number;
+  rssAfterBytes: number;
+  value: T;
+} {
   settle();
   const before = process.memoryUsage().heapUsed;
+  const rssBeforeBytes = process.memoryUsage().rss;
   const value = produce();
   settle();
   const after = process.memoryUsage().heapUsed;
-  return { bytes: Math.max(0, after - before), value };
+  const rssAfterBytes = process.memoryUsage().rss;
+  return {
+    bytes: Math.max(0, after - before),
+    rssBeforeBytes,
+    rssAfterBytes,
+    value,
+  };
 }
 
 type Row = { mechanism: string; site: string; bytes: number };
@@ -137,9 +157,7 @@ async function main(): Promise<void> {
   const hold: unknown[] = []; // keep measured values reachable until output is complete
 
   const clientTextLimit = getChatLogClientTextLimit();
-  const clientSnapshot = measureRetained(() =>
-    cloneBoundedForLog(body, 0, null, clientTextLimit)
-  );
+  const clientSnapshot = measureRetained(() => cloneBoundedForLog(body, 0, null, clientTextLimit));
   hold.push(clientSnapshot.value);
   rows.push({
     mechanism: "bounded client snapshot",
@@ -159,20 +177,28 @@ async function main(): Promise<void> {
   });
 
   const deduplicatedPipeline = measureRetained(() =>
-    cloneClientRawRequestPayloadForLog(clientSnapshot.value, body.input)
+    cloneClientRawRequestPayloadForLog(
+      clientSnapshot.value,
+      body.input,
+      CLIENT_SNAPSHOT_MODE === "prebounded"
+    )
   );
   hold.push(deduplicatedPipeline.value);
   rows.push({
-    mechanism: "deduplicated call-log snapshot",
-    site: "requestLogger.logClientRawRequest with input reference",
+    mechanism:
+      CLIENT_SNAPSHOT_MODE === "prebounded"
+        ? "reused prebounded call-log snapshot"
+        : "deduplicated call-log snapshot",
+    site:
+      CLIENT_SNAPSHOT_MODE === "prebounded"
+        ? "requestLogger.logClientRawRequest with prebounded body + input reference"
+        : "requestLogger.logClientRawRequest with input reference",
     bytes: deduplicatedPipeline.bytes,
   });
 
   // The combo executor shallow-copies the top-level body per target. Nested
   // messages/input/tool arrays remain shared unless a transform replaces them.
-  const comboBodies = measureRetained(() =>
-    Array.from({ length: TARGETS }, () => ({ ...body }))
-  );
+  const comboBodies = measureRetained(() => Array.from({ length: TARGETS }, () => ({ ...body })));
   hold.push(comboBodies.value);
   rows.push({
     mechanism: `shallow attempt body x${TARGETS}`,
@@ -181,7 +207,10 @@ async function main(): Promise<void> {
   });
 
   const legacyPipelineBytes = Buffer.byteLength(JSON.stringify(legacyPipeline.value), "utf8");
-  const deduplicatedPipelineBytes = Buffer.byteLength(JSON.stringify(deduplicatedPipeline.value), "utf8");
+  const deduplicatedPipelineBytes = Buffer.byteLength(
+    JSON.stringify(deduplicatedPipeline.value),
+    "utf8"
+  );
 
   const summary = {
     id: "heap-benchmark",
@@ -238,7 +267,11 @@ async function main(): Promise<void> {
               body: cloneBoundedForLog(pendingSnapshot, 0, null, clientTextLimit),
               effectiveInput: cloneBoundedForLog(parsedBody.input),
             }
-          : cloneClientRawRequestPayloadForLog(pendingSnapshot, parsedBody.input);
+          : cloneClientRawRequestPayloadForLog(
+              pendingSnapshot,
+              parsedBody.input,
+              CLIENT_SNAPSHOT_MODE === "prebounded"
+            );
       return { parsedBody, pendingSnapshot, pipeline };
     })
   );
@@ -252,6 +285,7 @@ async function main(): Promise<void> {
         {
           runtime: process.version,
           pipelineMode: PIPELINE_MODE,
+          clientSnapshotMode: CLIENT_SNAPSHOT_MODE,
           shape: {
             endpoint: "/v1/responses (synthetic, incident-derived payload)",
             messages: MESSAGES,
@@ -264,7 +298,10 @@ async function main(): Promise<void> {
           mechanisms: rows,
           legacyPipelineBytes,
           deduplicatedPipelineBytes,
-          serializedPipelineBytesSaved: Math.max(0, legacyPipelineBytes - deduplicatedPipelineBytes),
+          serializedPipelineBytesSaved: Math.max(
+            0,
+            legacyPipelineBytes - deduplicatedPipelineBytes
+          ),
           artifactQueueFootprint: {
             legacy: legacyArtifactFootprint,
             deduplicated: deduplicatedArtifactFootprint,
@@ -272,9 +309,13 @@ async function main(): Promise<void> {
             deduplicatedReservedBytes: queuedReservationBytes(deduplicatedArtifactFootprint),
           },
           effectiveInputUsesReference:
-            (deduplicatedPipeline.value as Record<string, unknown>).effectiveInputRef === "body.input",
+            (deduplicatedPipeline.value as Record<string, unknown>).effectiveInputRef ===
+            "body.input",
           oneRequestSnapshotBytes: requestSnapshotBytes,
           concurrentRequestSnapshotBytes: concurrent.bytes,
+          concurrentRssBeforeBytes: concurrent.rssBeforeBytes,
+          concurrentRssAfterBytes: concurrent.rssAfterBytes,
+          concurrentRssDeltaBytes: concurrent.rssAfterBytes - concurrent.rssBeforeBytes,
         },
         null,
         2
@@ -283,7 +324,7 @@ async function main(): Promise<void> {
   } else {
     console.log(`# Request-body retained-state benchmark (#7847)\n`);
     console.log(
-      `Runtime: **${process.version}** · ${PIPELINE_MODE} pipeline · synthetic Responses payload: ${MESSAGES} messages · ${TOOLS} tools · wire size **${fmt(wireBytes)} MiB**` +
+      `Runtime: **${process.version}** · ${PIPELINE_MODE} pipeline · ${CLIENT_SNAPSHOT_MODE} client snapshot · synthetic Responses payload: ${MESSAGES} messages · ${TOOLS} tools · wire size **${fmt(wireBytes)} MiB**` +
         ` · ${TARGETS} combo targets · JSON stringify ${jsonSerializationMs.toFixed(1)} ms\n`
     );
     console.log("| mechanism | call site | retained | x wire |");
@@ -311,6 +352,10 @@ async function main(): Promise<void> {
       `One modeled request retains **${fmt(requestSnapshotBytes)} MiB** in the two measured snapshots; ` +
         `${CONCURRENCY} independent concurrent requests retain **${fmt(concurrent.bytes)} MiB** ` +
         `including parsed bodies, pending snapshots, and deduplicated pipeline payloads.`
+    );
+    console.log(
+      `${CONCURRENCY}-request process RSS: ${fmt(concurrent.rssBeforeBytes)} MiB before and ` +
+        `${fmt(concurrent.rssAfterBytes)} MiB after retention (delta ${fmt(concurrent.rssAfterBytes - concurrent.rssBeforeBytes)} MiB).`
     );
     console.log("");
   }

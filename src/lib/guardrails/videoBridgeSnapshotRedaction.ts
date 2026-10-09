@@ -113,7 +113,8 @@ interface RequestLoggerLike {
     endpoint: unknown,
     body: unknown,
     headers?: unknown,
-    effectiveInput?: unknown
+    effectiveInput?: unknown,
+    bodyAlreadyBounded?: boolean
   ) => void;
 }
 
@@ -128,7 +129,8 @@ interface RequestLoggerLike {
 export function logClientRawRequestRedacted(
   reqLogger: RequestLoggerLike,
   clientRawRequest: ClientRawRequestLike | null | undefined,
-  videoBridgeObserved: boolean
+  videoBridgeObserved: boolean,
+  bodyAlreadyBounded = false
 ): void {
   if (!clientRawRequest) return;
   reqLogger.logClientRawRequest(
@@ -137,7 +139,8 @@ export function logClientRawRequestRedacted(
       ? redactVideoTranscriptFieldsForLog(clientRawRequest.body)
       : clientRawRequest.body,
     clientRawRequest.headers,
-    clientRawRequest.effectiveInput
+    clientRawRequest.effectiveInput,
+    bodyAlreadyBounded
   );
 }
 

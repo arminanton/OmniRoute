@@ -31,11 +31,11 @@ export function buildClientRawRequest(
   const envelope = {
     endpoint: url.pathname,
     // #7847: bounded, not a full deep clone. Every consumer of clientRawRequest.body is
-    // observability — reqLogger.logClientRawRequest (which re-bounds it anyway, or drops it
-    // entirely when the logger is disabled), trackPendingRequest's `clientRequest`, and
-    // recordRejectedRequestUsage's `requestBody`. None feeds dispatch, translation or the
-    // upstream call, so cloning the whole payload retained ~41x more than anything kept:
-    // 3.19 MiB vs 0.08 MiB on the incident's 3.05 MiB / 729-message request.
+    // observability — chatCore's call-log path reuses this already-bounded snapshot,
+    // trackPendingRequest's `clientRequest`, and recordRejectedRequestUsage's `requestBody`.
+    // None feeds dispatch, translation or the upstream call, so cloning the whole payload
+    // retained ~41x more than anything kept: 3.19 MiB vs 0.08 MiB on the incident's 3.05 MiB /
+    // 729-message request. Generic logger callers retain their defensive bounding pass.
     // Still a clone, not an alias — `body` is rewritten downstream (plugin onRequest hook,
     // compression), and this has to stay a snapshot of what the client actually sent.
     body: cloneBoundedForLog(body, 0, null, getChatLogClientTextLimit()),

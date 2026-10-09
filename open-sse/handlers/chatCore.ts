@@ -1351,9 +1351,9 @@ async function handleChatCoreOwned({
     enabled: detailedLoggingEnabled,
     provider,
   });
-  // 0. Log client raw request (before format conversion) — redacts video transcript
-  // cues in the logged copy only; see videoBridgeSnapshotRedaction.ts.
-  logClientRawRequestRedacted(reqLogger, clientRawRequest, videoBridgeObserved);
+  // 0. Log client raw request; redact video cues on the producer-bounded snapshot.
+  // See videoBridgeSnapshotRedaction.ts; reuse its already-isolated body.
+  logClientRawRequestRedacted(reqLogger, clientRawRequest, videoBridgeObserved, true);
   const reasoningRouteDecision =
     body && typeof body === "object"
       ? (body as Record<string, unknown>)._omnirouteReasoningRouteTrace
