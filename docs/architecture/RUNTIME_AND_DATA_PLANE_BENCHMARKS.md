@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 784
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 792
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 504 operations have success
-response content schemas and 419 declare operation-level security. Of 1,001 operations with a
-non-`204` success status, 497 still lack an explicit success-body schema; 13 operations have no
+contract is still stronger on route coverage than schema completeness: 506 operations have success
+response content schemas and 421 declare operation-level security. Of 1,001 operations with a
+non-`204` success status, 495 still lack an explicit success-body schema; 13 operations have no
 declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -148,8 +148,11 @@ database/environment/default precedence, flag summaries, one-flag mutation and o
 The task-routing pass documents all seven task names, partial bounded model/pattern overrides, runtime
 counters, built-in defaults, and both task-action request/result branches. The tier-config pass types
 the normalized tier response and the provider override upsert/removal body, including the nullable
-tier used to clear an override. The current spec inventory is 784 schemas, 504 success-body operations,
-and 419 security declarations; 497 non-`204` successes still lack bodies.
+tier used to clear an override. Quota-state handlers are typed for aggregates, reset windows, and
+their reset/clear actions; its implemented CORS `OPTIONS` preflight remains excluded as transport
+boilerplate by repository policy and is exercised by a route test. The current spec inventory is 792
+schemas, 506 success-body operations, and 421 security declarations; 495 non-`204` successes still
+lack bodies.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.

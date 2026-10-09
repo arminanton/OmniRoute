@@ -21175,22 +21175,75 @@ paths:
         "200":
           description: OK
   /api/settings/quota/state:
+    description: CORS preflight is handled by the route's OPTIONS export; OPTIONS is intentionally omitted from the published API surface as transport boilerplate.
     get:
       operationId: getApiSettingsQuotaState
       tags:
         - Settings
       summary: "GET settings › quota › state"
+      description: Returns aggregate provider-token quota usage and active window reset timers.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current quota analytics snapshot and active resets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaStateResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Quota-state snapshot could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsQuotaState
       tags:
         - Settings
       summary: "POST settings › quota › state"
+      description: >-
+        Resets all expired quota windows or clears every quota row for one connection. The supplied
+        model on `clear_connection` is echoed in the message and does not limit the deletion.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QuotaStateActionRequest" }
       responses:
         "200":
-          description: OK
+          description: Expired-window reset count or successful connection-wide clear.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaStateActionResponse" }
+        "400":
+          description: Invalid JSON or quota-state action body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Quota-state action could not be completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/reasoning-routing-rules:
     get:
       operationId: getApiSettingsReasoningRoutingRules
@@ -39088,6 +39141,117 @@ components:
           type: [string, "null"]
           enum: [free, cheap, premium, null]
       additionalProperties: false
+
+    QuotaAnalyticsConnection:
+      type: object
+      required:
+        [
+          connectionId,
+          model,
+          tokensUsed,
+          tokenLimit,
+          tokensRemaining,
+          remainingRatio,
+          windowReset,
+          isExhausted,
+        ]
+      properties:
+        connectionId: { type: string }
+        model: { type: string }
+        tokensUsed: { type: number, minimum: 0 }
+        tokenLimit: { type: number, minimum: 0 }
+        tokensRemaining: { type: number, minimum: 0 }
+        remainingRatio: { type: number, minimum: 0, maximum: 1 }
+        windowReset: { type: number, minimum: 0 }
+        isExhausted: { type: boolean }
+      additionalProperties: false
+
+    QuotaAnalyticsSummary:
+      type: object
+      required:
+        [
+          totalConnectionsTracked,
+          exhaustedConnections,
+          healthyConnections,
+          averageRemainingRatio,
+          totalTokensUsed,
+          totalTokenLimit,
+          connections,
+        ]
+      properties:
+        totalConnectionsTracked: { type: integer, minimum: 0 }
+        exhaustedConnections: { type: integer, minimum: 0 }
+        healthyConnections: { type: integer, minimum: 0 }
+        averageRemainingRatio: { type: number, minimum: 0, maximum: 1 }
+        totalTokensUsed: { type: number, minimum: 0 }
+        totalTokenLimit: { type: number, minimum: 0 }
+        connections:
+          type: array
+          items: { $ref: "#/components/schemas/QuotaAnalyticsConnection" }
+      additionalProperties: false
+
+    QuotaResetItem:
+      type: object
+      required: [connectionId, model, tokensUsed, tokenLimit, windowReset, timeRemainingMs]
+      properties:
+        connectionId: { type: string }
+        model: { type: string }
+        tokensUsed: { type: number, minimum: 0 }
+        tokenLimit: { type: number, minimum: 0 }
+        windowReset: { type: number, minimum: 0 }
+        timeRemainingMs: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    QuotaStateResponse:
+      type: object
+      required: [success, analytics, resetTimers, timestamp]
+      properties:
+        success: { type: boolean, const: true }
+        analytics: { $ref: "#/components/schemas/QuotaAnalyticsSummary" }
+        resetTimers:
+          type: array
+          items: { $ref: "#/components/schemas/QuotaResetItem" }
+        timestamp: { type: string, format: date-time }
+      additionalProperties: false
+
+    QuotaStateActionRequest:
+      oneOf:
+        - type: object
+          required: [action]
+          properties:
+            action: { type: string, const: reset_expired }
+          additionalProperties: false
+        - type: object
+          required: [action, connectionId, model]
+          properties:
+            action: { type: string, const: clear_connection }
+            connectionId: { type: string, minLength: 1 }
+            model: { type: string, minLength: 1 }
+          additionalProperties: false
+      discriminator:
+        propertyName: action
+
+    QuotaResetExpiredResponse:
+      type: object
+      required: [success, resetCount, message]
+      properties:
+        success: { type: boolean, const: true }
+        resetCount: { type: integer, minimum: 0 }
+        message: { type: string }
+      additionalProperties: false
+
+    QuotaClearConnectionResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+      additionalProperties: false
+
+    QuotaStateActionResponse:
+      oneOf:
+        - $ref: "#/components/schemas/QuotaResetExpiredResponse"
+        - $ref: "#/components/schemas/QuotaClearConnectionResponse"
 
     RestartResponse:
       type: object
