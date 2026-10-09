@@ -23858,16 +23858,52 @@ paths:
       - name: channel
         in: path
         required: true
-        schema:
-          type: string
+        description: "`auto` or a built-in auto-combo channel suffix."
+        schema: { type: string, minLength: 1, maxLength: 128, pattern: "^[a-zA-Z0-9:_-]+$" }
     get:
       operationId: getApiV1AutoComboByChannelCandidates
       tags:
         - V1 Auto-combo
       summary: "GET auto combo › <channel> › candidates"
+      description: >-
+        Returns the unfiltered provider/model/account candidates for this automatic-routing channel,
+        including candidates currently blocked by a circuit breaker, cooldown, model lock, or
+        strict-zero-cost policy. Blocked candidates remain in the list with their state flags so
+        clients can inspect why they are not presently reachable. `channel` is `auto` or the suffix
+        of a built-in `auto/*` model. An API key's per-connection exclusions are reflected when the
+        request is authenticated with a key identity the handler can resolve.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Candidate rows and their current reachability/exclusion state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1AutoComboCandidatesResponse" }
+        "400":
+          description: Invalid channel path segment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: API key authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Unknown built-in auto-combo channel.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Candidate discovery failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/batches:
     get:
       operationId: getApiV1Batches
@@ -24125,13 +24161,25 @@ paths:
         required; when disabled, anonymous reads are allowed.
       security:
         - BearerAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       responses:
         "200":
-          description: Public combo list
+          description: Public combo metadata without internal account IDs, weights, or routing labels.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1PublicComboListResponse" }
         "401":
           description: Authentication is required but missing or invalid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Combo metadata could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/completions:
     post:
       operationId: postApiV1Completions
@@ -24903,9 +24951,33 @@ paths:
       tags:
         - V1 Me
       summary: "GET me › status"
+      description: >-
+        Returns usage and budget information for the authenticated API key. The key must have the
+        `self:usage` scope. When it also has `self:account-quota`, the response includes quota data
+        for its allowed active provider connections; these quota fields are omitted otherwise.
+      security:
+        - BearerAuth: []
       responses:
         "200":
-          description: OK
+          description: API-key identity, usage totals, budget status, and optional account quotas.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1ApiKeySelfServiceStatus" }
+        "401":
+          description: Missing, invalid, or unsupported environment API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1ApiKeySelfServiceErrorResponse" }
+        "403":
+          description: API key lacks the required self:usage scope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1ApiKeySelfServiceErrorResponse" }
+        "500":
+          description: Usage status could not be built.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1ApiKeySelfServiceErrorResponse" }
   /api/v1/models/{model}:
     parameters:
       - name: model
@@ -24947,9 +25019,24 @@ paths:
       tags:
         - V1 Muse-code
       summary: "GET muse code › models"
+      description: Returns the Muse Code CLI model catalog, including its provider-specific metadata fields.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Muse Code model list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MuseCodeModelListResponse" }
+        "401":
+          description: API key authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/music/generations:
     get:
       operationId: getApiV1MusicGenerations
@@ -32202,6 +32289,9 @@ components:
               type: string
             reason:
               type: string
+            correlation_id:
+              type: string
+              format: uuid
             details:
               description: Optional additional error details
         requestId:
@@ -43127,4 +43217,275 @@ components:
       properties:
         success: { type: boolean, const: true }
         strategy: { type: string, enum: [round-robin, random, sticky, latency] }
+      additionalProperties: false
+
+    V1AutoComboCandidate:
+      type: object
+      description: >-
+        One provider/model/account candidate, including current dispatch reachability. Internal
+        connection identifiers are intentionally included because this endpoint is an operator
+        inspection surface.
+      required:
+        [
+          provider,
+          connectionId,
+          model,
+          modelStr,
+          excluded,
+          reachable,
+          breakerState,
+          connectionCooldown,
+          modelLocked,
+          freeAccessExclusion,
+        ]
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        model: { type: string }
+        modelStr: { type: string }
+        excluded: { type: boolean }
+        reachable: { type: boolean }
+        breakerState: { type: string }
+        connectionCooldown: { type: boolean }
+        modelLocked: { type: boolean }
+        freeAccessExclusion:
+          oneOf:
+            - type: string
+              enum:
+                [
+                  not-in-catalog,
+                  regime-not-free,
+                  no-hard-stop,
+                  contradictory-noauth,
+                  exhausted,
+                  state-unknown,
+                  no-connection,
+                ]
+            - type: "null"
+      additionalProperties: false
+
+    V1AutoComboCandidatesResponse:
+      type: object
+      required: [channel, candidates]
+      properties:
+        channel: { type: string, pattern: "^auto(?:/.+)?$" }
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/V1AutoComboCandidate" }
+      additionalProperties: false
+
+    V1PublicComboStep:
+      oneOf:
+        - type: object
+          required: [kind, model, accountPinned]
+          properties:
+            kind: { type: string, const: model }
+            model: { type: string }
+            providerId: { type: string }
+            accountPinned: { type: boolean }
+          additionalProperties: false
+        - type: object
+          required: [kind, comboName]
+          properties:
+            kind: { type: string, const: combo-ref }
+            comboName: { type: string }
+          additionalProperties: false
+
+    V1PublicComboCapabilities:
+      type: object
+      required: [multimodal, reasoning, caching]
+      properties:
+        multimodal: { type: boolean }
+        reasoning: { type: boolean }
+        caching: { type: boolean }
+      additionalProperties: false
+
+    V1PublicCombo:
+      type: object
+      required: [name, strategy, models, capabilities]
+      properties:
+        name: { type: string }
+        strategy: { type: string }
+        description: { type: string }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/V1PublicComboStep" }
+        capabilities: { $ref: "#/components/schemas/V1PublicComboCapabilities" }
+      additionalProperties: false
+
+    V1PublicComboListResponse:
+      type: object
+      required: [object, data]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/V1PublicCombo" }
+      additionalProperties: false
+
+    V1ApiKeyCostStatus:
+      type: object
+      required:
+        [
+          period,
+          currency,
+          usedUsd,
+          limitUsd,
+          remainingUsd,
+          usedPercent,
+          warningThreshold,
+          resetAt,
+          periodStartAt,
+        ]
+      properties:
+        period: { type: string }
+        currency: { type: string, const: USD }
+        usedUsd: { type: number, minimum: 0 }
+        limitUsd: { type: [number, "null"], minimum: 0 }
+        remainingUsd: { type: [number, "null"], minimum: 0 }
+        usedPercent: { type: [number, "null"], minimum: 0 }
+        warningThreshold: { type: [number, "null"], minimum: 0 }
+        resetAt: { type: [string, "null"], format: date-time }
+        periodStartAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+
+    V1ApiKeyTokenUsage:
+      type: object
+      required:
+        [
+          periodStartAt,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheCreationTokens,
+          reasoningTokens,
+          totalTokens,
+        ]
+      properties:
+        periodStartAt: { type: [string, "null"], format: date-time }
+        inputTokens: { type: number, minimum: 0 }
+        outputTokens: { type: number, minimum: 0 }
+        cacheReadTokens: { type: number, minimum: 0 }
+        cacheCreationTokens: { type: number, minimum: 0 }
+        reasoningTokens: { type: number, minimum: 0 }
+        totalTokens: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    V1ApiKeyQuotaWindow:
+      type: object
+      required: [usedPercentage, remainingPercentage, resetAt]
+      properties:
+        usedPercentage: { type: number }
+        remainingPercentage: { type: number }
+        resetAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+
+    V1ApiKeyAccountQuotaAvailable:
+      type: object
+      description: Provider quota lookup succeeded and returned a plan and/or quota windows.
+      required: [provider, connectionId, shared]
+      anyOf:
+        - required: [plan]
+        - required: [quotas]
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        shared: { type: boolean, const: true }
+        plan:
+          oneOf:
+            - type: string
+            - type: number
+            - type: boolean
+        quotas:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/V1ApiKeyQuotaWindow" }
+      additionalProperties: false
+
+    V1ApiKeyAccountQuotaUnavailable:
+      type: object
+      required: [provider, connectionId, shared, available, reason]
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        shared: { type: boolean, const: true }
+        available: { type: boolean, const: false }
+        reason:
+          type: string
+          enum: [connection_lookup_failed, not_supported, not_available, fetch_failed]
+      additionalProperties: false
+
+    V1ApiKeyAccountQuota:
+      oneOf:
+        - $ref: "#/components/schemas/V1ApiKeyAccountQuotaAvailable"
+        - $ref: "#/components/schemas/V1ApiKeyAccountQuotaUnavailable"
+
+    V1ApiKeySelfServiceStatus:
+      type: object
+      required: [apiKey, usage]
+      properties:
+        apiKey:
+          type: object
+          required: [id, name]
+          properties:
+            id: { type: string }
+            name: { type: string }
+          additionalProperties: false
+        usage:
+          type: object
+          required: [cost, tokens]
+          properties:
+            cost: { $ref: "#/components/schemas/V1ApiKeyCostStatus" }
+            tokens: { $ref: "#/components/schemas/V1ApiKeyTokenUsage" }
+          additionalProperties: false
+        accountQuotas:
+          type: array
+          description: Omitted unless this API key has the self:account-quota scope.
+          items: { $ref: "#/components/schemas/V1ApiKeyAccountQuota" }
+        accountQuota:
+          allOf:
+            - $ref: "#/components/schemas/V1ApiKeyAccountQuota"
+          description: Present only when accountQuotas contains exactly one item.
+      additionalProperties: false
+
+    V1ApiKeySelfServiceErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+      additionalProperties: false
+
+    MuseCodeModelMetadata:
+      type: object
+      required: [name, family, reasoning, tool_call, modalities, limit, cost]
+      properties:
+        name: { type: string }
+        family: { type: string, enum: [llama, llama-4, llama-3.3, llama-3.2, llama-3.1] }
+        reasoning: { type: boolean }
+        tool_call: { type: boolean }
+        modalities:
+          type: array
+          items: { type: string, enum: [text, image] }
+        limit: { type: number, minimum: 1 }
+        cost: { type: integer, enum: [1, 3] }
+      additionalProperties: false
+
+    MuseCodeModel:
+      type: object
+      required: [id, object, created, owned_by, metadata]
+      properties:
+        id: { type: string }
+        object: { type: string, const: model }
+        created: { type: integer, minimum: 0, description: Unix timestamp in seconds. }
+        owned_by: { type: string, const: meta }
+        metadata: { $ref: "#/components/schemas/MuseCodeModelMetadata" }
+      additionalProperties: false
+
+    MuseCodeModelListResponse:
+      type: object
+      required: [object, data]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/MuseCodeModel" }
       additionalProperties: false

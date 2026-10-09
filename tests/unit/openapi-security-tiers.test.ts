@@ -160,12 +160,16 @@ test("configuration-gated model and routing catalogs document anonymous alternat
   for (const [pathStr, method] of [
     ["/api/v1/models", "get"],
     ["/api/v1/providers/{provider}/models", "get"],
-    ["/api/v1/combos", "get"],
     ["/api/v1/explain/routing", "get"],
   ] as const) {
     const operation = paths[pathStr]?.[method];
     assert.deepEqual(operation?.security, expected, `${method.toUpperCase()} ${pathStr}`);
   }
+  assert.deepEqual(
+    paths["/api/v1/combos"]?.get?.security,
+    [{ BearerAuth: [] }, { GoogleApiKeyAuth: [] }, { ManagementSessionAuth: [] }, {}],
+    "GET /api/v1/combos also accepts a valid key supplied via x-goog-api-key"
+  );
   assert.match(paths["/api/v1/models"]?.get?.description ?? "", /requireAuthForModels/);
   assert.match(paths["/api/v1/combos"]?.get?.description ?? "", /REQUIRE_API_KEY/);
 });
