@@ -192,6 +192,8 @@ export type ExecuteInput = {
   stream: boolean;
   credentials: ProviderCredentials;
   signal?: AbortSignal | null;
+  /** Original client signal, kept separate from per-target dispatch timeouts. */
+  callerSignal?: AbortSignal | null;
   log?: ExecutorLog | null;
   extendedContext?: boolean;
   /** Merged after auth + CLI fingerprint headers (values override same-named defaults). */

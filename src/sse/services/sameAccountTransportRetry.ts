@@ -33,6 +33,7 @@ const NON_RETRYABLE_ERROR_TYPES = new Set([
   "account_semaphore_capacity",
   "logical_retry_budget",
   "upstream_acceptance_uncertain",
+  "local_stream_buffer_limit",
 ]);
 
 export function isRetryableTransportStatus(status: unknown): boolean {

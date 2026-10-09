@@ -243,6 +243,8 @@ const REQUEST_SCOPED_UPSTREAM_ERROR_CODES: Record<string, true> = {
   rate_limit_queue_timeout: true,
   rate_limit_queue_full: true,
   rate_limit_queue_wedged: true,
+  // Local pre-readiness buffer guard: memory protection, not provider health.
+  stream_readiness_buffer_limit: true,
   // #10360: our own executor-result contract violation. An internal defect, not
   // a provider/account fault — it must never cool a connection or trip a breaker.
   [EXECUTOR_CONTRACT_VIOLATION_CODE]: true,
@@ -259,6 +261,7 @@ export function isRequestScopedUpstreamFailure(error?: {
     REQUEST_SCOPED_UPSTREAM_ERROR_CODES[code] === true ||
     type === "context_length_exceeded" ||
     type === "local_queue_capacity" ||
+    type === "local_stream_buffer_limit" ||
     type === "upstream_acceptance_uncertain" ||
     code === "upstream_acceptance_uncertain" ||
     type === UPSTREAM_POLICY_REJECTION ||
@@ -377,7 +380,29 @@ export function isStreamReadinessFailureErrorBody(errorBody: unknown): boolean {
   const error = (errorBody as Record<string, unknown>).error;
   if (!error || typeof error !== "object") return false;
   const code = (error as Record<string, unknown>).code;
-  return code === "STREAM_READINESS_TIMEOUT" || code === "STREAM_EARLY_EOF";
+  return (
+    code === "STREAM_READINESS_TIMEOUT" ||
+    code === "STREAM_READINESS_BUFFER_LIMIT" ||
+    code === "STREAM_EARLY_EOF"
+  );
+}
+
+/**
+ * A stream-readiness failure happens after the upstream returned HTTP 200. The
+ * provider may still be processing the generation, so combo dispatch must not
+ * issue another target. The local buffer-limit marker is terminal too, even
+ * though its type remains local/request-scoped for health classification.
+ */
+export function isTerminalAcceptedStreamFailureErrorBody(errorBody: unknown): boolean {
+  if (!errorBody || typeof errorBody !== "object") return false;
+  const error = (errorBody as Record<string, unknown>).error;
+  if (!error || typeof error !== "object") return false;
+  const record = error as Record<string, unknown>;
+  return (
+    record.type === "upstream_acceptance_uncertain" ||
+    record.type === "local_stream_buffer_limit" ||
+    record.code === "STREAM_READINESS_BUFFER_LIMIT"
+  );
 }
 
 /**

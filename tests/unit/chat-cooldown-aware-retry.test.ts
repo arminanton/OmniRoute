@@ -52,6 +52,50 @@ function buildZombieSseResponse() {
   );
 }
 
+async function assertAcceptedStreamFailureDoesNotRetry({
+  apiKey,
+  makeResponse,
+  expectedStatus,
+  expectedCode,
+  expectedType,
+}: {
+  apiKey: string;
+  makeResponse: () => Response;
+  expectedStatus: number;
+  expectedCode: string;
+  expectedType: string;
+}) {
+  const connection = await seedConnection("openai", { apiKey });
+  await settingsDb.updateSettings({ requestRetry: 1, maxRetryIntervalSec: 10 });
+  let fetchCalls = 0;
+  globalThis.fetch = async () => {
+    fetchCalls += 1;
+    return makeResponse();
+  };
+
+  const response = await handleChat(
+    buildRequest({
+      body: {
+        model: "openai/gpt-4.1",
+        stream: true,
+        messages: [{ role: "user", content: "accepted generation must not replay" }],
+      },
+    })
+  );
+  const body = (await response.json()) as any;
+
+  assert.equal(response.status, expectedStatus);
+  assert.equal(body.error.code, expectedCode);
+  assert.equal(body.error.type, expectedType);
+  assert.equal(fetchCalls, 1, "the accepted upstream generation must not be sent again");
+
+  const refreshedConnection = (await getProviderConnectionById((connection as any).id)) as any;
+  assert.equal(refreshedConnection.testStatus, "active");
+  assert.ok(refreshedConnection.rateLimitedUntil == null);
+  assert.ok(refreshedConnection.errorCode == null);
+  assert.equal(refreshedConnection.backoffLevel, 0);
+}
+
 test.beforeEach(async () => {
   BaseExecutor.RETRY_CONFIG.maxAttempts = originalRetryConfig.maxAttempts;
   BaseExecutor.RETRY_CONFIG.delayMs = 0;
@@ -317,12 +361,49 @@ test("handleChat returns stream readiness timeout without entering cooldown-awar
   assert.equal(response.status, 504);
   assert.equal(fetchCalls, 1);
   assert.equal(body.error.code, "STREAM_READINESS_TIMEOUT");
+  assert.equal(body.error.type, "upstream_acceptance_uncertain");
 
   const refreshedConnection = (await getProviderConnectionById((connection as any).id)) as any;
   assert.equal(refreshedConnection.testStatus, "active");
   assert.ok(refreshedConnection.rateLimitedUntil == null);
   assert.ok(refreshedConnection.errorCode == null);
   assert.equal(refreshedConnection.backoffLevel, 0);
+});
+
+test("handleChat does not replay an accepted stream after a body read error", async () => {
+  await assertAcceptedStreamFailureDoesNotRetry({
+    apiKey: "sk-openai-stream-read-error",
+    makeResponse: () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.error(new Error("mock upstream body reset"));
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      ),
+    expectedStatus: 502,
+    expectedCode: "STREAM_READ_ERROR",
+    expectedType: "upstream_acceptance_uncertain",
+  });
+});
+
+test("handleChat does not replay or cool an account when its local readiness buffer cap is hit", async () => {
+  await assertAcceptedStreamFailureDoesNotRetry({
+    apiKey: "sk-openai-stream-readiness-buffer-limit",
+    makeResponse: () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(textEncoder.encode(`data: ${"x".repeat(1_050_000)}\n\n`));
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      ),
+    expectedStatus: 502,
+    expectedCode: "STREAM_READINESS_BUFFER_LIMIT",
+    expectedType: "local_stream_buffer_limit",
+  });
 });
 
 test("handleChat aborts the pending cooldown wait when the client disconnects", async () => {

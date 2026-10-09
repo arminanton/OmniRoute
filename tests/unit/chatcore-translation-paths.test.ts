@@ -402,6 +402,7 @@ async function invokeChatCore({
   reasoningTransportFallback = "drop",
   managedLease = null,
   cachedSettings = null,
+  requestSignal = undefined,
 }: any = {}) {
   const calls: any[] = [];
 
@@ -411,10 +412,16 @@ async function invokeChatCore({
       url: String(url),
       method: init.method || "GET",
       headers,
-      body: init.body ? (() => {
-        try { return JSON.parse(String(init.body)); }
-        catch { return String(init.body); }
-      })() : null,
+      signal: init.signal,
+      body: init.body
+        ? (() => {
+            try {
+              return JSON.parse(String(init.body));
+            } catch {
+              return String(init.body);
+            }
+          })()
+        : null,
     };
     calls.push(captured);
 
@@ -444,6 +451,9 @@ async function invokeChatCore({
         endpoint,
         body: structuredClone(body),
         headers: new Headers({ accept, ...requestHeaders }),
+        ...(requestSignal !== undefined
+          ? { signal: requestSignal, callerSignal: requestSignal }
+          : {}),
       },
       connectionId,
       apiKeyInfo,
@@ -2060,7 +2070,9 @@ test("provider JSON cannot claim local proxy_unreachable provenance", async () =
       },
       responseFactory() {
         return new Response(
-          JSON.stringify({ error: { message: "ordinary upstream outage", code: "proxy_unreachable" } }),
+          JSON.stringify({
+            error: { message: "ordinary upstream outage", code: "proxy_unreachable" },
+          }),
           { status: 503, headers: { "Content-Type": "application/json" } }
         );
       },
@@ -2141,37 +2153,60 @@ test("non-stream invalid_grant expires only an unrotated OAuth token", async () 
   for (const rotated of [false, true]) {
     const refreshToken = `claude-refresh-${rotated}`;
     const connection = await providersDb.createProviderConnection({
-      provider: "claude", authType: "oauth", name: `claude-invalid-grant-${rotated}`,
-      accessToken: "expired-test-access", refreshToken,
+      provider: "claude",
+      authType: "oauth",
+      name: `claude-invalid-grant-${rotated}`,
+      accessToken: "expired-test-access",
+      refreshToken,
       expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-      isActive: true, testStatus: "active", providerSpecificData: {},
+      isActive: true,
+      testStatus: "active",
+      providerSpecificData: {},
     });
     const changes = [];
     const { result, calls } = await invokeChatCore({
-      provider: "claude", model: "claude-sonnet-4-5", connectionId: connection.id,
-      credentials: { connectionId: connection.id, accessToken: "expired-test-access",
-        refreshToken, expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
-        providerSpecificData: {} },
-      body: { model: "claude-sonnet-4-5", stream: false,
-        messages: [{ role: "user", content: "invalid refresh token" }] },
-      onCredentialsRefreshed(change) { changes.push(change); },
+      provider: "claude",
+      model: "claude-sonnet-4-5",
+      connectionId: connection.id,
+      credentials: {
+        connectionId: connection.id,
+        accessToken: "expired-test-access",
+        refreshToken,
+        expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        providerSpecificData: {},
+      },
+      body: {
+        model: "claude-sonnet-4-5",
+        stream: false,
+        messages: [{ role: "user", content: "invalid refresh token" }],
+      },
+      onCredentialsRefreshed(change) {
+        changes.push(change);
+      },
       async responseFactory(captured) {
         if (captured.url.includes("/v1/oauth/token")) {
           if (rotated) {
-            await providersDb.updateProviderConnection(connection.id, { refreshToken: "newer-token" });
+            await providersDb.updateProviderConnection(connection.id, {
+              refreshToken: "newer-token",
+            });
           }
           return new Response(JSON.stringify({ error: "invalid_grant" }), {
-            status: 400, headers: { "content-type": "application/json" },
+            status: 400,
+            headers: { "content-type": "application/json" },
           });
         }
         return new Response(JSON.stringify({ error: { message: "expired access token" } }), {
-          status: 401, headers: { "content-type": "application/json" },
+          status: 401,
+          headers: { "content-type": "application/json" },
         });
       },
     });
     assert.equal(result.status, 401);
     assert.ok(calls.some((entry) => entry.url.includes("/v1/oauth/token")));
-    assert.equal(changes.some((change) => change.isActive === false), !rotated);
+    assert.equal(
+      changes.some((change) => change.isActive === false),
+      !rotated
+    );
   }
 });
 
@@ -3169,6 +3204,61 @@ test("chatCore maps raw string abort reasons to 499, not 502 (#7907)", async () 
   assert.equal(result.success, false);
   assert.equal(result.status, 499);
   assert.equal(result.error, "Request aborted");
+});
+
+test("chatCore reports a caller abort during stream readiness as 499", async () => {
+  const caller = new AbortController();
+  let fetchCalls = 0;
+  let abortTimer: ReturnType<typeof setTimeout> | undefined;
+  const invocation = invokeChatCore({
+    provider: "openai",
+    model: "gpt-4o-mini",
+    accept: "text/event-stream",
+    requestSignal: caller.signal,
+    body: {
+      model: "gpt-4o-mini",
+      stream: true,
+      messages: [{ role: "user", content: "abort during readiness" }],
+    },
+    responseFactory(captured) {
+      fetchCalls++;
+      const signal = captured.signal as AbortSignal;
+      abortTimer = setTimeout(() => caller.abort(new Error("caller closed")), 0);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            signal.addEventListener("abort", () => controller.error(signal.reason), {
+              once: true,
+            });
+          },
+          pull() {
+            return new Promise<void>(() => {});
+          },
+          cancel() {
+            return new Promise<void>(() => {});
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+    },
+  });
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  const result = await Promise.race([
+    invocation,
+    new Promise<never>((_resolve, reject) => {
+      watchdog = setTimeout(
+        () => reject(new Error("chatCore readiness abort did not settle")),
+        500
+      );
+    }),
+  ]).finally(() => {
+    clearTimeout(abortTimer);
+    clearTimeout(watchdog);
+  });
+
+  assert.equal(result.result.success, false);
+  assert.equal(result.result.status, 499);
+  assert.equal(fetchCalls, 1, "caller abort must not dispatch another upstream attempt");
 });
 
 // Live incident territory (dashboard log id 1784504040241-6f8b9a): the client had

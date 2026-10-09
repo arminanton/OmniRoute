@@ -898,6 +898,7 @@ export class GrokWebExecutor extends BaseExecutor {
     stream,
     credentials,
     signal,
+    callerSignal,
     log,
     upstreamExtraHeaders,
   }: ExecuteInput) {
@@ -1108,7 +1109,11 @@ export class GrokWebExecutor extends BaseExecutor {
         provider: this.provider,
         model,
         log,
+        signal,
+        callerSignal: callerSignal !== undefined ? callerSignal : signal,
       });
+      if (!readiness.ok && readiness.callerAborted)
+        throw Object.assign(new Error("Request aborted"), { name: "AbortError" });
       finalResponse = readiness.response;
     } else {
       finalResponse = await buildNonStreamingResponse(

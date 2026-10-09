@@ -9,6 +9,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "combo-499-test-secret";
 
 const { handleComboChat } = await import("../../open-sse/services/combo.ts");
+const { ensureStreamReadiness } = await import("../../open-sse/utils/streamReadiness.ts");
 
 const noop = () => {};
 const log = { info: noop, warn: noop, debug: noop, error: noop };
@@ -88,6 +89,80 @@ test("combo loop with 3 models: 499 on model-1 prevents trying model-2 and model
     `Expected first model to contain 'fast', got '${modelsCalled[0]}'`
   );
   assert.equal(result.status, 499);
+});
+
+test("readiness caller abort returns 499 and stops combo fallback", async () => {
+  const caller = new AbortController();
+  let callCount = 0;
+
+  const result = await handleComboChat({
+    body: { model: "test", messages: [{ role: "user", content: "hi" }] },
+    combo: makeCombo("priority", ["provider-a/first", "provider-b/fallback"]),
+    handleSingleModel: async () => {
+      callCount++;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          pull() {
+            return new Promise<void>(() => {});
+          },
+          cancel() {
+            return new Promise<void>(() => {});
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+      const readiness = ensureStreamReadiness(response, {
+        timeoutMs: 10_000,
+        signal: caller.signal,
+        callerSignal: caller.signal,
+      });
+      caller.abort(new Error("client disconnected"));
+      return (await readiness).response;
+    },
+    log,
+    settings: {},
+    allCombos: [],
+  });
+
+  assert.equal(result.status, 499);
+  assert.equal(callCount, 1, "a caller abort during readiness must not dispatch the fallback");
+});
+
+test("readiness caller abort returns 499 and stops combo fallback", async () => {
+  const caller = new AbortController();
+  let callCount = 0;
+
+  const result = await handleComboChat({
+    body: { model: "test", messages: [{ role: "user", content: "hi" }] },
+    combo: makeCombo("priority", ["provider-a/first", "provider-b/fallback"]),
+    handleSingleModel: async () => {
+      callCount++;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          pull() {
+            return new Promise<void>(() => {});
+          },
+          cancel() {
+            return new Promise<void>(() => {});
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      );
+      const readiness = ensureStreamReadiness(response, {
+        timeoutMs: 10_000,
+        signal: caller.signal,
+        callerSignal: caller.signal,
+      });
+      caller.abort(new Error("client disconnected"));
+      return (await readiness).response;
+    },
+    log,
+    settings: {},
+    allCombos: [],
+  });
+
+  assert.equal(result.status, 499);
+  assert.equal(callCount, 1, "a caller abort during readiness must not dispatch the fallback");
 });
 
 test("combo loop does NOT stop on 502 (transient) — tries more than one model", async () => {

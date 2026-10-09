@@ -60,6 +60,7 @@ import {
   shouldRecordProviderBreakerFailure,
   isComboRequestScopedFailure as isScopedFailure,
   isStreamReadinessFailureErrorBody,
+  isTerminalAcceptedStreamFailureErrorBody,
   isStreamEarlyEofErrorBody,
   isTokenLimitBreachErrorBody,
   isLocalQueueCapacityErrorBody,
@@ -734,8 +735,7 @@ export async function executeTargetAttempt(opts: {
     }
 
     if (
-      (errorBody?.error as { type?: unknown } | undefined)?.type ===
-        "upstream_acceptance_uncertain" ||
+      isTerminalAcceptedStreamFailureErrorBody(errorBody) ||
       classifyUpstreamPolicyRejection(errorBody) ||
       classifyUpstreamPolicyRejection(errorText)
     )

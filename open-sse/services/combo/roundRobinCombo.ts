@@ -93,6 +93,7 @@ import {
   resolveDelayMs,
   comboModelNotFoundResponse,
   isStreamReadinessFailureErrorBody,
+  isTerminalAcceptedStreamFailureErrorBody,
   isTokenLimitBreachErrorBody,
   isLocalQueueCapacityErrorBody,
   toRecordedTarget,
@@ -876,6 +877,21 @@ export async function handleRoundRobinCombo({
             classifyUpstreamPolicyRejection(errorText)
           )
             return result;
+
+          // The provider has already accepted HTTP 200; a failed readiness gate
+          // cannot prove that generation stopped. Preserve the result and stop
+          // round-robin here rather than replaying the request at another target.
+          if (isTerminalAcceptedStreamFailureErrorBody(errorBody)) {
+            recordComboRequest(combo.name, modelStr, {
+              success: false,
+              latencyMs: Date.now() - startTime,
+              fallbackCount,
+              strategy: "round-robin",
+              target: toRecordedTarget(target),
+            });
+            recordedAttempts++;
+            return result;
+          }
 
           const isStreamReadinessFailure =
             (result.status === 502 || result.status === 504) &&

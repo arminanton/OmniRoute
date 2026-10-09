@@ -2112,6 +2112,21 @@ async function handleSingleModelChatImplementation(
         return withSelectedConnectionHeader(result.response, credentials.connectionId);
       }
 
+      // These readiness results happen only after the upstream returned HTTP 200.
+      // It may still be processing the generation, so preserve the diagnostic
+      // response without same-account retry, account rotation, or breaker updates.
+      const isAcceptedStreamReadinessFailure =
+        result.errorType === "upstream_acceptance_uncertain" ||
+        result.errorType === "local_stream_buffer_limit" ||
+        result.errorCode === "STREAM_READINESS_BUFFER_LIMIT";
+      if (isAcceptedStreamReadinessFailure) {
+        log.warn(
+          "STREAM",
+          `${provider}/${model} readiness failed after HTTP 200; returning without replay`
+        );
+        return withSelectedConnectionHeader(result.response, credentials.connectionId);
+      }
+
       const isAntigravityStreamReadinessFailure =
         provider === "antigravity" &&
         (result.errorCode === "STREAM_READINESS_TIMEOUT" ||

@@ -486,7 +486,11 @@ export class GlmExecutor extends DefaultExecutor {
         provider: this.provider,
         model: input.model,
         log: input.log,
+        signal: combinedSignal,
+        callerSignal: input.callerSignal !== undefined ? input.callerSignal : input.signal,
       });
+      if (!readiness.ok && readiness.callerAborted)
+        throw Object.assign(new Error("Request aborted"), { name: "AbortError" });
       response = readiness.response;
     }
 

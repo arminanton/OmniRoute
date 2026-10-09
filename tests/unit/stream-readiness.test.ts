@@ -5,11 +5,29 @@ import {
   ensureStreamReadiness,
   hasStreamReadinessSignal,
   hasUsefulStreamContent,
+  prependBufferedChunks,
 } from "../../open-sse/utils/streamReadiness.ts";
 import { checkFallbackError } from "../../open-sse/services/accountFallback.ts";
 import { resolveStreamReadinessClassificationError } from "../../src/sse/handlers/chatPredicates.ts";
 
 const encoder = new TextEncoder();
+
+async function beforeDeadline<T>(promise: Promise<T>, timeoutMs = 250): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error("readiness result did not settle promptly")),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function streamFromChunks(chunks: string[], delayMs = 0): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
@@ -566,6 +584,265 @@ test("ensureStreamReadiness cancellation is bounded when upstream cancel never s
   ]);
   await reader.cancel("duplicate cancellation");
   assert.equal(cancelCalls, 1);
+});
+
+test("ensureStreamReadiness timeout is non-blocking when pre-ready cancellation never settles", async () => {
+  let cancelCalls = 0;
+  let cancelUpstreamCalls = 0;
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => {});
+      },
+      cancel() {
+        cancelCalls += 1;
+        return new Promise<void>(() => {});
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+
+  const result = await beforeDeadline(
+    ensureStreamReadiness(response, {
+      timeoutMs: 10,
+      maxTimeoutMs: 10,
+      cancelUpstream: () => {
+        cancelUpstreamCalls += 1;
+      },
+    })
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("a stream with no readiness event must time out");
+  assert.equal(result.code, "STREAM_READINESS_TIMEOUT");
+  assert.equal(result.response.status, 504);
+  assert.equal(cancelCalls, 1);
+  assert.equal(cancelUpstreamCalls, 1);
+});
+
+test("ensureStreamReadiness bounds buffered bytes before parsing partial SSE data", async () => {
+  let cancelCalls = 0;
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${"x".repeat(700)}\n\n`));
+      },
+      cancel() {
+        cancelCalls += 1;
+        return new Promise<void>(() => {});
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+
+  const result = await beforeDeadline(
+    ensureStreamReadiness(response, { timeoutMs: 1000, maxBufferedBytes: 512 })
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("oversized readiness input must fail closed");
+  assert.equal(result.code, "STREAM_READINESS_BUFFER_LIMIT");
+  assert.equal(result.type, "local_stream_buffer_limit");
+  assert.equal(result.response.status, 502);
+  assert.match(result.reason, /pre-readiness buffer limit/);
+  assert.equal(cancelCalls, 1);
+
+  const pooledBacking = new Uint8Array(4096);
+  const ping = encoder.encode(": ping\n\n");
+  pooledBacking.set(ping);
+  const pooledViewResponse = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(pooledBacking.subarray(0, ping.length));
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+  const backingBound = await ensureStreamReadiness(pooledViewResponse, {
+    timeoutMs: 1000,
+    maxBufferedBytes: 1024,
+  });
+  assert.equal(backingBound.ok, false, "a tiny view must not pin an oversized backing array");
+  if (backingBound.ok) assert.fail("the backing allocation must count against the buffer limit");
+  assert.match(backingBound.reason, /pre-readiness buffer limit/);
+});
+
+test("ensureStreamReadiness bounds the number of buffered partial-event lines", async () => {
+  const response = new Response(streamFromChunks(["data: x\n".repeat(1025)]), {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+  const result = await beforeDeadline(ensureStreamReadiness(response, { timeoutMs: 1000 }));
+
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("partial SSE event lines must have a finite bound");
+  assert.equal(result.code, "STREAM_READINESS_BUFFER_LIMIT");
+  assert.equal(result.response.status, 502);
+  assert.match(result.reason, /pre-readiness buffer limit/);
+});
+
+test("ensureStreamReadiness returns 499 for caller abort without waiting for body cancel", async () => {
+  const caller = new AbortController();
+  const target = new AbortController();
+  let cancelCalls = 0;
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => {});
+      },
+      cancel() {
+        cancelCalls += 1;
+        return new Promise<void>(() => {});
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+  const readiness = ensureStreamReadiness(response, {
+    timeoutMs: 10_000,
+    signal: AbortSignal.any([caller.signal, target.signal]),
+    callerSignal: caller.signal,
+  });
+  caller.abort(new Error("client disconnected"));
+
+  const result = await beforeDeadline(readiness);
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("caller abort must be a failed result");
+  assert.equal(result.callerAborted, true);
+  assert.equal(result.code, "CLIENT_ABORTED");
+  assert.equal(result.response.status, 499);
+  assert.equal(cancelCalls, 1);
+});
+
+test("ensureStreamReadiness keeps per-target abort separate from caller-abort classification", async () => {
+  const caller = new AbortController();
+  const target = new AbortController();
+  const targetReason = new Error("combo target timed out");
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => {});
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+  const readiness = ensureStreamReadiness(response, {
+    timeoutMs: 10_000,
+    signal: AbortSignal.any([caller.signal, target.signal]),
+    callerSignal: caller.signal,
+  });
+  target.abort(targetReason);
+
+  const result = await beforeDeadline(readiness);
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("per-target cancellation must not report a ready stream");
+  assert.equal(result.callerAborted, undefined);
+  assert.equal(result.code, "STREAM_READINESS_TIMEOUT");
+  assert.equal(result.response.status, 504);
+  assert.equal(caller.signal.aborted, false);
+});
+
+test("ensureStreamReadiness timeout preserves its code but marks accepted generation uncertain", async () => {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      pull() {
+        return new Promise<void>(() => {});
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+  const result = await beforeDeadline(
+    ensureStreamReadiness(response, { timeoutMs: 10, maxTimeoutMs: 10 })
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("a missing first event must keep timeout behavior");
+  assert.equal(result.code, "STREAM_READINESS_TIMEOUT");
+  assert.equal(result.type, "upstream_acceptance_uncertain");
+  assert.equal(result.response.status, 504);
+  assert.equal(result.callerAborted, undefined);
+});
+
+test("ensureStreamReadiness distinguishes upstream body read errors from its own deadline", async () => {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(new Error("mock upstream body reset"));
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+  const result = await beforeDeadline(ensureStreamReadiness(response, { timeoutMs: 1000 }));
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("a source read failure before readiness must fail");
+  assert.equal(result.code, "STREAM_READ_ERROR");
+  assert.equal(result.type, "upstream_acceptance_uncertain");
+  assert.equal(result.response.status, 502);
+  const body = await result.response.json();
+  assert.equal(body.error.message, "Upstream stream failed before response readiness");
+  assert.doesNotMatch(JSON.stringify(body), /mock upstream body reset/);
+  assert.equal(result.callerAborted, undefined);
+});
+
+test("ensureStreamReadiness bounds oversized pre-ready bytes and excessive partial SSE lines", async () => {
+  let cancelCalls = 0;
+  const oversized = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${"x".repeat(700)}\n\n`));
+      },
+      cancel() {
+        cancelCalls += 1;
+      },
+    }),
+    { status: 200, headers: { "Content-Type": "text/event-stream" } }
+  );
+  const byteBound = await ensureStreamReadiness(oversized, {
+    timeoutMs: 1000,
+    maxBufferedBytes: 512,
+  });
+  assert.equal(byteBound.ok, false);
+  if (byteBound.ok) assert.fail("oversized pre-readiness bytes must be bounded");
+  assert.equal(byteBound.code, "STREAM_READINESS_BUFFER_LIMIT");
+  assert.equal(byteBound.type, "local_stream_buffer_limit");
+  assert.equal(byteBound.response.status, 502);
+  assert.match(byteBound.reason, /pre-readiness buffer limit/);
+  assert.equal(cancelCalls, 1);
+
+  const tooManyDataLines = new Response(streamFromChunks(["data: x\n".repeat(1025)]), {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+  const lineBound = await ensureStreamReadiness(tooManyDataLines, { timeoutMs: 1000 });
+  assert.equal(lineBound.ok, false);
+  if (lineBound.ok) assert.fail("partial event parser line count must be bounded");
+  assert.equal(lineBound.code, "STREAM_READINESS_BUFFER_LIMIT");
+  assert.equal(lineBound.response.status, 502);
+  assert.match(lineBound.reason, /pre-readiness buffer limit/);
+});
+
+test("pre-readiness budget includes owned parser line copies", async () => {
+  const response = new Response(streamFromChunks([`data: ${"x".repeat(80)}\n`]), {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+  const result = await beforeDeadline(
+    ensureStreamReadiness(response, { timeoutMs: 1000, maxBufferedBytes: 600 })
+  );
+  assert.equal(result.ok, false);
+  if (result.ok) assert.fail("retained parser lines must count against the aggregate cap");
+  assert.equal(result.code, "STREAM_READINESS_BUFFER_LIMIT");
+  assert.match(result.reason, /pre-readiness buffer limit/);
+});
+
+test("readiness replay releases each buffered byte chunk after enqueue and clears on cancel", async () => {
+  const rawChunk = encoder.encode("first readiness bytes");
+  const chunks = [rawChunk];
+  const source = new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+  const replay = prependBufferedChunks(chunks, source.getReader());
+  const reader = replay.getReader();
+
+  const first = await reader.read();
+  assert.equal(new TextDecoder().decode(first.value), "first readiness bytes");
+  assert.equal(chunks[0].byteLength, 0, "replayed prefix bytes should not remain retained");
+  await reader.cancel("consumer disconnected");
+  assert.equal(chunks.length, 0, "remaining prefix references should be released on cancel");
 });
 
 test("ensureStreamReadiness honors configured timeouts above 2000ms", async () => {

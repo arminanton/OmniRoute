@@ -40,6 +40,9 @@ export function buildClientRawRequest(
     // compression), and this has to stay a snapshot of what the client actually sent.
     body: cloneBoundedForLog(body, 0, null, getChatLogClientTextLimit()),
     headers,
+    // Dispatch copies can merge per-target cancellation into `signal`; retain
+    // the original caller signal so readiness does not report that timeout as 499.
+    callerSignal: request.signal ?? null,
     signal: request.signal ?? null,
   };
   const admittedBytes = getAdmittedRawRequestBodyBytes(request);
@@ -51,10 +54,11 @@ export function buildClientRawRequest(
 
 /**
  * #7360 follow-up: chatCore.ts's createStreamController (and, downstream,
- * withRateLimit/acquireAccountSemaphore) only ever watches
- * clientRawRequest.signal — the ORIGINAL client's request signal, which stays
- * open for as long as the overall combo keeps retrying elsewhere. A target
- * abandoned by comboTargetTimeoutMs (open-sse/services/combo/targetTimeoutRunner.ts)
+ * withRateLimit/acquireAccountSemaphore) watches clientRawRequest.signal,
+ * which is the original client signal merged with the current combo target's
+ * cancellation signal. Keep callerSignal separately for code that must tell a
+ * real client disconnect from a per-target timeout. A target abandoned by
+ * comboTargetTimeoutMs (open-sse/services/combo/targetTimeoutRunner.ts)
  * never learns it was abandoned, and hangs forever (leaking a permanent
  * "pending" dashboard entry — trackPendingRequest(false) never runs; live
  * incident, log id 1784418258231-14961a). Merges the per-target
@@ -64,12 +68,18 @@ export function buildClientRawRequest(
  * modelAbortSignal to merge in (the non-combo / non-timed-out common case).
  */
 export function resolveDispatchClientRawRequest(
-  clientRawRequest: { signal?: AbortSignal | null } | null | undefined,
+  clientRawRequest:
+    { signal?: AbortSignal | null; callerSignal?: AbortSignal | null } | null | undefined,
   modelAbortSignal: AbortSignal | null | undefined
 ): typeof clientRawRequest {
   if (!modelAbortSignal) return clientRawRequest;
+  const callerSignal =
+    clientRawRequest?.callerSignal !== undefined
+      ? clientRawRequest.callerSignal
+      : (clientRawRequest?.signal ?? null);
   const copy = {
     ...clientRawRequest,
+    callerSignal,
     signal: clientRawRequest?.signal
       ? mergeAbortSignals(clientRawRequest.signal, modelAbortSignal)
       : modelAbortSignal,

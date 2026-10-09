@@ -22,10 +22,14 @@ process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "combo-target-timeout
 const { handleComboChat } = await import("../../../open-sse/services/combo.ts");
 const { isComboRequestScopedFailure, shouldRecordProviderBreakerFailure } =
   await import("../../../open-sse/services/combo/comboPredicates.ts");
+const { isStreamReadinessFailureErrorBody } =
+  await import("../../../open-sse/services/combo/comboPredicates.ts");
 const { applyComboTargetExhaustion } =
   await import("../../../open-sse/services/combo/targetExhaustion.ts");
 const { getProviderBreakerState } = await import("../../../open-sse/services/accountFallback.ts");
 const { resetAllCircuitBreakers } = await import("../../../src/shared/utils/circuitBreaker.ts");
+const { clearCooldownState, getCooldownEntryCount } =
+  await import("../../../open-sse/services/providerCooldownTracker.ts");
 
 const noop = () => {};
 const log = { info: noop, warn: noop, debug: noop, error: noop };
@@ -93,6 +97,7 @@ function resolvedTarget(overrides: Record<string, unknown> = {}) {
 
 test.beforeEach(() => {
   resetAllCircuitBreakers();
+  clearCooldownState();
 });
 
 // ── Decision seam: breaker + request-scoped classification ──────────────────
@@ -125,6 +130,63 @@ test("decision seam: generic upstream 504 is NOT request-scoped and still record
     true,
     "genuine upstream 504 must retain connection-level breaker recording"
   );
+});
+
+test("local readiness buffer overflow is request-scoped and excluded from all cooldown paths", () => {
+  const errorBody = {
+    error: {
+      message: "Stream exceeded the local pre-readiness buffer limit",
+      code: "STREAM_READINESS_BUFFER_LIMIT",
+      type: "local_stream_buffer_limit",
+    },
+  };
+  const response = new Response(JSON.stringify(errorBody), {
+    status: 502,
+    headers: { "Content-Type": "application/json" },
+  });
+  const structuredError = errorBody.error;
+  const requestScopedFailure = isComboRequestScopedFailure(
+    response,
+    errorBody.error.message,
+    structuredError
+  );
+
+  assert.equal(isStreamReadinessFailureErrorBody(errorBody), true);
+  assert.equal(requestScopedFailure, true);
+  assert.equal(
+    shouldRecordProviderBreakerFailure({
+      isStreamReadinessFailure: true,
+      status: response.status,
+      sameProviderNext: false,
+      requestScopedFailure,
+      error: errorBody.error.message,
+    }),
+    false,
+    "local buffer protection must not trip the provider breaker"
+  );
+
+  const sets = {
+    exhaustedProviders: new Set<string>(),
+    exhaustedConnections: new Set<string>(),
+    transientRateLimitedProviders: new Set<string>(),
+  };
+  applyComboTargetExhaustion(resolvedTarget(), {
+    result: response,
+    fallbackResult: {},
+    errorText: errorBody.error.message,
+    rawModel: "gpt-4o-mini",
+    isTokenLimitBreach: false,
+    allAccountsRateLimited: false,
+    requestScopedFailure,
+    sets,
+    log,
+    tag: "COMBO",
+    exhaustedLogLevel: "info",
+    structuredError,
+  });
+  assert.equal(sets.exhaustedConnections.size, 0);
+  assert.equal(sets.exhaustedProviders.size, 0);
+  assert.equal(sets.transientRateLimitedProviders.size, 0);
 });
 
 test("decision seam: genuine Cloudflare 524 is not request-scoped (exhaustion, not breaker status set)", () => {
@@ -289,4 +351,83 @@ test("handleComboChat: generic upstream 504 fails over but still records provide
     (breaker?.failureCount ?? 0) >= 1,
     "genuine upstream 504 must record at least one provider breaker failure"
   );
+});
+
+test("combo and round-robin stop replay after accepted HTTP 200 readiness failures", async () => {
+  const acceptedReadinessFailures = [
+    {
+      name: "readiness timeout",
+      status: 504,
+      code: "STREAM_READINESS_TIMEOUT",
+      type: "upstream_acceptance_uncertain",
+    },
+    {
+      name: "source read error",
+      status: 502,
+      code: "STREAM_READ_ERROR",
+      type: "upstream_acceptance_uncertain",
+    },
+    {
+      name: "local buffer cap",
+      status: 502,
+      code: "STREAM_READINESS_BUFFER_LIMIT",
+      type: "local_stream_buffer_limit",
+    },
+  ];
+
+  for (const strategy of ["priority", "round-robin"] as const) {
+    for (const failure of acceptedReadinessFailures) {
+      resetAllCircuitBreakers();
+      clearCooldownState();
+      const calls: string[] = [];
+      const comboName = `accepted-stream-${strategy}-${failure.code}-${Math.random().toString(16).slice(2)}`;
+      const result = await handleComboChat({
+        body: { messages: [{ role: "user", content: "do not replay an accepted stream" }] },
+        combo: {
+          name: comboName,
+          strategy,
+          models: ["openai/primary", "openai/backup"],
+          config: {
+            maxRetries: 2,
+            retryDelayMs: 0,
+            fallbackDelayMs: 0,
+            targetTimeoutMs: 60_000,
+          },
+        },
+        handleSingleModel: async (_b: Body, modelStr: string) => {
+          calls.push(modelStr);
+          return new Response(
+            JSON.stringify({
+              error: {
+                message: `${failure.name} after upstream acceptance`,
+                code: failure.code,
+                type: failure.type,
+              },
+            }),
+            { status: failure.status, headers: { "Content-Type": "application/json" } }
+          );
+        },
+        isModelAvailable: async () => true,
+        log,
+        settings: null,
+        allCombos: null,
+      });
+
+      assert.equal(result.status, failure.status, `${strategy} must preserve ${failure.name}`);
+      assert.deepEqual(calls, ["openai/primary"], `${strategy} must not send the request twice`);
+      const body = await result.json();
+      assert.equal(body.error.code, failure.code, `${failure.name} diagnostic code must survive`);
+      assert.equal(body.error.type, failure.type, `${failure.name} classification must survive`);
+      assert.equal(
+        getCooldownEntryCount(),
+        0,
+        `${failure.name} must not persist a provider cooldown`
+      );
+      assert.equal(
+        getProviderBreakerState("openai")?.failureCount ?? 0,
+        0,
+        `${failure.name} must not increment provider breaker failures`
+      );
+    }
+  }
 });

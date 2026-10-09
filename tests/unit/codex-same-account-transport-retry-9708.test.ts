@@ -88,6 +88,16 @@ test("#9708: quota, auth, and deterministic 400s never enter the same-account re
   assert.equal(isRetryablePreOutputTransportError(401, "unauthorized"), false);
   assert.equal(isRetryablePreOutputTransportError(400, "prompt is too long"), false);
   assert.equal(
+    isRetryablePreOutputTransportError(
+      502,
+      "local pre-readiness buffer cap",
+      "STREAM_READINESS_BUFFER_LIMIT",
+      "local_stream_buffer_limit"
+    ),
+    false,
+    "a local readiness memory guard must not replay an accepted generation"
+  );
+  assert.equal(
     shouldRetrySameAccountTransport({
       status: 503,
       errorText: "remote connection failure",
@@ -104,6 +114,28 @@ test("#9708: quota, auth, and deterministic 400s never enter the same-account re
       hasEmittedOutput: true,
     }),
     false
+  );
+});
+
+test("accepted-stream readiness guard runs before same-account retry and cooldown", () => {
+  const chatSource = fs.readFileSync(
+    path.resolve(import.meta.dirname, "../../src/sse/handlers/chat.ts"),
+    "utf8"
+  );
+  const guardOffset = chatSource.indexOf("const isAcceptedStreamReadinessFailure");
+  assert.notEqual(guardOffset, -1, "missing accepted-stream readiness guard");
+  const guardedTail = chatSource.slice(guardOffset);
+  const terminalReturn = guardedTail.indexOf(
+    "return withSelectedConnectionHeader(result.response, credentials.connectionId)"
+  );
+  assert.ok(terminalReturn >= 0, "readiness failure must return the diagnostic response");
+  assert.ok(
+    terminalReturn < guardedTail.indexOf("shouldRetrySameAccountTransport({"),
+    "accepted generation must not enter same-account retry"
+  );
+  assert.ok(
+    terminalReturn < guardedTail.indexOf("await markAccountUnavailable("),
+    "accepted generation must not enter account cooldown"
   );
 });
 

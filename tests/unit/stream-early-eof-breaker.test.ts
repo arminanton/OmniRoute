@@ -4,6 +4,7 @@ import {
   shouldRecordProviderBreakerFailure,
   isStreamEarlyEofErrorBody,
   isStreamReadinessFailureErrorBody,
+  isTerminalAcceptedStreamFailureErrorBody,
 } from "../../open-sse/services/combo/comboPredicates.ts";
 
 // A STREAM_EARLY_EOF means the upstream returned HTTP 200, opened the SSE stream, then
@@ -27,8 +28,15 @@ const earlyEofBody = {
 const readinessBody = {
   error: {
     message: "Stream readiness timeout",
-    type: "stream_timeout",
+    type: "upstream_acceptance_uncertain",
     code: "STREAM_READINESS_TIMEOUT",
+  },
+};
+const bufferLimitBody = {
+  error: {
+    message: "local pre-readiness buffer limit exceeded",
+    type: "local_stream_buffer_limit",
+    code: "STREAM_READINESS_BUFFER_LIMIT",
   },
 };
 
@@ -60,6 +68,44 @@ test("a readiness-probe timeout still does not trip the breaker", () => {
     }),
     false
   );
+});
+
+test("a local pre-readiness buffer limit is readiness-scoped, but a source read error remains upstream failure", () => {
+  const readErrorBody = {
+    error: {
+      message: "Upstream stream failed before response readiness",
+      type: "upstream_stream_error",
+      code: "STREAM_READ_ERROR",
+    },
+  };
+
+  assert.equal(isStreamReadinessFailureErrorBody(bufferLimitBody), true);
+  assert.equal(isStreamReadinessFailureErrorBody(readErrorBody), false);
+  assert.equal(
+    shouldRecordProviderBreakerFailure({
+      isStreamReadinessFailure: false,
+      status: 502,
+      sameProviderNext: false,
+      skipProviderBreaker: false,
+      requestScopedFailure: false,
+      error: readErrorBody.error.message,
+    }),
+    true,
+    "a genuine source read failure remains an upstream failure signal"
+  );
+});
+
+test("accepted-stream readiness failures are terminal, but early EOF remains eligible for fallback", () => {
+  const readErrorBody = {
+    error: {
+      type: "upstream_acceptance_uncertain",
+      code: "STREAM_READ_ERROR",
+    },
+  };
+  assert.equal(isTerminalAcceptedStreamFailureErrorBody(readinessBody), true);
+  assert.equal(isTerminalAcceptedStreamFailureErrorBody(readErrorBody), true);
+  assert.equal(isTerminalAcceptedStreamFailureErrorBody(bufferLimitBody), true);
+  assert.equal(isTerminalAcceptedStreamFailureErrorBody(earlyEofBody), false);
 });
 
 test("regression: before the fix both codes shared one flag, so the early EOF was exempted", () => {
@@ -163,10 +209,10 @@ test("isStreamEarlyEofErrorBody matches only the early-EOF code", () => {
   assert.equal(isStreamEarlyEofErrorBody(readinessBody), false);
 });
 
-test("isStreamReadinessFailureErrorBody keeps matching both codes", () => {
-  // The transient-retry and semaphore paths depend on this staying unchanged.
+test("isStreamReadinessFailureErrorBody includes timeout, local cap, and early EOF", () => {
   assert.equal(isStreamReadinessFailureErrorBody(earlyEofBody), true);
   assert.equal(isStreamReadinessFailureErrorBody(readinessBody), true);
+  assert.equal(isStreamReadinessFailureErrorBody(bufferLimitBody), true);
 });
 
 test("malformed bodies are not classified as an early EOF", () => {

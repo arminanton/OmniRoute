@@ -19,7 +19,26 @@ export type StreamReadinessResult =
       upstreamDiagnostic?: string;
       code: string;
       type: string;
+      /** True only for the original client request signal, not per-target cancellation. */
+      callerAborted?: true;
     };
+
+/** Aggregate retained raw+decoded pre-readiness budget per request. */
+export const MAX_STREAM_READINESS_BUFFER_BYTES = 1024 * 1024;
+const MAX_STREAM_READINESS_BUFFER_CHUNKS = 1024;
+const MAX_STREAM_READINESS_DATA_LINES = 1024;
+const MAX_STREAM_READINESS_EVENTS = 2048;
+const READINESS_BUFFER_CHUNK_OVERHEAD_BYTES = 64;
+const READINESS_BUFFER_DATA_LINE_OVERHEAD_BYTES = 64;
+const READINESS_BUFFER_PARSER_OVERHEAD_BYTES = 64;
+const STREAM_READINESS_BUFFER_LIMIT_CODE = "STREAM_READINESS_BUFFER_LIMIT";
+const STREAM_READ_ERROR_CODE = "STREAM_READ_ERROR";
+
+type ReadinessReadOutcome =
+  | { kind: "read"; value: ReadableStreamReadResult<Uint8Array> }
+  | { kind: "timeout" }
+  | { kind: "aborted" }
+  | { kind: "read_error"; error: unknown };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -316,8 +335,10 @@ export function createStreamContentWatcher(): StreamContentWatcher {
 type StreamReadinessSignalState = {
   currentEvent: string;
   dataLines: string[];
+  eventsProcessed: number;
   pendingLine: string;
   upstreamDiagnostic: string | null;
+  bufferLimitExceeded: boolean;
 };
 
 function resetCurrentEvent(state: StreamReadinessSignalState): void {
@@ -325,10 +346,44 @@ function resetCurrentEvent(state: StreamReadinessSignalState): void {
   state.dataLines = [];
 }
 
+/**
+ * Make parser-owned strings independent from the large combined chunk string.
+ * V8 may represent substring/slice results as views that keep their source string
+ * alive; copying each retained field prevents a short pending line from pinning
+ * an entire large decoded chunk.
+ */
+function copyParserString(value: string): string {
+  if (!value) return "";
+  return Buffer.from(value, "utf16le").toString("utf16le");
+}
+
+function estimateParserStringBytes(value: string | null | undefined): number {
+  if (!value) return 0;
+  // UTF-16 code units are a conservative upper bound for V8's one-byte/two-byte
+  // string storage; the UTF-8 check also covers surrogate-pair representations.
+  return Math.max(value.length * 2, Buffer.byteLength(value, "utf8"));
+}
+
+function estimateReadinessParserBytes(state: StreamReadinessSignalState): number {
+  let bytes = READINESS_BUFFER_PARSER_OVERHEAD_BYTES;
+  for (const line of state.dataLines) {
+    bytes += estimateParserStringBytes(line) + READINESS_BUFFER_DATA_LINE_OVERHEAD_BYTES;
+  }
+  bytes += estimateParserStringBytes(state.currentEvent) + READINESS_BUFFER_PARSER_OVERHEAD_BYTES;
+  bytes += estimateParserStringBytes(state.pendingLine) + READINESS_BUFFER_PARSER_OVERHEAD_BYTES;
+  bytes +=
+    estimateParserStringBytes(state.upstreamDiagnostic) + READINESS_BUFFER_PARSER_OVERHEAD_BYTES;
+  return bytes;
+}
+
 function processStreamReadinessEvent(state: StreamReadinessSignalState): boolean {
   const eventType = state.currentEvent;
   const data = state.dataLines.join("\n").trim();
   resetCurrentEvent(state);
+  if (++state.eventsProcessed > MAX_STREAM_READINESS_EVENTS) {
+    state.bufferLimitExceeded = true;
+    return false;
+  }
 
   if (isPingEventType(eventType) || !data || data === "[DONE]") return false;
 
@@ -359,24 +414,34 @@ function processStreamReadinessLine(state: StreamReadinessSignalState, line: str
   }
 
   if (trimmed.startsWith("event:")) {
-    state.currentEvent = trimmed.slice(6).trim();
+    state.currentEvent = copyParserString(trimmed.slice(6).trim());
     return false;
   }
 
   if (trimmed.startsWith("data:")) {
-    state.dataLines.push(trimmed.slice(5).trimStart());
+    if (state.dataLines.length >= MAX_STREAM_READINESS_DATA_LINES) {
+      state.bufferLimitExceeded = true;
+      return false;
+    }
+    state.dataLines.push(copyParserString(trimmed.slice(5).trimStart()));
   }
   return false;
 }
 
 function appendStreamReadinessSignal(state: StreamReadinessSignalState, chunk: string): boolean {
-  const lines = `${state.pendingLine}${chunk}`.split(/\r?\n/);
-  state.pendingLine = lines.pop() ?? "";
-
-  for (const line of lines) {
+  const text = `${state.pendingLine}${chunk}`;
+  state.pendingLine = "";
+  let start = 0;
+  for (;;) {
+    const newline = text.indexOf("\n", start);
+    if (newline < 0) break;
+    const line = text.slice(start, newline);
     if (processStreamReadinessLine(state, line)) return true;
+    if (state.bufferLimitExceeded) return false;
+    start = newline + 1;
   }
 
+  state.pendingLine = copyParserString(text.slice(start));
   return false;
 }
 
@@ -390,11 +455,15 @@ export function hasStreamReadinessSignal(text: string): boolean {
   const state: StreamReadinessSignalState = {
     currentEvent: "",
     dataLines: [],
+    eventsProcessed: 0,
     pendingLine: "",
     upstreamDiagnostic: null,
+    bufferLimitExceeded: false,
   };
   if (appendStreamReadinessSignal(state, text)) return true;
-  return finishStreamReadinessSignal(state);
+  if (state.bufferLimitExceeded) return false;
+  const finished = finishStreamReadinessSignal(state);
+  return !state.bufferLimitExceeded && finished;
 }
 
 function createErrorResponse(
@@ -417,7 +486,7 @@ function createErrorResponse(
   );
 }
 
-function prependBufferedChunks(
+export function prependBufferedChunks(
   chunks: Uint8Array[],
   reader: ReadableStreamDefaultReader<Uint8Array>
 ): ReadableStream<Uint8Array> {
@@ -435,6 +504,8 @@ function prependBufferedChunks(
   const cancelReader = (reason: unknown) => {
     if (cancelRequested) return;
     cancelRequested = true;
+    // Drop any readiness-prefix bytes that downstream will never request.
+    chunks.length = 0;
 
     try {
       // The provider controls this promise and may never settle. Cancellation
@@ -457,8 +528,10 @@ function prependBufferedChunks(
       // eagerly here would let a subsequent source error clear this queue
       // before the consumer has observed the buffered prefix.
       if (bufferedIndex < chunks.length) {
-        controller.enqueue(chunks[bufferedIndex]);
+        const chunk = chunks[bufferedIndex];
+        chunks[bufferedIndex] = new Uint8Array(0);
         bufferedIndex += 1;
+        controller.enqueue(chunk);
         return;
       }
 
@@ -488,21 +561,165 @@ function prependBufferedChunks(
 
 function readWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  timeoutMs: number
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("STREAM_READINESS_TIMEOUT")), timeoutMs);
-    reader.read().then(
-      (value) => {
-        clearTimeout(timeout);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      }
-    );
+  timeoutMs: number,
+  dispatchSignal?: AbortSignal | null,
+  callerSignal?: AbortSignal | null
+): Promise<ReadinessReadOutcome> {
+  const signals = [
+    ...new Set(
+      [dispatchSignal, callerSignal].filter((signal): signal is AbortSignal => signal != null)
+    ),
+  ];
+  if (signals.some((signal) => signal.aborted)) {
+    return Promise.resolve({ kind: "aborted" });
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
+  const timeoutPromise = new Promise<ReadinessReadOutcome>((resolve) => {
+    timeout = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
   });
+  const abortPromise =
+    signals.length > 0
+      ? new Promise<ReadinessReadOutcome>((resolve) => {
+          const onAbort = () => resolve({ kind: "aborted" });
+          abort = onAbort;
+          for (const signal of signals) {
+            if (signal.aborted) {
+              onAbort();
+              return;
+            }
+            signal.addEventListener("abort", onAbort, { once: true });
+          }
+        })
+      : new Promise<ReadinessReadOutcome>(() => {});
+  const readPromise: Promise<ReadinessReadOutcome> = reader.read().then(
+    (value) => ({ kind: "read", value }),
+    (error) => ({ kind: "read_error", error })
+  );
+
+  return Promise.race([readPromise, timeoutPromise, abortPromise]).finally(() => {
+    clearTimeout(timeout);
+    if (abort) for (const signal of signals) signal.removeEventListener("abort", abort);
+  });
+}
+
+function createCallerAbortedResult(): StreamReadinessResult {
+  const reason = "Request aborted";
+  return {
+    ok: false,
+    callerAborted: true,
+    reason,
+    classificationReason: reason,
+    code: "CLIENT_ABORTED",
+    type: "client_disconnected",
+    response: createErrorResponse(499, reason, "CLIENT_ABORTED", "client_disconnected"),
+  };
+}
+
+function readinessTimeoutResult(
+  options: {
+    provider?: string | null;
+    model?: string | null;
+    log?: StreamReadinessLogger | null;
+  },
+  reason: string
+): StreamReadinessResult {
+  options.log?.warn?.(
+    "STREAM",
+    `${reason} (${options.provider || "provider"}/${options.model || "unknown"})`
+  );
+  return {
+    ok: false,
+    reason,
+    classificationReason: reason,
+    code: "STREAM_READINESS_TIMEOUT",
+    // The provider has already returned HTTP 200, so it may still be generating.
+    // Preserve the timeout code while making the result terminal to combo replay.
+    type: "upstream_acceptance_uncertain",
+    response: createErrorResponse(
+      HTTP_STATUS.GATEWAY_TIMEOUT,
+      reason,
+      "STREAM_READINESS_TIMEOUT",
+      "upstream_acceptance_uncertain"
+    ),
+  };
+}
+
+function readinessBufferLimitResult(
+  options: {
+    provider?: string | null;
+    model?: string | null;
+    log?: StreamReadinessLogger | null;
+  },
+  reason: string
+): StreamReadinessResult {
+  options.log?.warn?.(
+    "STREAM",
+    `${reason} (${options.provider || "provider"}/${options.model || "unknown"})`
+  );
+  return {
+    ok: false,
+    reason,
+    classificationReason: reason,
+    code: STREAM_READINESS_BUFFER_LIMIT_CODE,
+    type: "local_stream_buffer_limit",
+    response: createErrorResponse(
+      HTTP_STATUS.BAD_GATEWAY,
+      reason,
+      STREAM_READINESS_BUFFER_LIMIT_CODE,
+      "local_stream_buffer_limit"
+    ),
+  };
+}
+
+function upstreamStreamReadErrorResult(options: {
+  provider?: string | null;
+  model?: string | null;
+  log?: StreamReadinessLogger | null;
+}): StreamReadinessResult {
+  const reason = "Upstream stream failed before response readiness";
+  options.log?.warn?.(
+    "STREAM",
+    `${reason} (${options.provider || "provider"}/${options.model || "unknown"})`
+  );
+  return {
+    ok: false,
+    reason,
+    classificationReason: reason,
+    code: STREAM_READ_ERROR_CODE,
+    // Read failure after HTTP 200 does not prove the provider stopped processing.
+    type: "upstream_acceptance_uncertain",
+    response: createErrorResponse(
+      HTTP_STATUS.BAD_GATEWAY,
+      reason,
+      STREAM_READ_ERROR_CODE,
+      "upstream_acceptance_uncertain"
+    ),
+  };
+}
+
+function cancelReadinessReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reason: unknown,
+  dispatchSignal?: AbortSignal | null,
+  callerSignal?: AbortSignal | null,
+  cancelUpstream?: ((reason: unknown) => void) | null
+): void {
+  if (!dispatchSignal?.aborted && !callerSignal?.aborted) {
+    try {
+      cancelUpstream?.(reason);
+    } catch {
+      // Upstream cancellation is best-effort cleanup; preserve the readiness outcome.
+    }
+  }
+  try {
+    // Readiness must settle at its own deadline even when a source's cancel hook
+    // never resolves. Calling cancel still propagates cleanup; do not await it.
+    void reader.cancel(reason).catch(() => {});
+  } catch {
+    // The stream may already be errored/closed.
+  }
 }
 
 export async function ensureStreamReadiness(
@@ -515,8 +732,28 @@ export async function ensureStreamReadiness(
     provider?: string | null;
     model?: string | null;
     log?: StreamReadinessLogger | null;
+    /** Dispatch signal may include per-target cancellation; callerSignal is the original client. */
+    signal?: AbortSignal | null;
+    callerSignal?: AbortSignal | null;
+    /** Abort the owning request attempt on a local readiness timeout/cap. */
+    cancelUpstream?: (reason: unknown) => void;
+    /** Test seam and bounded override; the effective limit is never above the 1 MiB default. */
+    maxBufferedBytes?: number;
   }
 ): Promise<StreamReadinessResult> {
+  if (options.callerSignal?.aborted) {
+    try {
+      void response.body?.cancel(options.callerSignal.reason).catch(() => {});
+    } catch {}
+    return createCallerAbortedResult();
+  }
+  if (options.signal?.aborted) {
+    const reason = "Stream dispatch was cancelled before readiness";
+    try {
+      void response.body?.cancel(options.signal.reason).catch(() => {});
+    } catch {}
+    return readinessTimeoutResult(options, reason);
+  }
   if (!response.body || options.timeoutMs <= 0) return { ok: true, response };
 
   const reader = response.body.getReader();
@@ -525,11 +762,20 @@ export async function ensureStreamReadiness(
   const readinessState: StreamReadinessSignalState = {
     currentEvent: "",
     dataLines: [],
+    eventsProcessed: 0,
     pendingLine: "",
     upstreamDiagnostic: null,
+    bufferLimitExceeded: false,
   };
   const startedAt = Date.now();
   const effectiveTimeoutMs = Math.max(0, Math.floor(options.timeoutMs));
+  const requestedBufferBytes =
+    Number.isInteger(options.maxBufferedBytes) && Number(options.maxBufferedBytes) > 0
+      ? Number(options.maxBufferedBytes)
+      : MAX_STREAM_READINESS_BUFFER_BYTES;
+  const maxBufferedBytes = Math.min(requestedBufferBytes, MAX_STREAM_READINESS_BUFFER_BYTES);
+  let bufferedRawBytes = 0;
+  let bufferedDecodedBytes = 0;
   // Hard ceiling: the deadline may extend on liveness signals (bytes arriving),
   // but never past this absolute maximum.  When maxTimeoutMs is omitted the
   // initial timeoutMs itself acts as the ceiling (no extension).
@@ -550,55 +796,136 @@ export async function ensureStreamReadiness(
   const timeoutReason = () =>
     `Stream produced no non-ping SSE event within ${deadline - startedAt}ms (max=${maxDeadline - startedAt}ms)`;
 
+  const bufferLimitReason = () =>
+    `Stream exceeded the ${maxBufferedBytes}-byte pre-readiness buffer limit before a non-ping SSE event`;
+
+  const failForBufferLimit = (): StreamReadinessResult => {
+    if (options.callerSignal?.aborted) {
+      cancelReadinessReader(
+        reader,
+        options.callerSignal.reason,
+        options.signal,
+        options.callerSignal,
+        options.cancelUpstream
+      );
+      return createCallerAbortedResult();
+    }
+    if (options.signal?.aborted) {
+      cancelReadinessReader(
+        reader,
+        options.signal.reason,
+        options.signal,
+        options.callerSignal,
+        options.cancelUpstream
+      );
+      return readinessTimeoutResult(options, bufferLimitReason());
+    }
+    const reason = bufferLimitReason();
+    cancelReadinessReader(
+      reader,
+      reason,
+      options.signal,
+      options.callerSignal,
+      options.cancelUpstream
+    );
+    return readinessBufferLimitResult(options, reason);
+  };
+
   try {
     while (true) {
       const remainingMs = deadline - Date.now();
       if (remainingMs <= 0) {
         const reason = timeoutReason();
-        options.log?.warn?.(
-          "STREAM",
-          `${reason} (${options.provider || "provider"}/${options.model || "unknown"})`
-        );
-        await reader.cancel(reason).catch(() => {});
-        return {
-          ok: false,
+        cancelReadinessReader(
+          reader,
           reason,
-          classificationReason: reason,
-          code: "STREAM_READINESS_TIMEOUT",
-          type: "stream_timeout",
-          response: createErrorResponse(
-            HTTP_STATUS.GATEWAY_TIMEOUT,
-            reason,
-            "STREAM_READINESS_TIMEOUT",
-            "stream_timeout"
-          ),
-        };
+          options.signal,
+          options.callerSignal,
+          options.cancelUpstream
+        );
+        return readinessTimeoutResult(options, reason);
       }
 
-      let readResult: ReadableStreamReadResult<Uint8Array>;
-      try {
-        readResult = await readWithTimeout(reader, remainingMs);
-      } catch {
-        const reason = timeoutReason();
-        options.log?.warn?.(
-          "STREAM",
-          `${reason} (${options.provider || "provider"}/${options.model || "unknown"})`
+      const readOutcome = await readWithTimeout(
+        reader,
+        remainingMs,
+        options.signal,
+        options.callerSignal
+      );
+      if (options.callerSignal?.aborted) {
+        cancelReadinessReader(
+          reader,
+          options.callerSignal.reason,
+          options.signal,
+          options.callerSignal,
+          options.cancelUpstream
         );
-        await reader.cancel(reason).catch(() => {});
-        return {
-          ok: false,
-          reason,
-          classificationReason: reason,
-          code: "STREAM_READINESS_TIMEOUT",
-          type: "stream_timeout",
-          response: createErrorResponse(
-            HTTP_STATUS.GATEWAY_TIMEOUT,
-            reason,
-            "STREAM_READINESS_TIMEOUT",
-            "stream_timeout"
-          ),
-        };
+        return createCallerAbortedResult();
       }
+      if (options.signal?.aborted) {
+        cancelReadinessReader(
+          reader,
+          options.signal.reason,
+          options.signal,
+          options.callerSignal,
+          options.cancelUpstream
+        );
+        return readinessTimeoutResult(options, timeoutReason());
+      }
+      if (readOutcome.kind === "aborted") {
+        cancelReadinessReader(
+          reader,
+          options.callerSignal?.reason ?? options.signal?.reason,
+          options.signal,
+          options.callerSignal,
+          options.cancelUpstream
+        );
+        if (options.callerSignal?.aborted) return createCallerAbortedResult();
+        return readinessTimeoutResult(options, timeoutReason());
+      }
+      if (readOutcome.kind === "read_error") {
+        if (options.callerSignal?.aborted) {
+          cancelReadinessReader(
+            reader,
+            options.callerSignal.reason,
+            options.signal,
+            options.callerSignal,
+            options.cancelUpstream
+          );
+          return createCallerAbortedResult();
+        }
+        if (options.signal?.aborted) {
+          cancelReadinessReader(
+            reader,
+            options.signal.reason,
+            options.signal,
+            options.callerSignal,
+            options.cancelUpstream
+          );
+          return readinessTimeoutResult(options, timeoutReason());
+        }
+        cancelReadinessReader(
+          reader,
+          "Upstream stream failed before response readiness",
+          options.signal,
+          options.callerSignal,
+          options.cancelUpstream
+        );
+        return upstreamStreamReadErrorResult(options);
+      }
+      if (readOutcome.kind === "timeout") {
+        const reason = timeoutReason();
+        cancelReadinessReader(
+          reader,
+          reason,
+          options.signal,
+          options.callerSignal,
+          options.cancelUpstream
+        );
+        return readinessTimeoutResult(options, reason);
+      }
+
+      const readResult = readOutcome.value;
 
       if (readResult.done) {
         const tail = decoder.decode(undefined, { stream: false });
@@ -606,7 +933,10 @@ export async function ensureStreamReadiness(
           handedOffReader = true;
           return { ok: true, response: buildReadyResponse() };
         }
-        if (finishStreamReadinessSignal(readinessState)) {
+        if (readinessState.bufferLimitExceeded) return failForBufferLimit();
+        const finishedWithReadiness = finishStreamReadinessSignal(readinessState);
+        if (readinessState.bufferLimitExceeded) return failForBufferLimit();
+        if (finishedWithReadiness) {
           handedOffReader = true;
           return { ok: true, response: buildReadyResponse() };
         }
@@ -638,8 +968,35 @@ export async function ensureStreamReadiness(
       }
 
       if (!readResult.value) continue;
-      chunks.push(readResult.value);
+      if (chunks.length >= MAX_STREAM_READINESS_BUFFER_CHUNKS) return failForBufferLimit();
+      // A Uint8Array view can pin a larger pooled ArrayBuffer, so account the
+      // full backing store rather than only the visible byteLength.
+      const rawBackingBytes = Math.max(
+        readResult.value.byteLength,
+        readResult.value.buffer.byteLength
+      );
+      const nextRawBytes = bufferedRawBytes + rawBackingBytes;
+      // Check the raw-buffer ceiling before TextDecoder creates a parallel JS
+      // string. The full raw+decoded estimate is checked immediately below.
+      if (nextRawBytes >= maxBufferedBytes) return failForBufferLimit();
+      // The raw replay chunk and its decoded UTF-16 view can both remain live
+      // until readiness. Count both conservatively before retaining either.
       const decodedChunk = decoder.decode(readResult.value, { stream: true });
+      const decodedStorageBytes = Math.max(
+        decodedChunk.length * 2,
+        Buffer.byteLength(decodedChunk, "utf8")
+      );
+      const nextBufferedBytes =
+        nextRawBytes +
+        bufferedDecodedBytes +
+        decodedStorageBytes +
+        READINESS_BUFFER_CHUNK_OVERHEAD_BYTES * (chunks.length + 1) +
+        estimateReadinessParserBytes(readinessState) +
+        256;
+      if (nextBufferedBytes > maxBufferedBytes) return failForBufferLimit();
+      chunks.push(readResult.value);
+      bufferedRawBytes = nextRawBytes;
+      bufferedDecodedBytes += decodedStorageBytes;
 
       // Liveness extension: bytes arrived → connection is alive, not dead.
       // Reset the deadline so slow-but-alive upstreams (reasoning warm-ups,
@@ -668,10 +1025,26 @@ export async function ensureStreamReadiness(
           response: buildReadyResponse(),
         };
       }
+      if (
+        readinessState.bufferLimitExceeded ||
+        bufferedRawBytes +
+          bufferedDecodedBytes +
+          READINESS_BUFFER_CHUNK_OVERHEAD_BYTES * chunks.length +
+          estimateReadinessParserBytes(readinessState) +
+          256 >
+          maxBufferedBytes
+      ) {
+        return failForBufferLimit();
+      }
     }
   } finally {
     if (!handedOffReader) {
-      reader.releaseLock();
+      try {
+        reader.releaseLock();
+      } catch {
+        // A timed-out upstream read may remain in flight after fire-and-forget
+        // cancellation. Do not turn cleanup into another unbounded wait.
+      }
     }
   }
 }

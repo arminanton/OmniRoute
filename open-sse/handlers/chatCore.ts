@@ -3359,6 +3359,10 @@ async function handleChatCoreOwned({
                                     stream: upstreamStream,
                                     credentials: execCreds,
                                     signal,
+                                    callerSignal:
+                                      clientRawRequest?.callerSignal !== undefined
+                                        ? clientRawRequest.callerSignal
+                                        : clientRawRequest?.signal,
                                     log,
                                     extendedContext,
                                     upstreamExtraHeaders:
@@ -3569,6 +3573,10 @@ async function handleChatCoreOwned({
                                   stream: upstreamStream,
                                   credentials: execCreds,
                                   signal,
+                                  callerSignal:
+                                    clientRawRequest?.callerSignal !== undefined
+                                      ? clientRawRequest.callerSignal
+                                      : clientRawRequest?.signal,
                                   log,
                                   extendedContext,
                                   upstreamExtraHeaders: buildUpstreamHeadersForExecute(modelToCall),
@@ -4816,6 +4824,10 @@ async function handleChatCoreOwned({
                 stream: upstreamStream,
                 credentials: getExecutionCredentials(),
                 signal: streamController.signal,
+                callerSignal:
+                  clientRawRequest?.callerSignal !== undefined
+                    ? clientRawRequest.callerSignal
+                    : clientRawRequest?.signal,
                 log,
                 extendedContext,
                 upstreamExtraHeaders: buildUpstreamHeadersForExecute(retryModelId),
@@ -6265,7 +6277,20 @@ async function handleChatCoreOwned({
     provider,
     model,
     log,
+    signal: clientRawRequest?.signal ?? streamController.signal,
+    callerSignal:
+      clientRawRequest?.callerSignal !== undefined
+        ? clientRawRequest.callerSignal
+        : clientRawRequest?.signal,
+    cancelUpstream: () => streamController.abort(),
   });
+  if (!streamReadiness.ok && streamReadiness.callerAborted) {
+    // The client request signal also closes streamController and finalizes the
+    // pending detail. Return the existing 499 shape without persisting a 504
+    // readiness failure or allowing a combo to dispatch its next target.
+    streamController.handleDisconnect("request_signal_aborted");
+    return createErrorResult(499, "Request aborted");
+  }
   if (runtimePolicyStreamDenial) {
     trackPendingRequest(model, provider, connectionId, false);
     return runtimePolicyFailureResult(

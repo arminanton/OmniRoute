@@ -37,9 +37,12 @@ test("mutating the original body after capture does not corrupt the snapshot", (
 });
 
 test("endpoint and headers are captured from the request", () => {
-  const out = buildClientRawRequest(req({ model: "m" }), { model: "m" });
+  const request = req({ model: "m" });
+  const out = buildClientRawRequest(request, { model: "m" });
   assert.equal(out.endpoint, "/v1/chat/completions");
   assert.equal(out.headers["content-type"], "application/json");
+  assert.strictEqual(out.callerSignal, request.signal);
+  assert.strictEqual(out.signal, request.signal);
 });
 
 // #7360 follow-up (live incident, log id 1784418258231-14961a): a combo target
@@ -60,6 +63,7 @@ test("resolveDispatchClientRawRequest uses modelAbortSignal directly when client
   const clientRawRequest = { endpoint: "/v1/responses", signal: null };
   const out = resolveDispatchClientRawRequest(clientRawRequest, modelAbortController.signal);
   assert.equal(out?.endpoint, "/v1/responses", "other fields are preserved");
+  assert.equal(out?.callerSignal, null, "target cancellation is not a caller signal");
   assert.equal(out?.signal?.aborted, false);
   modelAbortController.abort(new Error("target timeout"));
   assert.equal(out?.signal?.aborted, true, "the returned signal must reflect the model abort");
@@ -72,6 +76,7 @@ test("resolveDispatchClientRawRequest merges both signals — EITHER aborting fi
 
   const out = resolveDispatchClientRawRequest(clientRawRequest, modelAbortController.signal);
   assert.equal(out?.signal?.aborted, false);
+  assert.strictEqual(out?.callerSignal, clientAbortController.signal);
 
   // The per-target timeout fires WITHOUT the real client ever disconnecting —
   // this is exactly the live-incident scenario: the merged signal must still abort.
@@ -86,6 +91,11 @@ test("resolveDispatchClientRawRequest merges both signals — EITHER aborting fi
     false,
     "the original client signal is untouched"
   );
+  assert.equal(
+    out?.callerSignal?.aborted,
+    false,
+    "a per-target timeout must not be exposed as a caller abort"
+  );
 });
 
 test("resolveDispatchClientRawRequest: the real client disconnecting also aborts the merged signal", () => {
@@ -96,4 +106,5 @@ test("resolveDispatchClientRawRequest: the real client disconnecting also aborts
   const out = resolveDispatchClientRawRequest(clientRawRequest, modelAbortController.signal);
   clientAbortController.abort(new Error("client disconnected"));
   assert.equal(out?.signal?.aborted, true);
+  assert.equal(out?.callerSignal?.aborted, true);
 });
