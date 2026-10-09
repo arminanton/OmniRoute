@@ -19968,25 +19968,87 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › local corpus"
+      description: Disconnects the configured source root and resets the in-memory index; source files are not deleted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Local corpus disconnected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalCorpusDisconnectResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Local corpus could not be disconnected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     get:
       operationId: getApiSettingsLocalCorpus
       tags:
         - Settings
       summary: "GET settings › local corpus"
+      description: Returns the configured root and current in-memory index status without triggering a scan.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Local corpus settings and index status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalCorpusSettingsResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Local corpus status could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiSettingsLocalCorpus
       tags:
         - Settings
       summary: "POST settings › local corpus"
+      description: Validates and canonicalizes an absolute directory, saves it as the source root, and resets the index.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LocalCorpusRootRequest" }
       responses:
         "200":
-          description: OK
+          description: Canonical local corpus root saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalCorpusRootSetResponse" }
+        "400":
+          description: Invalid JSON, invalid rootPath, or inaccessible/non-directory root.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/LocalCorpusValidationErrorResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/settings/mitm:
     get:
       operationId: getApiSettingsMitm
@@ -39965,6 +40027,85 @@ components:
       required: [cleared]
       properties:
         cleared: { type: boolean, const: true }
+      additionalProperties: false
+
+    LocalCorpusLimitsResponse:
+      type: object
+      required: [maxFiles, maxFileBytes, maxTotalBytes, maxReadLines]
+      properties:
+        maxFiles: { type: integer, minimum: 1 }
+        maxFileBytes: { type: integer, minimum: 1 }
+        maxTotalBytes: { type: integer, minimum: 1 }
+        maxReadLines: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    LocalCorpusStatusResponse:
+      type: object
+      required:
+        [configured, source, indexedFiles, indexedBytes, chunks, truncated, lastIndexedAt, limits]
+      properties:
+        configured: { type: boolean }
+        source:
+          {
+            type: [string, "null"],
+            description: Basename of the canonical root after an index is built; null before the first scan.,
+          }
+        indexedFiles: { type: integer, minimum: 0 }
+        indexedBytes: { type: integer, minimum: 0 }
+        chunks: { type: integer, minimum: 0 }
+        truncated: { type: boolean }
+        lastIndexedAt: { type: [string, "null"], format: date-time }
+        limits: { $ref: "#/components/schemas/LocalCorpusLimitsResponse" }
+      additionalProperties: false
+
+    LocalCorpusSettingsResponse:
+      type: object
+      required: [rootPath, configured, status]
+      properties:
+        rootPath: { type: [string, "null"] }
+        configured: { type: boolean }
+        status: { $ref: "#/components/schemas/LocalCorpusStatusResponse" }
+      additionalProperties: false
+
+    LocalCorpusRootRequest:
+      type: object
+      required: [rootPath]
+      properties:
+        rootPath:
+          {
+            type: string,
+            minLength: 1,
+            maxLength: 4096,
+            description: Absolute directory path on the host filesystem.,
+          }
+      additionalProperties: false
+
+    LocalCorpusRootSetResponse:
+      type: object
+      required: [configured, rootPath, message]
+      properties:
+        configured: { type: boolean, const: true }
+        rootPath:
+          { type: string, description: Canonical absolute directory path after symlink resolution. }
+        message: { type: string }
+      additionalProperties: false
+
+    LocalCorpusDisconnectResponse:
+      type: object
+      required: [configured, message]
+      properties:
+        configured: { type: boolean, const: false }
+        message: { type: string }
+      additionalProperties: false
+
+    LocalCorpusValidationErrorResponse:
+      type: object
+      required: [error, details]
+      properties:
+        error: { type: string }
+        details:
+          type: array
+          items: { type: object, additionalProperties: true }
       additionalProperties: false
 
     RestartResponse:

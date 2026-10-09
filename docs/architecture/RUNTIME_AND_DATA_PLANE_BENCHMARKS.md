@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 815
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 822
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 522 operations have success
-response content schemas and 437 declare operation-level security. Of 1,001 operations with a
-non-`204` success status, 479 still lack an explicit success-body schema; 13 operations have no
+contract is still stronger on route coverage than schema completeness: 525 operations have success
+response content schemas and 440 declare operation-level security. Of 1,001 operations with a
+non-`204` success status, 476 still lack an explicit success-body schema; 13 operations have no
 declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -156,8 +156,9 @@ the actual `201` create response. Model-alias settings now describe built-in/cus
 replace/add/remove bodies, persistence, and the self-healing GET behavior. The history-cleanup pass
 documents destructive scope, period choices, row/artifact counts, and each endpoint's distinct error
 behavior; its handlers are tested only against isolated temporary databases. The current spec
-inventory is 815 schemas, 522 success-body operations, and 437 security declarations; 479 non-`204`
-successes still lack bodies.
+inventory is 822 schemas, 525 success-body operations, and 440 security declarations; 476 non-`204`
+successes still lack bodies. The local-corpus settings pass documents the canonical filesystem root,
+bounded indexing status, validation failures, and that disconnecting never deletes source files.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
