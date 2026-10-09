@@ -918,9 +918,12 @@ capture, route readiness was p95 18.10 s; full capture was p95 18.48 s. Time fro
 the mock provider receiving a request was p95 15.95 s without capture and 16.67 s with capture; the
 client-to-gateway p95 was 2.05 s and 2.07 s respectively. Body completion p95 was 14.24 s without
 capture and 15.01 s with capture, while the post-body-to-provider interval was about 4.2 s in both
-runs. This points to concurrent large-body intake and pre-provider request work as the main measured
-latency, with private capture adding about 0.8 s to body completion in this single pair. It does not
-prove that capture has no effect on other workloads.
+runs. A later timestamp probe found that the outbound `fetch` call starts within p95 128 ms of body
+completion without capture and 169 ms with capture, while the mock provider receives the full
+request body roughly 3–4 s later. This places the larger delay in body transfer/dispatch and mock
+request parsing rather than post-body application policy. The A/B points to concurrent large-body
+intake as the main measured latency, with private capture adding about 0.8 s to body completion in
+this single pair. It does not prove that capture has no effect on other workloads.
 
 The full-capture variant retained all 200 metadata artifacts and all 200 private trace references
 under the default 2 GiB aggregate budget. It wrote 527,483,104 raw bytes and 397,326,897 compressed
@@ -933,6 +936,13 @@ peaked at 2,472,632,320 bytes with no high/max/OOM events or memory PSI; the no-
 wall time. These single, synthetic
 route-handler trials expose a sizable capture CPU/RSS cost and a modest latency change; they do not
 establish sustained throughput, standalone Next behavior, or real-provider quotas.
+
+A test-only direct-dispatcher comparison at 32 versus 128 connections showed no consistent effect:
+without capture, route-ready p95 was 18.10 s at 32 and 16.68 s at 128; with capture, it was 18.48 s
+at both settings. Mock-provider arrival p95 likewise moved from 15.95 to 15.81 s without capture,
+but from 16.67 to 17.41 s with capture. The 128-connection runs passed all 200 tool-cycle requests
+and, under capture, all 200 traces. These single trials do not justify raising the production
+connection cap; large-body ingestion and transformation remain the measured high-latency stages.
 
 ### Bun direct-route comparison at 100 sessions
 

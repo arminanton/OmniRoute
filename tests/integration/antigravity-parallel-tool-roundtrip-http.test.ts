@@ -3,6 +3,7 @@ import test from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import http from "node:http";
 import { Readable } from "node:stream";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -66,6 +67,10 @@ const route = await import("../../src/app/api/v1/chat/completions/route.ts");
 const { flushProxyLogsSync } = await import("../../src/lib/proxyLogger.ts");
 const { CALL_LOGS_DIR, readCallArtifact } = await import("../../src/lib/usage/callLogArtifacts.ts");
 const versions = await import("../../open-sse/services/antigravityVersion.ts");
+const routeRequestTimingContext = new AsyncLocalStorage<{
+  bodyCompleteAtMs: number | null;
+  providerFetchStartedAtMs: number[];
+}>();
 
 async function listen(server: http.Server): Promise<string> {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -193,6 +198,8 @@ test(
     const errors: string[] = [];
     const routeReadyLatenciesMs: number[] = [];
     const clientToGatewayDelaysMs: number[] = [];
+    const bodyCompleteToProviderFetchMs: number[] = [];
+    const providerFetchAttemptCounts: number[] = [];
     let routeHeadersPendingAt25s = 0;
     const routeHeadersPendingSessions = new Set<string>();
     const gatewayCounts = {
@@ -238,6 +245,8 @@ test(
     let clientMemorySnapshot: Record<string, unknown> | null = null;
     let upstreamMemorySnapshot: Record<string, unknown> | null = null;
     let upstreamStatsForDiagnostics: Record<string, unknown> | null = null;
+    let instrumentedUpstreamUrl: string | null = null;
+    let restoreFetch = () => {};
     const gateway = http.createServer(async (incoming, outgoing) => {
       const routeStartedAt = performance.now();
       const sessionId =
@@ -275,6 +284,10 @@ test(
       gatewayCounts.active++;
       gatewayCounts.maxActive = Math.max(gatewayCounts.maxActive, gatewayCounts.active);
       const routeAbort = new AbortController();
+      const routeRequestTiming = {
+        bodyCompleteAtMs: null as number | null,
+        providerFetchStartedAtMs: [] as number[],
+      };
       let clientDisconnectRecorded = false;
       const abortForClientDisconnect = () => {
         if (!clientDisconnectRecorded) {
@@ -311,6 +324,7 @@ test(
               sessionCounts.bodyComplete++;
               gatewayCounts.bodyComplete++;
               sessionCounts.bodyCompleteMs.push(performance.now() - routeStartedAt);
+              routeRequestTiming.bodyCompleteAtMs = performance.now();
             },
           })
         );
@@ -318,18 +332,20 @@ test(
         for (const [name, value] of Object.entries(incoming.headers))
           if (typeof value === "string" && name !== "x-omniroute-fixture-started-at")
             headers.set(name, value);
-        const response = await route.POST(
-          new Request(
-            `http://127.0.0.1:${(gateway.address() as { port: number }).port}/v1/chat/completions`,
-            {
-              method: incoming.method,
-              headers,
-              body: countedBody,
-              signal: routeAbort.signal,
-              duplex: "half",
-            } as RequestInit & {
-              duplex: "half";
-            }
+        const response = await routeRequestTimingContext.run(routeRequestTiming, () =>
+          route.POST(
+            new Request(
+              `http://127.0.0.1:${(gateway.address() as { port: number }).port}/v1/chat/completions`,
+              {
+                method: incoming.method,
+                headers,
+                body: countedBody,
+                signal: routeAbort.signal,
+                duplex: "half",
+              } as RequestInit & {
+                duplex: "half";
+              }
+            )
           )
         );
         clearTimeout(routePendingTimer);
@@ -384,6 +400,15 @@ test(
           outgoing.end('{"error":{"message":"isolated gateway test failed"}}');
         }
       } finally {
+        if (
+          routeRequestTiming.bodyCompleteAtMs !== null &&
+          routeRequestTiming.providerFetchStartedAtMs.length > 0
+        ) {
+          bodyCompleteToProviderFetchMs.push(
+            routeRequestTiming.providerFetchStartedAtMs[0] - routeRequestTiming.bodyCompleteAtMs
+          );
+        }
+        providerFetchAttemptCounts.push(routeRequestTiming.providerFetchStartedAtMs.length);
         if (sessionCounts.active > 0) {
           sessionCounts.active--;
           gatewayCounts.active--;
@@ -436,6 +461,20 @@ test(
         executor.buildUrl = originalUrl;
       };
       executor.buildUrl = () => `${upstreamUrl}/generate`;
+      instrumentedUpstreamUrl = upstreamUrl;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = function instrumentedFetch(input, init) {
+        const timing = routeRequestTimingContext.getStore();
+        const requestUrl =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (timing && instrumentedUpstreamUrl && requestUrl.startsWith(instrumentedUpstreamUrl))
+          timing.providerFetchStartedAtMs.push(performance.now());
+        return originalFetch.call(globalThis, input, init);
+      };
+      restoreFetch = () => {
+        globalThis.fetch = originalFetch;
+        instrumentedUpstreamUrl = null;
+      };
       clientFixture = spawnFixture("antigravity-parallel-client.mjs", {
         ANTIGRAVITY_GATEWAY_URL: gatewayUrl,
         ANTIGRAVITY_TEST_API_KEY: key.key,
@@ -751,6 +790,7 @@ test(
       }
     } finally {
       restoreUrl();
+      restoreFetch();
       if (captureMemoryBench) {
         eventLoopDelay?.disable();
         if (!upstreamStatsForDiagnostics && upstreamFixture) {
@@ -841,6 +881,13 @@ test(
         const sortedGatewayToProviderDelays = gatewayToProviderDelaysMs.sort((a, b) => a - b);
         const sortedBodyCompleteDelays = bodyCompleteDelaysMs.sort((a, b) => a - b);
         const sortedProviderDelayAfterBody = providerDelayAfterBodyMs.sort((a, b) => a - b);
+        const sortedBodyCompleteToFetchDelays = bodyCompleteToProviderFetchMs.sort((a, b) => a - b);
+        const bodyCompleteToFetchPercentile = (value: number) =>
+          Math.round(
+            sortedBodyCompleteToFetchDelays[
+              Math.max(0, Math.ceil(sortedBodyCompleteToFetchDelays.length * value) - 1)
+            ] ?? 0
+          );
         const gatewayToProviderPercentile = (value: number) =>
           Math.round(
             sortedGatewayToProviderDelays[
@@ -885,6 +932,14 @@ test(
               gatewayToProviderDelayP50Ms: gatewayToProviderPercentile(0.5),
               gatewayToProviderDelayP95Ms: gatewayToProviderPercentile(0.95),
               gatewayToProviderDelayMaxMs: Math.round(sortedGatewayToProviderDelays.at(-1) ?? 0),
+              bodyCompleteToFetchCount: sortedBodyCompleteToFetchDelays.length,
+              bodyCompleteToFetchP50Ms: bodyCompleteToFetchPercentile(0.5),
+              bodyCompleteToFetchP95Ms: bodyCompleteToFetchPercentile(0.95),
+              bodyCompleteToFetchMaxMs: Math.round(sortedBodyCompleteToFetchDelays.at(-1) ?? 0),
+              providerFetchAttemptCount: providerFetchAttemptCounts.reduce(
+                (total, count) => total + count,
+                0
+              ),
               bodyCompleteP50Ms: Math.round(
                 sortedBodyCompleteDelays[
                   Math.max(0, Math.ceil(sortedBodyCompleteDelays.length * 0.5) - 1)
