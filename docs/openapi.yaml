@@ -4695,29 +4695,128 @@ paths:
       operationId: getApiSettings
       tags: [Settings]
       summary: Get application settings
+      description: >-
+        Returns the persisted settings snapshot plus runtime metadata. The current route removes the
+        `password` setting (which stores the management-password hash), but returns configured
+        `oidcClientSecret`, `skillsmpApiKey`, and `cliproxyapi_api_key` values; treat this response
+        as sensitive. Unknown persisted settings may also be present. Protected profiles accept a
+        dashboard session, a `manage`/`admin` API key via Bearer, Anthropic `x-api-key` (with the
+        `anthropic-version` header or a User-Agent matching `claude-code`, `claude-cli`, or
+        `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted loopback
+        internal-service token. An `oma_live_` Access Token requires
+        `read` scope. Unlocked standalone installs with `requireLogin=false` may permit anonymous
+        access, and a fresh install may allow loopback bootstrap requests; locked management still
+        requires authentication. URL credentials are not accepted.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Current settings
+          description: Current settings and runtime metadata; secret settings may be returned.
+          x-sensitive: true
+          headers:
+            ETag:
+              description: Decimal string form of `settingsRevision`.
+              schema: { type: string, pattern: "^(0|[1-9][0-9]*)$" }
+            Cache-Control:
+              description: Settings responses are not stored by caches.
+              schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationSettingsReadResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiSettings
       tags: [Settings]
       summary: Update settings
+      description: >-
+        Updates settings and returns the updated persisted snapshot with its revision. The current
+        route removes the `password` setting (which stores the management-password hash), but
+        returns configured `oidcClientSecret`, `skillsmpApiKey`, and `cliproxyapi_api_key` values;
+        treat this response as sensitive. Unknown persisted settings may also be present. Protected
+        profiles accept a dashboard session, a `manage`/`admin` API key via Bearer, Anthropic
+        `x-api-key` (with the `anthropic-version` header or a User-Agent matching `claude-code`,
+        `claude-cli`, or `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted
+        loopback internal-service token. An
+        `oma_live_` Access Token requires `write` scope. Unlocked standalone installs with
+        `requireLogin=false` may permit anonymous access, and a fresh install may allow loopback
+        bootstrap requests; locked management still requires authentication. URL credentials are
+        not accepted.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
+        description: May contain secret settings such as OIDC, SkillsMP, or CLIProxyAPI credentials.
         content:
           application/json:
             schema:
               type: object
       responses:
         "200":
-          description: Updated settings
+          description: Updated settings snapshot and revision; secret settings may be returned.
+          x-sensitive: true
+          headers:
+            ETag:
+              description: Decimal string form of `settingsRevision`.
+              schema: { type: string, pattern: "^(0|[1-9][0-9]*)$" }
+            Cache-Control:
+              description: Settings responses are not stored by caches.
+              schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationSettingsUpdateResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettings
       tags: [Settings]
       summary: Update application settings (PUT compatibility alias)
-      description: Delegates to the same settings update handler as PATCH.
+      description: >-
+        Compatibility alias that delegates to the PATCH handler and returns the same updated
+        settings snapshot, revision, and headers. The current route removes the `password` setting
+        (which stores the management-password hash), but returns configured `oidcClientSecret`,
+        `skillsmpApiKey`, and `cliproxyapi_api_key` values; treat this response as sensitive.
+        Unknown persisted settings may also be present. Protected profiles accept a dashboard
+        session, a `manage`/`admin` API key via Bearer, Anthropic `x-api-key` (with the
+        `anthropic-version` header or a User-Agent matching `claude-code`, `claude-cli`, or
+        `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted loopback
+        internal-service token. An `oma_live_` Access Token requires
+        `write` scope. Unlocked standalone installs with `requireLogin=false` may permit anonymous
+        access, and a fresh install may allow loopback bootstrap requests; locked management still
+        requires authentication. URL credentials are not accepted.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
+        description: May contain secret settings such as OIDC, SkillsMP, or CLIProxyAPI credentials.
         content:
           application/json:
             schema:
@@ -4725,7 +4824,24 @@ paths:
               additionalProperties: true
       responses:
         "200":
-          description: Updated settings
+          description: Updated settings snapshot and revision; secret settings may be returned.
+          x-sensitive: true
+          headers:
+            ETag:
+              description: Decimal string form of `settingsRevision`.
+              schema: { type: string, pattern: "^(0|[1-9][0-9]*)$" }
+            Cache-Control:
+              description: Settings responses are not stored by caches.
+              schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApplicationSettingsUpdateResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/settings/purge-request-history:
     post:
@@ -34485,6 +34601,89 @@ components:
         domainCostHistory: { type: integer, minimum: 0 }
         domainBudgets: { type: integer, minimum: 0 }
       additionalProperties: true
+    ApplicationSettingsPersistedValues:
+      type: object
+      description: >-
+        Persisted settings spread into the `/api/settings` responses. The current route removes
+        only the `password` property, which stores the management-password hash. It returns
+        configured OIDC, SkillsMP, and CLIProxyAPI credential values; other non-underscore legacy
+        settings may also be present. Treat the full settings object as sensitive.
+      x-sensitive: true
+      required: [oidcClientSecret]
+      properties:
+        oidcClientSecret:
+          type: string
+          description: Decrypted OIDC client secret when configured.
+          x-sensitive: true
+        skillsmpApiKey:
+          type: string
+          description: SkillsMP API key when configured.
+          x-sensitive: true
+        cliproxyapi_api_key:
+          type: string
+          description: CLIProxyAPI API key when configured.
+          x-sensitive: true
+      additionalProperties: true
+      not:
+        required: [password]
+    ApplicationSettingsRuntimePorts:
+      type: object
+      required: [port, apiPort, dashboardPort, apiPortExplicit, dashboardPortExplicit]
+      properties:
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        apiPort: { type: integer, minimum: 1, maximum: 65535 }
+        dashboardPort: { type: integer, minimum: 1, maximum: 65535 }
+        apiPortExplicit: { type: boolean }
+        dashboardPortExplicit: { type: boolean }
+      additionalProperties: false
+    ApplicationSettingsReadResponse:
+      type: object
+      description: >-
+        Sensitive settings snapshot plus runtime metadata. `password` is omitted; configured secret
+        settings are returned as described by `ApplicationSettingsPersistedValues`.
+      x-sensitive: true
+      allOf:
+        - $ref: "#/components/schemas/ApplicationSettingsPersistedValues"
+        - type: object
+          required:
+            - settingsRevision
+            - hasPassword
+            - runtimePorts
+            - apiPort
+            - dashboardPort
+            - cloudConfigured
+            - cloudUrl
+            - machineId
+            - radarEnabled
+            - radarAdminUrl
+          properties:
+            settingsRevision: { type: integer, minimum: 0 }
+            hasPassword: { type: boolean }
+            runtimePorts: { $ref: "#/components/schemas/ApplicationSettingsRuntimePorts" }
+            apiPort: { type: integer, minimum: 1, maximum: 65535 }
+            dashboardPort: { type: integer, minimum: 1, maximum: 65535 }
+            cloudConfigured: { type: boolean }
+            cloudUrl: { type: [string, "null"] }
+            machineId: { type: string }
+            radarEnabled: { type: boolean }
+            radarAdminUrl: { type: [string, "null"] }
+            cliproxyapi_model_mapping:
+              type: object
+              additionalProperties: { type: string }
+          additionalProperties: true
+    ApplicationSettingsUpdateResponse:
+      type: object
+      description: >-
+        Sensitive updated settings snapshot. `password` is omitted; configured secret settings
+        are returned as described by `ApplicationSettingsPersistedValues`.
+      x-sensitive: true
+      allOf:
+        - $ref: "#/components/schemas/ApplicationSettingsPersistedValues"
+        - type: object
+          required: [settingsRevision]
+          properties:
+            settingsRevision: { type: integer, minimum: 0 }
+          additionalProperties: true
     RtkConfig:
       type: object
       description: >-
