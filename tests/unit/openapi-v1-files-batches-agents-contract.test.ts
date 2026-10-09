@@ -127,7 +127,17 @@ const cloudAgentOperations: Array<[string, string]> = [
 test("v1 files, batches, and cloud-agent routes expose source-backed success bodies and auth", () => {
   for (const [pathTemplate, method] of [...fileOperations, ...batchOperations]) {
     const op = operation(pathTemplate, method);
-    assertApiV1Auth(op, !(pathTemplate === "/api/v1/batches/delete-completed"));
+    assertApiV1Auth(op, false);
+    assert.equal(
+      op.responses?.["401"]?.$ref,
+      "#/components/responses/V1ResourceAuthenticationRequired",
+      `missing source-backed 401 for ${method.toUpperCase()} ${pathTemplate}`
+    );
+    assert.equal(
+      op.responses?.["503"]?.$ref,
+      "#/components/responses/V1ResourceAuthenticationUnavailable",
+      `missing source-backed 503 for ${method.toUpperCase()} ${pathTemplate}`
+    );
     for (const [status, response] of Object.entries(op.responses ?? {})) {
       if (!status.startsWith("2")) continue;
       assert.ok(
@@ -198,6 +208,10 @@ test("batch request, cursor paging, state transitions, and cleanup match the han
     ),
     false
   );
+  const cleanup = operation("/api/v1/batches/delete-completed", "delete");
+  assert.match(cleanup.description ?? "", /all owners.*dashboard session/i);
+  assert.match(cleanup.description ?? "", /exact API key/i);
+  assert.match(cleanup.description ?? "", /no remaining batch references/i);
 });
 
 test("file upload, paging, deletion, and download describe their actual wire formats", () => {

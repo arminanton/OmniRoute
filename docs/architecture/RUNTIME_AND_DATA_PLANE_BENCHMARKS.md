@@ -32,10 +32,10 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 550 operations have success
-response content schemas and 468 declare operation-level security. Of 987 operations with a
-non-`204` success status, 437 have no explicit response content; two are intentional bodyless `HEAD`
-probes, leaving 435 non-`HEAD` operations whose successful response shape remains undocumented.
+contract is still stronger on route coverage than schema completeness: 558 operations have success
+response content schemas and 493 declare operation-level security. Of 987 operations with a
+non-`204` success status, 429 have no explicit response content; two are intentional bodyless `HEAD`
+probes, leaving 427 non-`HEAD` operations whose successful response shape remains undocumented.
 Eighteen operations have no declared `2xx` status, and 15 return only an intentional `204`. This
 pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
@@ -160,7 +160,7 @@ the actual `201` create response. Model-alias settings now describe built-in/cus
 replace/add/remove bodies, persistence, and the self-healing GET behavior. The history-cleanup pass
 documents destructive scope, period choices, row/artifact counts, and each endpoint's distinct error
 behavior; its handlers are tested only against isolated temporary databases. The current spec
-inventory is 884 schemas, 550 success-body operations, and 468 security declarations; 437 non-`204`
+inventory is 903 schemas, 558 success-body operations, and 493 security declarations; 429 non-`204`
 success operations have no explicit response content, including two intentional bodyless `HEAD`
 probes. The
 versioned read-contract pass now describes the public combo projection, auto-combo candidate state,
@@ -178,6 +178,16 @@ envelopes, node fields, and outbound validation results and errors. Every non-HE
 under `/api/v1/` and `/api/v1beta/` now has a response schema; the two model-catalog HEAD probes are
 intentionally bodyless. The Volcengine Plan login-flow pass types local phone/SMS, captcha/identity,
 polling, resend, cancel, and binding responses, including sensitive successful-session credentials.
+The first CLI-tools pass types status/all-statuses/detect/runtime responses, marks returned raw config
+and API keys as sensitive, and removes the false guide-settings GET success. The route’s raw-key
+response is now always-protected in the handler, auth policy, and spec.
+The OAuth subtree now uses management-route auth instead of the broad public-prefix classification,
+so enabled-login deployments require management scope while disabled-login deployments preserve
+their configured behavior. Its spec distinguishes those conditions and corrects Kiro social authorize
+to the handler's JSON device-code response. V1 file/batch resources now require an API key or
+dashboard session, document owner-scoped versus session-wide access, and limit completed-batch
+cleanup to the caller's resources. Translator step-4 previews document redacted, display-only
+credentials; the separate send route remains unchanged.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -1512,9 +1522,9 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 550 operations with success-response content; 437
+- Continue the OpenAPI handler audit beyond the 558 operations with success-response content; 429
   of 987 non-`204` success operations still lack explicit success-body schemas, including the two
-  intentional bodyless `HEAD` probes (435 non-HEAD shapes remain). Twenty-seven operations have no
+  intentional bodyless `HEAD` probes (427 non-HEAD shapes remain). Twenty-seven operations have no
   declared `2xx` status and 15 have only an intentional `204`. The path/method inventory covers
-  705/705 routes and 468 operations declare security alternatives; remaining response schemas and
+  705/705 routes and 493 operations declare security alternatives; remaining response schemas and
   conditional auth behavior have not all been source-verified.

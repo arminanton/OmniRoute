@@ -81,7 +81,12 @@ tags:
       Install, start, stop, and monitor locally-running embedded services (9Router, CLIProxyAPI).
       All routes are LOCAL_ONLY — accessible from loopback only (hard rule #17).
   - name: OAuth
-    description: OAuth flows for provider authentication
+    description: >-
+      Provider OAuth management routes accept a dashboard session or a bearer credential with
+      management scope when `requireLogin` is enabled. The anonymous security alternative reflects
+      installations that explicitly disable login; it does not make these routes universally public.
+      Cursor and Kiro host-credential auto-import routes are additionally loopback-only. The
+      single-use Codex connection ticket and OIDC callback are separate public flows.
   - name: System
     description: System management (restart, shutdown, backup)
   - name: Pricing
@@ -6598,28 +6603,44 @@ paths:
       operationId: postApiTranslatorTranslate
       tags: [Translator]
       summary: Translate between formats
-      description: Converts a request between API formats (e.g. Claude → OpenAI)
+      description: >-
+        Converts a request between API formats (e.g. Claude → OpenAI). For `step: 4`, the response
+        contains a display-only outbound request preview: credential-bearing header values and
+        sensitive URL query values are redacted as `[REDACTED]`, and known credential strings are
+        removed from the displayed URL/header values. The preview body is the translated request
+        body. This route does not send the request upstream. Use `/api/translator/send` for the
+        separate outbound-send operation; its behavior is unchanged by preview redaction.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [sourceFormat, targetFormat, body]
-              properties:
-                step:
-                  type: string
-                sourceFormat:
-                  type: string
-                targetFormat:
-                  type: string
-                provider:
-                  type: string
-                body:
-                  type: object
+            schema: { $ref: "#/components/schemas/TranslatorTranslateRequest" }
       responses:
         "200":
           description: Translated request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorTranslateResponse" }
+        "400":
+          description: Invalid JSON, invalid step/provider input, missing active provider connection, or unsupported OAuth translator.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorTranslateFailure" }
+        "500":
+          description: Translation or preview construction failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorTranslateFailure" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/translator/send:
     post:
@@ -6790,21 +6811,68 @@ paths:
       x-loopback-only: true
       tags: [CLI Tools]
       summary: Get runtime status for a CLI tool
+      description: >-
+        Loopback-only management endpoint. Management authentication is required when management
+        login is enabled; a valid local CLI token is also accepted from loopback, and deployments
+        that disable management login allow unauthenticated loopback access. `toolId` must be a
+        canonical id from the CLI runtime catalog.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - {}
       parameters:
         - name: toolId
           in: path
           required: true
+          description: Canonical CLI tool id, matched after trimming and case-normalization.
           schema:
-            type: string
+            $ref: "#/components/schemas/CliToolId"
       responses:
         "200":
           description: Runtime status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CliToolsRuntimeResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Caller is remote or lacks management authorization.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Unsupported CLI tool id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Runtime status could not be determined.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/cli-tools/guide-settings/{toolId}:
     get:
       operationId: getApiCliToolsGuideSettingsByToolId
       tags: [CLI Tools]
-      summary: Get guide settings for a tool
+      summary: Reject guide settings reads
+      description: >-
+        This route does not implement reads. Every request that passes the management gate returns HTTP 400 with
+        `{error: "GET not supported for this tool"}`. Use POST to save supported guide-based CLI
+        configuration. Management authentication depends on deployment settings; a valid local
+        CLI token is accepted only from loopback.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - {}
       parameters:
         - name: toolId
           in: path
@@ -6812,13 +6880,31 @@ paths:
           schema:
             type: string
       responses:
-        "200":
-          description: Guide settings
+        "400":
+          description: Guide settings reads are not supported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCliToolsGuideSettingsByToolId
       tags: [CLI Tools]
       summary: Save CLI tool guide settings
-      description: Writes supported connection settings to the selected CLI tool's configuration file.
+      description: >-
+        Writes supported connection settings to the selected CLI tool's configuration file.
+        Management authentication depends on deployment settings; a valid local CLI token is
+        accepted only from loopback.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - {}
       parameters:
         - name: toolId
           in: path
@@ -6845,6 +6931,12 @@ paths:
           description: Tool configuration saved
         "400":
           description: Invalid settings or unsupported configuration target
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/cli-tools/antigravity-mitm:
     get:
@@ -8615,10 +8707,11 @@ paths:
       summary: Read or start a provider OAuth flow
       description: >-
         Supports `authorize`, `device-code`, `start-callback-server`, and `public-link-status`.
-        Device-code fields vary by provider and are intentionally open-ended. When
-        `REQUIRE_API_KEY` is enabled, a valid Bearer API key or dashboard session is required;
-        requests are anonymous when authentication is disabled. Devin Desktop/CLI browser callback
-        actions are retired with 410; use their import-token flow.
+        Device-code fields vary by provider and are intentionally open-ended. When `requireLogin`
+        is enabled, these management actions require a dashboard session or management-scoped
+        bearer credential. The anonymous security alternative applies only when that local setting
+        disables login. Devin Desktop/CLI browser callback actions are retired with 410; use their
+        import-token flow.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -8679,15 +8772,21 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "401":
-          description: Authentication required by the current configuration or OAuth flow.
+          description: Management authentication is required when enabled by local policy.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
-          description: Browser origin is not allowed for the Nous device flow.
+          description: Management credentials lack scope, or the browser origin is not allowed for the Nous device flow.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
         "410":
           description: Devin Desktop/CLI browser PKCE callback flow is retired; use import-token.
           content:
@@ -8709,10 +8808,13 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
-          description: Assigned proxy policy prevents the Nous device authorization request.
+          description: Management authentication or assigned proxy policy prevented the device authorization request.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiOauthByProviderByAction
       tags: [OAuth]
@@ -8722,9 +8824,10 @@ paths:
         Codex-only `public-link`, and Codex-only `device-complete`. Request validation and successful
         response shape depend on the action/provider. Every action except `poll-callback` requires a
         syntactically valid JSON body; `poll-callback` accepts an absent or invalid body as `{}`.
-        Authentication is configuration-dependent: valid Bearer API key or dashboard session when
-        `REQUIRE_API_KEY` is enabled, otherwise anonymous requests are allowed except where the
-        Nous flow binds to an authenticated session.
+        These POST actions exchange, poll, or import credentials and can persist provider
+        connections. When `requireLogin` is enabled, a dashboard session or management-scoped bearer
+        credential is required; anonymous access is available only when local policy disables
+        login. Public Codex ticket completion uses `POST /api/codex/connect/{token}`, not this route.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -8776,15 +8879,15 @@ paths:
                   - $ref: "#/components/schemas/StringErrorResponse"
                   - $ref: "#/components/schemas/ValidationErrorResponse"
         "401":
-          description: Authentication required by the current configuration or Nous device flow.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          description: Browser origin is not allowed for the Nous flow.
+          description: Management credentials lack scope, or the browser origin is not allowed for the Nous flow.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "410":
           description: Devin Desktop/CLI browser PKCE callback flow is retired; use import-token.
           content:
@@ -8804,10 +8907,13 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
-          description: Assigned proxy policy prevents Nous OAuth polling.
+          description: Management authentication or assigned proxy policy prevented Nous OAuth polling.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/oauth/cursor/auto-import:
     get:
@@ -8816,18 +8922,38 @@ paths:
       tags: [OAuth]
       summary: Auto-import Cursor OAuth credentials
       description: Automatically detects and imports Cursor credentials from local config.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Import result
 
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/cursor/import:
     get:
       operationId: getApiOauthCursorImport
       tags: [OAuth]
       summary: Get Cursor import status
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Current import status
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiOauthCursorImport
       tags: [OAuth]
@@ -8838,10 +8964,20 @@ paths:
           application/json:
             schema:
               type: object
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Credentials imported
 
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/kiro/auto-import:
     get:
       operationId: getApiOauthKiroAutoImport
@@ -8849,10 +8985,20 @@ paths:
       tags: [OAuth]
       summary: Auto-import Kiro OAuth credentials
       description: Automatically detects and imports Kiro credentials from local config.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Import result
 
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/kiro/import:
     post:
       operationId: postApiOauthKiroImport
@@ -8864,35 +9010,139 @@ paths:
           application/json:
             schema:
               type: object
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Credentials imported
 
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/kiro/social-authorize:
     get:
       operationId: getApiOauthKiroSocialAuthorize
       tags: [OAuth]
       summary: Initiate Kiro social OAuth authorization
-      description: Starts the social OAuth flow for Kiro.
+      description: >-
+        Requests a Kiro Google/GitHub device authorization code. Requires a management credential
+        when `requireLogin` is enabled; anonymous access is available only when local policy disables
+        login.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          schema: { type: string, enum: [google, github] }
       responses:
-        "302":
-          description: Redirect to OAuth provider
-
+        "200":
+          description: Device authorization URL and code for the selected social provider.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authUrl, deviceCode, userCode, expiresIn, interval, provider]
+                properties:
+                  authUrl: { type: string, format: uri }
+                  deviceCode: { type: string }
+                  userCode: { type: string }
+                  expiresIn: { type: integer, minimum: 1 }
+                  interval: { type: integer, minimum: 1 }
+                  provider: { type: string, enum: [google, github] }
+        "400":
+          description: Missing or unsupported social provider.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Kiro device authorization failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "502":
+          description: Kiro social device authorization provider returned a failure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/kiro/social-exchange:
     post:
       operationId: postApiOauthKiroSocialExchange
       tags: [OAuth]
       summary: Exchange Kiro social OAuth token
-      description: Exchanges the authorization code for access tokens.
+      description: >-
+        Polls the Kiro social device code. It returns a pending response until authorization
+        completes, then persists the Kiro/Amazon Q connection. Requires a management credential
+        when `requireLogin` is enabled; anonymous access is available only when local policy disables
+        login.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [deviceCode, provider]
+              properties:
+                deviceCode: { type: string, minLength: 1 }
+                provider: { type: string, enum: [google, github] }
+                targetProvider: { type: string, enum: [kiro, amazon-q] }
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: Token exchange result
+          description: Device-code poll is pending or a provider connection was persisted.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [success, pending, error]
+                    properties:
+                      success: { type: boolean, const: false }
+                      pending: { type: boolean, const: true }
+                      error: { type: string }
+                  - type: object
+                    required: [success, connection]
+                    properties:
+                      success: { type: boolean, const: true }
+                      connection:
+                        type: object
+                        required: [id, provider, email]
+                        properties:
+                          id: { type: string }
+                          provider: { type: string, enum: [kiro, amazon-q] }
+                          email: { type: [string, "null"] }
+        "400":
+          description: Invalid JSON or missing/invalid device code fields.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Token exchange or connection persistence failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   # ─── Cloud ─────────────────────────────────────────────────────
 
@@ -13162,6 +13412,10 @@ paths:
         Dashboard-only. Creates a Codex (ChatGPT/OpenAI) connection from a raw
         access token with no refresh token (authType `access_token`).
       x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Connection imported.
@@ -13169,6 +13423,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cli-tools/crush-settings:
     get:
       operationId: getApiCliToolsCrushSettings
@@ -13600,9 +13858,41 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › all statuses"
+      description: >-
+        Returns a per-tool snapshot with runtime detection and configuration status. Management
+        authentication is required when management login is enabled; a valid local CLI token is
+        accepted only from loopback, and deployments that disable management login may allow
+        anonymous access. This handler reads local config files and probes CLI runtime status.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - {}
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          description: Set to `true` to bypass the per-tool mtime cache for this request.
+          schema: { type: string, enum: ["true", "false"], default: "false" }
       responses:
         "200":
-          description: OK
+          description: Runtime and configuration status keyed by CLI tool id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CliToolsAllStatusesResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Status collection failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cli-tools/apply:
     post:
       operationId: postApiCliToolsApply
@@ -13660,9 +13950,47 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › detect"
+      description: >-
+        Detects one CLI tool or all known CLI tools. Management authentication is required when
+        management login is enabled; a valid local CLI token is accepted only from loopback, and
+        deployments that disable management login may allow anonymous access. `configContents` is
+        returned verbatim when readable and may contain local credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - {}
+      parameters:
+        - name: tool
+          in: query
+          required: false
+          description: When present, return one detected tool; otherwise return `{tools:[...]}`.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: One detected CLI tool or the complete detection list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CliToolsDetectResponse"
+        "400":
+          description: Requested tool id is unknown.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Tool detection failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cli-tools/forge-settings:
     delete:
       operationId: deleteApiCliToolsForgeSettings
@@ -13770,9 +14098,36 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › keys"
+      description: >-
+        Always-protected management endpoint used by the CLI tools UI. Returns masked `key` values
+        and a separate `rawKey` field containing each complete API key. `rawKey` is a secret and
+        must be handled as credential material. Requires a dashboard session or a valid management
+        bearer credential (a `manage` or `admin` API-key scope), or the local CLI token from a
+        loopback request; this remains enforced even when ordinary management login is disabled.
+      x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
       responses:
         "200":
-          description: OK
+          description: API keys for the authenticated CLI tools UI; each item includes a secret rawKey.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CliToolsKeysResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: API key list could not be loaded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cli-tools/letta-settings:
     delete:
       operationId: deleteApiCliToolsLettaSettings
@@ -13931,9 +14286,35 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › status"
+      description: >-
+        Returns runtime and (for selected tools) configuration status keyed by canonical CLI tool
+        id. Management authentication is required when management login is enabled; a valid local
+        CLI token is accepted only from loopback, and deployments that disable management login
+        may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Runtime and configuration status keyed by CLI tool id.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CliToolsStatusResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Status collection failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/codex/connect/{token}:
     parameters:
       - name: token
@@ -16659,8 +17040,9 @@ paths:
       description: >-
         Persists the credential blob produced by the local Antigravity remote-login helper. The
         blob contains OAuth token data and is finalized server-side; the response includes only
-        connection id/provider/email/displayName. The route itself enforces auth when required by
-        local policy; standalone mode with login disabled may allow anonymous calls.
+        connection id/provider/email/displayName. When `requireLogin` is enabled, a dashboard
+        session or management-scoped bearer credential is required; anonymous access is available
+        only when local policy disables login.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -16688,96 +17070,186 @@ paths:
                   - $ref: "#/components/schemas/ValidationErrorResponse"
                   - $ref: "#/components/schemas/AntigravityPastedCredentialErrorResponse"
         "401":
-          description: Management authentication required when enabled by local policy.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StringErrorResponse"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "500":
           description: OAuth finalization or connection persistence failed.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AntigravityPastedCredentialErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/cliproxy-import:
     get:
       operationId: getApiOauthCliproxyImport
       tags:
         - Oauth
       summary: "GET oauth › cliproxy import"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiOauthCliproxyImport
       tags:
         - Oauth
       summary: "POST oauth › cliproxy import"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/codex/import:
     post:
       operationId: postApiOauthCodexImport
       tags:
         - Oauth
       summary: "POST oauth › codex › import"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/cursor/login/cancel:
     post:
       operationId: postApiOauthCursorLoginCancel
       tags:
         - Oauth
       summary: "POST oauth › cursor › login › cancel"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/cursor/login/poll:
     post:
       operationId: postApiOauthCursorLoginPoll
       tags:
         - Oauth
       summary: "POST oauth › cursor › login › poll"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/cursor/login/start:
     post:
       operationId: postApiOauthCursorLoginStart
       tags:
         - Oauth
       summary: "POST oauth › cursor › login › start"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/kiro/api-key:
     post:
       operationId: postApiOauthKiroApiKey
       tags:
         - Oauth
       summary: "POST oauth › kiro › api key"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/oauth/trae/import:
     get:
       operationId: getApiOauthTraeImport
       tags:
         - Oauth
       summary: "GET oauth › trae › import"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiOauthTraeImport
       tags:
         - Oauth
       summary: "POST oauth › trae › import"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/omniroute/route/preview:
     post:
       operationId: postApiOmnirouteRoutePreview
@@ -24459,15 +24931,14 @@ paths:
         - V1 Batches
       summary: List OpenAI-compatible batch jobs
       description: >-
-        Lists batches visible to the authenticated API key, using cursor pagination. Authentication
-        follows the API v1 configuration: a valid client key or dashboard session when
-        `REQUIRE_API_KEY` is enabled; anonymous access is possible only when it is disabled.
+        Lists batches using cursor pagination. A dashboard session lists across all owners; an API
+        key lists only batches whose owner is that exact key. A valid API key or dashboard session
+        is required even when `REQUIRE_API_KEY` is disabled.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       parameters:
         - name: limit
           in: query
@@ -24481,7 +24952,7 @@ paths:
           schema: { type: string, pattern: "^batch_[0-9a-f]{24}$" }
       responses:
         "200":
-          description: Cursor-paginated batch collection scoped to the API key when one is present.
+          description: Cursor-paginated batch collection; API-key results are restricted to that key's owner ID, while dashboard sessions see all owners.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1BatchListResponse" }
@@ -24491,7 +24962,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
     post:
       operationId: postApiV1Batches
       tags:
@@ -24500,13 +24973,13 @@ paths:
       description: >-
         Creates a batch for an existing input file. This endpoint records and schedules an
         asynchronous job; it is not a multiplexed streaming API for interactive agent sessions. The
-        file must be visible to the current API key or unowned.
+        input file must be unowned or owned by the same API key as the request. Dashboard sessions
+        may list across owners, but batch creation still applies this input-file ownership check.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       requestBody:
         required: true
         content:
@@ -24524,7 +24997,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
   /api/v1/batches/{id}:
     parameters:
       - name: id
@@ -24540,14 +25015,14 @@ paths:
       summary: Delete a terminal batch
       description: >-
         Deletes the batch and its associated record only after it is completed, failed, cancelled,
-        or expired. Nonterminal batches return 409. A batch owned by a different API key is reported
-        as not found.
+        or expired. Nonterminal batches return 409. API keys may access their own or unowned batches;
+        a batch owned by a different key is reported as not found. Dashboard sessions may access any
+        owner's batch.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       responses:
         "200":
           description: Batch deleted.
@@ -24555,7 +25030,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/V1BatchDeleteResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
         "404":
           description: Batch not found or inaccessible to this API key.
           content:
@@ -24571,13 +25048,14 @@ paths:
       tags:
         - V1 Batches
       summary: Get a batch job
-      description: Returns the batch only if it is visible to the current API key, unless it is unowned.
+      description: >-
+        Returns a batch owned by the API key or an unowned batch; batches owned by another API key
+        are hidden as not found. Dashboard sessions may access batches across all owners.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       responses:
         "200":
           description: Batch status, output/error files, counters, metadata, and optional usage.
@@ -24585,7 +25063,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/V1BatchObject" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
         "404":
           description: Batch not found or inaccessible to this API key.
           content:
@@ -24604,13 +25084,15 @@ paths:
       tags:
         - V1 Batches
       summary: Request cancellation of a batch
-      description: Sets a nonterminal batch to `cancelling`; a batch already cancelling is returned unchanged.
+      description: >-
+        Sets a nonterminal batch to `cancelling`; a batch already cancelling is returned unchanged.
+        API keys may access their own or unowned batches; a batch owned by another key is hidden as
+        not found. Dashboard sessions may cancel batches across all owners.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       responses:
         "200":
           description: Updated or already-cancelling batch.
@@ -24623,7 +25105,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
         "404":
           description: Batch not found or inaccessible to this API key.
           content:
@@ -24636,8 +25120,10 @@ paths:
         - V1 Batches
       summary: Delete completed batch jobs and their files
       description: >-
-        Deletes batches with status `completed` and their associated files. A dashboard session or
-        valid API key is always required, including when inference-key enforcement is disabled.
+        Deletes completed batches across all owners for a dashboard session, or only batches owned
+        by the exact API key for an API-key caller. A valid API key or dashboard session is always
+        required, including when inference-key enforcement is disabled. Referenced input/output/error
+        files are deleted only when no remaining batch references them.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
@@ -24650,10 +25136,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/V1BatchCleanupResponse" }
         "401":
-          description: API key or dashboard session authentication is required by the current configuration.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
   /api/v1/classify:
     post:
       operationId: postApiV1Classify
@@ -24769,15 +25254,15 @@ paths:
         - V1 Files
       summary: List uploaded files
       description: >-
-        Cursor-paginated file metadata. API-key callers see their own files plus unowned files;
-        dashboard sessions see all files. Anonymous access is possible only when API-key auth is
-        disabled for this instance.
+        Cursor-paginated file metadata. API-key callers see only files owned by that exact key;
+        unowned files are excluded from collection listings. Dashboard sessions see files across
+        all owners. A valid API key or dashboard session is required even when `REQUIRE_API_KEY` is
+        disabled.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       parameters:
         - name: limit
           in: query
@@ -24810,7 +25295,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
     post:
       operationId: postApiV1Files
       tags:
@@ -24824,7 +25311,6 @@ paths:
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       requestBody:
         required: true
         content:
@@ -24854,7 +25340,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
         "500":
           description: File upload or storage failed.
           content:
@@ -24873,13 +25361,15 @@ paths:
       tags:
         - V1 Files
       summary: Delete a file
-      description: Soft-deletes a file and clears its stored content. API-key callers can delete only their own or unowned files; dashboard sessions may delete any file.
+      description: >-
+        Soft-deletes a file and clears its stored content. API keys may access their own or unowned
+        files; a file owned by another API key is hidden as not found. Dashboard sessions may delete
+        files across all owners.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       responses:
         "200":
           description: Deletion acknowledgement.
@@ -24887,7 +25377,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/V1FileDeleteResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
         "404":
           description: File not found or inaccessible to this API key.
           content:
@@ -24898,12 +25390,14 @@ paths:
       tags:
         - V1 Files
       summary: Get file metadata
+      description: >-
+        Returns metadata for a file owned by the API key or an unowned file; files owned by another
+        key are hidden as not found. Dashboard sessions may access files across all owners.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       responses:
         "200":
           description: File metadata without the stored content.
@@ -24911,7 +25405,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/V1FileObject" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
         "404":
           description: File not found or inaccessible to this API key.
           content:
@@ -24930,13 +25426,15 @@ paths:
       tags:
         - V1 Files
       summary: Download file content
-      description: Returns the raw content with the stored MIME type, or `application/octet-stream` when no type was stored.
+      description: >-
+        Returns raw content with the stored MIME type, or `application/octet-stream` when no type
+        was stored. API keys may access their own or unowned files; a file owned by another key is
+        hidden as not found. Dashboard sessions may download files across all owners.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
-        - {}
       responses:
         "200":
           description: Raw file bytes. The filename is supplied in Content-Disposition.
@@ -24948,7 +25446,9 @@ paths:
             "*/*":
               schema: { type: string, format: binary }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/V1ResourceAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/V1ResourceAuthenticationUnavailable"
         "404":
           description: File or file content not found, or inaccessible to this API key.
           content:
@@ -28491,6 +28991,13 @@ components:
       in: cookie
       name: auth_token
       description: Dashboard management session cookie (auth_token) for protected management routes. Distinct from Bearer Access Tokens and API keys. See docs/guides/MANAGEMENT-AUTH.md.
+    LocalCliTokenAuth:
+      type: apiKey
+      in: header
+      name: x-omniroute-cli-token
+      description: >-
+        Per-install machine token accepted only from a loopback request. This credential cannot
+        authenticate a remote request.
     ClientApiKeyAuth:
       type: apiKey
       in: header
@@ -28521,6 +29028,24 @@ components:
               error:
                 type: string
                 example: Unauthorized
+    V1ResourceAuthenticationRequired:
+      description: A valid API key or dashboard session is required for this files/batches operation, regardless of `REQUIRE_API_KEY` configuration.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+          example:
+            error:
+              message: Authentication required
+              type: invalid_request_error
+    V1ResourceAuthenticationUnavailable:
+      description: The API-key authentication store could not validate the request.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+          example:
+            error:
+              message: Authentication service unavailable
+              type: server_error
     RateLimited:
       description: Provider or account is rate limited. `Retry-After` is expressed in seconds.
       headers:
@@ -28618,6 +29143,119 @@ components:
             $ref: "#/components/schemas/ApiErrorResponse"
 
   schemas:
+    TranslatorTranslateFailure:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error:
+          oneOf:
+            - type: string
+            - type: object
+              additionalProperties: true
+      additionalProperties: true
+    TranslatorTranslateRequest:
+      type: object
+      required: [step, body]
+      properties:
+        step:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 4
+            - type: string
+              const: direct
+        provider:
+          type: string
+          minLength: 1
+          description: Required for numbered steps 1 through 4; optional for direct translation.
+        body:
+          type: object
+          minProperties: 1
+          description: Non-empty JSON object to translate or preview.
+          additionalProperties: true
+        sourceFormat: { type: string }
+        targetFormat: { type: string }
+      allOf:
+        - if:
+            properties:
+              step:
+                type: integer
+                minimum: 1
+                maximum: 4
+            required: [step]
+          then:
+            required: [provider]
+      description: >-
+        Numbered steps 1–4 require `provider`; direct translation may infer source/target formats
+        and optionally use provider configuration.
+    TranslatorTranslateResponse:
+      oneOf:
+        - type: object
+          required: [success, sourceFormat, targetFormat, result]
+          properties:
+            success: { type: boolean, const: true }
+            sourceFormat: { type: string }
+            targetFormat: { type: string }
+            result:
+              type: object
+              description: Directly translated request body.
+              additionalProperties: true
+          additionalProperties: true
+        - type: object
+          required: [success, result]
+          properties:
+            success: { type: boolean, const: true }
+            result:
+              oneOf:
+                - type: object
+                  required: [timestamp, endpoint, headers, body, _detectedFormat]
+                  properties:
+                    timestamp: { type: string, format: date-time }
+                    endpoint: { type: string }
+                    headers: { type: object, additionalProperties: true }
+                    body: { type: object, additionalProperties: true }
+                    _detectedFormat: { type: string }
+                  additionalProperties: true
+                - type: object
+                  required: [timestamp, headers, body]
+                  properties:
+                    timestamp: { type: string, format: date-time }
+                    headers: { type: object, additionalProperties: true }
+                    body: { type: object, additionalProperties: true }
+                  additionalProperties: true
+                - type: object
+                  required: [timestamp, body]
+                  properties:
+                    timestamp: { type: string, format: date-time }
+                    body: { type: object, additionalProperties: true }
+                  additionalProperties: true
+                - $ref: "#/components/schemas/TranslatorProviderRequestPreview"
+          additionalProperties: true
+      description: Direct translation or the result for a numbered translator step.
+    TranslatorProviderRequestPreview:
+      type: object
+      description: >-
+        Step-4 display-only preview. `url` and sensitive credential header values are sanitized for
+        display; the request is not sent by this endpoint. The body remains the translated request
+        body. `/api/translator/send` is a distinct operation and is not modified by this redaction.
+      required: [timestamp, url, headers, body]
+      properties:
+        timestamp: { type: string, format: date-time }
+        url:
+          type: string
+          description: Provider URL with sensitive query fields and known credential strings redacted.
+        headers:
+          type: object
+          description: >-
+            Provider headers with credential-bearing values redacted. A non-secret authentication
+            scheme such as `Bearer` may remain before `[REDACTED]`.
+          additionalProperties: { type: string }
+        body:
+          type: object
+          description: Translated request body; it is not sent by the preview operation.
+          additionalProperties: true
+      additionalProperties: true
     RtkConfig:
       type: object
       description: >-
@@ -39880,6 +40518,202 @@ components:
             value:
               $ref: "#/components/schemas/ProviderCcAliasValue"
           additionalProperties: true
+
+    CliToolId:
+      type: string
+      enum:
+        [
+          claude,
+          codex,
+          droid,
+          openclaw,
+          cursor,
+          windsurf,
+          devin,
+          zcode,
+          cline,
+          kilo,
+          continue,
+          opencode,
+          hermes,
+          hermes-agent,
+          amp,
+          qoder,
+          qwen,
+          aider,
+          goose,
+          gemini,
+          forge,
+          jcode,
+          prime-agent,
+          grok-build,
+          deepseek-tui,
+          omp,
+          letta,
+          codewhale,
+          smelt,
+          pi,
+          crush,
+          5dive,
+        ]
+      description: Canonical id from `CLI_TOOL_IDS` in the CLI runtime catalog.
+
+    CliRuntimeStatus:
+      type: object
+      required: [installed, runnable, command, commandPath, runtimeMode, requiresBinary]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean }
+        version: { type: string }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        reason: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        requiresBinary: { type: boolean }
+
+    CliToolsRuntimeResponse:
+      allOf:
+        - $ref: "#/components/schemas/CliRuntimeStatus"
+        - type: object
+          required: [toolId, configPath, message]
+          properties:
+            toolId: { $ref: "#/components/schemas/CliToolId" }
+            configPath: { type: [string, "null"] }
+            message: { type: string }
+
+    CliToolsStatusEntry:
+      type: object
+      required: [installed, runnable]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        reason: { type: [string, "null"] }
+        configStatus:
+          type: string
+          enum: [configured, not_configured, not_installed, unknown, other]
+        lastConfiguredAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+
+    CliToolsStatusResponse:
+      type: object
+      description: One status entry per canonical CLI runtime tool id.
+      propertyNames:
+        $ref: "#/components/schemas/CliToolId"
+      additionalProperties:
+        $ref: "#/components/schemas/CliToolsStatusEntry"
+
+    CliToolBatchDetection:
+      type: object
+      required: [installed, runnable]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean }
+        version: { type: string }
+        command: { type: string }
+        commandPath: { type: string }
+        reason: { type: string }
+      additionalProperties: false
+
+    CliToolBatchConfig:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [configured, not_configured, not_installed, unknown, other]
+        endpoint: { type: [string, "null"] }
+        lastConfiguredAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+
+    CliToolBatchStatus:
+      type: object
+      required: [detection, config]
+      properties:
+        detection:
+          $ref: "#/components/schemas/CliToolBatchDetection"
+        config:
+          $ref: "#/components/schemas/CliToolBatchConfig"
+        error: { type: string }
+      additionalProperties: false
+
+    CliToolsAllStatusesResponse:
+      type: object
+      description: One batch detection/configuration status per CLI catalog id.
+      additionalProperties:
+        $ref: "#/components/schemas/CliToolBatchStatus"
+
+    CliToolDetectedHermesAgentRole:
+      type: object
+      required: [model, usingOmniRoute]
+      properties:
+        model: { type: string }
+        provider: { type: string }
+        usingOmniRoute: { type: boolean }
+      additionalProperties: false
+
+    CliToolDetectedTool:
+      type: object
+      required: [id, name, installed, configPath, configured]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        installed: { type: boolean }
+        version: { type: string }
+        configPath: { type: string }
+        configured: { type: boolean }
+        configContents:
+          type: string
+          description: >-
+            Verbatim local CLI configuration file contents. This may contain API keys, tokens, or
+            other secrets; treat it as sensitive credential material.
+          x-sensitive: true
+        hermesAgentRoles:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/CliToolDetectedHermesAgentRole"
+      additionalProperties: false
+
+    CliToolsDetectAllResponse:
+      type: object
+      required: [tools]
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/CliToolDetectedTool"
+      additionalProperties: false
+
+    CliToolsDetectResponse:
+      oneOf:
+        - $ref: "#/components/schemas/CliToolDetectedTool"
+        - $ref: "#/components/schemas/CliToolsDetectAllResponse"
+
+    CliToolsApiKey:
+      allOf:
+        - $ref: "#/components/schemas/ApiKey"
+        - type: object
+          required: [rawKey]
+          properties:
+            rawKey:
+              type: string
+              description: >-
+                Full, unmasked API key. This is a secret credential returned only by the
+                always-protected CLI tools key-list endpoint.
+              x-sensitive: true
+          additionalProperties: true
+
+    CliToolsKeysResponse:
+      type: object
+      required: [keys, total]
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: "#/components/schemas/CliToolsApiKey"
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
 
     AntigravityMitmStatus:
       type: object
