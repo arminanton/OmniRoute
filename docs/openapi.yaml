@@ -8859,9 +8859,25 @@ paths:
       operationId: postApiRestart
       tags: [System]
       summary: Restart the application
+      description: >-
+        Requires management authentication when enabled. Returns before sending SIGTERM so the
+        process manager can restart OmniRoute through the graceful shutdown path.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Restart initiated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RestartResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/shutdown:
     post:
@@ -8869,9 +8885,22 @@ paths:
       tags: [System]
       summary: Shutdown the application
       x-always-protected: true
+      description: Sends SIGTERM after returning the confirmation response. Authentication remains required even when management login is disabled.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       responses:
         "200":
           description: Shutdown initiated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ShutdownResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/db-backups:
     put:
@@ -9110,16 +9139,47 @@ paths:
       operationId: getApiSyncInitialize
       tags: [System]
       summary: Read cloud sync initialization status
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Cloud and model sync initialization flags
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncInitializationStatusResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSyncInitialize
       tags: [System]
       summary: Initialize cloud sync
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Sync initialized
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncInitializationResponse" }
+        "500":
+          description: Cloud or model synchronization scheduler initialization failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   # ─── Background Jobs (local-only administration) ───────────────
 
@@ -37368,6 +37428,51 @@ components:
       properties:
         initialized: { type: boolean }
       additionalProperties: false
+
+    RestartResponse:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, const: restarting }
+      additionalProperties: false
+
+    ShutdownResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: "Shutting down..." }
+      additionalProperties: false
+
+    SyncInitializationStatusResponse:
+      type: object
+      required: [initialized, modelSyncInitialized, message]
+      properties:
+        initialized: { type: boolean }
+        modelSyncInitialized: { type: boolean }
+        message: { type: string }
+      additionalProperties: false
+
+    SyncInitializationAlreadyResponse:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, const: "Cloud sync already initialized" }
+      additionalProperties: false
+
+    SyncInitializationStartedResponse:
+      type: object
+      required: [success, message, modelSyncEnabled]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: "Cloud sync initialized successfully" }
+        modelSyncEnabled: { type: boolean, const: true }
+      additionalProperties: false
+
+    SyncInitializationResponse:
+      oneOf:
+        - $ref: "#/components/schemas/SyncInitializationAlreadyResponse"
+        - $ref: "#/components/schemas/SyncInitializationStartedResponse"
 
     StorageHealthResponse:
       type: object
