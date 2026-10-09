@@ -35,7 +35,7 @@ type WorkerReply = {
 
 type QueueItem = {
   id: number;
-  artifact: CallLogArtifact;
+  artifact: CallLogArtifact | null;
   estimatedFootprintBytes: number;
   reservationClass: "normal" | "diagnostic_stub";
   preparationReservation?: CallLogArtifactReservation;
@@ -357,14 +357,17 @@ function buildDiagnosticOverflowStub(
   rawReference: unknown,
   reason:
     | "call_log_artifact_queue_memory_budget_exceeded"
-    | "call_log_artifact_worker_missing" = "call_log_artifact_queue_memory_budget_exceeded"
+    | "call_log_artifact_worker_missing"
+    | "call_log_artifact_worker_failure" = "call_log_artifact_queue_memory_budget_exceeded"
 ): CallLogArtifact | null {
   const reference = projectDiagnosticOverflowReference(rawReference);
   if (!reference || reference.persisted === false) return null;
   const omissionMarker =
-    reason === "call_log_artifact_worker_missing"
-      ? "[omitted: call log artifact worker unavailable]"
-      : "[omitted: artifact queue memory budget exceeded]";
+    reason === "call_log_artifact_queue_memory_budget_exceeded"
+      ? "[omitted: artifact queue memory budget exceeded]"
+      : reason === "call_log_artifact_worker_missing"
+        ? "[omitted: call log artifact worker unavailable]"
+        : "[omitted: call log artifact worker failed]";
 
   return {
     schemaVersion: 5,
@@ -516,17 +519,51 @@ export function writeDiagnosticOverflowStubAsync(
  */
 export function writeDiagnosticOverflowStubSync(
   summary: CallLogArtifact["summary"],
-  reference: unknown
+  reference: unknown,
+  reason:
+    | "call_log_artifact_worker_missing"
+    | "call_log_artifact_worker_failure" = "call_log_artifact_worker_missing"
 ): CallLogArtifactWriteResult | null {
-  const stub = buildDiagnosticOverflowStub(summary, reference, "call_log_artifact_worker_missing");
+  const stub = buildDiagnosticOverflowStub(summary, reference, reason);
   if (!stub) return null;
 
-  warnRateLimited(
-    "[callLogs] Artifact worker is missing; synchronously preserving the private diagnostic reference.",
-    "sync_diagnostic_stub_worker_missing"
-  );
-  const result = writeCallArtifact(stub);
-  return result ? { ...result, diagnosticOverflowStub: true } : null;
+  const estimate = estimateCallLogArtifactFootprint(stub);
+  const activeStubCount = active?.reservationClass === "diagnostic_stub" ? 1 : 0;
+  if (
+    estimate.reason ||
+    diagnosticStubQueue.length + activeStubCount >= MAX_QUEUED_DIAGNOSTIC_STUBS ||
+    reservedDiagnosticStubBytes + estimate.estimatedBytes > MAX_QUEUED_DIAGNOSTIC_STUB_BYTES
+  ) {
+    warnRateLimited(
+      `[callLogs] Private diagnostic pointer stub refused (reason=stub_budget, source=${reason}).`,
+      `sync_diagnostic_stub_refused:${reason}`
+    );
+    return null;
+  }
+
+  reservedDiagnosticStubBytes += estimate.estimatedBytes;
+  try {
+    const result = writeCallArtifact(stub);
+    if (!result) {
+      warnRateLimited(
+        `[callLogs] Private diagnostic pointer stub was not persisted (reason=write_failed, source=${reason}).`,
+        `sync_diagnostic_stub_write_failed:${reason}`
+      );
+      return null;
+    }
+    warnRateLimited(
+      reason === "call_log_artifact_worker_missing"
+        ? "[callLogs] Artifact worker is missing; synchronously preserved the private diagnostic reference."
+        : "[callLogs] Artifact worker write failed; synchronously preserved the private diagnostic reference.",
+      `sync_diagnostic_stub:${reason}`
+    );
+    return { ...result, diagnosticOverflowStub: true };
+  } finally {
+    reservedDiagnosticStubBytes = Math.max(
+      0,
+      reservedDiagnosticStubBytes - estimate.estimatedBytes
+    );
+  }
 }
 
 function fileExistsAtRuntime(candidate: string): boolean {
@@ -647,6 +684,20 @@ function safeWorkerFailureReason(error: unknown): string {
   return typeof code === "string" && /^[A-Z0-9_]{2,64}$/.test(code) ? code : "worker_error";
 }
 
+function takeDiagnosticStubInputs(item: QueueItem): {
+  summary: CallLogArtifact["summary"];
+  reference: unknown;
+} | null {
+  const artifact = item.artifact;
+  if (!artifact) return null;
+  const inputs = {
+    summary: artifact.summary,
+    reference: artifact.pipeline?.diagnosticOverflow,
+  };
+  item.artifact = null;
+  return inputs;
+}
+
 function failOpen(warn = false, reason = "worker_error"): void {
   if (warn) {
     warnRateLimited(
@@ -679,17 +730,34 @@ function ensureWorker(): Worker {
     const completed = active;
     active = null;
     releaseReservation(completed);
+    let result = reply.result;
     if (!reply.result) {
       const reason = reply.failureReason ?? "no_result";
       warnRateLimited(
         `[callLogs] Call-log artifact worker returned no stored artifact (reason=${reason}).`,
         `write_no_result:${reason}`
       );
+      const stubInputs = takeDiagnosticStubInputs(completed);
+      if (stubInputs && (reason === "write_failed" || reason === "worker_exception")) {
+        try {
+          result = writeDiagnosticOverflowStubSync(
+            stubInputs.summary,
+            stubInputs.reference,
+            "call_log_artifact_worker_failure"
+          );
+        } catch {
+          result = null;
+          warnRateLimited(
+            "[callLogs] Private diagnostic pointer fallback threw (reason=stub_write_exception).",
+            "sync_diagnostic_stub_write_exception"
+          );
+        }
+      }
     }
     completed.resolve(
-      reply.result && completed.reservationClass === "diagnostic_stub"
-        ? { ...reply.result, diagnosticOverflowStub: true }
-        : reply.result
+      result && completed.reservationClass === "diagnostic_stub" && !result.diagnosticOverflowStub
+        ? { ...result, diagnosticOverflowStub: true }
+        : result
     );
     pump();
   });
@@ -714,6 +782,10 @@ function pump(): void {
 
   active = next;
   clearIdleTimer();
+  if (!next.artifact) {
+    failOpen(true, "queued_artifact_missing");
+    return;
+  }
   try {
     ensureWorker().postMessage({
       id: next.id,
