@@ -1740,13 +1740,14 @@ resolved CLI versions in the image/build evidence.
 
 ## Remaining acceptance checks
 
-- Query the new management-only pressure sample on `GET /api/monitoring/health` using a credential
-  accepted by the candidate. Blue now exposes the configured immediate-heap threshold, V8 heap,
+- Capture the management-only pressure sample on `GET /api/monitoring/health` with a credential
+  accepted by the candidate. Blue exposes the configured immediate-heap threshold, V8 heap,
   process external/array-buffer/RSS, cgroup, host-PSI source, guard state, and sample age together.
-  The current `~/.omni-mg` credential receives 403
-  `Invalid management token` from `/api/usage/call-logs`, so the running candidate only returns
-  public health. A heap snapshot or isolated allocation profile is still required to identify
-  retained V8 objects.
+  At the latest read-only check on 2026-10-09 18:49 UTC, the active-slot marker still named `green`,
+  but `omni-local-next@app.service` was inactive and the local API proxy had no app backend. A prior
+  manager-key probe also returned `403 Invalid management token`; neither source can currently
+  provide a live pressure sample. A heap snapshot or isolated allocation profile is still required
+  to identify retained V8 objects.
 - Assemble a canary OCI image from the now-passing blue standalone build and verify a complete
   request artifact through that container. The earlier captured candidate-image incident lost 118
   detailed artifacts and had no artifact file newer than image start; do not treat the
@@ -1759,9 +1760,12 @@ resolved CLI versions in the image/build evidence.
   now passes a bounded isolated canary; full HTTP-route behavior under real request load and retained
   object attribution remain unverified.
 - Build and smoke the production OCI image on a dedicated builder with enough memory and native
-  overlay. The latest Node/Webpack source build and standalone health/worker smokes pass, but no OCI
-  image was assembled. Preserve `memory.peak`, `memory.events`, wall time, and output size for the
-  image build; the full Turbopack runs on Maria did not complete under 14 GiB.
+  overlay. The Node/Webpack source build and Bun/Turbopack source-only standalone build both
+  completed, but no OCI image was assembled. The Bun 1.4.2 build required a 17 GiB cgroup cap and
+  reached 16.25 GiB peak with host swap use; it was not a low-footprint result. Maria currently has
+  only about 12 GiB free disk, while DevVM has about 5.6 GiB available RAM and 4.2 GiB of swap in
+  use; the other known Linux builders are offline. Preserve `memory.peak`, `memory.events`, wall
+  time, and output size when a suitable isolated builder is available.
 - TPROXY is a small first-party C Node-API addon in `src/mitm/tproxy/native/transparent.c`, not an
   installed package dependency. The upstream TPROXY notes say its `build/` and `prebuilds/`
   directories are ignored and the binary is built from source; the loader can probe a prebuild, but
@@ -1777,21 +1781,24 @@ resolved CLI versions in the image/build evidence.
 - Keep the passing `typecheck:core` target in the validation set. If a broader whole-app typecheck is
   required, first build a smaller project graph or use a builder with an explicit memory budget; the
   earlier broad no-emit attempts exhausted 4 GiB and 3 GiB without reporting source diagnostics.
-- Complete production builds and runtime smokes for the locked `Dockerfile.bun` path on Bun 1.4.0
-  and 1.4.2 using a dedicated builder; the current 1.4.2 Turbopack trial stopped at 3m06s for host
-  memory safety before compilation completed. Record native-module, database, streaming, and
-  shutdown differences. The Bun 1.4.2 direct route/tool/capture test now passes, but does not test
-  the full Next server, production image, or 4 GiB cgroup behavior.
+- Complete production OCI builds and runtime smokes for the locked `Dockerfile.bun` path on Bun
+  1.4.0 and 1.4.2 using a dedicated builder. An earlier Bun 1.4.2 debug-builder attempt stopped at
+  3m06s under host memory pressure; a later source-only 1.4.2 standalone build did complete in
+  944 seconds, but it did not build or validate the Dockerfile image. Record native-module,
+  database, streaming, and shutdown differences. The Bun 1.4.2 direct route/tool/capture test and
+  standalone health smoke pass, but do not test the packaged image or full 4 GiB cgroup behavior.
 - Resolve the diagnostic-storage policy before relying on Bun high-context captures: the default
   2 GiB private-overflow budget left 12/402 Bun traces unpersisted, while the isolated 4 GiB run
   captured 402/402. The default is unchanged; decide whether a temporary 4 GiB diagnostic budget is
   acceptable only after checking image/container free space and retention cleanup.
-- Exercise the full OmniRoute app with mock provider credentials at 70 and 100 active sessions,
-  including actual tool-call cycles, authentication, account-level limits, and verified artifact
-  capture through standalone Next and middleware. The direct route test now runs 1/30/70/100
-  synthetic Antigravity conversations in both Node and Bun, but uses an in-process route handler,
-  Node test fixtures, and mock upstream. The Rust policy prototype still has one static key and
-  alias map but no database-backed policies.
+- Complete standalone Next/middleware E2E at 70 and 100 active sessions with mock provider
+  credentials, tool-call cycles, authentication, account limits, and verified artifacts. Current
+  local evidence is mixed: 100 conversations at 200,000 synthetic context bytes per user turn
+  completed 200/200 turns with 200/200 artifacts and private traces; a 70-conversation run at
+  700,000 bytes completed 140/140 turns but omitted 120/140 details at the 128 MiB preparation
+  reservation ceiling, with no worker failures. The test passed requests through the local
+  standalone bridge/mock but is not external-provider or deployed-image acceptance. The Rust
+  policy prototype remains benchmark-only and has no database-backed policies.
 - Compare the current TypeScript route, Bun/Turbopack candidate, Rust policy-aware prototype, and
   Bifrost only with equivalent authentication, model/account policy, request bodies, and provider
   mocks. The new Node/Bun rows compare one direct route handler; current Rust-vs-Rust rows isolate
@@ -1799,9 +1806,7 @@ resolved CLI versions in the image/build evidence.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 600 operations with success-response content; 387
-  of 987 non-`204` success operations still lack explicit success-body schemas, including the two
-  intentional bodyless `HEAD` probes (385 non-HEAD shapes remain). Twenty-eight operations have no
-  declared `2xx` status and 14 have only an intentional `204`. The path/method inventory covers
-  705/705 routes and 552 operations have security metadata (545 nonempty alternative lists); remaining
-  response schemas and conditional auth behavior have not all been source-verified.
+- Continue the source audit for response schemas and conditional auth behavior. After the Claude CLI
+  settings batch, the measured inventory is 985 response-contract candidates: 652 typed and 333
+  remaining gaps; route coverage is 705/705. This count is a contract-coverage inventory, not proof
+  that all security conditions or response semantics have been verified.
