@@ -19021,34 +19021,141 @@ paths:
       tags:
         - Settings
       summary: "GET settings › cache config"
+      description: >-
+        Returns the effective cache controls from both the database-settings cache block and the flat
+        general settings consumed by idempotency/cache-control runtime modules.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Effective cache configuration with default values applied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CacheRuntimeSettingsResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Cache settings could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsCacheConfig
       tags:
         - Settings
       summary: "PUT settings › cache config"
+      description: >-
+        Partial update. Semantic/prompt/model-catalog values are stored in the database-settings
+        cache section; `idempotencyWindowMs` and `alwaysPreserveClientCache` are written to flat
+        settings because those are the runtime read paths. Unknown fields are ignored by validation.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CacheRuntimeSettingsUpdate" }
       responses:
         "200":
-          description: OK
+          description: Update accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CacheRuntimeSettingsUpdateResponse" }
+        "400":
+          description: Invalid JSON or invalid cache setting values.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Cache settings could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/cache-metrics:
     delete:
       operationId: deleteApiSettingsCacheMetrics
       tags:
         - Settings
       summary: "DELETE settings › cache metrics"
+      description: >-
+        Deprecated compatibility endpoint. Cache metrics are computed from `usage_history`, so this
+        operation does not delete historical data and returns the current computed totals.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current computed cache metrics (no history is deleted).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CachePromptMetrics" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Cache metrics could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiSettingsCacheMetrics
       tags:
         - Settings
       summary: "GET settings › cache metrics"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Computed cache hit/token totals grouped by provider and combo strategy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CachePromptMetrics" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Cache metrics could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/cc-discovery-metrics:
     get:
       operationId: getApiSettingsCcDiscoveryMetrics
@@ -26922,6 +27029,50 @@ components:
         cachedTokens: { type: integer, minimum: 0 }
         cacheCreationTokens: { type: integer, minimum: 0 }
       additionalProperties: false
+    CacheRuntimeSettingsResponse:
+      type: object
+      required:
+        [
+          semanticCacheEnabled,
+          semanticCacheMaxSize,
+          semanticCacheTTL,
+          promptCacheEnabled,
+          promptCacheStrategy,
+          alwaysPreserveClientCache,
+          idempotencyWindowMs,
+          modelCatalogCacheTtlMs,
+        ]
+      properties:
+        semanticCacheEnabled: { type: boolean }
+        semanticCacheMaxSize: { type: number, exclusiveMinimum: 0 }
+        semanticCacheTTL: { type: number, exclusiveMinimum: 0 }
+        promptCacheEnabled: { type: boolean }
+        promptCacheStrategy: { type: string, enum: [auto, system-only, manual] }
+        alwaysPreserveClientCache: { type: string, enum: [auto, always, never] }
+        idempotencyWindowMs: { type: number, exclusiveMinimum: 0 }
+        modelCatalogCacheTtlMs: { type: number, exclusiveMinimum: 0 }
+      additionalProperties: false
+
+    CacheRuntimeSettingsUpdate:
+      type: object
+      properties:
+        semanticCacheEnabled: { type: boolean }
+        semanticCacheMaxSize: { type: number, exclusiveMinimum: 0 }
+        semanticCacheTTL: { type: number, exclusiveMinimum: 0 }
+        promptCacheEnabled: { type: boolean }
+        promptCacheStrategy: { type: string, enum: [auto, system-only, manual] }
+        alwaysPreserveClientCache: { type: string, enum: [auto, always, never] }
+        idempotencyWindowMs: { type: number, exclusiveMinimum: 0 }
+        modelCatalogCacheTtlMs: { type: number, exclusiveMinimum: 0 }
+      additionalProperties: true
+
+    CacheRuntimeSettingsUpdateResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean, const: true }
+      additionalProperties: false
+
     CachePromptMetrics:
       type: object
       required:
