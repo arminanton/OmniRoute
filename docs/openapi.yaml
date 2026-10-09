@@ -4150,51 +4150,166 @@ paths:
       operationId: getApiSettingsProxy
       tags: [Settings]
       summary: Get proxy settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: resolve
+          in: query
+          required: false
+          description: Resolve the effective proxy for a provider connection.
+          schema: { type: string }
+        - name: level
+          in: query
+          required: false
+          description: Return the setting for one scope.
+          schema: { type: string, enum: [global, provider, combo, key] }
+        - name: id
+          in: query
+          required: false
+          description: Scope identifier; omitted for the global scope.
+          schema: { type: string }
       responses:
         "200":
-          description: Current proxy settings
+          description: Full configuration, one scope, or effective connection proxy depending on query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyReadResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Proxy settings could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     put:
       operationId: putApiSettingsProxy
       tags: [Settings]
       summary: Update proxy settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: "#/components/schemas/ProxyConfigUpdate"
       responses:
         "200":
-          description: Updated proxy settings
+          description: Updated proxy configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxySettings"
         "400":
           description: Invalid proxy settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Proxy settings could not be updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     delete:
       operationId: deleteApiSettingsProxy
       tags: [Settings]
       summary: Delete a proxy configuration
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: level
           in: query
           required: true
-          schema: { type: string }
+          schema: { type: string, enum: [global, provider, combo, key] }
         - name: id
           in: query
+          required: false
+          description: Scope identifier; required for provider, combo, or key levels.
           schema: { type: string }
       responses:
         "200":
           description: Proxy configuration deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxySettings"
         "400":
-          description: The level query parameter is missing
+          description: Missing or invalid scope parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Proxy configuration could not be deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/settings/proxy/test:
     post:
       operationId: postApiSettingsProxyTest
       tags: [Settings]
       summary: Test proxy connection
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyTestRequest"
       responses:
         "200":
           description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyTestResponse"
+        "400":
+          description: Invalid proxy request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credentials or runtime policy blocked the configured proxy
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Proxy test could not be completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/settings/require-login:
     get:
@@ -4218,57 +4333,67 @@ paths:
       tags: [Settings]
       summary: Get IP filter configuration
       description: Returns the current IP filter settings including blacklist, whitelist, and temp bans.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: IP filter configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IpFilterConfig"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: IP filter configuration could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
     put:
       operationId: putApiSettingsIpFilter
       tags: [Settings]
       summary: Update IP filter configuration
       description: |
-        Configure IP filtering with blacklist/whitelist modes, add/remove individual IPs, and manage temp bans.
+        Configure blacklist, whitelist, or whitelist-priority filtering; update lists, or add/remove
+        individual IPs and temporary bans. At least one request field must be supplied.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                enabled:
-                  type: boolean
-                mode:
-                  type: string
-                  enum: [blacklist, whitelist]
-                blacklist:
-                  type: array
-                  items:
-                    type: string
-                whitelist:
-                  type: array
-                  items:
-                    type: string
-                addBlacklist:
-                  type: string
-                removeBlacklist:
-                  type: string
-                addWhitelist:
-                  type: string
-                removeWhitelist:
-                  type: string
-                tempBan:
-                  type: object
-                  properties:
-                    ip:
-                      type: string
-                    durationMs:
-                      type: integer
-                    reason:
-                      type: string
-                removeBan:
-                  type: string
+              $ref: "#/components/schemas/IpFilterUpdate"
       responses:
         "200":
           description: Updated IP filter configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IpFilterConfig"
+        "400":
+          description: Invalid IP filter update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: IP filter configuration could not be updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/settings/system-prompt:
     get:
@@ -4276,27 +4401,64 @@ paths:
       tags: [Settings]
       summary: Get system prompt configuration
       description: Returns the current system prompt injection settings.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: System prompt configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemPromptConfig"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: System prompt configuration could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
     put:
       operationId: putApiSettingsSystemPrompt
       tags: [Settings]
       summary: Update system prompt configuration
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                prompt:
-                  type: string
-                enabled:
-                  type: boolean
+              $ref: "#/components/schemas/SystemPromptUpdate"
       responses:
         "200":
           description: Updated system prompt configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemPromptConfig"
+        "400":
+          description: Invalid prompt update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: System prompt configuration could not be updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/settings/thinking-budget:
     get:
@@ -4304,33 +4466,64 @@ paths:
       tags: [Settings]
       summary: Get thinking budget configuration
       description: Returns the current thinking/reasoning budget settings for AI models.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Thinking budget configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThinkingBudgetConfig"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Thinking budget configuration could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
     put:
       operationId: putApiSettingsThinkingBudget
       tags: [Settings]
       summary: Update thinking budget configuration
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                mode:
-                  type: string
-                  description: Thinking mode (e.g., auto, manual, disabled)
-                customBudget:
-                  type: integer
-                  minimum: 0
-                  maximum: 131072
-                effortLevel:
-                  type: string
-                  enum: [none, low, medium, high]
+              $ref: "#/components/schemas/ThinkingBudgetUpdate"
       responses:
         "200":
           description: Updated thinking budget configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ThinkingBudgetConfig"
+        "400":
+          description: Invalid thinking budget update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Thinking budget configuration could not be updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/rate-limit:
     get:
@@ -5455,31 +5648,119 @@ paths:
       x-loopback-only: true
       tags: [CLI Tools]
       summary: Get Antigravity MITM proxy settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: MITM proxy configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AntigravityMitmStatus"
+        "500":
+          description: MITM status could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
     post:
       operationId: postApiCliToolsAntigravityMitm
       x-loopback-only: true
       tags: [CLI Tools]
       summary: Update Antigravity MITM proxy settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/AntigravityMitmStartRequest"
       responses:
         "200":
           description: Updated MITM proxy configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AntigravityMitmStartResponse"
+        "400":
+          description: Invalid startup configuration or missing API key/sudo credentials
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "500":
+          description: MITM proxy could not be started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management credential validation is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     delete:
       operationId: deleteApiCliToolsAntigravityMitm
       x-loopback-only: true
       tags: [CLI Tools]
       summary: Reset Antigravity MITM proxy settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AntigravityMitmStopRequest"
       responses:
         "200":
           description: MITM proxy settings reset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AntigravityMitmStopResponse"
+        "400":
+          description: Invalid stop request or missing sudo credentials
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "500":
+          description: MITM proxy could not be stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management credential validation is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/cli-tools/antigravity-mitm/alias:
     get:
@@ -5487,23 +5768,85 @@ paths:
       x-loopback-only: true
       tags: [CLI Tools]
       summary: Get Antigravity MITM alias configuration
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: tool
+          in: query
+          required: false
+          description: Return normalized aliases for one tool; without it, return all stored tool mappings.
+          schema: { type: string }
       responses:
         "200":
           description: Alias configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AntigravityMitmAliasGetResponse"
+        "500":
+          description: Alias configuration could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     put:
       operationId: putApiCliToolsAntigravityMitmAlias
       x-loopback-only: true
       tags: [CLI Tools]
       summary: Update Antigravity MITM alias configuration
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/AntigravityMitmAliasUpdateRequest"
       responses:
         "200":
           description: Updated alias configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AntigravityMitmAliasUpdateResponse"
+        "400":
+          description: Invalid alias mapping or reasoning effort
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "500":
+          description: Alias configuration could not be saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   /api/cli-tools/claude-settings:
     get:
@@ -7310,23 +7653,52 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [password]
-              properties:
-                password:
-                  type: string
-                  minLength: 1
+              $ref: "#/components/schemas/AuthLoginRequest"
       responses:
         "200":
-          description: JWT token returned
+          description: Dashboard session created; the JWT is set in an HttpOnly cookie.
+          headers:
+            Set-Cookie:
+              description: Sets the auth_token cookie for a 30-day dashboard session.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
         "400":
           description: Invalid login request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
         "401":
           description: Invalid password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
         "403":
-          description: Password setup required
+          description: Password login is disabled by OIDC, or initial password setup is required.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthLoginForbiddenResponse"
         "429":
           description: Too many failed attempts
+          headers:
+            Retry-After:
+              description: Seconds until login can be attempted again.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Login service is misconfigured or encountered an internal error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/auth/logout:
     post:
@@ -7335,7 +7707,15 @@ paths:
       summary: Log out
       responses:
         "200":
-          description: Session cleared
+          description: Clears the auth_token cookie; does not require a prior session.
+          headers:
+            Set-Cookie:
+              description: Expires the auth_token cookie.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
 
   /api/auth/oidc/login:
     get:
@@ -7415,71 +7795,198 @@ paths:
       operationId: putApiDbBackups
       tags: [System]
       summary: Create a manual database backup
-      description: A backup may be skipped when no database changes have occurred since the previous backup.
+      description: >-
+        Trigger an explicit manual snapshot. If the backup helper returns no result, this route
+        reports a fixed throttling message even when the underlying reason is another unavailable
+        or skipped condition.
+      x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       responses:
         "200":
-          description: Backup created or skipped
+          description: Snapshot created, or the route's no-result message returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbBackupPutResponse"
         "401":
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
           description: Backup creation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
     get:
       operationId: getApiDbBackups
       tags: [System]
       summary: List database backups
+      x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       responses:
         "200":
-          description: Backup list
+          description: Backups newest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbBackupListResponse"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Backup list could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
     post:
       operationId: postApiDbBackups
       tags: [System]
-      summary: Create database backup
-      responses:
-        "200":
-          description: Backup created
-    patch:
-      operationId: patchApiDbBackups
-      tags: [System]
-      summary: Save database backup retention settings
+      summary: Restore a database backup
+      description: Restores the selected local database snapshot and reports imported row counts.
+      x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                keepLatest:
-                  type: integer
-                  minimum: 1
-                  maximum: 200
-                retentionDays:
-                  type: integer
-                  minimum: 0
-                  maximum: 3650
+              $ref: "#/components/schemas/DbBackupRestoreRequest"
       responses:
         "200":
-          description: Backup retention settings saved
-    delete:
-      operationId: deleteApiDbBackups
+          description: Backup restored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbBackupRestoreResponse"
+        "400":
+          description: Invalid JSON or backup identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Backup restore failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+    patch:
+      operationId: patchApiDbBackups
       tags: [System]
-      summary: Clean up database backups and save retention settings
+      summary: Save database backup retention settings
+      x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       requestBody:
         required: false
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                keepLatest: { type: integer, minimum: 1, maximum: 200 }
-                retentionDays: { type: integer, minimum: 0, maximum: 3650 }
-              additionalProperties: false
+              $ref: "#/components/schemas/DbBackupCleanupRequest"
+      responses:
+        "200":
+          description: Backup retention settings saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbBackupRetentionResponse"
+        "400":
+          description: Invalid optional JSON body or retention values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Retention settings could not be saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+    delete:
+      operationId: deleteApiDbBackups
+      tags: [System]
+      summary: Clean up database backups and save retention settings
+      x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DbBackupCleanupRequest"
       responses:
         "200":
           description: Backup cleanup and retention settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbBackupCleanupResponse"
         "400":
           description: Invalid retention settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidationErrorResponse"
         "401":
           description: Authentication required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Backup cleanup failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/storage/health:
     get:
@@ -10687,18 +11194,49 @@ paths:
       tags:
         - Auth
       summary: "GET auth › csrf"
+      description: >-
+        When the deployment requires management auth, accepts a dashboard session or management
+        bearer credential. Otherwise it may be called anonymously. Returns a session-bound CSRF
+        token when the JWT secret and auth_token cookie are present, or null fields otherwise.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Session-bound CSRF token or a null pair when it cannot be issued
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardCsrfResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management authentication service is temporarily unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/auth/status:
     get:
       operationId: getApiAuthStatus
       tags:
         - Auth
       summary: "GET auth › status"
+      description: Public probe that reports false when no valid dashboard JWT can be verified.
+      security: []
       responses:
         "200":
-          description: OK
+          description: Dashboard session authentication status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthStatusResponse"
   /api/batches:
     get:
       operationId: getApiBatches
@@ -11575,29 +12113,154 @@ paths:
       operationId: getApiDbBackupsExport
       tags:
         - Db backups
-      summary: "GET db backups › export"
+      summary: Download a consistent SQLite snapshot
+      x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       responses:
         "200":
-          description: OK
+          description: SQLite database snapshot download
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            Content-Length:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Database file was not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Database export failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/db-backups/exportAll:
     get:
       operationId: getApiDbBackupsExportAll
       tags:
         - Db backups
-      summary: "GET db backups › exportAll"
+      summary: Download a full tar.gz archive of database, settings, and call-log artifacts
+      description: >-
+        Despite legacy ZIP naming in the implementation, the response is a gzip-compressed tar
+        archive (`.tar.gz`). This local-only operation is rejected in cloud mode.
       x-loopback-only: true
+      x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       responses:
         "200":
-          description: OK
+          description: Full backup tar.gz download
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            Content-Length:
+              schema: { type: string }
+          content:
+            application/gzip:
+              schema: { type: string, format: binary }
+        "400":
+          description: Full export is unavailable in cloud mode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Full export failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbBackupExportAllError"
   /api/db-backups/import:
     post:
       operationId: postApiDbBackupsImport
       tags:
         - Db backups
-      summary: "POST db backups › import"
+      summary: Import a SQLite database backup
+      description: >-
+        Accepts either a multipart file upload or a raw SQLite binary body. The default upload
+        limit is 100 MiB, configurable with OMNIROUTE_DB_IMPORT_MAX_MB and clamped to 4 GiB; files
+        smaller than 4 KiB or without a `.sqlite` filename are rejected.
+      x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: filename
+          in: query
+          required: false
+          description: Filename used for raw binary uploads; defaults to import.sqlite.
+          schema: { type: string, default: import.sqlite }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+              additionalProperties: false
+          application/octet-stream:
+            schema: { type: string, format: binary }
       responses:
         "200":
-          description: OK
+          description: Imported database and table row counts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbBackupImportResponse"
+        "400":
+          description: Missing, invalid, truncated, too large, or corrupt SQLite upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Database import failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/db/health:
     get:
       operationId: getApiDbHealth
@@ -12925,17 +13588,67 @@ paths:
       tags:
         - Providers
       summary: "GET providers › <id> › cc alias"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Provider-level and per-model Claude Code alias overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCcAliasResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Alias settings could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     put:
       operationId: putApiProvidersByIdCcAlias
       tags:
         - Providers
       summary: "PUT providers › <id> › cc alias"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderCcAliasUpdate"
       responses:
         "200":
-          description: OK
+          description: Alias override updated or cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid alias update
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Alias settings could not be updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/providers/{id}/chatgpt-web-codex-doctor:
     parameters:
       - name: id
@@ -13028,25 +13741,93 @@ paths:
       tags:
         - Providers
       summary: "DELETE providers › <id> › interception rules"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Interception rules removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Interception rules could not be removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     get:
       operationId: getApiProvidersByIdInterceptionRules
       tags:
         - Providers
       summary: "GET providers › <id> › interception rules"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Interception rules or empty default configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderInterceptionRules"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Interception rules could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     put:
       operationId: putApiProvidersByIdInterceptionRules
       tags:
         - Providers
       summary: "PUT providers › <id> › interception rules"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderInterceptionRulesUpdate"
       responses:
         "200":
-          description: OK
+          description: Interception rules saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid interception rules
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Interception rules could not be saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/providers/{id}/login:
     parameters:
       - name: id
@@ -13075,25 +13856,93 @@ paths:
       tags:
         - Providers
       summary: "DELETE providers › <id> › param filters"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Parameter filters removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Parameter filters could not be removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     get:
       operationId: getApiProvidersByIdParamFilters
       tags:
         - Providers
       summary: "GET providers › <id> › param filters"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Provider-level and model-specific parameter filters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderParamFilter"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Parameter filters could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
     put:
       operationId: putApiProvidersByIdParamFilters
       tags:
         - Providers
       summary: "PUT providers › <id> › param filters"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderParamFilterUpdate"
       responses:
         "200":
-          description: OK
+          description: Parameter filters saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Invalid parameter filter configuration
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Parameter filters could not be saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/providers/{id}/refresh:
     parameters:
       - name: id
@@ -15798,27 +16647,84 @@ paths:
       operationId: getApiUsageProviderLimits
       tags:
         - Usage
-      summary: "GET usage › provider limits"
+      summary: Get cached provider quota and billing limits
       responses:
         "200":
-          description: OK
+          description: Cached provider limits and synchronization metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderLimitsCacheResponse"
+        "500":
+          description: Cached provider limits could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
     post:
       operationId: postApiUsageProviderLimits
       tags:
         - Usage
-      summary: "POST usage › provider limits"
+      summary: Refresh provider quota and billing limits
       responses:
         "200":
-          description: OK
+          description: Refresh results and updated provider limits cache
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderLimitsSyncResponse"
+        "500":
+          description: Provider limits could not be refreshed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/provider-window-costs:
     get:
       operationId: getApiUsageProviderWindowCosts
       tags:
         - Usage
-      summary: "GET usage › provider window costs"
+      summary: Get provider costs within the current quota window
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^[A-Za-z0-9._-]{1,80}$'
+        - name: connectionId
+          in: query
+          required: false
+          description: Restrict the breakdown to one provider connection.
+          schema:
+            type: string
       responses:
         "200":
-          description: OK
+          description: Cost and usage breakdown for the current provider quota window
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderWindowCostBreakdown"
+        "400":
+          description: Missing or invalid provider identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Provider window costs could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/quota:
     get:
       operationId: getApiUsageQuota
@@ -15856,10 +16762,59 @@ paths:
       operationId: getApiUsageRequestsByProviderDate
       tags:
         - Usage
-      summary: "GET usage › requests by provider date"
+      summary: Get daily request and token counts by provider
+      description: >-
+        Returns usage rows grouped by UTC calendar date and provider. Standard range values are
+        1d, 7d, 30d, 90d, 180d, 365d, ytd, and all. The route does not validate unknown range strings;
+        they resolve to the all-history window and are echoed in the response.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: range
+          in: query
+          required: false
+          description: Named range preset; defaults to 30d.
+          schema:
+            type: string
+            default: 30d
+        - name: startDate
+          in: query
+          required: false
+          description: Optional ISO-8601 start boundary; used when a custom date window is requested.
+          schema:
+            type: string
+        - name: endDate
+          in: query
+          required: false
+          description: Optional ISO-8601 end boundary.
+          schema:
+            type: string
+        - name: date
+          in: query
+          required: false
+          description: Restrict to one UTC calendar date (YYYY-MM-DD); takes precedence over range.
+          schema:
+            type: string
+            pattern: '^\d{4}-\d{2}-\d{2}$'
       responses:
         "200":
-          description: OK
+          description: Per-provider request and token totals by day
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestsByProviderDateResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Requests by provider and date could not be calculated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/usage/route-explain/{id}:
     parameters:
       - name: id
@@ -24246,6 +25201,876 @@ components:
       required: [error]
       properties:
         error: { type: string }
+      additionalProperties: false
+
+    SystemPromptConfig:
+      type: object
+      required: [enabled, prefixPrompt, suffixPrompt]
+      properties:
+        enabled: { type: boolean }
+        prefixPrompt: { type: string }
+        suffixPrompt: { type: string }
+      additionalProperties: false
+
+    SystemPromptUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        prompt:
+          type: string
+          maxLength: 50000
+          description: Legacy-compatible prompt field.
+        prefixPrompt: { type: string, maxLength: 50000 }
+        suffixPrompt: { type: string, maxLength: 50000 }
+        enabled: { type: boolean }
+      additionalProperties: false
+
+    ThinkingBudgetConfig:
+      type: object
+      required: [mode, customBudget, effortLevel]
+      properties:
+        mode: { type: string, enum: [passthrough, auto, custom, adaptive] }
+        customBudget: { type: integer, minimum: 0, maximum: 131072 }
+        effortLevel: { type: string, enum: [none, low, medium, high, xhigh, max] }
+      additionalProperties: false
+
+    ThinkingBudgetUpdate:
+      type: object
+      minProperties: 1
+      description: >-
+        Numeric budget fields are coerced by the handler before validation; integer budgets must
+        resolve to values from 0 through 131072. baseBudget and complexityMultiplier are accepted
+        and persisted, although the adaptive runtime currently reads only mode/customBudget/effortLevel.
+      properties:
+        mode: { type: string, enum: [passthrough, auto, custom, adaptive] }
+        customBudget: { type: integer, minimum: 0, maximum: 131072 }
+        effortLevel: { type: string, enum: [none, low, medium, high, xhigh, max] }
+        baseBudget: { type: integer, minimum: 0, maximum: 131072 }
+        complexityMultiplier: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    IpFilterTempBan:
+      type: object
+      required: [ip, until, reason, remainingMs]
+      properties:
+        ip: { type: string }
+        until: { type: string, format: date-time }
+        reason: { type: string }
+        remainingMs: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    IpFilterConfig:
+      type: object
+      required: [enabled, mode, blacklist, whitelist, tempBans]
+      properties:
+        enabled: { type: boolean }
+        mode: { type: string, enum: [blacklist, whitelist, whitelist-priority] }
+        blacklist:
+          type: array
+          items: { type: string }
+        whitelist:
+          type: array
+          items: { type: string }
+        tempBans:
+          type: array
+          items:
+            $ref: "#/components/schemas/IpFilterTempBan"
+      additionalProperties: false
+
+    IpFilterTempBanUpdate:
+      type: object
+      required: [ip]
+      properties:
+        ip: { type: string, minLength: 1 }
+        durationMs: { type: integer, minimum: 1 }
+        reason: { type: string, maxLength: 200 }
+      additionalProperties: false
+
+    IpFilterUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        enabled: { type: boolean }
+        mode: { type: string, enum: [blacklist, whitelist, whitelist-priority] }
+        blacklist:
+          type: array
+          items: { type: string }
+        whitelist:
+          type: array
+          items: { type: string }
+        addBlacklist: { type: string }
+        removeBlacklist: { type: string }
+        addWhitelist: { type: string }
+        removeWhitelist: { type: string }
+        tempBan:
+          $ref: "#/components/schemas/IpFilterTempBanUpdate"
+        removeBan: { type: string }
+      additionalProperties: false
+
+    ProxySettingsEntry:
+      type: object
+      properties:
+        type: { type: string, enum: [http, https, socks5] }
+        host: { type: string, minLength: 1 }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        username: { type: string }
+        password: { type: string }
+      additionalProperties: false
+
+    ProxyUpdateValue:
+      oneOf:
+        - $ref: "#/components/schemas/ProxySettingsEntry"
+        - type: "null"
+
+    ProxyReadValue:
+      description: Stored proxy value; legacy configuration entries can be strings or objects.
+      oneOf:
+        - type: object
+          additionalProperties: true
+        - type: string
+        - type: "null"
+
+    ProxyReadMap:
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/ProxyReadValue"
+
+    ProxySettings:
+      type: object
+      required: [global, providers, combos, keys]
+      properties:
+        global:
+          $ref: "#/components/schemas/ProxyReadValue"
+        providers:
+          $ref: "#/components/schemas/ProxyReadMap"
+        combos:
+          $ref: "#/components/schemas/ProxyReadMap"
+        keys:
+          $ref: "#/components/schemas/ProxyReadMap"
+      additionalProperties: true
+
+    ProxyResolutionResult:
+      type: object
+      required: [proxy, level, levelId]
+      properties:
+        proxy:
+          $ref: "#/components/schemas/ProxyReadValue"
+        level: { type: string }
+        levelId: { type: [string, "null"] }
+        source: { type: string }
+      additionalProperties: true
+
+    ProxyLevelReadResponse:
+      type: object
+      required: [level, id, proxy]
+      properties:
+        level: { type: string, enum: [global, provider, combo, key] }
+        id: { type: [string, "null"] }
+        proxy:
+          $ref: "#/components/schemas/ProxyReadValue"
+      additionalProperties: false
+
+    ProxyReadResponse:
+      oneOf:
+        - $ref: "#/components/schemas/ProxySettings"
+        - $ref: "#/components/schemas/ProxyLevelReadResponse"
+        - $ref: "#/components/schemas/ProxyResolutionResult"
+
+    ProxyConfigUpdateMap:
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/ProxyUpdateValue"
+
+    ProxyConfigUpdate:
+      type: object
+      description: >-
+        Send either legacy scope maps or `level` with `proxy`; when level is provider/combo/key,
+        `id` is also required. Null clears a proxy value. SOCKS5 acceptance depends on server config.
+      properties:
+        proxy:
+          $ref: "#/components/schemas/ProxyUpdateValue"
+        global:
+          $ref: "#/components/schemas/ProxyUpdateValue"
+        providers:
+          $ref: "#/components/schemas/ProxyConfigUpdateMap"
+        combos:
+          $ref: "#/components/schemas/ProxyConfigUpdateMap"
+        keys:
+          $ref: "#/components/schemas/ProxyConfigUpdateMap"
+        level: { type: string, enum: [global, provider, combo, key] }
+        id: { type: string }
+      anyOf:
+        - required: [proxy]
+        - required: [global]
+        - required: [providers]
+        - required: [combos]
+        - required: [keys]
+        - required: [level]
+      allOf:
+        - if:
+            required: [level]
+          then:
+            required: [proxy]
+        - if:
+            properties:
+              level: { enum: [provider, combo, key] }
+            required: [level]
+          then:
+            required: [id]
+      additionalProperties: false
+
+    ProxyTestRequest:
+      type: object
+      required: [proxy]
+      properties:
+        proxyId: { type: string }
+        proxy:
+          type: object
+          required: [host, port]
+          properties:
+            type: { type: string }
+            host: { type: string, minLength: 1 }
+            port:
+              oneOf:
+                - type: string
+                - type: number
+            username: { type: string }
+            password: { type: string }
+          additionalProperties: true
+      additionalProperties: true
+
+    ProxyTestResponse:
+      oneOf:
+        - type: object
+          required: [success, publicIp, latencyMs, proxyUrl]
+          properties:
+            success: { type: boolean, const: true }
+            publicIp: { type: [string, "null"] }
+            latencyMs: { type: number }
+            proxyUrl: { type: string }
+            relay:
+              type: object
+              required: [url, mode, attempts, fallback]
+              properties:
+                url: { type: [string, "null"] }
+                mode: { type: [string, "null"] }
+                attempts: { type: [integer, "null"] }
+                fallback: { type: [boolean, "null"] }
+              additionalProperties: false
+          additionalProperties: false
+        - type: object
+          required: [success, error, latencyMs, proxyUrl]
+          properties:
+            success: { type: boolean, const: false }
+            error: { type: string }
+            publicIp: { type: [string, "null"] }
+            latencyMs: { type: number }
+            proxyUrl: { type: string }
+          additionalProperties: false
+
+    SuccessResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+      additionalProperties: false
+
+    ProviderParamFilterModel:
+      type: object
+      properties:
+        block:
+          type: array
+          maxItems: 500
+          items: { type: string, minLength: 1, maxLength: 200 }
+        allow:
+          type: array
+          maxItems: 500
+          items: { type: string, minLength: 1, maxLength: 200 }
+      additionalProperties: true
+
+    ProviderParamFilter:
+      type: object
+      required: [block, allow, autoLearn]
+      properties:
+        block:
+          type: array
+          items: { type: string }
+        allow:
+          type: array
+          items: { type: string }
+        models:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ProviderParamFilterModel"
+        autoLearn: { type: boolean }
+      additionalProperties: false
+
+    ProviderParamFilterUpdate:
+      type: object
+      properties:
+        block:
+          type: array
+          maxItems: 500
+          items: { type: string, minLength: 1, maxLength: 200 }
+        allow:
+          type: array
+          maxItems: 500
+          items: { type: string, minLength: 1, maxLength: 200 }
+        models:
+          type: object
+          propertyNames: { minLength: 1, maxLength: 200 }
+          additionalProperties:
+            $ref: "#/components/schemas/ProviderParamFilterModel"
+        autoLearn: { type: boolean }
+      additionalProperties: true
+
+    ProviderInterceptionRule:
+      type: object
+      properties:
+        interceptSearch: { type: boolean }
+        interceptFetch: { type: boolean }
+        fetchBackend: { type: string, enum: [firecrawl, jina, tavily] }
+        fetchProxyUrl: { type: string, format: uri, maxLength: 2000 }
+      additionalProperties: true
+
+    ProviderInterceptionRules:
+      type: object
+      properties:
+        interceptSearch: { type: boolean }
+        interceptFetch: { type: boolean }
+        fetchBackend: { type: string, enum: [firecrawl, jina, tavily] }
+        fetchProxyUrl: { type: string, format: uri, maxLength: 2000 }
+        models:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ProviderInterceptionRule"
+      additionalProperties: false
+
+    ProviderInterceptionRulesUpdate:
+      type: object
+      properties:
+        interceptSearch: { type: boolean }
+        interceptFetch: { type: boolean }
+        fetchBackend: { type: string, enum: [firecrawl, jina, tavily] }
+        fetchProxyUrl: { type: string, format: uri, maxLength: 2000 }
+        models:
+          type: object
+          propertyNames: { minLength: 1, maxLength: 200 }
+          additionalProperties:
+            $ref: "#/components/schemas/ProviderInterceptionRule"
+      additionalProperties: true
+
+    ProviderCcAliasValue:
+      type: [string, "null"]
+      enum: ["on", "off", null]
+
+    ProviderCcAliasResponse:
+      type: object
+      required: [provider, models]
+      properties:
+        provider:
+          $ref: "#/components/schemas/ProviderCcAliasValue"
+        models:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [on, off]
+      additionalProperties: false
+
+    ProviderCcAliasUpdate:
+      oneOf:
+        - type: object
+          required: [scope, value]
+          properties:
+            scope: { type: string, const: provider }
+            value:
+              $ref: "#/components/schemas/ProviderCcAliasValue"
+          additionalProperties: true
+        - type: object
+          required: [scope, modelId, value]
+          properties:
+            scope: { type: string, const: model }
+            modelId: { type: string, minLength: 1, maxLength: 200 }
+            value:
+              $ref: "#/components/schemas/ProviderCcAliasValue"
+          additionalProperties: true
+
+    AntigravityMitmStatus:
+      type: object
+      required: [running, pid, dnsConfigured, certExists, hasCachedPassword, isWin, needsSudoPassword]
+      properties:
+        running: { type: boolean }
+        pid:
+          oneOf:
+            - type: integer
+            - type: string
+            - type: "null"
+        dnsConfigured: { type: boolean }
+        certExists: { type: boolean }
+        hasCachedPassword: { type: boolean }
+        isWin: { type: boolean }
+        needsSudoPassword: { type: boolean }
+      additionalProperties: false
+
+    AntigravityMitmStartRequest:
+      type: object
+      properties:
+        apiKey: { type: [string, "null"], minLength: 1 }
+        keyId: { type: [string, "null"], minLength: 1 }
+        sudoPassword: { type: string }
+      additionalProperties: true
+
+    AntigravityMitmStartResponse:
+      type: object
+      required: [success, running, pid]
+      properties:
+        success: { type: boolean, const: true }
+        running: { type: boolean }
+        pid:
+          oneOf:
+            - type: integer
+            - type: string
+            - type: "null"
+      additionalProperties: false
+
+    AntigravityMitmStopRequest:
+      type: object
+      properties:
+        sudoPassword: { type: string }
+      additionalProperties: true
+
+    AntigravityMitmStopResponse:
+      type: object
+      required: [success, running]
+      properties:
+        success: { type: boolean, const: true }
+        running: { type: boolean, const: false }
+      additionalProperties: false
+
+    AntigravityMitmAliasEntry:
+      type: object
+      properties:
+        model: { type: string }
+        reasoningEffort:
+          type: string
+          enum: [none, low, medium, high, xhigh, max, extra]
+          description: The route accepts canonical effort names case-insensitively and maps extra to xhigh.
+      additionalProperties: false
+
+    AntigravityMitmAliasStoredValue:
+      oneOf:
+        - type: string
+        - $ref: "#/components/schemas/AntigravityMitmAliasEntry"
+        - type: "null"
+
+    AntigravityMitmAliasInputValue:
+      oneOf:
+        - type: string
+        - type: object
+          properties:
+            model: { type: string }
+            reasoningEffort:
+              type: string
+              description: Invalid non-empty values are rejected by the route; an empty string clears the override.
+          additionalProperties: true
+
+    AntigravityMitmAliasMappings:
+      type: object
+      additionalProperties:
+        $ref: "#/components/schemas/AntigravityMitmAliasEntry"
+
+    AntigravityMitmAliasAllTools:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties:
+          $ref: "#/components/schemas/AntigravityMitmAliasStoredValue"
+
+    AntigravityMitmAliasGetResponse:
+      type: object
+      required: [aliases]
+      properties:
+        aliases:
+          oneOf:
+            - $ref: "#/components/schemas/AntigravityMitmAliasMappings"
+            - $ref: "#/components/schemas/AntigravityMitmAliasAllTools"
+      additionalProperties: false
+
+    AntigravityMitmAliasUpdateRequest:
+      type: object
+      required: [tool, mappings]
+      properties:
+        tool: { type: string, minLength: 1 }
+        mappings:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/AntigravityMitmAliasInputValue"
+      additionalProperties: true
+
+    AntigravityMitmAliasUpdateResponse:
+      type: object
+      required: [success, aliases]
+      properties:
+        success: { type: boolean, const: true }
+        aliases:
+          $ref: "#/components/schemas/AntigravityMitmAliasMappings"
+      additionalProperties: false
+
+    AuthLoginRequest:
+      type: object
+      required: [password]
+      properties:
+        password: { type: string, minLength: 1, maxLength: 200 }
+      additionalProperties: true
+
+    AuthLoginForbiddenResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        needsSetup: { type: boolean, const: true }
+      additionalProperties: false
+
+    AuthStatusResponse:
+      type: object
+      required: [authenticated]
+      properties:
+        authenticated: { type: boolean }
+      additionalProperties: false
+
+    DashboardCsrfResponse:
+      type: object
+      required: [token, expiresAt]
+      properties:
+        token: { type: [string, "null"] }
+        expiresAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+
+    DbBackupEntry:
+      type: object
+      required: [id, filename, createdAt, size, reason, connectionCount]
+      properties:
+        id: { type: string }
+        filename: { type: string }
+        createdAt: { type: string, format: date-time }
+        size: { type: integer, minimum: 0 }
+        reason: { type: string }
+        connectionCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    DbBackupListResponse:
+      type: object
+      required: [backups]
+      properties:
+        backups:
+          type: array
+          items:
+            $ref: "#/components/schemas/DbBackupEntry"
+      additionalProperties: false
+
+    DbBackupCreatedResponse:
+      type: object
+      required: [created, filename, size]
+      properties:
+        created: { type: boolean, const: true }
+        filename: { type: string }
+        size: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    DbBackupSkippedResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          const: No changes since last backup (throttled)
+          description: The route uses this fixed message for every null backup result, not only throttling.
+      additionalProperties: false
+
+    DbBackupPutResponse:
+      oneOf:
+        - $ref: "#/components/schemas/DbBackupCreatedResponse"
+        - $ref: "#/components/schemas/DbBackupSkippedResponse"
+
+    DbBackupRestoreRequest:
+      type: object
+      required: [backupId]
+      properties:
+        backupId: { type: string, minLength: 1 }
+      additionalProperties: true
+
+    DbBackupRestoreResponse:
+      type: object
+      required: [restored, backupId, connectionCount, nodeCount, comboCount, apiKeyCount]
+      properties:
+        restored: { type: boolean, const: true }
+        backupId: { type: string }
+        connectionCount: { type: integer, minimum: 0 }
+        nodeCount: { type: integer, minimum: 0 }
+        comboCount: { type: integer, minimum: 0 }
+        apiKeyCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    DbBackupCleanupRequest:
+      type: object
+      properties:
+        keepLatest: { type: integer, minimum: 1, maximum: 200 }
+        retentionDays: { type: integer, minimum: 0, maximum: 3650 }
+      additionalProperties: true
+
+    DbBackupRetentionResponse:
+      type: object
+      required: [saved, keepLatest, retentionDays]
+      properties:
+        saved: { type: boolean, const: true }
+        keepLatest: { type: integer, minimum: 1 }
+        retentionDays: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    DbBackupCleanupResponse:
+      type: object
+      required:
+        - cleaned
+        - keepLatest
+        - retentionDays
+        - deletedBackupFamilies
+        - deletedFiles
+        - keptBackupFamilies
+        - maxFiles
+      properties:
+        cleaned: { type: boolean, const: true }
+        keepLatest: { type: integer, minimum: 1 }
+        retentionDays: { type: integer, minimum: 0 }
+        deletedBackupFamilies: { type: integer, minimum: 0 }
+        deletedFiles: { type: integer, minimum: 0 }
+        keptBackupFamilies: { type: integer, minimum: 0 }
+        maxFiles: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    DbBackupExportAllError:
+      type: object
+      required: [error, details]
+      properties:
+        error: { type: string }
+        details: { type: string }
+      additionalProperties: false
+
+    DbBackupImportResponse:
+      type: object
+      required: [imported, filename, connectionCount, nodeCount, comboCount, apiKeyCount]
+      properties:
+        imported: { type: boolean, const: true }
+        filename: { type: string }
+        connectionCount: { type: integer, minimum: 0 }
+        nodeCount: { type: integer, minimum: 0 }
+        comboCount: { type: integer, minimum: 0 }
+        apiKeyCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    GrokAutoTopUpStatus:
+      type: object
+      required: [available]
+      properties:
+        available: { type: boolean }
+        enabled: { type: boolean }
+        thresholdMinorUnits: { type: integer, minimum: 0 }
+        amountMinorUnits: { type: integer, minimum: 0 }
+        maxMonthlyMinorUnits: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    GrokBillingStatus:
+      type: object
+      required: [currency, autoTopUp, additionalCreditsUrl]
+      properties:
+        currency: { type: string, const: USD }
+        extraCreditsMinorUnits: { type: integer, minimum: 0 }
+        autoTopUp:
+          $ref: "#/components/schemas/GrokAutoTopUpStatus"
+        additionalCreditsUrl:
+          type: string
+          const: "https://grok.com/build?_s=usage"
+      additionalProperties: false
+
+    KimiBillingStatus:
+      type: object
+      required: [currency, extraUsageStatus, additionalCreditsUrl]
+      properties:
+        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        extraCreditsMinorUnits: { type: integer, minimum: 0 }
+        monthlyUsedMinorUnits: { type: integer, minimum: 0 }
+        monthlyLimitEnabled: { type: boolean }
+        monthlyLimitMinorUnits: { type: integer, minimum: 0 }
+        extraUsageStatus: { type: string, enum: [enabled, disabled, frozen, unavailable] }
+        additionalCreditsUrl:
+          type: string
+          const: "https://www.kimi.com/membership/subscription?tab=quota&aff=omniroute"
+      additionalProperties: false
+
+    ProviderBillingStatus:
+      oneOf:
+        - $ref: "#/components/schemas/GrokBillingStatus"
+        - $ref: "#/components/schemas/KimiBillingStatus"
+
+    ProviderLimitsCacheEntry:
+      type: object
+      required: [quotas, plan, message, fetchedAt]
+      properties:
+        quotas:
+          type: [object, "null"]
+          additionalProperties: true
+        plan: {}
+        message: { type: [string, "null"] }
+        fetchedAt: { type: string }
+        source: { type: [string, "null"] }
+        bankedResetCredits: { type: number }
+        billing:
+          $ref: "#/components/schemas/ProviderBillingStatus"
+      additionalProperties: false
+
+    ProviderLimitsCacheResponse:
+      type: object
+      required: [caches, intervalMinutes, lastAutoSyncAt]
+      properties:
+        caches:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ProviderLimitsCacheEntry"
+        intervalMinutes: { type: integer }
+        lastAutoSyncAt: { type: [string, "null"] }
+      additionalProperties: false
+
+    ProviderLimitsSyncResponse:
+      type: object
+      required: [total, succeeded, failed, caches, errors, intervalMinutes, lastAutoSyncAt]
+      description: >-
+        `succeeded` counts entries whose cache value changed and was written by the sync. `failed`
+        is the total number of supported connections minus that count, so it can include unchanged
+        cached entries; the `errors` map contains actual per-connection fetch failures.
+      properties:
+        total: { type: integer, minimum: 0 }
+        succeeded: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        caches:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/ProviderLimitsCacheEntry"
+        errors:
+          type: object
+          additionalProperties: { type: string }
+        intervalMinutes: { type: integer }
+        lastAutoSyncAt: { type: [string, "null"] }
+      additionalProperties: false
+
+    ProviderWindowCostModelRow:
+      type: object
+      required: [model, provider, serviceTier, requests, totalTokens, costUsd]
+      properties:
+        model: { type: string }
+        provider: { type: string }
+        serviceTier: { type: string }
+        requests: { type: integer }
+        totalTokens: { type: integer }
+        costUsd: { type: number }
+      additionalProperties: false
+
+    ProviderWindowCostBreakdownRow:
+      type: object
+      required:
+        - apiKeyKey
+        - apiKeyId
+        - apiKeyName
+        - requests
+        - promptTokens
+        - completionTokens
+        - totalTokens
+        - costUsd
+        - limitUsd
+        - limitPeriod
+        - limitUsedPercent
+        - budgetResetAt
+        - lastUsed
+        - models
+      properties:
+        apiKeyKey: { type: string }
+        apiKeyId: { type: [string, "null"] }
+        apiKeyName: { type: string }
+        requests: { type: integer }
+        promptTokens: { type: integer }
+        completionTokens: { type: integer }
+        totalTokens: { type: integer }
+        costUsd: { type: number }
+        limitUsd: { type: [number, "null"] }
+        limitPeriod: { type: [string, "null"] }
+        limitUsedPercent: { type: [number, "null"] }
+        budgetResetAt: { type: [string, "null"] }
+        lastUsed: { type: [string, "null"] }
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderWindowCostModelRow"
+      additionalProperties: false
+
+    ProviderWindowCostBreakdown:
+      type: object
+      required:
+        - provider
+        - connectionId
+        - windowStartAt
+        - windowResetAt
+        - windowSource
+        - windowStartSource
+        - quotaName
+        - quotaUsedPercent
+        - quotaRemainingPercent
+        - totalCostUsd
+        - estimatedFullQuotaUsd
+        - rows
+      properties:
+        provider: { type: string }
+        connectionId: { type: [string, "null"] }
+        windowStartAt: { type: string, format: date-time }
+        windowResetAt: { type: [string, "null"] }
+        windowSource: { type: string, enum: [provider_weekly_reset, fallback_rolling_7d] }
+        windowStartSource:
+          type: string
+          enum:
+            - recorded_reset_event
+            - observed_snapshot_reset
+            - inferred_from_reset_at
+            - fallback_rolling_7d
+        quotaName: { type: [string, "null"] }
+        quotaUsedPercent: { type: [number, "null"] }
+        quotaRemainingPercent: { type: [number, "null"] }
+        totalCostUsd: { type: number }
+        estimatedFullQuotaUsd: { type: [number, "null"] }
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderWindowCostBreakdownRow"
+      additionalProperties: false
+
+    ProviderDailyUsageRow:
+      type: object
+      required: [date, provider, requests, promptTokens, completionTokens, totalTokens]
+      properties:
+        date: { type: string, format: date }
+        provider: { type: string }
+        requests: { type: integer }
+        promptTokens: { type: integer }
+        completionTokens: { type: integer }
+        totalTokens: { type: integer }
+      additionalProperties: false
+
+    RequestsByProviderDateResponse:
+      type: object
+      required: [rows, range, date]
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProviderDailyUsageRow"
+        range: { type: string }
+        date: { type: [string, "null"], format: date }
       additionalProperties: false
 
     ComboCreate:

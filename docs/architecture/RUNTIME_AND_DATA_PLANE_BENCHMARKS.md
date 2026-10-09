@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 239
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 310
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 209 operations have success
-response content schemas and 149 declare operation-level security. Of 1,004 operations with a
-non-`204` success status, 795 still lack an explicit success-body schema; 11 operations have no
+contract is still stronger on route coverage than schema completeness: 248 operations have success
+response content schemas and 180 declare operation-level security. Of 1,004 operations with a
+non-`204` success status, 756 still lack an explicit success-body schema; 11 operations have no
 declared `2xx` status, and 14 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -69,7 +69,15 @@ generation routes also describe native request/response formats. The provider-cl
 masks primary and rotating API keys and omits OAuth tokens. Subsequent usage-contract passes added
 typed schemas and query parameters for provider quota/utilization, combo health/forecast/autopilot/
 scoring/dashboard, and per-key token-limit CRUD, including its Zod-backed mutation body and
-validation errors. The spec has 239 component schemas. All 98 operations previously missing
+validation errors. This pass also types cached provider-limit sync results, provider quota-window
+costs, and per-provider daily usage rows. The latest settings pass adds accurate proxy, IP-filter,
+system-prompt, and thinking-budget request/response contracts, including configuration-dependent
+management authentication.
+This provider/CLI pass adds typed contracts for parameter filters, interception rules, Claude Code
+alias overrides, and Antigravity MITM start/stop plus alias read/write variants. It brings the spec
+The auth and database-backup pass types session/CSRF responses, backup
+restore and retention bodies, binary database exports, the actual gzip tar export format, and both
+multipart and raw-binary imports. Together these passes bring the spec to 310 component schemas. All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
 
@@ -1060,7 +1068,7 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 199 operations with success-response content; 805
+- Continue the OpenAPI handler audit beyond the 248 operations with success-response content; 756
   of 1,004 non-`204` success operations still lack explicit success-body schemas. The
   path/method/security-tier inventory is
   complete, but remaining response schemas and conditional auth behavior have not all been

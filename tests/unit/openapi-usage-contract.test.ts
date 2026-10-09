@@ -32,7 +32,17 @@ const spec = yaml.load(fs.readFileSync(path.join(process.cwd(), "docs/openapi.ya
     >
   >;
   components: {
-    schemas: Record<string, { properties?: Record<string, { format?: string; pattern?: string }> }>;
+    schemas: Record<
+      string,
+      {
+        description?: string;
+        oneOf?: Array<{ $ref?: string }>;
+        properties?: Record<
+          string,
+          { format?: string; pattern?: string; description?: string; $ref?: string }
+        >;
+      }
+    >;
   };
 };
 
@@ -143,5 +153,44 @@ test("combo autopilot, dashboard, and scoring contracts expose their typed resul
   assert.equal(
     responseSchema("/api/usage/combo-scoring-inspector", "get")?.$ref,
     "#/components/schemas/ComboScoringInspectorResponse"
+  );
+});
+
+test("provider limits and quota-window usage expose their source-defined response shapes", () => {
+  assert.equal(
+    responseSchema("/api/usage/provider-limits", "get")?.$ref,
+    "#/components/schemas/ProviderLimitsCacheResponse"
+  );
+  assert.equal(
+    responseSchema("/api/usage/provider-limits", "post")?.$ref,
+    "#/components/schemas/ProviderLimitsSyncResponse"
+  );
+  assert.match(
+    spec.components.schemas.ProviderLimitsSyncResponse.description ?? "",
+    /unchanged cached entries/
+  );
+
+  const windowCosts = spec.paths["/api/usage/provider-window-costs"]?.get;
+  assert.equal(
+    windowCosts?.parameters?.find((parameter) => parameter.name === "provider")?.required,
+    true
+  );
+  assert.equal(
+    responseSchema("/api/usage/provider-window-costs", "get")?.$ref,
+    "#/components/schemas/ProviderWindowCostBreakdown"
+  );
+
+  const dailyUsage = spec.paths["/api/usage/requests-by-provider-date"]?.get;
+  assert.equal(
+    dailyUsage?.parameters?.find((parameter) => parameter.name === "date")?.required ?? false,
+    false
+  );
+  assert.equal(
+    responseSchema("/api/usage/requests-by-provider-date", "get")?.$ref,
+    "#/components/schemas/RequestsByProviderDateResponse"
+  );
+  assert.deepEqual(
+    spec.components.schemas.ProviderBillingStatus.oneOf?.map((schema) => schema.$ref),
+    ["#/components/schemas/GrokBillingStatus", "#/components/schemas/KimiBillingStatus"]
   );
 });
