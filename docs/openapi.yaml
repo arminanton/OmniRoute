@@ -4481,40 +4481,55 @@ paths:
       tags: [Compression]
       summary: Get RTK compression settings
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Current RTK config
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RtkConfig" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiContextRtkConfig
       tags: [Compression]
       summary: Update RTK compression settings
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                enabled:
-                  type: boolean
-                intensity:
-                  type: string
-                  enum: [minimal, standard, aggressive]
-                customFiltersEnabled:
-                  type: boolean
-                trustProjectFilters:
-                  type: boolean
-                rawOutputRetention:
-                  type: string
-                  enum: [never, failures, always]
-                rawOutputMaxBytes:
-                  type: integer
+              $ref: "#/components/schemas/RtkConfigUpdate"
       responses:
         "200":
           description: Updated RTK config
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RtkConfig" }
+        "400":
+          description: Invalid JSON body or invalid RTK configuration.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/context/rtk/filters:
     get:
@@ -4522,10 +4537,21 @@ paths:
       tags: [Compression]
       summary: List RTK filters and load diagnostics
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: RTK filter catalog and diagnostics
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RtkFilterCatalogResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/context/rtk/import:
     post:
@@ -4533,30 +4559,37 @@ paths:
       tags: [Compression]
       summary: Validate or install an RTK TOML schema v1 filter file
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [action, content]
-              additionalProperties: false
-              properties:
-                action:
-                  type: string
-                  enum: [validate, install]
-                content:
-                  type: string
-                  maxLength: 1048576
-                overwrite:
-                  type: boolean
-                  description: Replace an existing global file and create a backup
+              $ref: "#/components/schemas/RtkFilterImportRequest"
       responses:
         "200":
           description: Filter metadata, inline-test outcomes, warnings, and installation status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RtkFilterImportResponse" }
         "400":
           description: Invalid TOML, schema, regular expression, inline test, or install request
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: RTK filter import failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/context/rtk/test:
     post:
@@ -4564,25 +4597,35 @@ paths:
       tags: [Compression]
       summary: Run RTK compression preview for text
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [text]
-              properties:
-                text:
-                  type: string
-                command:
-                  type: string
-                config:
-                  type: object
-                  additionalProperties: true
+              $ref: "#/components/schemas/RtkTextTestRequest"
       responses:
         "200":
           description: Detection and RTK compression result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RtkTextTestResponse" }
+        "400":
+          description: Invalid JSON body or RTK test request.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/context/rtk/raw-output/{id}:
     get:
@@ -4590,7 +4633,9 @@ paths:
       tags: [Compression]
       summary: Read retained redacted RTK raw output
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       parameters:
         - in: path
           name: id
@@ -4601,8 +4646,25 @@ paths:
       responses:
         "200":
           description: Raw output text
+          content:
+            text/plain:
+              schema: { type: string }
         "404":
           description: Raw output not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "400":
+          description: Raw output id is malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/settings/payload-rules:
     get:
@@ -13081,21 +13143,76 @@ paths:
   /api/context/rtk/discover:
     get:
       operationId: getApiContextRtkDiscover
-      tags:
-        - Context
+      tags: [Compression]
       summary: "GET context › rtk › discover"
+      description: >-
+        Scans opt-in retained RTK command-output samples and returns recurring line-template
+        candidates for operator review. It suggests patterns only; it does not install filters.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Sample-count limit. Positive values are floored and capped at 2,000; absent, invalid,
+            zero, or negative values use the default of 500.
+          schema: { type: string, default: "500", example: "500" }
       responses:
         "200":
-          description: OK
+          description: Number of scanned samples and ranked repeated-line candidates.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RtkDiscoverResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/context/rtk/learn:
     get:
       operationId: getApiContextRtkLearn
-      tags:
-        - Context
+      tags: [Compression]
       summary: "GET context › rtk › learn"
+      description: >-
+        Builds a reviewable RTK filter draft from retained samples for the requested command.
+        Samples for other commands are excluded; the generated draft is not installed automatically.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: command
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Sample-count limit. Positive values are floored and capped at 2,000; absent, invalid,
+            zero, or negative values use the default of 500.
+          schema: { type: string, default: "500", example: "500" }
       responses:
         "200":
-          description: OK
+          description: Matching sample count and a filter draft for operator review.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RtkLearnResponse" }
+        "400":
+          description: The required command query parameter is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/conversations:
     get:
       operationId: getApiConversations
@@ -25415,6 +25532,312 @@ components:
             $ref: "#/components/schemas/ApiErrorResponse"
 
   schemas:
+    RtkConfig:
+      type: object
+      description: >-
+        Fully normalized RTK settings returned by GET and PUT. Raw-output retention is opt-in;
+        stored outputs are redacted and bounded by the configured byte, count, and age limits.
+      required:
+        [
+          enabled,
+          intensity,
+          applyToToolResults,
+          applyToCodeBlocks,
+          applyToAssistantMessages,
+          enabledFilters,
+          disabledFilters,
+          maxLinesPerResult,
+          maxCharsPerResult,
+          deduplicateThreshold,
+          customFiltersEnabled,
+          trustProjectFilters,
+          rawOutputRetention,
+          rawOutputMaxBytes,
+          rawOutputMaxFiles,
+          rawOutputMaxAgeDays,
+          enableGrouping,
+          groupingThreshold,
+          stripCodeComments,
+          preserveDocstrings,
+          enableRenderers,
+        ]
+      properties:
+        enabled: { type: boolean }
+        intensity: { type: string, enum: [minimal, standard, aggressive] }
+        applyToToolResults: { type: boolean }
+        applyToCodeBlocks: { type: boolean }
+        applyToAssistantMessages: { type: boolean }
+        enabledFilters: { type: array, items: { type: string } }
+        disabledFilters: { type: array, items: { type: string } }
+        maxLinesPerResult: { type: integer, minimum: 0, maximum: 100000 }
+        maxCharsPerResult: { type: integer, minimum: 0, maximum: 1000000 }
+        deduplicateThreshold: { type: integer, minimum: 2, maximum: 100 }
+        customFiltersEnabled: { type: boolean }
+        trustProjectFilters: { type: boolean }
+        rawOutputRetention: { type: string, enum: [never, failures, always] }
+        rawOutputMaxBytes: { type: integer, minimum: 1024, maximum: 10000000 }
+        rawOutputMaxFiles: { type: integer, minimum: 1, maximum: 10000000 }
+        rawOutputMaxAgeDays: { type: integer, minimum: 1, maximum: 3650 }
+        enableGrouping: { type: boolean }
+        groupingThreshold: { type: integer, minimum: 2, maximum: 100 }
+        stripCodeComments: { type: boolean }
+        preserveDocstrings: { type: boolean }
+        enableRenderers: { type: boolean }
+      additionalProperties: false
+    RtkConfigUpdate:
+      type: object
+      description: >-
+        Partial update merged over the current RTK configuration. Unknown fields are rejected.
+        Numeric values are normalized to the documented bounded ranges before storage.
+      properties:
+        enabled: { type: boolean }
+        intensity: { type: string, enum: [minimal, standard, aggressive] }
+        applyToToolResults: { type: boolean }
+        applyToCodeBlocks: { type: boolean }
+        applyToAssistantMessages: { type: boolean }
+        enabledFilters: { type: array, items: { type: string } }
+        disabledFilters: { type: array, items: { type: string } }
+        maxLinesPerResult: { type: integer, minimum: 0, maximum: 100000 }
+        maxCharsPerResult: { type: integer, minimum: 0, maximum: 1000000 }
+        deduplicateThreshold: { type: integer, minimum: 2, maximum: 100 }
+        customFiltersEnabled: { type: boolean }
+        trustProjectFilters: { type: boolean }
+        rawOutputRetention: { type: string, enum: [never, failures, always] }
+        rawOutputMaxBytes: { type: integer, minimum: 1024, maximum: 10000000 }
+        rawOutputMaxFiles: { type: integer, minimum: 1, maximum: 10000000 }
+        rawOutputMaxAgeDays: { type: integer, minimum: 1, maximum: 3650 }
+        enableGrouping: { type: boolean }
+        groupingThreshold: { type: integer, minimum: 2, maximum: 100 }
+        stripCodeComments: { type: boolean }
+        preserveDocstrings: { type: boolean }
+        enableRenderers: { type: boolean }
+      additionalProperties: false
+    RtkFilterCategory:
+      type: string
+      enum: [git, test, build, shell, docker, package, infra, cloud, generic]
+    RtkFilterCatalogEntry:
+      type: object
+      required: [id, name, description, commandTypes, category, priority, source, sourceFormat]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        commandTypes: { type: array, items: { type: string } }
+        category: { $ref: "#/components/schemas/RtkFilterCategory" }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        source: { type: string, enum: [project, global, builtin] }
+        sourceFormat: { type: string, enum: [omniroute-json, rtk-toml-v1] }
+      additionalProperties: false
+    RtkFilterLoadDiagnostic:
+      type: object
+      required: [source, level, message]
+      properties:
+        source: { type: string, enum: [project, global, builtin] }
+        format: { type: string, enum: [omniroute-json, rtk-toml-v1] }
+        path:
+          type: string
+          description: Local filter-file path; visible only through the management route.
+        level: { type: string, enum: [warning, error] }
+        message: { type: string }
+      additionalProperties: false
+    RtkFilterCatalogResponse:
+      type: object
+      required: [filters, diagnostics]
+      properties:
+        filters:
+          type: array
+          items: { $ref: "#/components/schemas/RtkFilterCatalogEntry" }
+        diagnostics:
+          type: array
+          items: { $ref: "#/components/schemas/RtkFilterLoadDiagnostic" }
+      additionalProperties: false
+    RtkFilterImportRequest:
+      type: object
+      required: [action, content]
+      properties:
+        action: { type: string, enum: [validate, install] }
+        content:
+          type: string
+          minLength: 1
+          maxLength: 1048576
+          description: RTK TOML schema v1 content; capped at 1,048,576 characters by request validation.
+        overwrite:
+          type: boolean
+          description: Replace an existing global file and create a backup when action is install.
+      additionalProperties: false
+    RtkTomlFilterSummary:
+      type: object
+      required: [id, description, category, commandPatterns, testCount]
+      properties:
+        id: { type: string }
+        description: { type: string }
+        category: { $ref: "#/components/schemas/RtkFilterCategory" }
+        commandPatterns: { type: array, items: { type: string } }
+        testCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+    RtkTomlTestOutcome:
+      type: object
+      required: [filterId, testName, passed, actual, expected]
+      properties:
+        filterId: { type: string }
+        testName: { type: string }
+        passed: { type: boolean }
+        actual: { type: string }
+        expected: { type: string }
+      additionalProperties: false
+    RtkFilterImportResponse:
+      type: object
+      required: [schemaVersion, sha256, passed, filters, outcomes, filtersWithoutTests, warnings]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        passed: { type: boolean }
+        filters:
+          type: array
+          items: { $ref: "#/components/schemas/RtkTomlFilterSummary" }
+        outcomes:
+          type: array
+          items: { $ref: "#/components/schemas/RtkTomlTestOutcome" }
+        filtersWithoutTests: { type: array, items: { type: string } }
+        warnings: { type: array, items: { type: string } }
+        installedPath: { type: string }
+        backupCreated: { type: boolean }
+      additionalProperties: false
+    RtkCommandDetection:
+      type: object
+      required: [type, command, confidence, category, matchedPatterns]
+      properties:
+        type: { type: string }
+        command: { type: [string, "null"] }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        category: { $ref: "#/components/schemas/RtkFilterCategory" }
+        matchedPatterns: { type: array, items: { type: string } }
+      additionalProperties: false
+    RtkRawOutputPointer:
+      type: object
+      required: [id, path, bytes, sha256, redacted]
+      properties:
+        id: { type: string, pattern: "^[a-f0-9]{24}$" }
+        path:
+          type: string
+          description: Local retained-output path; included only when redacted output was persisted.
+        bytes: { type: integer, minimum: 0 }
+        sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+        redacted: { type: boolean, const: true }
+      additionalProperties: false
+    RtkTextTestRequest:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1 }
+        command: { type: string }
+        config: { $ref: "#/components/schemas/RtkConfigUpdate" }
+      additionalProperties: false
+    RtkTextTestResponse:
+      type: object
+      required:
+        [
+          detection,
+          text,
+          compressed,
+          originalTokens,
+          compressedTokens,
+          techniquesUsed,
+          rulesApplied,
+        ]
+      properties:
+        detection: { $ref: "#/components/schemas/RtkCommandDetection" }
+        text: { type: string }
+        compressed: { type: boolean }
+        originalTokens: { type: integer, minimum: 0 }
+        compressedTokens: { type: integer, minimum: 0 }
+        techniquesUsed: { type: array, items: { type: string } }
+        rulesApplied: { type: array, items: { type: string } }
+        rawOutputPointers:
+          type: array
+          items: { $ref: "#/components/schemas/RtkRawOutputPointer" }
+      additionalProperties: false
+    RtkNoiseCandidate:
+      type: object
+      required: [pattern, hits]
+      properties:
+        pattern: { type: string }
+        hits: { type: integer, minimum: 2 }
+      additionalProperties: false
+    RtkDiscoverResponse:
+      type: object
+      required: [sampleCount, candidates]
+      properties:
+        sampleCount: { type: integer, minimum: 0 }
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/RtkNoiseCandidate" }
+      additionalProperties: false
+    RtkSuggestedFilter:
+      type: object
+      required: [id, label, description, category, priority, match, rules, preserve, _meta]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        description: { type: string }
+        category: { type: string, const: generic }
+        priority: { type: integer, minimum: 0, maximum: 100 }
+        match:
+          type: object
+          required: [outputTypes, commands, patterns]
+          properties:
+            outputTypes: { type: array, items: { type: string } }
+            commands: { type: array, items: { type: string } }
+            patterns: { type: array, items: { type: string } }
+          additionalProperties: false
+        rules:
+          type: object
+          required:
+            [
+              stripAnsi,
+              dropPatterns,
+              collapsePatterns,
+              includePatterns,
+              deduplicate,
+              maxLines,
+              headLines,
+              tailLines,
+              onEmpty,
+            ]
+          properties:
+            stripAnsi: { type: boolean }
+            dropPatterns: { type: array, items: { type: string } }
+            collapsePatterns: { type: array, items: { type: string } }
+            includePatterns: { type: array, items: { type: string } }
+            deduplicate: { type: boolean }
+            maxLines: { type: integer, minimum: 0 }
+            headLines: { type: integer, minimum: 0 }
+            tailLines: { type: integer, minimum: 0 }
+            onEmpty: { type: string }
+          additionalProperties: false
+        preserve:
+          type: object
+          required: [errorPatterns, summaryPatterns]
+          properties:
+            errorPatterns: { type: array, items: { type: string } }
+            summaryPatterns: { type: array, items: { type: string } }
+          additionalProperties: false
+        _meta:
+          type: object
+          required: [learnedFromSamples, dropThreshold]
+          properties:
+            learnedFromSamples: { type: integer, minimum: 0 }
+            dropThreshold: { type: number, minimum: 0, maximum: 1 }
+          additionalProperties: false
+      additionalProperties: false
+    RtkLearnResponse:
+      type: object
+      required: [command, sampleCount, filter]
+      properties:
+        command: { type: string }
+        sampleCount: { type: integer, minimum: 0 }
+        filter: { $ref: "#/components/schemas/RtkSuggestedFilter" }
+      additionalProperties: false
     FreeProxyRecord:
       type: object
       required:

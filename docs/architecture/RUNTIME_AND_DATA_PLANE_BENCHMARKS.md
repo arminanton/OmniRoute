@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 586
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 604
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 419 operations have success
-response content schemas and 355 declare operation-level security. Of 1,003 operations with a
-non-`204` success status, 584 still lack an explicit success-body schema; 11 operations have no
+contract is still stronger on route coverage than schema completeness: 427 operations have success
+response content schemas and 357 declare operation-level security. Of 1,003 operations with a
+non-`204` success status, 576 still lack an explicit success-body schema; 11 operations have no
 declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -95,8 +95,11 @@ contracts. File bytes, batch errors/usage, quota usage extensions, and provider 
 open-ended where the implementation stores arbitrary JSON. Dynamic provider quota data also remains
 open-ended because adapters return different fields. The combo-management pass adds typed combo
 create/update/list/detail, strategy and model-step configuration, metrics, testing, auto-generation,
-builder options, duplicate-to-static, and reorder contracts. These slices bring the spec to 586
-component schemas, with 419 operations declaring success-body schemas and 355 operation-level
+builder options, duplicate-to-static, and reorder contracts. The RTK pass types normalized settings,
+partial updates, filter-catalog diagnostics, TOML validation/install results, text tests, retained
+raw-output text, recurring-noise candidates, and reviewable learned-filter drafts; it also documents
+the configuration-gated management auth on discover/learn. These slices bring the spec to 604
+component schemas, with 427 operations declaring success-body schemas and 357 operation-level
 security declarations.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
@@ -1210,8 +1213,8 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 419 operations with success-response content; 584
+- Continue the OpenAPI handler audit beyond the 427 operations with success-response content; 576
   of 1,003 non-`204` success operations still lack explicit success-body schemas. Eleven operations
   have no declared `2xx` status and 15 have only an intentional `204`. The path/method inventory
-  covers 705/705 routes and 355 operations now declare security alternatives; remaining response
+  covers 705/705 routes and 357 operations now declare security alternatives; remaining response
   schemas and conditional auth behavior have not all been source-verified.
