@@ -243,6 +243,16 @@ const nextConfig = {
     webpackMemoryOptimizations: true,
     // Run webpack in a separate Node worker, lowering main-process memory.
     webpackBuildWorker: true,
+    // Turbopack's default child-process plugin pool can start one Node process
+    // per visible CPU. The thread backend is documented by Next as lower-memory
+    // and lower-CPU; the Bun/Turbopack build candidate enables it explicitly.
+    // Leave the upstream default untouched unless the operator/build image opts in.
+    ...(process.env.OMNIROUTE_TURBOPACK_PLUGIN_RUNTIME_STRATEGY === "workerThreads" ||
+    process.env.OMNIROUTE_TURBOPACK_PLUGIN_RUNTIME_STRATEGY === "childProcesses"
+      ? {
+          turbopackPluginRuntimeStrategy: process.env.OMNIROUTE_TURBOPACK_PLUGIN_RUNTIME_STRATEGY,
+        }
+      : {}),
     // Next.js proxy (middleware) has a default 10MB body clone limit. File
     // uploads (OpenAI-compatible /v1/files) routinely exceed this. Match the
     // 512 MB server-side cap; tune via env if needed.

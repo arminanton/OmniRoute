@@ -48,6 +48,12 @@ COPY . .
 ARG OMNIROUTE_USE_TURBOPACK=1
 ENV OMNIROUTE_USE_TURBOPACK=${OMNIROUTE_USE_TURBOPACK}
 
+# Turbopack otherwise creates a child Node process pool for JS loaders. Next's
+# worker-thread backend is the lower-memory option; keep it overridable so the
+# benchmark can compare both strategies on the same dependency lock.
+ARG OMNIROUTE_TURBOPACK_PLUGIN_RUNTIME_STRATEGY=workerThreads
+ENV OMNIROUTE_TURBOPACK_PLUGIN_RUNTIME_STRATEGY=${OMNIROUTE_TURBOPACK_PLUGIN_RUNTIME_STRATEGY}
+
 ARG OMNIROUTE_BASE_PATH=""
 ENV OMNIROUTE_BASE_PATH=$OMNIROUTE_BASE_PATH
 
