@@ -10,6 +10,7 @@ const spec = yaml.load(fs.readFileSync(path.join(process.cwd(), "docs/openapi.ya
     Record<
       string,
       {
+        security?: Array<Record<string, string[]>>;
         parameters?: Array<{
           name: string;
           in: string;
@@ -24,7 +25,13 @@ const spec = yaml.load(fs.readFileSync(path.join(process.cwd(), "docs/openapi.ya
           {
             content?: Record<
               string,
-              { schema?: { $ref?: string; oneOf?: Array<{ $ref?: string }> } }
+              {
+                schema?: {
+                  $ref?: string;
+                  oneOf?: Array<{ $ref?: string }>;
+                  required?: string[];
+                };
+              }
             >;
           }
         >;
@@ -202,5 +209,40 @@ test("provider limits and quota-window usage expose their source-defined respons
   assert.deepEqual(
     spec.components.schemas.ProviderBillingStatus.oneOf?.map((schema) => schema.$ref),
     ["#/components/schemas/GrokBillingStatus", "#/components/schemas/KimiBillingStatus"]
+  );
+});
+
+test("cache health and model latency document their source-defined errors and auth", () => {
+  assert.equal(
+    responseSchema("/api/usage/cache-health", "get", "400")?.$ref,
+    "#/components/schemas/StringErrorResponse"
+  );
+  assert.equal(
+    responseSchema("/api/usage/cache-health", "get", "500")?.$ref,
+    "#/components/schemas/StringErrorResponse"
+  );
+
+  const modelLatency = spec.paths["/api/usage/model-latency-stats"]?.get;
+  assert.deepEqual(modelLatency?.security, [
+    { BearerAuth: [] },
+    { ManagementAnthropicApiKeyAuth: [] },
+    { ManagementGoogleApiKeyAuth: [] },
+    { ManagementSessionAuth: [] },
+    { LocalCliTokenAuth: [] },
+    { InternalServiceTokenAuth: [] },
+    {},
+  ]);
+  assert.deepEqual(responseSchema("/api/usage/model-latency-stats", "get")?.required, [
+    "entries",
+    "windowHours",
+    "generatedAt",
+  ]);
+  assert.equal(
+    responseSchema("/api/usage/model-latency-stats", "get", "400")?.$ref,
+    "#/components/schemas/ApiErrorResponse"
+  );
+  assert.equal(
+    responseSchema("/api/usage/model-latency-stats", "get", "500")?.$ref,
+    "#/components/schemas/ApiErrorResponse"
   );
 });

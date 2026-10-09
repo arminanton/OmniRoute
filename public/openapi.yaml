@@ -1383,16 +1383,14 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  deleted:
-                    type: integer
-                  checked:
-                    type: integer
+                $ref: "#/components/schemas/QdrantCleanupResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "503":
-          description: Qdrant unavailable (structured error, no stack trace)
+        "500":
+          description: Qdrant cleanup failed; the error message is sanitized.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/settings/qdrant/embedding-models:
     get:
       operationId: getApiSettingsQdrantEmbeddingModels
@@ -1409,11 +1407,12 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [models]
                 properties:
                   models:
                     type: array
                     items:
-                      type: string
+                      $ref: "#/components/schemas/QdrantEmbeddingModelOption"
         "401":
           $ref: "#/components/responses/Unauthorized"
   # ─── Proxy Endpoints ──────────────────────────────────────────
@@ -2687,30 +2686,103 @@ paths:
       operationId: getApiProviders
       tags: [Providers]
       summary: List provider connections
+      description: >-
+        In protected profiles, accepts a dashboard session, a `manage`/`admin` API key via Bearer,
+        Anthropic `x-api-key`, or Google `x-goog-api-key`, a loopback CLI token, or a trusted
+        loopback internal-service token. An `oma_live_` Access Token requires the `read` scope.
+        Unlocked standalone installs may permit anonymous access. This response is sensitive: when
+        API-key reveal is enabled, `apiKey` can contain raw keys; with anonymous access and reveal
+        enabled, any caller able to reach this route can retrieve them.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Provider connection list
+          description: Provider connection list; raw API keys may be returned when reveal is enabled.
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderConnectionListResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Provider connections could not be fetched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiProviders
       tags: [Providers]
       summary: Create provider connection
+      description: >-
+        Creates an API-key provider connection. API keys are required for providers that do not
+        support keyless access. In protected profiles, accepts a dashboard session, a `manage` or
+        `admin` API key via Bearer, Anthropic `x-api-key`, or Google `x-goog-api-key`, a loopback CLI
+        token, or a trusted loopback internal-service token. An `oma_live_` Access Token requires the
+        `write` scope. Unlocked standalone installs may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/ProviderConnectionCreate"
       responses:
         "201":
-          description: Created provider connection
+          description: Created provider connection; the response omits the raw API key.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderConnectionEnvelope"
+        "400":
+          description: Invalid provider connection data or credentials.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: A compatible provider node required for this connection was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "410":
+          description: The requested provider has been retired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "500":
+          description: Provider connection creation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiProviders
       tags: [Providers]
@@ -6528,6 +6600,16 @@ paths:
                     description: True when the window held more than 5000 rows and only the newest were summarized.
         "400":
           description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Cache health summary could not be built
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/usage/model-latency-stats:
     get:
@@ -6538,9 +6620,20 @@ paths:
         Aggregates `usage_history` rows into per-(provider, model) latency stats
         (avg/p50/p95/p99, std-dev, TTFT, tokens/sec) over a rolling window. Falls
         back from successful-only to all-sample rows when the successful count is
-        below `minSamples`.
+        below `minSamples`. This management route accepts a dashboard session,
+        Bearer management credentials, Anthropic or Google API-key headers, and
+        loopback CLI or trusted loopback internal-service credentials. `oma_live_`
+        access tokens require the `read` scope. When management authentication is
+        unlocked and no other auth policy requires a credential, anonymous access
+        is allowed.
       security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: windowHours
           in: query
@@ -6582,6 +6675,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [entries, windowHours, generatedAt]
                 properties:
                   entries:
                     type: array
@@ -6625,10 +6719,20 @@ paths:
                     format: date-time
         "400":
           description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Model latency statistics could not be built
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
 
   # ─── Pricing ───────────────────────────────────────────────────
 
@@ -17594,18 +17698,57 @@ paths:
       operationId: getApiContextCombos
       tags:
         - Context
-      summary: "GET context › combos"
+      summary: List compression combos
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Compression combos ordered for display.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextCompressionComboListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiContextCombos
       tags:
         - Context
-      summary: "POST context › combos"
+      summary: Create a compression combo
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContextCompressionComboCreateRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Created compression combo.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextCompressionComboRecord" }
+        "400":
+          description: Invalid JSON body or invalid compression combo fields.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/context/combos/{id}:
     parameters:
       - name: id
@@ -21928,9 +22071,48 @@ paths:
       tags:
         - Providers
       summary: "POST providers › command code › auth › callback"
+      description: >-
+        Receives a Command Code API key bound to the short-lived state created by the auth-start
+        operation. The API key is never returned. A missing Origin is accepted; when Origin is
+        present, production allows `https://commandcode.ai` and `https://staging.commandcode.ai`,
+        while non-production also allows `http://localhost:3000`. The callback request body is
+        limited to 10 KiB. The OPTIONS preflight allows POST and OPTIONS, reflects requested
+        headers, and only emits Access-Control-Allow-Origin for an allowed callback origin.
+        Responses are no-store and include CORS headers for allowed origins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommandCodeAuthCallbackRequest"
       responses:
         "200":
-          description: OK
+          description: API key accepted for the pending auth state; the raw key is not returned.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandCodeAuthCallbackResponse"
+        "400":
+          description: Invalid JSON, callback payload, or missing/expired auth state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandCodeAuthCallbackErrorResponse"
+        "403":
+          description: The supplied Origin is not allowed by the callback origin policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandCodeAuthCallbackErrorResponse"
+        "413":
+          description: Callback request body exceeds 10 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandCodeAuthCallbackErrorResponse"
   /api/providers/command-code/auth/start:
     post:
       operationId: postApiProvidersCommandCodeAuthStart
@@ -24551,29 +24733,131 @@ paths:
       operationId: getApiSettingsMitm
       tags:
         - Settings
-      summary: "GET settings › mitm"
+      summary: Get local MITM proxy status or download its certificate
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: download
+          in: query
+          required: false
+          description: Set to `cert` to download the MITM root certificate.
+          schema: { type: string, enum: [cert] }
       responses:
         "200":
-          description: OK
+          description: MITM status, or the certificate when `download=cert`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MitmStatusResponse" }
+            application/x-pem-file:
+              schema: { type: string }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or request outside the loopback boundary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Requested certificate does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: MITM status or certificate could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MitmRouteErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsMitm
       tags:
         - Settings
-      summary: "POST settings › mitm"
+      summary: Regenerate the MITM proxy certificate
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MitmRegenerateCertificateRequest" }
       responses:
         "200":
-          description: OK
+          description: Regenerated certificate and current MITM status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MitmStatusResponse" }
+        "400":
+          description: Invalid regeneration request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MitmBadRequestResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or request outside the loopback boundary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Stop the MITM proxy before regenerating its certificate.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: MITM certificate could not be regenerated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MitmRouteErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsMitm
       tags:
         - Settings
-      summary: "PUT settings › mitm"
+      summary: Update or enable the local MITM proxy
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: false
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MitmUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated MITM configuration and current status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MitmStatusResponse" }
+        "400":
+          description: Invalid port, missing credentials, or invalid request fields.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MitmBadRequestResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or request outside the loopback boundary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: MITM configuration could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MitmRouteErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/model-aliases:
     delete:
       operationId: deleteApiSettingsModelAliases
@@ -35683,6 +35967,50 @@ components:
               ultraSlmPrewarm,
               exclusions,
             ]
+    ContextCompressionComboRecord:
+      type: object
+      required:
+        [id, name, description, pipeline, languagePacks, outputMode, outputModeIntensity, isDefault, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        pipeline:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionEngineStep" }
+        languagePacks: { type: array, items: { type: string } }
+        outputMode: { type: boolean }
+        outputModeIntensity: { type: string }
+        isDefault: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      additionalProperties: false
+    ContextCompressionComboListResponse:
+      type: object
+      required: [combos]
+      properties:
+        combos:
+          type: array
+          items: { $ref: "#/components/schemas/ContextCompressionComboRecord" }
+      additionalProperties: false
+    ContextCompressionComboCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+        pipeline:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/CompressionEngineStep" }
+        languagePacks:
+          type: array
+          items: { type: string, minLength: 1 }
+        outputMode: { type: boolean }
+        outputModeIntensity: { type: string, enum: [lite, full, ultra] }
+        isDefault: { type: boolean }
+      additionalProperties: false
     McpAccessibilityConfig:
       type: object
       description: Fully populated MCP tool-output trimming config after server-side floors are applied.
@@ -38925,6 +39253,105 @@ components:
           type: string
           nullable: true
           description: Sanitized error message (no stack traces)
+    QdrantEmbeddingModelOption:
+      type: object
+      required: [value, label]
+      properties:
+        value: { type: string }
+        label: { type: string }
+        dimensions: { type: integer, minimum: 1 }
+      additionalProperties: false
+    QdrantCleanupResponse:
+      type: object
+      required: [ok, deletedCount, retentionDays]
+      properties:
+        ok: { type: boolean }
+        deletedCount: { type: integer, minimum: 0 }
+        retentionDays: { type: integer, minimum: 0 }
+      additionalProperties: false
+    MitmTargetRoute:
+      type: object
+      required: [id, name, targetHost, targetPort, localPort, endpoints, enabled]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        targetHost: { type: string }
+        targetPort: { type: integer, minimum: 1, maximum: 65535 }
+        localPort: { type: integer, minimum: 1, maximum: 65535 }
+        endpoints: { type: array, items: { type: string } }
+        enabled: { type: boolean }
+      additionalProperties: false
+    MitmStats:
+      type: object
+      required:
+        [startedAt, totalRequests, interceptedRequests, activeConnections, lastRequestAt, lastInterceptAt]
+      properties:
+        startedAt: { type: [string, "null"], format: date-time }
+        totalRequests: { type: integer, minimum: 0 }
+        interceptedRequests: { type: integer, minimum: 0 }
+        activeConnections: { type: integer, minimum: 0 }
+        lastRequestAt: { type: [string, "null"], format: date-time }
+        lastInterceptAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+    MitmStatusResponse:
+      type: object
+      required: [running, pid, dnsConfigured, certExists, hasCachedPassword, port, targets, stats]
+      properties:
+        running: { type: boolean }
+        pid: { type: [integer, "null"] }
+        dnsConfigured: { type: boolean }
+        certExists: { type: boolean }
+        hasCachedPassword: { type: boolean }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        targets:
+          type: array
+          items: { $ref: "#/components/schemas/MitmTargetRoute" }
+        stats: { $ref: "#/components/schemas/MitmStats" }
+      additionalProperties: false
+    MitmUpdateRequest:
+      type: object
+      description: >-
+        Partial MITM configuration update. `apiKey` and `sudoPassword` are secret inputs and are
+        never returned by the status response. The port is currently restricted to 443.
+      x-sensitive: true
+      properties:
+        enabled: { type: boolean }
+        apiKey:
+          type: string
+          writeOnly: true
+          x-sensitive: true
+        keyId: { type: string }
+        sudoPassword:
+          type: string
+          writeOnly: true
+          x-sensitive: true
+        port: { type: integer, minimum: 1, maximum: 65535 }
+      additionalProperties: true
+    MitmRegenerateCertificateRequest:
+      type: object
+      properties:
+        action: { type: string, enum: [regenerate-cert] }
+      additionalProperties: true
+    MitmBadRequestResponse:
+      oneOf:
+        - $ref: "#/components/schemas/StringErrorResponse"
+        - type: object
+          required: [formErrors, fieldErrors]
+          properties:
+            formErrors: { type: array, items: { type: string } }
+            fieldErrors:
+              type: object
+              additionalProperties: { type: array, items: { type: string } }
+          additionalProperties: false
+    MitmRouteErrorResponse:
+      type: object
+      required: [error, reason]
+      properties:
+        error: { type: string }
+        reason:
+          type: string
+          enum: [not_installed, permission_denied, already_running, timeout, network, unknown]
+      additionalProperties: false
     AgentSkill:
       type: object
       description: >-
@@ -42882,6 +43309,7 @@ components:
           type: boolean
         apiKey:
           type: [string, "null"]
+          x-sensitive: true
           description: >-
             Masked by default; raw values are returned only when API-key reveal is enabled.
         defaultModel:
@@ -42961,6 +43389,10 @@ components:
 
     ProviderConnectionListResponse:
       type: object
+      description: >-
+        Sensitive provider-connection listing. The `apiKey` field contains raw keys when API-key
+        reveal is enabled and masked values otherwise.
+      x-sensitive: true
       required: [connections, total]
       properties:
         connections:
@@ -43054,29 +43486,93 @@ components:
           $ref: "#/components/schemas/ProviderConnection"
       additionalProperties: false
 
+    CommandCodeAuthCallbackRequest:
+      type: object
+      description: Sensitive callback payload carrying a Command Code API key and short-lived auth state.
+      x-sensitive: true
+      required: [apiKey, state]
+      properties:
+        apiKey:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          writeOnly: true
+          x-sensitive: true
+          description: Command Code API key; accepted only by the callback and never returned.
+        state:
+          type: string
+          minLength: 32
+          maxLength: 512
+          x-sensitive: true
+          description: Short-lived state returned by the Command Code auth-start operation.
+        userId: { type: string, maxLength: 256 }
+        userName: { type: string, maxLength: 256 }
+        keyName: { type: string, maxLength: 256 }
+
+    CommandCodeAuthCallbackResponse:
+      type: object
+      required: [success, ok, status, expiresAt, metadata]
+      properties:
+        success: { type: boolean, const: true }
+        ok: { type: boolean, const: true }
+        status: { type: string, const: received }
+        expiresAt: { type: string, format: date-time }
+        metadata:
+          type: object
+          properties:
+            userId: { type: string, maxLength: 256 }
+            userName: { type: string, maxLength: 256 }
+            keyName: { type: string, maxLength: 256 }
+          additionalProperties: false
+      additionalProperties: false
+
+    CommandCodeAuthCallbackErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
+
     ProviderConnectionCreate:
       type: object
-      required: [provider, url]
+      x-sensitive: true
+      description: >-
+        `provider` and `name` are required. `apiKey` is required for providers that do not support
+        keyless access. Provider-specific credential data may have additional provider-specific
+        validation rules. Unknown request fields are ignored by the validator.
+      required: [provider, name]
       properties:
         provider:
           type: string
+          minLength: 1
+          maxLength: 100
           example: openai
         name:
           type: string
-        url:
-          type: string
+          minLength: 1
+          maxLength: 200
+        priority: { type: integer, minimum: 1, maximum: 100 }
+        globalPriority: { type: [integer, "null"], minimum: 1, maximum: 100 }
+        defaultModel: { type: [string, "null"], maxLength: 200 }
+        testStatus: { type: string, maxLength: 50 }
         apiKey:
           type: string
-        isActive:
-          type: boolean
-          default: true
-        maxConcurrent:
-          type: integer
-          nullable: true
-          minimum: 0
+          maxLength: 100000
+          writeOnly: true
+          x-sensitive: true
+          description: >-
+            Required for providers that do not support keyless access. The create response omits the
+            key; later management reads mask it unless API-key reveal is enabled.
+        providerSpecificData:
+          type: object
+          writeOnly: true
+          x-sensitive: true
+          additionalProperties: true
 
     ProviderConnectionUpdate:
       type: object
+      x-sensitive: true
       minProperties: 1
       description: >-
         Partial update accepted by PUT and PATCH /api/providers/{id}. Omitted properties are
@@ -43097,9 +43593,9 @@ components:
         apiKey:
           type: string
           maxLength: 100000
-          description: >-
-            Optional replacement credential. The response never includes this value unless
-            API-key reveal is enabled.
+          writeOnly: true
+          x-sensitive: true
+          description: Optional replacement credential; update responses never include this value.
         testStatus: { type: string, maxLength: 50 }
         lastError: { type: [string, "null"] }
         lastErrorAt: { type: [string, "null"] }
@@ -43148,6 +43644,8 @@ components:
         quotaVisible: { type: boolean }
         providerSpecificData:
           type: object
+          writeOnly: true
+          x-sensitive: true
           additionalProperties: true
       additionalProperties: true
 
