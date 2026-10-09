@@ -1179,8 +1179,18 @@ no-auth catalog filter with the optional model ID shape.
   overlay; Maria completed and smoke-tested the Node/Webpack standalone path, but no OCI image was
   assembled. Preserve `memory.peak`, `memory.events`, wall time, and output size for each next build;
   the full Turbopack runs on Maria did not complete under 14 GiB.
-- Find out whether OmniRoute's TPROXY addon has an official prebuilt arm64 package. The successful
-  Maria Webpack build compiled `transparent.node` from source after Python/make/g++ were installed.
+- TPROXY is a small first-party C Node-API addon in `src/mitm/tproxy/native/transparent.c`, not an
+  installed package dependency. The upstream TPROXY notes say its `build/` and `prebuilds/`
+  directories are ignored and the binary is built from source; the loader can probe a prebuild, but
+  `buildTproxyNative()` currently always resolves the locked `node-gyp` and rebuilds on Linux. The C
+  source uses `node_api.h`, and Node-API is ABI-stable across Node versions, but each OS/architecture
+  still needs a matching binary ([upstream TPROXY notes](https://github.com/diegosouzapw/OmniRoute/wiki/MITM-Tproxy-Decrypt),
+  [Node-API ABI guarantee](https://nodejs.org/download/release/v22.23.0/docs/api/n-api.html)). A
+  future CI matrix can produce checksum-stamped `linux-x64` and `linux-arm64` prebuild artifacts,
+  pin their N-API level, validate the ELF architecture and exports, then let the image builder copy
+  the artifact and skip the C toolchain when present. This can remove a small native compile step;
+  it is not expected to resolve the multi-minute Next/Turbopack build peak, and no isolated TPROXY
+  build-time measurement has established its total contribution.
 - Keep the passing `typecheck:core` target in the validation set. If a broader whole-app typecheck is
   required, first build a smaller project graph or use a builder with an explicit memory budget; the
   earlier broad no-emit attempts exhausted 4 GiB and 3 GiB without reporting source diagnostics.
