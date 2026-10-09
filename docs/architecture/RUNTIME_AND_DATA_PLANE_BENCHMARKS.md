@@ -770,7 +770,10 @@ RSS near 1.7 GiB, and no cgroup memory cap or PSI pressure. The heap guard now u
 `process.constrainedMemory()` ceiling (cgroup when available, host RAM otherwise), while Node
 continues using its V8 heap limit. Node and Bun unit checks pass, and the matched 100-session Bun
 reruns after this change produced no local pressure 503s. This does not yet verify the policy with
-Bun inside the production 4 GiB container limit.
+Bun inside the production 4 GiB app-container limit. A separate isolated
+`systemd-run --user --scope --property=MemoryMax=4G` probe on the verified Bun binary returned
+`process.constrainedMemory() = 4,294,967,296` while `os.totalmem()` remained 25,137,336,320 bytes;
+that confirms Bun exposes the temporary cgroup limit to the new threshold calculation.
 
 At the existing 2 GiB private-overflow aggregate budget, the Bun run persisted 390 of 402 trace
 references; the unpersisted traces coincided with the aggregate storage budget. A temporary 4 GiB
