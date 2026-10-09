@@ -7439,47 +7439,194 @@ paths:
     get:
       operationId: getApiCliToolsCodexProfiles
       tags: [CLI Tools]
-      summary: Get Codex profiles
+      summary: List saved Codex profiles
+      description: >-
+        Lists profile metadata only; it does not return stored `auth.json` or `config.toml` contents.
+        `authLabel` may expose an account email, auth mode, or an eight-character API-key prefix,
+        so treat the response as sensitive. The path is always-protected, including when
+        `requireLogin=false`. A `read` Access Token, a `manage` or `admin` API key, a dashboard
+        session, or trusted loopback CLI/internal-service credentials are accepted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       x-always-protected: true
       responses:
         "200":
-          description: Codex profile list
+          description: Saved profile summaries; corrupt profile files are skipped.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexProfileListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: The profile directory could not be listed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCliToolsCodexProfiles
       tags: [CLI Tools]
-      summary: Create Codex profile
+      summary: Save current Codex configuration as a profile
+      description: >-
+        Reads the server's current Codex `config.toml` and `auth.json` and saves their contents in
+        a JSON profile under the server's data directory; the response contains only profile
+        metadata. The operation
+        requires CLI-config writes to be enabled. It is always-protected, including when
+        `requireLogin=false`. A `write` Access Token, a `manage` or `admin` API key, a dashboard
+        session, or trusted loopback CLI/internal-service credentials are accepted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       x-always-protected: true
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/CodexProfileNameRequest"
       responses:
         "200":
-          description: Profile created
+          description: Profile saved; response does not include the saved credential/configuration contents.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexProfileSaveResponse" }
+        "400":
+          description: Invalid JSON/profile name or no Codex configuration files are present.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Authentication was rejected or CLI-config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Codex config paths could not be resolved or the profile could not be saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiCliToolsCodexProfiles
       tags: [CLI Tools]
-      summary: Update Codex profile
+      summary: Activate a saved Codex profile
+      description: >-
+        Creates a backup, then restores the profile's stored `config.toml` and `auth.json` into the
+        server's Codex CLI configuration paths. The result reports which files were restored and
+        never returns their contents. The operation requires CLI-config writes to be enabled and is
+        always-protected, including when `requireLogin=false`. A `write` Access Token, a `manage` or
+        `admin` API key, a dashboard session, or trusted loopback CLI/internal-service credentials
+        are accepted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       x-always-protected: true
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/CodexProfileIdRequest"
       responses:
         "200":
-          description: Profile updated
+          description: Profile activated and file-restore status returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexProfileActivateResponse" }
+        "400":
+          description: Malformed JSON or profile id validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Authentication was rejected or CLI-config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "404":
+          description: Saved profile does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Codex config paths, backup, or file restore failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiCliToolsCodexProfiles
       tags: [CLI Tools]
       summary: Delete Codex profile
+      description: >-
+        Removes the saved profile file, which may contain the original `auth.json` and `config.toml`.
+        This operation is always-protected, including when `requireLogin=false`. A `write` Access
+        Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
+        CLI/internal-service credentials are accepted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       x-always-protected: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CodexProfileIdRequest" }
       responses:
         "200":
-          description: Profile deleted
+          description: Profile file deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexProfileDeleteResponse" }
+        "400":
+          description: Malformed JSON or profile id validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Saved profile does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Profile deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/cli-tools/codex-settings:
     get:
@@ -35177,6 +35324,79 @@ components:
             At most 2,048 response characters plus a truncation ellipsis; private targets use a
             redaction marker and failed reads may return an empty string.
         error: { type: [string, "null"], x-sensitive: true }
+      additionalProperties: false
+    CodexProfileSummary:
+      type: object
+      required: [id, name, authLabel, createdAt, hasConfig, hasAuth]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        authLabel:
+          type: string
+          x-sensitive: true
+          description: May contain an account email, auth mode, or a short API-key prefix.
+        createdAt: { type: string, format: date-time }
+        hasConfig: { type: boolean }
+        hasAuth: { type: boolean }
+      additionalProperties: false
+    CodexProfileListResponse:
+      type: object
+      x-sensitive: true
+      required: [profiles]
+      properties:
+        profiles:
+          type: array
+          items: { $ref: "#/components/schemas/CodexProfileSummary" }
+      additionalProperties: false
+    CodexProfileNameRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          pattern: "\\S"
+          description: Trimmed before validation and persistence; no maximum length is set by the route.
+      description: Unknown top-level fields are accepted by Zod and stripped.
+      additionalProperties: true
+    CodexProfileIdRequest:
+      type: object
+      required: [profileId]
+      properties:
+        profileId:
+          type: string
+          minLength: 1
+          pattern: "^(?!\\.{1,2}$)[A-Za-z0-9._-]+$"
+          description: >-
+            Trimmed profile slug. Slash, path traversal, and the `.` / `..` segments are rejected.
+      description: Unknown top-level fields are accepted by Zod and stripped.
+      additionalProperties: true
+    CodexProfileSaveResponse:
+      type: object
+      required: [success, message, profileId]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        profileId:
+          type: string
+          description: Lowercase slug generated from the profile name.
+      additionalProperties: false
+    CodexProfileActivateResponse:
+      type: object
+      required: [success, message, profileId, restoredConfig, restoredAuth]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        profileId: { type: string }
+        restoredConfig: { type: boolean }
+        restoredAuth: { type: boolean }
+      additionalProperties: false
+    CodexProfileDeleteResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
       additionalProperties: false
     V1AccountKeyLimits:
       type: object
