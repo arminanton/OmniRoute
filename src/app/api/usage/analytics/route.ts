@@ -27,11 +27,26 @@ import { buildByProviderRows } from "@/lib/usage/providerDisplayNames";
 import { isFlatRateProvider } from "@/lib/usage/flatRateProviders";
 import { toNumber } from "@/shared/utils/numeric";
 
+const SUPPORTED_USAGE_ANALYTICS_RANGES = new Set([
+  "1h",
+  "1d",
+  "7d",
+  "30d",
+  "90d",
+  "180d",
+  "365d",
+  "ytd",
+  "all",
+]);
+
 function getRangeStartIso(range: string): string | null {
   const end = new Date();
   const start = new Date(end);
 
   switch (range) {
+    case "1h":
+      start.setTime(start.getTime() - 60 * 60 * 1000);
+      break;
     case "1d":
       start.setDate(start.getDate() - 1);
       break;
@@ -354,6 +369,18 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const range = searchParams.get("range") || "30d";
+    if (!SUPPORTED_USAGE_ANALYTICS_RANGES.has(range)) {
+      return NextResponse.json(
+        {
+          error: {
+            message: "Unsupported usage analytics range",
+            type: "invalid_request_error",
+            code: "invalid_range",
+          },
+        },
+        { status: 400 }
+      );
+    }
     const startDate = searchParams.get("startDate") || undefined;
     const endDate = searchParams.get("endDate") || undefined;
     const apiKeyIdsParam = searchParams.get("apiKeyIds") || "";

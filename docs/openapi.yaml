@@ -6010,9 +6010,10 @@ paths:
       parameters:
         - name: range
           in: query
+          description: Unsupported values return 400; `all` is the explicit unbounded-history option.
           schema:
             type: string
-            enum: [1d, 7d, 30d, 90d, 180d, 365d, ytd, all]
+            enum: [1h, 1d, 7d, 30d, 90d, 180d, 365d, ytd, all]
             default: 30d
         - name: startDate
           in: query
@@ -6041,6 +6042,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UsageAnalyticsResponse"
+        "400":
+          description: Unsupported range value.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
         "500":
           description: Analytics query failed
           content:

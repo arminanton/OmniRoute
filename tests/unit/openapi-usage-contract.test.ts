@@ -52,6 +52,16 @@ function responseSchema(pathTemplate: string, method: string, status = "200") {
 }
 
 test("usage analytics contracts document their source-defined query and response shapes", () => {
+  const analytics = spec.paths["/api/usage/analytics"]?.get;
+  assert.deepEqual(
+    analytics?.parameters?.find((parameter) => parameter.name === "range")?.schema?.enum,
+    ["1h", "1d", "7d", "30d", "90d", "180d", "365d", "ytd", "all"]
+  );
+  assert.equal(
+    responseSchema("/api/usage/analytics", "get", "400")?.$ref,
+    "#/components/schemas/ApiErrorResponse"
+  );
+
   const utilization = spec.paths["/api/usage/utilization"]?.get;
   assert.deepEqual(
     utilization?.parameters?.find((parameter) => parameter.name === "range")?.schema?.enum,

@@ -424,6 +424,19 @@ test("GET /api/usage/analytics filters by range parameter", async () => {
   assert.equal(body.range, "1d");
 });
 
+test("GET /api/usage/analytics rejects unsupported ranges instead of querying all history", async () => {
+  await seedAnalyticsData();
+
+  const response = await analyticsRoute.GET(
+    makeRequest("http://localhost/api/usage/analytics?range=60d")
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error.code, "invalid_range");
+  assert.equal(body.summary, undefined);
+});
+
 test("GET /api/usage/analytics includes byProvider array with cost data", async () => {
   await seedAnalyticsData();
 
@@ -702,7 +715,7 @@ test("GET /api/usage/analytics does not throw Unknown named parameter with apiKe
   }
 
   const response = await analyticsRoute.GET(
-    makeRequest(`http://localhost/api/usage/analytics?range=60d&apiKeyId=${apiKey.id}`)
+    makeRequest(`http://localhost/api/usage/analytics?range=90d&apiKeyId=${apiKey.id}`)
   );
   const body = await response.json();
 
