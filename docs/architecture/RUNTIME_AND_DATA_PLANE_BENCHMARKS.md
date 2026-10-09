@@ -32,10 +32,10 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 539 operations have success
-response content schemas and 453 declare operation-level security. Of 996 operations with a
-non-`204` success status, 457 have no explicit response content; two are intentional bodyless `HEAD`
-probes, leaving 455 non-`HEAD` operations whose successful response shape remains undocumented.
+contract is still stronger on route coverage than schema completeness: 544 operations have success
+response content schemas and 458 declare operation-level security. Of 996 operations with a
+non-`204` success status, 452 have no explicit response content; two are intentional bodyless `HEAD`
+probes, leaving 450 non-`HEAD` operations whose successful response shape remains undocumented.
 Eighteen operations have no declared `2xx` status, and 15 return only an intentional `204`. This
 pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
@@ -160,7 +160,7 @@ the actual `201` create response. Model-alias settings now describe built-in/cus
 replace/add/remove bodies, persistence, and the self-healing GET behavior. The history-cleanup pass
 documents destructive scope, period choices, row/artifact counts, and each endpoint's distinct error
 behavior; its handlers are tested only against isolated temporary databases. The current spec
-inventory is 868 schemas, 539 success-body operations, and 453 security declarations; 457 non-`204`
+inventory is 877 schemas, 544 success-body operations, and 458 security declarations; 452 non-`204`
 success operations have no explicit response content, including two intentional bodyless `HEAD`
 probes. The
 versioned read-contract pass now describes the public combo projection, auto-combo candidate state,
@@ -172,6 +172,10 @@ bounded indexing status, validation failures, and that disconnecting never delet
 The latest versioned inference pass adds provider-native issue-report, music/video generation,
 search-analytics, web-fetch, and Video Bridge drill-down contracts. It also corrects the API catch-all
 from placeholder 200s to the JSON 404 response actually returned by the handler.
+The provider-node management pass types list pagination, preset-aware create, update/delete
+envelopes, node fields, and outbound validation results and errors. Every non-HEAD inference success
+under `/api/v1/` and `/api/v1beta/` now has a response schema; the two model-catalog HEAD probes are
+intentionally bodyless.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -1506,9 +1510,9 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 539 operations with success-response content; 457
+- Continue the OpenAPI handler audit beyond the 544 operations with success-response content; 452
   of 996 non-`204` success operations still lack explicit success-body schemas, including the two
-  intentional bodyless `HEAD` probes (455 non-HEAD shapes remain). Eighteen operations have no
+  intentional bodyless `HEAD` probes (450 non-HEAD shapes remain). Eighteen operations have no
   declared `2xx` status and 15 have only an intentional `204`. The path/method inventory covers
-  705/705 routes and 453 operations declare security alternatives; remaining response schemas and
+  705/705 routes and 458 operations declare security alternatives; remaining response schemas and
   conditional auth behavior have not all been source-verified.

@@ -3491,45 +3491,246 @@ paths:
       operationId: getApiProviderNodes
       tags: [Provider Nodes]
       summary: List provider nodes
+      description: Returns provider-node rows, total count, and whether Claude Code-compatible nodes are enabled.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of rows, up to 200; zero means no limit.
+          schema: { type: integer, minimum: 0, maximum: 200 }
       responses:
         "200":
-          description: Provider node list
+          description: Paged provider-node rows and feature-flag state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderNodeListResponse"
+        "400":
+          description: Invalid pagination query.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "500":
+          description: Provider-node listing failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiProviderNodes
       tags: [Provider Nodes]
       summary: Create provider node
+      description: >-
+        Creates an OpenAI-compatible or Anthropic-compatible provider node. The VibeProxy
+        preset supplies name, prefix, and API type; otherwise name/prefix are required and
+        OpenAI-compatible nodes require `apiType`. `customHeaders` and provider-specific
+        paths are optional. Authentication follows the management-route policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderNodeCreateRequest"
       responses:
         "201":
-          description: Created node
+          description: Provider node created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderNodeEnvelope"
+        "400":
+          description: Invalid JSON, node fields, prefix, or base URL.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "403":
+          description: Compatible-provider feature is disabled, runtime policy denied the node, or management scope is missing.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: Provider-node creation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/provider-nodes/{id}:
     put:
       operationId: putApiProviderNodesById
       tags: [Provider Nodes]
       summary: Update provider node
+      description: Updates a provider node and propagates its connection-facing settings.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderNodeUpdateRequest"
       responses:
         "200":
-          description: Updated node
+          description: Updated provider node.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderNodeEnvelope"
+        "400":
+          description: Invalid JSON, node fields, prefix, API type, or base URL.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Provider node not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Provider-node update failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiProviderNodesById
       tags: [Provider Nodes]
-      summary: Delete provider node
+      summary: Delete provider node and associated connections
+      description: Also removes model aliases for the deleted provider-node ID.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
-          description: Node deleted
+          description: Provider node deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderNodeDeleteResponse"
+        "404":
+          description: Provider node not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Provider-node deletion failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/provider-nodes/validate:
     post:
       operationId: postApiProviderNodesValidate
       tags: [Provider Nodes]
       summary: Validate a provider node
+      description: >-
+        Probes a provider URL using the selected compatibility mode and API type.
+        This management operation may make an outbound request to the supplied URL;
+        Claude Code-compatible validation can also report warnings and the probe method.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateProviderNodeRequest"
       responses:
         "200":
-          description: Validation result
+          description: Provider validation result; invalid credentials are reported in the body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderNodeValidationResponse"
+        "400":
+          description: Invalid JSON, request fields, or provider URL.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential, disabled compatibility mode, or runtime-policy denial.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        default:
+          description: Provider probe, outbound-network, or upstream error.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
 
   /api/provider-models:
     get:
@@ -24648,7 +24849,10 @@ paths:
                   - $ref: "#/components/schemas/ApiErrorResponse"
                   - $ref: "#/components/schemas/ValidationErrorResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Authentication required or API key invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/management/proxies:
     delete:
       operationId: deleteApiV1ManagementProxies
@@ -25165,7 +25369,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ModelListResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Invalid API key or authentication required by the catalog policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
     post:
@@ -25203,7 +25410,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Invalid API key or authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
           description: API key policy or prompt-injection policy rejected the request.
           content:
@@ -25827,7 +26037,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/SearchAnalyticsResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Authentication required or API key invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
           description: API key endpoint restrictions rejected the analytics request.
           content:
@@ -25907,7 +26120,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: API key authentication is required and the key must be valid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
           description: Remote Video Bridge drill-down access is disabled or the API key is restricted.
           content:
@@ -25967,7 +26183,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: API key authentication is required and the key must be valid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
           description: Remote Video Bridge drill-down access is disabled or the API key is restricted.
           content:
@@ -25999,7 +26218,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ModelListResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Invalid API key or authentication required by the catalog policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
     post:
@@ -26038,7 +26260,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Invalid API key or authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
           description: API key policy or prompt-injection policy rejected the request.
           content:
@@ -27758,7 +27983,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: API key authentication is required and the key must be valid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "429":
           $ref: "#/components/responses/RateLimited"
         default:
@@ -32946,6 +33174,191 @@ components:
         page: { type: integer, minimum: 0 }
         variant: { type: string, enum: [preview, standard, detail] }
       additionalProperties: false
+
+    ProviderNode:
+      type: object
+      required: [id, type, name]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [openai-compatible, anthropic-compatible] }
+        name: { type: string }
+        prefix: { type: [string, "null"] }
+        apiType:
+          type: [string, "null"]
+          enum:
+            [
+              chat,
+              responses,
+              embeddings,
+              audio-transcriptions,
+              audio-speech,
+              images-generations,
+              null,
+            ]
+        baseUrl: { type: [string, "null"] }
+        chatPath: { type: [string, "null"] }
+        modelsPath: { type: [string, "null"] }
+        iconUrl: { type: [string, "null"] }
+        customHeaders:
+          oneOf:
+            - $ref: "#/components/schemas/ProviderNodeCustomHeaders"
+            - type: "null"
+        dailyQuotaResetTimezone: { type: [string, "null"] }
+        dailyQuotaResetHour: { type: [integer, "null"], minimum: 0, maximum: 23 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      additionalProperties: true
+
+    ProviderNodeCustomHeaders:
+      type: object
+      description: At most 16 custom upstream headers; names and values are validated by route policy.
+      maxProperties: 16
+      propertyNames: { type: string, minLength: 1, maxLength: 128 }
+      additionalProperties: { type: string, maxLength: 4096 }
+
+    ProviderNodeListResponse:
+      type: object
+      required: [nodes, total, ccCompatibleProviderEnabled]
+      properties:
+        nodes:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderNode" }
+        total: { type: integer, minimum: 0 }
+        ccCompatibleProviderEnabled: { type: boolean }
+      additionalProperties: false
+
+    ProviderNodeEnvelope:
+      type: object
+      required: [node]
+      properties:
+        node: { $ref: "#/components/schemas/ProviderNode" }
+      additionalProperties: false
+
+    ProviderNodeDeleteResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+      additionalProperties: false
+
+    ProviderNodeCreateRequest:
+      type: object
+      description: >-
+        Without `preset`, name and prefix are required. OpenAI-compatible nodes also require
+        `apiType`; the `vibeproxy-openai` preset supplies name, prefix, and API type but still
+        requires a base URL. Base URLs are checked by the provider URL safety policy.
+      properties:
+        name: { type: string }
+        prefix: { type: string }
+        apiType:
+          type: string
+          enum:
+            [chat, responses, embeddings, audio-transcriptions, audio-speech, images-generations]
+        baseUrl: { type: string, minLength: 1 }
+        type: { type: string, enum: [openai-compatible, anthropic-compatible] }
+        compatMode: { type: string, enum: [cc] }
+        preset: { type: string, enum: [vibeproxy-openai] }
+        chatPath:
+          oneOf:
+            - type: string
+              pattern: "^/"
+              maxLength: 500
+            - type: string
+              const: ""
+        modelsPath:
+          oneOf:
+            - type: string
+              pattern: "^/"
+              maxLength: 500
+            - type: string
+              const: ""
+        iconUrl:
+          type: string
+          description: Optional http(s) or base64 data:image URL.
+        customHeaders: { $ref: "#/components/schemas/ProviderNodeCustomHeaders" }
+        dailyQuotaResetTimezone: { type: string, description: IANA timezone identifier. }
+        dailyQuotaResetHour: { type: [integer, "null"], minimum: 0, maximum: 23 }
+      additionalProperties: true
+
+    ProviderNodeUpdateRequest:
+      type: object
+      required: [name, prefix, baseUrl]
+      properties:
+        name: { type: string, minLength: 1 }
+        prefix: { type: string, minLength: 1 }
+        apiType:
+          type: string
+          enum:
+            [chat, responses, embeddings, audio-transcriptions, audio-speech, images-generations]
+        baseUrl: { type: string, minLength: 1 }
+        chatPath:
+          oneOf:
+            - type: string
+              pattern: "^/"
+              maxLength: 500
+            - type: string
+              const: ""
+        modelsPath:
+          oneOf:
+            - type: string
+              pattern: "^/"
+              maxLength: 500
+            - type: string
+              const: ""
+        iconUrl:
+          type: string
+          description: Optional http(s) or base64 data:image URL; empty value clears the icon.
+        customHeaders: { $ref: "#/components/schemas/ProviderNodeCustomHeaders" }
+        dailyQuotaResetTimezone: { type: string, description: IANA timezone identifier. }
+        dailyQuotaResetHour: { type: [integer, "null"], minimum: 0, maximum: 23 }
+      additionalProperties: true
+
+    ValidateProviderNodeRequest:
+      type: object
+      required: [baseUrl]
+      properties:
+        baseUrl: { type: string, minLength: 1 }
+        apiKey: { type: string }
+        type: { type: string, enum: [openai-compatible, anthropic-compatible] }
+        compatMode: { type: string, enum: [cc] }
+        apiType:
+          type: string
+          enum:
+            [
+              chat,
+              responses,
+              embeddings,
+              rerank,
+              audio-transcriptions,
+              audio-speech,
+              images-generations,
+            ]
+        chatPath:
+          oneOf:
+            - type: string
+              pattern: "^/"
+              maxLength: 500
+            - type: string
+              const: ""
+        modelsPath:
+          oneOf:
+            - type: string
+              pattern: "^/"
+              maxLength: 500
+            - type: string
+              const: ""
+        modelId: { type: string, maxLength: 200 }
+      additionalProperties: true
+
+    ProviderNodeValidationResponse:
+      type: object
+      required: [valid]
+      properties:
+        valid: { type: boolean }
+        error: { type: [string, "null"] }
+        warning: { type: [string, "null"] }
+        method: { type: [string, "null"] }
+      additionalProperties: true
 
     ApiErrorResponse:
       type: object
