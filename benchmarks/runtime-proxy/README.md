@@ -139,6 +139,32 @@ eligible account with capacity, and its waiter wake-up is not FIFO. It does not 
 database-backed account selection, model/API-key filters, provider/global caps, distributed leases,
 provider quotas, or adaptive/shared admission.
 
+### Credential-free TypeScript policy-context adapter
+
+`src/policy_context.rs` defines a benchmark-only JSON contract (`schema_version: 1`) for a
+short-lived TypeScript routing snapshot. It carries only an opaque candidate handle and explicit
+eligibility facts; serde rejects missing or unknown fields and unsupported versions. It never
+accepts credentials, raw API-key/session identifiers, provider-specific data, or prompt content.
+Rust fails closed on a denied API-key decision, disabled/unusable connection, candidate model
+restriction, active cooldown, unknown/blocked/exhausted quota state, expired context, or full
+account cap. Context TTL is capped at 30 seconds; JSON input is limited to 1 MiB and 4,096
+candidates. An affinity hint contains only a candidate handle, cannot outlive its parent context,
+and is retained only while that candidate remains eligible and the hint is unexpired.
+
+TypeScript remains authoritative for key authentication/revocation and key-level endpoint,
+schedule, model, and quota rules; the connection allowlist; active/terminal account state; provider
+quota interpretation and thresholds; cooldown/model-lock classification; model inventory and
+connection-specific restrictions; cache refresh/invalidation and staleness policy; routing
+strategy, combo/forced-connection semantics, and session-affinity creation/expiry. The Rust adapter
+only validates the explicit projection and candidate capacity. This is a contract/parity probe,
+not a production authorization or routing implementation. The JSON has no signature or MAC;
+only consume it over a trusted in-process/IPC boundary after TypeScript policy evaluation, never
+as an unauthenticated network request. Focused tests run with:
+
+```bash
+cargo test --offline --manifest-path benchmarks/runtime-proxy/Cargo.toml --lib policy_context::tests
+```
+
 ### Synthetic multi-level admission contention
 
 Run the independent atomic global/provider/account gate model with:
