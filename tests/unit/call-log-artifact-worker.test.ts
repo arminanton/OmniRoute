@@ -256,6 +256,135 @@ test("preparation reservation counts exact shared stage bodies once", () => {
   );
 });
 
+test("high-context Antigravity stage bodies use exact shared and aggregate reservations", () => {
+  const contextBytes = 700_000;
+  const messages = Array.from({ length: 5 }, (_, index) => ({
+    role: "user",
+    // 525,000 bytes encode to exactly 700,000 base64url characters.
+    content: Buffer.alloc(525_000, 65 + index).toString("base64url"),
+  }));
+  assert.ok(messages.every((message) => message.content.length === contextBytes));
+
+  const clientBody = {
+    model: "antigravity/gemini-2.5-flash",
+    stream: true,
+    messages,
+    tools: [
+      {
+        type: "function",
+        function: {
+          name: "lookup",
+          parameters: {
+            type: "object",
+            properties: { session: { type: "string" } },
+            required: ["session"],
+          },
+        },
+      },
+    ],
+  };
+  const stage = (body: unknown) => ({
+    timestamp: "2026-10-09T12:00:00.000Z",
+    url: "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent",
+    body,
+  });
+  const payload = (bodies: [unknown, unknown, unknown]) => ({
+    requestBody: null,
+    responseBody: null,
+    error: null,
+    pipeline: {
+      clientRawRequest: stage(bodies[0]),
+      openaiRequest: stage(bodies[1]),
+      providerRequest: stage(bodies[2]),
+    },
+  });
+  const sharedPayload = payload([clientBody, clientBody, clientBody]);
+
+  // Mirror the exact reference projection made by compactArtifactForFootprint:
+  // one canonical body plus two bounded stage references.
+  const compactedSharedPayload = {
+    ...sharedPayload,
+    pipeline: {
+      clientRawRequest: stage(clientBody),
+      openaiRequest: {
+        ...stage(undefined),
+        bodyRef: "pipeline.clientRawRequest.body",
+      },
+      providerRequest: {
+        ...stage(undefined),
+        bodyRef: "pipeline.clientRawRequest.body",
+      },
+    },
+  };
+  const sharedBaseEstimate = estimateCallLogArtifactFootprint(compactedSharedPayload);
+  assert.equal(sharedBaseEstimate.reason, undefined);
+  const expectedSharedReservation = sharedBaseEstimate.estimatedBytes * 2 + 64 * 1024;
+
+  const before = getCallLogArtifactWriterSnapshot();
+  const sharedReservation = reserveCallLogArtifactPreparation(sharedPayload);
+  assert.ok(sharedReservation);
+  assert.equal(sharedReservation.estimatedBytes, expectedSharedReservation);
+  assert.ok(sharedReservation.estimatedBytes > 64 * 1024 * 1024);
+  assert.ok(sharedReservation.estimatedBytes < before.artifactFootprintLimitBytes);
+  assert.equal(
+    getCallLogArtifactWriterSnapshot().reservedArtifactBytes,
+    before.reservedArtifactBytes + expectedSharedReservation
+  );
+
+  try {
+    assert.ok(
+      before.reservedArtifactBytes + expectedSharedReservation <= before.artifactFootprintLimitBytes
+    );
+    assert.ok(
+      before.reservedArtifactBytes + expectedSharedReservation * 2 >
+        before.artifactFootprintLimitBytes,
+      "two high-context reservations must exceed the process-wide cap"
+    );
+    assert.equal(
+      reserveCallLogArtifactPreparation(sharedPayload),
+      null,
+      "a concurrent second request must fail open at aggregate admission"
+    );
+
+    const distinctPayload = payload([
+      clientBody,
+      structuredClone(clientBody),
+      structuredClone(clientBody),
+    ]);
+    const distinctBaseEstimate = estimateCallLogArtifactFootprint(distinctPayload);
+    assert.equal(distinctBaseEstimate.reason, undefined);
+    const expectedDistinctReservation = distinctBaseEstimate.estimatedBytes * 2 + 64 * 1024;
+    assert.ok(
+      expectedDistinctReservation > before.artifactFootprintLimitBytes,
+      "three distinct stage bodies must exceed the single-artifact cap"
+    );
+    assert.equal(
+      reserveCallLogArtifactPreparation(distinctPayload),
+      null,
+      "distinct client/OpenAI/provider copies must be refused before cloning"
+    );
+  } finally {
+    releaseCallLogArtifactPreparation(sharedReservation);
+  }
+
+  assert.equal(
+    getCallLogArtifactWriterSnapshot().reservedArtifactBytes,
+    before.reservedArtifactBytes,
+    "release must restore the exact pre-test reservation total"
+  );
+
+  const retried = reserveCallLogArtifactPreparation(sharedPayload);
+  try {
+    assert.ok(retried, "the same high-context request must reserve after release");
+  } finally {
+    releaseCallLogArtifactPreparation(retried);
+  }
+  assert.equal(
+    getCallLogArtifactWriterSnapshot().reservedArtifactBytes,
+    before.reservedArtifactBytes
+  );
+});
+
 test("writer health snapshot tracks bounded reservations and exposes no artifact data", async () => {
   const before = getCallLogArtifactWriterSnapshot();
   const reservation = reserveCallLogArtifactPreparation({

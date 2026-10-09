@@ -648,6 +648,26 @@ async function waitForMockStats(mockUrl) {
   return response.json();
 }
 
+async function readCallLogWriterHealth(baseUrl, managementApiKey) {
+  try {
+    const response = await harnessFetch(`${baseUrl}/api/monitoring/health`, {
+      headers: { authorization: `Bearer ${managementApiKey}` },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) return { unavailable: true, status: response.status };
+    const body = await response.json();
+    const snapshot = body?.callLogArtifacts;
+    return snapshot && typeof snapshot === "object"
+      ? snapshot
+      : { unavailable: true, reason: "callLogArtifacts_not_present" };
+  } catch (error) {
+    return {
+      unavailable: true,
+      reason: error instanceof Error ? error.message.slice(0, 200) : "health_request_failed",
+    };
+  }
+}
+
 async function waitForMockSession(mockUrl, sessionId, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -968,6 +988,11 @@ async function seedDatabase(dataDir, env, mockUrl, captureMode) {
   }
   console.error("[standalone-antigravity-e2e] seed_stage=api_keys");
   const apiKey = await apiKeys.createApiKey("standalone-antigravity-e2e", "synthetic-e2e-machine");
+  const managementApiKey = await apiKeys.createApiKey(
+    "standalone-antigravity-e2e-health",
+    "synthetic-e2e-management",
+    ["manage"]
+  );
   const cancelApiKey = await apiKeys.createApiKey(
     "standalone-antigravity-cancel-e2e",
     "synthetic-cancel-machine"
@@ -987,7 +1012,7 @@ async function seedDatabase(dataDir, env, mockUrl, captureMode) {
   assert.match(mockUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
   core.closeDbInstance({ checkpointMode: null });
   console.error("[standalone-antigravity-e2e] seed_stage=complete");
-  return { apiKey, cancelApiKey };
+  return { apiKey, cancelApiKey, managementApiKey };
 }
 
 async function main() {
@@ -1352,6 +1377,10 @@ async function main() {
     );
     assert.equal(postCancelStats.providerResponsesActive, 0);
     assert.deepEqual(postCancelStats.errors, []);
+    const callLogWriterHealth = await readCallLogWriterHealth(baseUrl, keys.managementApiKey.key);
+    console.error(
+      `[standalone-antigravity-e2e] call_log_artifact_writer=${JSON.stringify(callLogWriterHealth)}`
+    );
     if (appStopReason) throw new Error(appStopReason);
 
     let artifactResult = { rows: 0, artifacts: 0, traces: 0 };
