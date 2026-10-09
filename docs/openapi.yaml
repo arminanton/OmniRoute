@@ -67,7 +67,13 @@ tags:
   - name: Combos
     description: Routing combo management
   - name: Settings
-    description: Application settings
+    description: >-
+      Application settings. `/api/settings/export-json` and `/api/settings/import-json` are
+      always-protected credential-bearing backup operations. They require an authenticated
+      management identity even when `requireLogin=false`; that profile may additionally accept
+      a valid scoped `oma_live_` token or loopback CLI token through the central route policy.
+      When login is required or locked management is active, these legacy handlers additionally
+      call `isAuthenticated()`, which accepts a dashboard session or a management-scoped API key.
   - name: Compression
     description: Prompt compression, RTK filters, Caveman rules, and compression combos
   - name: Usage
@@ -9494,6 +9500,7 @@ paths:
       security:
         - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - BearerAuth: []
         - LocalCliTokenAuth: []
       responses:
         "200":
@@ -9529,6 +9536,7 @@ paths:
       security:
         - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - BearerAuth: []
         - LocalCliTokenAuth: []
       responses:
         "200":
@@ -9565,6 +9573,7 @@ paths:
       security:
         - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - BearerAuth: []
         - LocalCliTokenAuth: []
       requestBody:
         required: true
@@ -9617,6 +9626,7 @@ paths:
       security:
         - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - BearerAuth: []
         - LocalCliTokenAuth: []
       requestBody:
         required: false
@@ -9662,6 +9672,7 @@ paths:
       security:
         - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - BearerAuth: []
         - LocalCliTokenAuth: []
       requestBody:
         required: false
@@ -15735,6 +15746,7 @@ paths:
       security:
         - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - BearerAuth: []
         - LocalCliTokenAuth: []
       responses:
         "200":
@@ -15791,6 +15803,7 @@ paths:
       security:
         - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - BearerAuth: []
         - LocalCliTokenAuth: []
       responses:
         "200":
@@ -15842,6 +15855,7 @@ paths:
       security:
         - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - BearerAuth: []
         - LocalCliTokenAuth: []
       parameters:
         - name: filename
@@ -21253,10 +21267,58 @@ paths:
       tags:
         - Settings
       summary: "GET settings › export json"
+      description: >-
+        Downloads a legacy JSON backup. This operation is always-protected: a credential is
+        required even when `requireLogin=false`. With login enabled or locked management active,
+        the handler's legacy `isAuthenticated()` check accepts a dashboard session or a
+        management-scoped API key. In an unlocked `requireLogin=false` profile, the handler check
+        is skipped after the central policy has authenticated the caller; that policy may also
+        accept a valid scoped `oma_live_` token or loopback CLI token. The export contains stored
+        provider credentials and raw API keys and must be handled as secret material. The
+        `settings` object omits `password` and `requireLogin`. History collections are omitted
+        unless `includeHistory=true` is supplied.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+        - LocalCliTokenAuth: []
       x-always-protected: true
+      parameters:
+        - name: includeHistory
+          in: query
+          required: false
+          description: Include usage, domain-cost, and domain-budget history only when set to true.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
-          description: OK
+          description: Downloadable JSON backup containing settings, connections, nodes, combos and API keys.
+          x-sensitive: true
+          headers:
+            Content-Disposition:
+              description: Attachment filename for the generated legacy backup.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingsJsonExportResponse" }
+        "401":
+          description: Authentication is required or the handler rejected the supplied credential.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Export failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/favicon:
     get:
       operationId: getApiSettingsFavicon
@@ -21693,10 +21755,76 @@ paths:
       tags:
         - Settings
       summary: "POST settings › import json"
+      description: >-
+        Imports a legacy JSON backup, replacing imported settings, provider connections, provider
+        nodes, combos, API keys and optional history data. This operation is always-protected: a
+        credential is required even when `requireLogin=false`. With login enabled or locked
+        management active, the handler's legacy `isAuthenticated()` check accepts a dashboard
+        session or a management-scoped API key. In an unlocked `requireLogin=false` profile, the
+        handler check is skipped after the central policy has authenticated the caller; that policy
+        may also accept a valid scoped `oma_live_` token or loopback CLI token. Locked runtime
+        policy rejects this whole-backup import before reading the request body or modifying data.
+        `settings.password` and `settings.requireLogin` are discarded before migration. Treat the
+        request body as sensitive because it may contain raw credentials and API keys.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+        - LocalCliTokenAuth: []
       x-always-protected: true
+      requestBody:
+        required: true
+        x-sensitive: true
+        description: >-
+          Legacy JSON backup supplied as raw application/json or as multipart/form-data with a
+          `file` field. The upload is not size-limited by this handler; callers should bound files.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SettingsJsonImportRequest" }
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Legacy JSON backup file.
+              additionalProperties: false
       responses:
         "200":
-          description: OK
+          description: Backup data was imported and counts of migrated records are returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingsJsonImportResponse" }
+        "400":
+          description: The file or raw body is missing, empty, or not valid JSON.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication is required or the handler rejected the supplied credential.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "403":
+          description: Management credential rejected the request or locked runtime policy disallows whole-backup import.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Import failed during migration or post-import refresh.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/lkgp-cache:
     delete:
       operationId: deleteApiSettingsLkgpCache
@@ -30605,6 +30733,139 @@ components:
           type: object
           description: Translated request body; it is not sent by the preview operation.
           additionalProperties: true
+      additionalProperties: true
+    SettingsJsonExportResponse:
+      type: object
+      description: >-
+        Legacy JSON backup. Provider connection rows and API-key rows can contain decryptable
+        upstream credentials and raw OmniRoute API keys; handle the complete document as secret
+        material. `settings.password` and `settings.requireLogin` are omitted. The three history
+        arrays are present only when the exact query value `includeHistory=true` is supplied.
+      x-sensitive: true
+      required: [settings, providerConnections, providerNodes, combos, apiKeys, _meta]
+      properties:
+        settings:
+          type: object
+          description: Settings excluding the management password and requireLogin flag.
+          additionalProperties: true
+        providerConnections:
+          type: array
+          description: Provider account records, including stored provider credentials.
+          x-sensitive: true
+          items: { type: object, additionalProperties: true }
+        providerNodes:
+          type: array
+          items: { type: object, additionalProperties: true }
+        combos:
+          type: array
+          items: { type: object, additionalProperties: true }
+        apiKeys:
+          type: array
+          description: Stored API-key records, including their raw key values.
+          x-sensitive: true
+          items: { type: object, additionalProperties: true }
+        _meta:
+          type: object
+          required: [exportedAt, version, includesHistory]
+          properties:
+            exportedAt: { type: string, format: date-time }
+            version: { type: string, const: omniroute-v3-legacy-export }
+            includesHistory: { type: boolean }
+          additionalProperties: true
+        usageHistory:
+          type: array
+          description: Present only when includeHistory=true.
+          items: { type: object, additionalProperties: true }
+        domainCostHistory:
+          type: array
+          description: Present only when includeHistory=true.
+          items: { type: object, additionalProperties: true }
+        domainBudgets:
+          type: array
+          description: Present only when includeHistory=true.
+          items: { type: object, additionalProperties: true }
+      additionalProperties: true
+    SettingsJsonImportRequest:
+      type: object
+      description: >-
+        Loose legacy backup object. The importer migrates recognized fields and ignores unsupported
+        top-level fields. `settings.password` and `settings.requireLogin` are stripped before any
+        settings are written. This payload may contain raw provider credentials and API keys.
+      x-sensitive: true
+      properties:
+        settings:
+          type: object
+          description: Legacy settings; password and requireLogin are ignored during import.
+          additionalProperties: true
+        providerConnections:
+          type: array
+          x-sensitive: true
+          items: { type: object, additionalProperties: true }
+        providerNodes:
+          type: array
+          items: { type: object, additionalProperties: true }
+        combos:
+          type: array
+          items: { type: object, additionalProperties: true }
+        apiKeys:
+          type: array
+          description: May contain raw API-key values.
+          x-sensitive: true
+          items: { type: object, additionalProperties: true }
+        modelAliases:
+          type: object
+          additionalProperties: true
+        mitmAlias:
+          type: object
+          additionalProperties: true
+        pricing:
+          type: object
+          additionalProperties: true
+        customModels:
+          type: object
+          additionalProperties: true
+        proxyConfig:
+          type: object
+          properties:
+            global: {}
+            providers: {}
+            combos: {}
+            keys: {}
+          additionalProperties: true
+        usageHistory:
+          type: array
+          items: { type: object, additionalProperties: true }
+        domainCostHistory:
+          type: array
+          items: { type: object, additionalProperties: true }
+        domainBudgets:
+          type: array
+          items: { type: object, additionalProperties: true }
+      additionalProperties: true
+    SettingsJsonImportResponse:
+      type: object
+      required:
+        [
+          success,
+          message,
+          connections,
+          nodes,
+          combos,
+          apiKeys,
+          usageHistory,
+          domainCostHistory,
+          domainBudgets,
+        ]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Legacy JSON database imported successfully }
+        connections: { type: integer, minimum: 0 }
+        nodes: { type: integer, minimum: 0 }
+        combos: { type: integer, minimum: 0 }
+        apiKeys: { type: integer, minimum: 0 }
+        usageHistory: { type: integer, minimum: 0 }
+        domainCostHistory: { type: integer, minimum: 0 }
+        domainBudgets: { type: integer, minimum: 0 }
       additionalProperties: true
     RtkConfig:
       type: object

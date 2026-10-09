@@ -117,7 +117,7 @@ test("database backup CRUD models restore, optional retention bodies, and result
   assert.match(route?.post?.responses?.["400"]?.description ?? "", /malformed backup ID/i);
 });
 
-test("backup security reflects legacy isAuthenticated behavior without claiming oma tokens", () => {
+test("backup security reflects legacy handler behavior and unlocked access-token policy", () => {
   const operations = [
     ["/api/db-backups", "get"],
     ["/api/db-backups", "put"],
@@ -137,9 +137,9 @@ test("backup security reflects legacy isAuthenticated behavior without claiming 
     );
     assert.ok(operation?.security?.some((requirement) => "ManagementSessionAuth" in requirement));
     assert.ok(operation?.security?.some((requirement) => "LocalCliTokenAuth" in requirement));
-    assert.equal(
+    assert.ok(
       operation?.security?.some((requirement) => "BearerAuth" in requirement),
-      false
+      `${method.toUpperCase()} ${path} documents the central unlocked-profile bearer path`
     );
     assert.equal(
       operation?.security?.some((requirement) => Object.keys(requirement).length === 0),
@@ -161,6 +161,7 @@ test("backup security reflects legacy isAuthenticated behavior without claiming 
     spec.components.securitySchemes.ManagementApiKeyBearerAuth.description,
     /do not validate `oma_live_` access tokens/i
   );
+  assert.match(spec.components.securitySchemes.BearerAuth.description ?? "", /oma_live_/i);
 });
 
 test("database export/import use their actual archive formats and upload media types", () => {
