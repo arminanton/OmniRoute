@@ -1669,6 +1669,75 @@ current builder. The dashboard-scoped typecheck now passes within its frozen bas
 pre-existing diagnostics; its two unbaselined provider-model ID errors were fixed by aligning the
 no-auth catalog filter with the optional model ID shape.
 
+#### Follow-up blue build, standalone smoke, and bounded guard-recovery canary (2026-10-09)
+
+On source commit `bfe4385ecf`, Node 26.10.0 / Next.js 16.3.8 Webpack completed `npm run build`
+successfully. The Webpack compile phase took 9.2 minutes; all 598 static pages generated, and the
+postbuild step bundled the 90.2 KiB call-log worker into the standalone tree. The build used a
+two-CPU quota, one static-page worker, `MemoryHigh=16 GiB`, `MemoryMax=17 GiB`, a 1 GiB swap ceiling,
+and requested `IOWeight=10`. Its cgroup peak was 16,271,831,040 bytes (~15.16 GiB), below the high
+threshold; `memory.events` high/max/OOM counters and host memory PSI stayed at zero. Host available
+RAM stayed around 9–10 GiB near peak. Host I/O PSI rose transiently (avg10 around 8%, avg60 up to
+about 20%), and disk free space reached about 13 GiB. The user-slice does not delegate the I/O
+controller, so the requested weight could not be enforced or verified. The standalone output was
+about 999 MiB plus 5.1 GiB of Next cache (6.4 GiB total).
+
+The temporary standalone tree passed public `/api/health` and database-backed
+`/api/health/ping`; its temporary SQLite database applied 173 migrations. The standalone runtime
+smoke used the host's Node 24.21.0, while the build itself used Node 26.10.0. Its co-located worker
+wrote and read back a 700-byte synthetic request/response artifact. First-start migrations briefly
+raised host I/O PSI to about 26% some / 24% full avg10; after the isolated server exited, I/O PSI
+returned near baseline. The 6.4 GiB generated `.build/next` tree and temporary smoke data were then
+removed, restoring free disk to 20 GiB. Existing build warnings remain: Fumadocs cache dependency
+parsing, dynamic `require` in `maxaiTransport.ts`, and dynamic rendering of the AgentBridge page
+without its local API. No OCI image was built or deployed.
+
+A separate same-process cgroup canary used `MemoryHigh=1.5 GiB`, `MemoryMax=2 GiB`, and one CPU. At
+1,516,843,008 bytes (~94.2% of `memory.high`, 70.6% of `memory.max`), the sampled resource guard
+reported `critical/cgroup_high` and rejected a check. After the synthetic buffers were released and
+GC ran, the same PID returned to normal at 54,484,992 bytes and admitted a check without restart.
+The immediate V8-heap guard was disabled only in this test process; memory events and cgroup PSI
+remained zero, host memory PSI remained zero, and host I/O PSI peaked at 0.18%. This verifies the
+sampled guard's cgroup recovery state path, not a full HTTP inference route under concurrent load.
+
+#### Docker native-build and cache audit (2026-10-09)
+
+This was a source-only audit; no image build was run. The Node Docker path already installs the
+locked dependency tree with lifecycle scripts disabled, then runs the offline native-dependency
+verifier against the actual installed ARM64 binaries (`Dockerfile:63–88`). The only required
+source compile is OmniRoute's first-party TPROXY addon: `transparent.c` is one 5,587-byte C
+translation unit (`src/mitm/tproxy/native/binding.gyp:1–9`). Its build hook runs after the Next
+build while assembling the standalone bundle (`scripts/build/build-next-isolated.mjs:336–353`),
+so it cannot explain the Next compile's ~15.16 GiB memory peak. Its independent time/RSS has not
+been measured, but this small post-build compile is unlikely to change the main build duration.
+
+The Bun image offers a safer repeated-build experiment: `Dockerfile.bun:24–37` copies the entire
+`packages/` tree before `bun install` and has no BuildKit package-cache mount. Bun documents its
+package cache at `~/.bun/install/cache` (overridable with `BUN_INSTALL_CACHE_DIR`), and BuildKit
+supports persistent cache mounts ([Bun global cache](https://bun.sh/docs/pm/global-cache),
+[Docker cache backends](https://docs.docker.com/build/cache/backends/)). A future benchmark can
+copy only root/workspace manifests and required install helpers before the frozen install, mount
+the Bun cache, then copy source afterward. Keep the lockfile and currently allowed lifecycle
+scripts unchanged until x64/ARM64 installs prove the hooks still select working prebuilt binaries;
+this experiment has not been run.
+
+Browser setup is also prebuilt payload installation rather than a source compile. Node's
+`runner-web` downloads the locked Playwright Chromium revision and OS dependencies after
+`runner-base`; Bun installs the distribution Chromium package (`Dockerfile:291–314,354–368`,
+`Dockerfile.bun:136–187`). These steps may add web-image walltime, network traffic and disk use, but
+they follow Next and do not explain its compiler memory peak. Playwright lists Debian 13 and Ubuntu
+22.04/24.04/26.04 on ARM64 as supported targets ([Playwright platforms](https://playwright.dev/docs/intro)).
+If web-image rebuild time is material, a later experiment can isolate/cache the browser layer by
+Playwright revision and architecture. The main measured build cost remains the Next compile; the
+existing `npm run build:backend` target is a quicker API-only check, not a release-build substitute.
+
+The separate CLI dependency tree is intentionally locked in `docker/cli/package.json` and
+`package-lock.json` (currently Codex 0.160.0 and Claude Code 2.1.289, plus Droid and OpenClaw).
+That is still different from the earlier request for always-latest CLI packages; this audit did not
+change the version policy or rebuild the CLI image. The current offline install and verification
+path depends on that lock. A freshness change should be handled separately and must record the
+resolved CLI versions in the image/build evidence.
+
 ## Remaining acceptance checks
 
 - Query the new management-only pressure sample on `GET /api/monitoring/health` using a credential
@@ -1685,9 +1754,10 @@ no-auth catalog filter with the optional model ID shape.
   worker that successfully wrote/read a synthetic artifact, but the full packaged app route has not
   yet exercised it inside an OCI image. The tiny-stub fallback only links an overflow trace that was
   already captured; it cannot restore missing historical artifacts.
-- Reproduce heap growth from a clean start with capture on/off and optional subsystems isolated;
-  test that the local pressure guard recovers without restarting after pressure clears. No heap
-  snapshot or controlled recovery result exists yet.
+- Reproduce heap growth from a clean start with capture on/off and optional subsystems isolated, and
+  capture a safe live app heap/object profile. The sampled guard's same-process cgroup-high recovery
+  now passes a bounded isolated canary; full HTTP-route behavior under real request load and retained
+  object attribution remain unverified.
 - Build and smoke the production OCI image on a dedicated builder with enough memory and native
   overlay. The latest Node/Webpack source build and standalone health/worker smokes pass, but no OCI
   image was assembled. Preserve `memory.peak`, `memory.events`, wall time, and output size for the
