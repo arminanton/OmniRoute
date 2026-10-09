@@ -223,6 +223,18 @@ const IGNORE_FROM_CODE = new Set([
   // Test-only override: points setup-open-code.mjs at a fixture plugin dir without
   // requiring the real bundled plugin to be built.
   "OMNIROUTE_OPENCODE_PLUGIN_DIR",
+  // Synthetic Antigravity route/capture E2E fixture controls and fake-upstream timing.
+  // These are consumed only by tests/integration and scripts/perf; they are not server config.
+  "ANTIGRAVITY_CAPTURE_CONTEXT_BYTES",
+  "ANTIGRAVITY_CAPTURE_DIRECT_DISPATCHER_CONNECTIONS",
+  "ANTIGRAVITY_CAPTURE_REQUEST_TIMEOUT_MS",
+  "ANTIGRAVITY_CAPTURE_SESSION_COUNTS",
+  "ANTIGRAVITY_UPSTREAM_DELAY_MS",
+  // Standalone E2E harness selection and failure-scratch retention controls.
+  "OMNIROUTE_KEEP_STANDALONE_E2E_FAILURES",
+  "OMNIROUTE_STANDALONE_CAPTURE",
+  // Optional checksum sidecar for the transfer-oracle benchmark.
+  "TRANSFER_ORACLE_SHA_FILE",
 ]);
 
 // Vars documented in ENVIRONMENT.md but intentionally absent from .env.example.

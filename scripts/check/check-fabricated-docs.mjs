@@ -111,6 +111,7 @@ const ENV_VAR_ALLOWLIST = new Set([
   // subprocess — never read via `process.env.X` in OmniRoute's own source, so the
   // code-read index can't see them. Documented (correctly) in the relevant guides.
   "COPILOT_PROVIDER_BASE_URL", // GitHub Copilot CLI ≥v1.0.19's own env var (AGENTBRIDGE.md)
+  "BUN_INSTALL_CACHE_DIR", // Bun package-manager cache override (runtime benchmark report; not read by OmniRoute)
   "OPENAI_BASE_URL", // env var OmniRoute passes to downstream CLIs (AGENT_PROTOCOLS_GUIDE.md)
   "NINEROUTER_API_KEY", // injected into the 9router subprocess at spawn (EMBEDDED-SERVICES.md)
   "CLAUDE_CODE_MAX_OUTPUT_TOKENS", // Claude Code CLI's own env var (CODEX-CLI-CONFIGURATION.md)
