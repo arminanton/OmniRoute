@@ -868,21 +868,19 @@ call-log JSON artifact only; private overflow files continue storing their exact
 separate gzip and aggregate-budget controls. The writer keeps the original representation unless the
 complete serialized JSON becomes smaller, and the reader expands the table before any call-log API
 or UI consumer sees it. Stream chunks continue to use their own encoding, and no table is shared
-across API keys or requests. On 100 synthetic artifacts already
-compacted for duplicate stage bodies, the extra text table reduced serialized size from 13,063,780
-bytes to 1,782,080 bytes (86.36%); the latest bounded-pass rerun measured a transform median of
-0.163 ms and p95 of 0.231 ms per artifact on this host. A separate 100-artifact check with five
-unique 256 KiB context strings per artifact made no representation changes; its median scan was
-0.019 ms and p95 was 0.053 ms. Re-run
-with `npm run bench:call-log-text-dedup`. These are sequential synthetic microbenchmarks. They
-measure disk representation and the dedup scan, not request heap reduction or real-prompt
+across API keys or requests. On 100 synthetic artifacts already compacted for duplicate stage
+bodies, the extra text table reduced serialized size from 13,063,780 bytes to 1,782,080 bytes
+(86.36%). A fresh 2026-10-09 rerun measured a transform median of 0.165 ms and p95 of 0.234 ms
+per artifact on this host. A separate 100-artifact check with five unique 256 KiB context strings
+per artifact made no representation changes; its median scan was 0.019 ms and p95 was 0.052 ms.
+Re-run with `npm run bench:call-log-text-dedup`. These are sequential synthetic microbenchmarks.
+They measure disk representation and the dedup scan, not request heap reduction or real-prompt
 compression. A separate complete `writeCallArtifact()` sweep of 100 synthetic artifacts stored
-1,847,880 bytes instead of 50,537,450 bytes (96.34%); the latest run measured median write time of
-0.483 ms and p95 of 1.029 ms. That comparison includes the
-existing request/response stage references as well as the new text table, so it must not be
-attributed to the new table alone. The dictionaries are local to each artifact: cross-request blob
-sharing remains unimplemented, avoiding shared ownership, retention-reference, and cross-key
-deduplication concerns.
+1,847,880 bytes instead of 50,537,450 bytes (96.34%); the fresh run measured median write time of
+0.491 ms and p95 of 1.274 ms. That comparison includes the existing request/response stage
+references as well as the new text table, so it must not be attributed to the new table alone. The
+dictionaries are local to each artifact: cross-request blob sharing remains unimplemented,
+avoiding shared ownership, retention-reference, and cross-key deduplication concerns.
 
 The optional exact-text pass fails open when it sees accessors, unsupported object graphs, more than
 100,000 visited values, arrays longer than 100,000 entries, more than 4,096 unique candidate strings,
