@@ -32,11 +32,12 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 530 operations have success
-response content schemas and 444 declare operation-level security. Of 1,001 operations with a
-non-`204` success status, 471 have no explicit response content; two are intentional bodyless `HEAD`
-probes, leaving 469 non-`HEAD` operations whose successful response shape remains undocumented. Thirteen operations have no
-declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
+contract is still stronger on route coverage than schema completeness: 539 operations have success
+response content schemas and 453 declare operation-level security. Of 996 operations with a
+non-`204` success status, 457 have no explicit response content; two are intentional bodyless `HEAD`
+probes, leaving 455 non-`HEAD` operations whose successful response shape remains undocumented.
+Eighteen operations have no declared `2xx` status, and 15 return only an intentional `204`. This
+pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
 liveness versus authenticated system/pressure snapshot responses. The health snapshot includes the
@@ -49,7 +50,9 @@ Messages, OpenAI Responses, token-count, embedding, image-generation, audio, mod
 OCR, Jina classify/segment, legacy completions, and WebSocket-handshake paths now describe their
 principal request/response shapes and streaming media. The remaining contract pass must compare
 authentication and request/response schemas with each handler before calling the entire OpenAPI
-document semantically complete. The core inference paths also list the accepted bearer/API-key
+document semantically complete. All non-HEAD `/api/v1/` and `/api/v1beta/` success operations now
+have explicit response content schemas; only their two intentional bodyless `HEAD` probes are
+untyped. The core inference paths also list the accepted bearer/API-key
 headers, dashboard session cookie, and anonymous mode when `REQUIRE_API_KEY` is disabled. For other
 routes with confirmed configuration-dependent access, the spec includes anonymous alternatives
 where the handler allows them, including model discovery, combo/routing metadata, and API Explorer
@@ -157,14 +160,18 @@ the actual `201` create response. Model-alias settings now describe built-in/cus
 replace/add/remove bodies, persistence, and the self-healing GET behavior. The history-cleanup pass
 documents destructive scope, period choices, row/artifact counts, and each endpoint's distinct error
 behavior; its handlers are tested only against isolated temporary databases. The current spec
-inventory is 852 schemas, 530 success-body operations, and 444 security declarations; 471 non-`204`
-successes have no explicit response content, including two intentional bodyless `HEAD` probes. The
+inventory is 868 schemas, 539 success-body operations, and 453 security declarations; 457 non-`204`
+success operations have no explicit response content, including two intentional bodyless `HEAD`
+probes. The
 versioned read-contract pass now describes the public combo projection, auto-combo candidate state,
 scoped API-key self-status with optional quota branches, and the Muse Code model catalog. It also
 documents the correlation ID shape emitted by the authorization middleware. The Antigravity IDE/MITM
 ingress now types both nested and direct Cloud Code request envelopes, the wrapped response body, and
 its JSON/SSE media variants. The local-corpus settings pass documents the canonical filesystem root,
 bounded indexing status, validation failures, and that disconnecting never deletes source files.
+The latest versioned inference pass adds provider-native issue-report, music/video generation,
+search-analytics, web-fetch, and Video Bridge drill-down contracts. It also corrects the API catch-all
+from placeholder 200s to the JSON 404 response actually returned by the handler.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -1499,8 +1506,9 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 496 operations with success-response content; 505
-  of 1,001 non-`204` success operations still lack explicit success-body schemas. Thirteen operations
-  have no declared `2xx` status and 15 have only an intentional `204`. The path/method inventory
-  covers 705/705 routes and 411 operations now declare security alternatives; remaining response
-  schemas and conditional auth behavior have not all been source-verified.
+- Continue the OpenAPI handler audit beyond the 539 operations with success-response content; 457
+  of 996 non-`204` success operations still lack explicit success-body schemas, including the two
+  intentional bodyless `HEAD` probes (455 non-HEAD shapes remain). Eighteen operations have no
+  declared `2xx` status and 15 have only an intentional `204`. The path/method inventory covers
+  705/705 routes and 453 operations declare security alternatives; remaining response schemas and
+  conditional auth behavior have not all been source-verified.
