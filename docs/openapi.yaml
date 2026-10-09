@@ -31405,26 +31405,140 @@ paths:
       operationId: deleteApiWebhooksById
       tags:
         - Webhooks
-      summary: "DELETE webhooks › <id>"
+      summary: Delete a webhook
+      description: >-
+        Deletes the webhook record; returns 404 when no webhook exists. This route uses the
+        central management policy and handler auth. Protected profiles accept a
+        `write` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted
+        loopback CLI/internal-service credentials. An unlocked install with `requireLogin=false`
+        may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Webhook was deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookDeleteResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Webhook does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: A storage error was caught and returned as a sanitized error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiWebhooksById
       tags:
         - Webhooks
-      summary: "GET webhooks › <id>"
+      summary: Get webhook details
+      description: >-
+        Returns the webhook and encrypted metadata; the secret field is masked to its first ten
+        characters followed by an ellipsis, or null. Treat this management response as sensitive.
+        Protected profiles accept a `read` Access Token, a `manage` or `admin` API key, a dashboard
+        session, or trusted loopback CLI/internal-service credentials. An unlocked install with
+        `requireLogin=false` may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Webhook record with masked secret.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookDetailResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Webhook does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: A storage error was caught and returned as a sanitized error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiWebhooksById
       tags:
         - Webhooks
-      summary: "PUT webhooks › <id>"
+      summary: Update webhook settings
+      description: >-
+        Updates any supplied webhook settings; an empty object leaves the record unchanged. The
+        body rejects unknown fields. For non-Telegram kinds, an updated URL is validated by the
+        outbound URL guard. Telegram bot-token metadata requires storage encryption and is encrypted
+        before persistence. The success response returns the complete stored webhook, including its
+        full secret and encrypted metadata; treat it as sensitive. Protected profiles accept a
+        `write` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
+        CLI/internal-service credentials. An unlocked install with `requireLogin=false` may permit
+        anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated webhook record, including the full secret and encrypted metadata.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookUpdatedResponse" }
+        "400":
+          description: >-
+            Request fields fail validation, the URL guard rejects the destination, or Telegram
+            bot-token metadata is used without configured storage encryption.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Webhook does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Invalid JSON or an uncaught storage/helper error is returned as a sanitized error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/webhooks/{id}/deliveries:
     parameters:
       - name: id
@@ -31436,10 +31550,48 @@ paths:
       operationId: getApiWebhooksByIdDeliveries
       tags:
         - Webhooks
-      summary: "GET webhooks › <id> › deliveries"
+      summary: List recent webhook deliveries
+      description: >-
+        Returns recent delivery metadata without `payload_snapshot`; records are ordered newest
+        first. The optional limit is parsed and clamped to 1–100, defaulting to 20 for missing or
+        unparseable values. Protected profiles accept a `read` Access Token, a `manage` or `admin`
+        API key, a dashboard session, or trusted loopback CLI/internal-service credentials. An
+        unlocked install with `requireLogin=false` may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Parsed as an integer and clamped to 1–100; absent, zero, or unparseable values use 20.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
       responses:
         "200":
-          description: OK
+          description: Safe delivery metadata; captured payload snapshots are not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookDeliveriesResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Webhook does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: A storage error was caught and returned as a sanitized error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/webhooks/{id}/test:
     parameters:
       - name: id
@@ -31451,10 +31603,49 @@ paths:
       operationId: postApiWebhooksByIdTest
       tags:
         - Webhooks
-      summary: "POST webhooks › <id> › test"
+      summary: Send a test webhook delivery
+      description: >-
+        Sends a test event to the configured destination, records delivery status, and updates the
+        webhook's last status/failure counter. This is an outbound network side effect with a
+        ten-second timeout; the response includes the generated payload and a bounded response-body
+        preview. Private targets return a redacted response-body marker. Treat the result as
+        sensitive. Protected profiles accept a `write` Access Token, a `manage` or `admin` API key,
+        a dashboard session, or trusted loopback CLI/internal-service credentials. An unlocked
+        install with `requireLogin=false` may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Test attempt diagnostics; a failed delivery is still returned with HTTP 200.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookTestResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Webhook does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "422":
+          description: Telegram webhook is missing its configured bot token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: An unexpected test-delivery error is returned as a sanitized error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/webhooks/validate-url:
     post:
       operationId: postApiWebhooksValidateUrl
@@ -34849,6 +35040,143 @@ components:
       properties:
         success: { type: boolean, const: true }
         id: { type: string, description: Echoes the id or display prefix supplied in the path. }
+      additionalProperties: false
+    WebhookMaskedRecord:
+      type: object
+      required:
+        [id, url, events, secret, enabled, description, created_at, last_triggered_at, last_status, failure_count, kind, metadata_encrypted]
+      properties:
+        id: { type: string }
+        url:
+          type: string
+          description: Destination URL or kind-specific destination identifier such as a Telegram chat id.
+        events:
+          type: array
+          items: { type: string }
+        secret:
+          type: [string, "null"]
+          x-sensitive: true
+          description: Null when unset; otherwise the first ten characters followed by an ellipsis.
+        enabled: { type: boolean }
+        description: { type: string }
+        created_at: { type: string, description: SQLite timestamp. }
+        last_triggered_at: { type: [string, "null"], description: SQLite timestamp. }
+        last_status: { type: [integer, "null"] }
+        failure_count: { type: integer }
+        kind: { type: string, enum: [slack, telegram, discord, custom] }
+        metadata_encrypted:
+          type: [string, "null"]
+          x-sensitive: true
+          description: Encrypted integration metadata, when configured.
+      additionalProperties: false
+    WebhookStoredRecord:
+      type: object
+      x-sensitive: true
+      required:
+        [id, url, events, secret, enabled, description, created_at, last_triggered_at, last_status, failure_count, kind, metadata_encrypted]
+      properties:
+        id: { type: string }
+        url:
+          type: string
+          description: Destination URL or kind-specific destination identifier such as a Telegram chat id.
+        events:
+          type: array
+          items: { type: string }
+        secret: { type: [string, "null"], x-sensitive: true }
+        enabled: { type: boolean }
+        description: { type: string }
+        created_at: { type: string, description: SQLite timestamp. }
+        last_triggered_at: { type: [string, "null"], description: SQLite timestamp. }
+        last_status: { type: [integer, "null"] }
+        failure_count: { type: integer }
+        kind: { type: string, enum: [slack, telegram, discord, custom] }
+        metadata_encrypted:
+          type: [string, "null"]
+          x-sensitive: true
+          description: Encrypted integration metadata, when configured.
+      additionalProperties: false
+    WebhookDetailResponse:
+      type: object
+      required: [webhook]
+      properties:
+        webhook: { $ref: "#/components/schemas/WebhookMaskedRecord" }
+      additionalProperties: false
+    WebhookUpdatedResponse:
+      type: object
+      x-sensitive: true
+      required: [webhook]
+      properties:
+        webhook: { $ref: "#/components/schemas/WebhookStoredRecord" }
+      additionalProperties: false
+    WebhookUpdateRequest:
+      type: object
+      properties:
+        url: { type: string, minLength: 1, maxLength: 2000 }
+        events:
+          type: array
+          items:
+            type: string
+            enum: ["*", request.completed, request.failed, quota.exceeded, test.ping]
+        secret: { type: string, maxLength: 500, x-sensitive: true }
+        description: { type: string, maxLength: 1000 }
+        enabled: { type: boolean }
+        kind: { type: string, enum: [slack, telegram, discord, custom] }
+        metadata:
+          type: object
+          x-sensitive: true
+          description: String-valued integration metadata; Telegram bot tokens are encrypted before storage.
+          additionalProperties: { type: string }
+      description: Unknown fields are rejected; all fields are optional and an empty update is allowed.
+      additionalProperties: false
+    WebhookDeleteResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+      additionalProperties: false
+    WebhookDeliveryRecord:
+      type: object
+      required:
+        [id, webhook_id, event_type, status, http_status, latency_ms, error, created_at]
+      properties:
+        id: { type: integer }
+        webhook_id: { type: string }
+        event_type: { type: string }
+        status: { type: string }
+        http_status: { type: [integer, "null"] }
+        latency_ms: { type: [integer, "null"] }
+        error: { type: [string, "null"] }
+        created_at: { type: string, description: SQLite timestamp. }
+      additionalProperties: false
+    WebhookDeliveriesResponse:
+      type: object
+      required: [deliveries]
+      properties:
+        deliveries:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/WebhookDeliveryRecord" }
+      additionalProperties: false
+    WebhookTestResponse:
+      type: object
+      x-sensitive: true
+      required: [delivered, status, latencyMs, payloadSent, responseBody, error]
+      properties:
+        delivered: { type: boolean, description: True only when the destination returned HTTP 2xx. }
+        status: { type: integer, minimum: 0, maximum: 599, description: Zero means no HTTP response was received. }
+        latencyMs: { type: integer, minimum: 0 }
+        payloadSent:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+        responseBody:
+          type: string
+          maxLength: 2049
+          x-sensitive: true
+          description: >-
+            At most 2,048 response characters plus a truncation ellipsis; private targets use a
+            redaction marker and failed reads may return an empty string.
+        error: { type: [string, "null"], x-sensitive: true }
       additionalProperties: false
     V1AccountKeyLimits:
       type: object
