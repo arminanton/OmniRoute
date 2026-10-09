@@ -7797,56 +7797,212 @@ paths:
   # ─── OAuth ─────────────────────────────────────────────────────
 
   /api/oauth/{provider}/{action}:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        description: Provider identifier used by the OAuth provider registry.
+        schema: { type: string, minLength: 1 }
+      - name: action
+        in: path
+        required: true
+        description: >-
+          Actions handled by this dynamic route. Availability is method-, provider-, and
+          configuration-dependent; unsupported combinations return 400 and retired Devin browser
+          callback actions return 410. Other OAuth import routes have their own paths.
+        schema:
+          type: string
+          enum: [authorize, device-code, start-callback-server, public-link-status, exchange, poll, cancel, poll-callback, import-token, public-link, device-complete]
     get:
       operationId: getApiOauthByProviderByAction
       tags: [OAuth]
-      summary: OAuth flow handler
-      description: Handles OAuth authorization and callback for providers
+      summary: Read or start a provider OAuth flow
+      description: >-
+        Supports `authorize`, `device-code`, `start-callback-server`, and `public-link-status`.
+        Device-code fields vary by provider and are intentionally open-ended. When
+        `REQUIRE_API_KEY` is enabled, a valid Bearer API key or dashboard session is required;
+        requests are anonymous when authentication is disabled. Devin Desktop/CLI browser callback
+        actions are retired with 410; use their import-token flow.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
-        - name: provider
-          in: path
-          required: true
-          schema:
-            type: string
         - name: action
           in: path
           required: true
-          schema:
-            type: string
-            enum: [authorize, callback, refresh, status]
+          schema: { type: string, enum: [authorize, device-code, start-callback-server, public-link-status] }
+        - name: redirect_uri
+          in: query
+          required: false
+          description: Requested OAuth redirect URI for `authorize`; defaults to the local callback URI and is provider-normalized.
+          schema: { type: string }
+        - name: connectionId
+          in: query
+          required: false
+          description: Existing connection to re-authorize for supported provider device flows.
+          schema: { type: string, maxLength: 127 }
+        - name: startUrl
+          in: query
+          required: false
+          description: AWS IAM Identity Center start URL for Kiro or Amazon Q device authorization.
+          schema: { type: string }
+        - name: region
+          in: query
+          required: false
+          description: AWS region used by Kiro or Amazon Q; defaults to `us-east-1`.
+          schema: { type: string, pattern: "^[a-z]{2}-[a-z]+-[0-9]{1,2}$", default: us-east-1 }
+        - name: gheUrl
+          in: query
+          required: false
+          description: HTTPS GitHub Enterprise host for GitHub Copilot device authorization.
+          schema: { type: string, pattern: "^https://" }
+        - name: token
+          in: query
+          required: false
+          description: Required by the `public-link-status` action; opaque, short-lived device-flow ticket.
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: OAuth flow response
-        "302":
-          description: Redirect to provider auth page
+          description: Provider authorization data, device-code data, callback-server data, or public-link status.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/OAuthAuthorizeResponse"
+                  - $ref: "#/components/schemas/OAuthDeviceCodeResponse"
+                  - $ref: "#/components/schemas/OAuthCallbackServerResponse"
+                  - $ref: "#/components/schemas/OAuthPublicLinkStatusResponse"
+        "400":
+          description: Unsupported action/provider combination, missing ticket, or invalid provider query.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication required by the current configuration or OAuth flow.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          description: Browser origin is not allowed for the Nous device flow.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "410":
+          description: Devin Desktop/CLI browser PKCE callback flow is retired; use import-token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "429":
+          description: The in-memory Nous device-flow limit is reached.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: OAuth provider authorization failed; the sanitized detail is returned when available.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "502":
+          description: Nous device authorization is temporarily unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          description: Assigned proxy policy prevents the Nous device authorization request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiOauthByProviderByAction
       tags: [OAuth]
-      summary: Submit a provider-specific OAuth action
-      description: Provider and action determine the callback payload and result status.
+      summary: Complete, poll, or persist a provider OAuth flow
+      description: >-
+        Supports `exchange`, `poll`, Nous-only `cancel`, `poll-callback`, `import-token`,
+        Codex-only `public-link`, and Codex-only `device-complete`. Request validation and successful
+        response shape depend on the action/provider. Every action except `poll-callback` requires a
+        syntactically valid JSON body; `poll-callback` accepts an absent or invalid body as `{}`.
+        Authentication is configuration-dependent: valid Bearer API key or dashboard session when
+        `REQUIRE_API_KEY` is enabled, otherwise anonymous requests are allowed except where the
+        Nous flow binds to an authenticated session.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
-        - name: provider
-          in: path
-          required: true
-          schema: { type: string }
         - name: action
           in: path
           required: true
-          schema: { type: string }
+          schema: { type: string, enum: [exchange, poll, cancel, poll-callback, import-token, public-link, device-complete] }
       requestBody:
         required: false
+        description: >-
+          Action-specific JSON. `poll-callback` accepts no body; other POST actions must send valid
+          JSON. Extra fields are ignored by the Zod object validators except the Nous `connectionId`
+          read directly from the raw poll body.
         content:
           application/json:
-            schema: { type: object, additionalProperties: true }
+            schema:
+              anyOf:
+                - $ref: "#/components/schemas/OAuthExchangeRequest"
+                - $ref: "#/components/schemas/OAuthPollRequest"
+                - $ref: "#/components/schemas/OAuthPollCallbackRequest"
+                - $ref: "#/components/schemas/OAuthImportTokenRequest"
+                - $ref: "#/components/schemas/OAuthDeviceCompleteRequest"
+                - $ref: "#/components/schemas/OAuthPublicLinkRequest"
       responses:
         "200":
-          description: Provider-specific OAuth action result
-        "302":
-          description: OAuth redirect
+          description: >-
+            Provider-specific flow result: a redacted connection summary, pending/device authorization
+            state, public single-use link, or ticket status. OAuth tokens are never returned by this route.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/OAuthConnectionSuccessResponse"
+                  - $ref: "#/components/schemas/OAuthPollResultResponse"
+                  - $ref: "#/components/schemas/OAuthPublicLinkResponse"
         "400":
-          description: Invalid OAuth action
+          description: Invalid JSON, action/provider combination, or action-specific input.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          description: Authentication required by the current configuration or Nous device flow.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          description: Browser origin is not allowed for the Nous flow.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "410":
-          description: OAuth flow has been retired
+          description: Devin Desktop/CLI browser PKCE callback flow is retired; use import-token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: OAuth exchange or local persistence failed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/OAuthPollResultResponse"
+        "502":
+          description: Nous OAuth polling is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          description: Assigned proxy policy prevents Nous OAuth polling.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/oauth/cursor/auto-import:
     get:
@@ -23637,6 +23793,159 @@ components:
             repaired: { type: boolean, const: true }
             mode: { type: string, const: recovered }
           additionalProperties: false
+    OAuthAuthorizeResponse:
+      type: object
+      description: >-
+        OAuth URL/PKCE metadata returned by the registered provider. `authUrl` may be absent or null
+        when browser OAuth is disabled or the provider uses device-code flow. Credential tokens are
+        not included.
+      properties:
+        authUrl: { type: [string, "null"] }
+        state: { type: string }
+        codeVerifier: { type: string }
+        codeChallenge: { type: string }
+        redirectUri: { type: string }
+        flowType: { type: string }
+        fixedPort: { type: [integer, "null"] }
+        callbackPath: { type: string }
+        callbackHost: { type: string }
+        supported: { type: boolean }
+        error: { type: string }
+      additionalProperties: true
+    OAuthDeviceCodeResponse:
+      type: object
+      description: >-
+        Device-code fields are returned from provider adapters and vary by provider (for example
+        `device_code`, `user_code`, verification URL, expiry, and interval). The route may add a
+        PKCE `codeVerifier` or a Nous `flowId`; only the Nous branch binds a short-lived browser
+        cookie. Provider-specific properties remain open-ended.
+      properties:
+        device_code: { type: string }
+        user_code: { type: string }
+        verification_uri: { type: string }
+        verification_url: { type: string }
+        verification_uri_complete: { type: string }
+        expires_in: { type: number, minimum: 0 }
+        interval: { type: number, minimum: 0 }
+        codeVerifier: { type: string }
+        flowId: { type: string, format: uuid }
+      additionalProperties: true
+    OAuthCallbackServerResponse:
+      type: object
+      required: [authUrl, codeVerifier, redirectUri, serverPort, remoteHost]
+      properties:
+        authUrl: { type: string }
+        codeVerifier: { type: string }
+        redirectUri: { type: string }
+        serverPort: { type: integer, minimum: 1, maximum: 65535 }
+        remoteHost: { type: boolean }
+        tunnelCommand: { type: string }
+        message: { type: string }
+      additionalProperties: false
+    OAuthPublicLinkStatusResponse:
+      type: object
+      required: [status, connection]
+      properties:
+        status: { type: string, enum: [pending, claimed, completed, expired] }
+        connection:
+          oneOf:
+            - type: object
+              required: [connectionId, email]
+              properties:
+                connectionId: { type: string }
+                email: { type: [string, "null"] }
+              additionalProperties: false
+            - type: "null"
+      additionalProperties: false
+    OAuthConnectionSummary:
+      type: object
+      required: [id, provider]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        email: { type: [string, "null"] }
+        displayName: { type: [string, "null"] }
+      additionalProperties: false
+    OAuthConnectionSuccessResponse:
+      type: object
+      required: [success, connection]
+      properties:
+        success: { type: boolean, const: true }
+        warning: { type: string }
+        connection: { $ref: "#/components/schemas/OAuthConnectionSummary" }
+      additionalProperties: false
+    OAuthPollResultResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean }
+        pending: { type: boolean }
+        error: { type: string }
+        errorDescription: { type: string }
+        connection: { $ref: "#/components/schemas/OAuthConnectionSummary" }
+      additionalProperties: false
+    OAuthPublicLinkResponse:
+      type: object
+      required: [url, token, expiresAt]
+      properties:
+        url: { type: string, format: uri }
+        token: { type: string, description: Opaque, single-use, short-lived device-flow ticket. }
+        expiresAt: { type: string, format: date-time }
+      additionalProperties: false
+    OAuthExchangeRequest:
+      type: object
+      required: [code, redirectUri]
+      properties:
+        code: { type: string, minLength: 1, writeOnly: true }
+        redirectUri: { type: string, minLength: 1 }
+        codeVerifier: { type: string, minLength: 1, writeOnly: true }
+        state: { type: [string, "null"] }
+      additionalProperties: true
+    OAuthPollRequest:
+      type: object
+      required: [deviceCode]
+      properties:
+        deviceCode: { type: string, minLength: 1, writeOnly: true }
+        codeVerifier: { type: string, writeOnly: true }
+        extraData: {}
+        connectionId:
+          type: string
+          maxLength: 127
+          description: Read from the raw body only for Nous re-authentication; other providers ignore it.
+      additionalProperties: true
+    OAuthPollCallbackRequest:
+      type: object
+      properties:
+        connectionId: { type: string }
+      additionalProperties: true
+    OAuthImportTokenRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          oneOf:
+            - type: string
+              minLength: 1
+            - type: object
+              additionalProperties: true
+          writeOnly: true
+        connectionId: { type: string }
+      additionalProperties: true
+    OAuthDeviceCompleteRequest:
+      type: object
+      required: [access_token]
+      properties:
+        access_token: { type: string, minLength: 1, writeOnly: true }
+        refresh_token: { type: string, writeOnly: true }
+        id_token: { type: string, writeOnly: true }
+        expires_in: { type: integer, minimum: 1 }
+        connectionId: { type: string }
+      additionalProperties: true
+    OAuthPublicLinkRequest:
+      type: object
+      properties:
+        connectionId: { type: string }
+      additionalProperties: true
     CanaryReadiness:
       type: object
       required: [schema, generation, ready, databaseReady, coordination, conversationState, lifecycle]
