@@ -9123,16 +9123,75 @@ paths:
       tags: [System]
       summary: Read cloud synchronization status
       description: Reports whether cloud sync is enabled and whether a verification connection is available.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Cloud-enabled and connection status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudSyncStatusResponse" }
+        "500":
+          description: Cloud sync status lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudSyncStatusErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSyncCloud
       tags: [System]
-      summary: Sync with cloud
+      summary: Enable, run, or disable cloud synchronization
+      description: >-
+        Management action dispatcher. First-time `enable` may create and return one raw API key in
+        `createdKey`; retain it securely because the value cannot be recovered from later list APIs.
+        `sync` returns the cloud's change/version result, while `disable` returns a fixed success
+        envelope after remote deletion.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloudSyncActionRequest" }
       responses:
         "200":
-          description: Sync result
+          description: Sync result, verified/unverified enable result, or cloud-disable confirmation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudSyncActionResponse" }
+        "400":
+          description: Invalid JSON body or unknown cloud-sync action.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "500":
+          description: Local cloud configuration or sync action failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "502":
+          description: Cloud service request or remote disable failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/sync/initialize:
     get:
@@ -37473,6 +37532,131 @@ components:
       oneOf:
         - $ref: "#/components/schemas/SyncInitializationAlreadyResponse"
         - $ref: "#/components/schemas/SyncInitializationStartedResponse"
+
+    CloudSyncStatusDisabledResponse:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean, const: false }
+      additionalProperties: false
+
+    CloudSyncStatusEnabledResponse:
+      type: object
+      required: [enabled, connected]
+      properties:
+        enabled: { type: boolean, const: true }
+        connected:
+          {
+            type: boolean,
+            description: Whether the cloud verification endpoint answered successfully.,
+          }
+        lastSync:
+          {
+            type: string,
+            format: date-time,
+            description: Time of the verification request when one was attempted.,
+          }
+      additionalProperties: false
+
+    CloudSyncStatusResponse:
+      oneOf:
+        - $ref: "#/components/schemas/CloudSyncStatusDisabledResponse"
+        - $ref: "#/components/schemas/CloudSyncStatusEnabledResponse"
+
+    CloudSyncStatusErrorResponse:
+      type: object
+      required: [enabled, error]
+      properties:
+        enabled: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
+
+    CloudSyncActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [enable, sync, disable] }
+      additionalProperties: true
+
+    CloudSyncCreatedApiKey:
+      type: object
+      description: >-
+        Newly created key returned only on first-time cloud enablement when no API keys exist. The
+        `key` value is raw secret material; keep it securely because later key reads are masked.
+      required:
+        [
+          id,
+          name,
+          key,
+          machineId,
+          modelAccessMode,
+          allowedModels,
+          allowedCombos,
+          allowedConnections,
+          noLog,
+          allowUsageCommand,
+          createdAt,
+          scopes,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        key:
+          {
+            type: string,
+            x-sensitive: true,
+            description: Full raw API key secret returned only during this enable operation.,
+          }
+        machineId: { type: string }
+        modelAccessMode: { type: string, enum: [all, restricted] }
+        allowedModels: { type: array, items: { type: string } }
+        allowedCombos: { type: array, items: { type: string } }
+        allowedConnections: { type: array, items: { type: string } }
+        noLog: { type: boolean }
+        allowUsageCommand: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        scopes: { type: array, items: { type: string } }
+      additionalProperties: false
+
+    CloudSyncResultResponse:
+      type: object
+      required: [success, message, version]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: "Synced successfully" }
+        changes: { description: Cloud-side change metadata; provider-specific fields may vary. }
+        version: { type: string, description: Deterministic configuration-bundle version. }
+        createdKey: { $ref: "#/components/schemas/CloudSyncCreatedApiKey" }
+      additionalProperties: false
+
+    CloudSyncEnableResponse:
+      type: object
+      required: [success, message, version, cloudUrl, verified]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: "Synced successfully" }
+        changes: { description: Cloud-side change metadata; provider-specific fields may vary. }
+        version: { type: string, description: Deterministic configuration-bundle version. }
+        createdKey: { $ref: "#/components/schemas/CloudSyncCreatedApiKey" }
+        cloudUrl: { type: [string, "null"], format: uri }
+        verified: { type: boolean }
+        verifyError:
+          { type: string, description: Present when sync succeeds but verification does not. }
+      additionalProperties: false
+
+    CloudSyncDisableResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: "Cloud disabled" }
+      additionalProperties: false
+
+    CloudSyncActionResponse:
+      oneOf:
+        - $ref: "#/components/schemas/CloudSyncResultResponse"
+        - $ref: "#/components/schemas/CloudSyncEnableResponse"
+        - $ref: "#/components/schemas/CloudSyncDisableResponse"
 
     StorageHealthResponse:
       type: object
