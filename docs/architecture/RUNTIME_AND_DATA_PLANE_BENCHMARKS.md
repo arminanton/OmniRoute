@@ -1451,6 +1451,36 @@ state, and a production image was not assembled or deployed. The Dockerfile's
 `OMNIROUTE_BUILD_WORKERS=2` is translated to `CIRCLE_NODE_TOTAL=2`; direct local invocations must
 set `CIRCLE_NODE_TOTAL` explicitly to match that worker budget.
 
+#### Controlled Node/Webpack cold and warm-cache reruns (2026-10-09)
+
+On the same feature-branch commit (`ea358ab9b5`), Node 26.10.0 and Next.js 16.3.8 completed the
+full `npm run build` path twice with Webpack, `CIRCLE_NODE_TOTAL=2` (one page-data worker), a 6 GiB
+V8 heap setting, two CPUs, and I/O weight 50. The runtime tarball was downloaded from the official
+Node distribution and verified against its published SHA-256 manifest. The first build started
+without a `.build/next` cache; the second reused the cache from that build.
+
+| Cache state |        Elapsed | Exit | Observed cgroup peak | Result                                                                              |
+| ----------- | -------------: | ---: | -------------------: | ----------------------------------------------------------------------------------- |
+| Cold        | 752 s (12m32s) |    0 |               16 GiB | Compile, all 598 static pages, traces, and standalone-worker co-location completed. |
+| Warm        |  455 s (7m35s) |    0 |             14.5 GiB | Same full output completed; 39.5% less elapsed time than the cold run.              |
+
+The cold build's cgroup limit was raised from 14 to 16 and then 17 GiB as usage approached each
+limit; the warm run used a 17 GiB limit from the start. Neither run recorded an OOM or sustained
+memory-PSI stall. During the warm run, sampled host-available RAM stayed at or above 12 GiB; disk
+free space briefly reached 9.9 GiB and was 13 GiB after completion. The warm output measured 999
+MiB for `.build/next/standalone` and 5.9 GiB for `.build/next/cache`. A temporary Node 26.10.0
+server using the assembled standalone tree returned HTTP 200 from `/api/health/ping` under a 3 GiB
+memory cap; it used an isolated `/tmp` data directory and was stopped after the check. The build
+reported existing warnings for `fumadocs-mdx` cache dependency parsing and a dynamic `require` in
+`maxaiTransport.ts`; neither blocked the build. Both `.build/next` and the temporary runtime were
+removed after recording these measurements.
+
+This establishes that Webpack can complete on this host when its page-data worker count and build
+cgroup are controlled, while showing that cold compilation can still consume about 16 GiB and take
+over 12 minutes. Cache state alone reduced elapsed time by roughly five minutes. It does not settle
+Node/Turbopack versus Bun/Turbopack, since those full builds have not yet been completed under the
+same lockfile, cache state, and resource limits.
+
 A no-emit TypeScript check limited to the changed files still pulled in the broad `chat.ts` import
 graph. Node spent about 3 minutes at 1.5–1.6 CPU cores and hit its default 4 GiB V8 heap limit;
 there was no build artifact or typecheck result. This is separate from the earlier 5 GiB Next build
