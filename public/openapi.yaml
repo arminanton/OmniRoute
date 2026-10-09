@@ -13259,40 +13259,55 @@ paths:
         - OmnirouteApiCatchAll
       summary: "DELETE <omnirouteApiCatchAll>"
       responses:
-        "200":
-          description: OK
+        "404":
+          description: Unknown API route; the handler returns a JSON not-found body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
     get:
       operationId: getApiByOmnirouteApiCatchAll
       tags:
         - OmnirouteApiCatchAll
       summary: "GET <omnirouteApiCatchAll>"
       responses:
-        "200":
-          description: OK
+        "404":
+          description: Unknown API route; the handler returns a JSON not-found body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
     patch:
       operationId: patchApiByOmnirouteApiCatchAll
       tags:
         - OmnirouteApiCatchAll
       summary: "PATCH <omnirouteApiCatchAll>"
       responses:
-        "200":
-          description: OK
+        "404":
+          description: Unknown API route; the handler returns a JSON not-found body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
     post:
       operationId: postApiByOmnirouteApiCatchAll
       tags:
         - OmnirouteApiCatchAll
       summary: "POST <omnirouteApiCatchAll>"
       responses:
-        "200":
-          description: OK
+        "404":
+          description: Unknown API route; the handler returns a JSON not-found body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
     put:
       operationId: putApiByOmnirouteApiCatchAll
       tags:
         - OmnirouteApiCatchAll
       summary: "PUT <omnirouteApiCatchAll>"
       responses:
-        "200":
-          description: OK
+        "404":
+          description: Unknown API route; the handler returns a JSON not-found body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
   /api/a2a/status:
     get:
       operationId: getApiA2aStatus
@@ -33087,7 +33102,7 @@ components:
 
     V1UnknownRouteResponse:
       type: object
-      description: JSON not-found body returned by the versioned API catch-all.
+      description: JSON not-found body returned by the root and versioned API catch-alls.
       required: [error]
       properties:
         error:
