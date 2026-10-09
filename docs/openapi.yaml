@@ -3860,6 +3860,23 @@ paths:
       operationId: getApiCombos
       tags: [Combos]
       summary: List routing combos
+      description: >-
+        Returns persisted combos with computed context length and total count. Pagination offset and
+        limit are integer query values; limit may be zero, in which case the page is empty.
+        Management authentication is configuration-dependent.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, maximum: 200 }
       responses:
         "200":
           description: Combo list
@@ -3867,10 +3884,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ComboListResponse"
+        "400":
+          description: Invalid pagination query.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo list lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCombos
       tags: [Combos]
       summary: Create routing combo
+      description: Creates a routing combo after validating its model steps, composite tiers, and nested-combo graph.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -3879,20 +3917,67 @@ paths:
               $ref: "#/components/schemas/ComboCreate"
       responses:
         "201":
-          description: Created combo
+          description: Created combo; a model-name collision warning may be included.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboRecord" }
+        "400":
+          description: Invalid combo body, duplicate name, invalid composite config, or invalid nested graph.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo creation failed.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/combos/{id}:
     get:
       operationId: getApiCombosById
       tags: [Combos]
       summary: Get combo by ID
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
           description: Combo details
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboRecord" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: Combo not found
+          description: Combo not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Combo lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiCombosById
       tags: [Combos]
@@ -3902,21 +3987,51 @@ paths:
         its current value. An array that IS sent replaces the stored one outright.
       parameters:
         - $ref: "#/components/parameters/ResourceId"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/ComboUpdate"
       responses:
         "200":
           description: Updated combo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboRecord" }
         "400":
           description: Invalid body, or the resulting combo fails validation
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
         "404":
           description: Combo not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "409":
           description: Name already taken, or the combo is quota-share managed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiCombosById
       tags: [Combos]
@@ -3926,75 +4041,202 @@ paths:
         its current value. An array that IS sent replaces the stored one outright.
       parameters:
         - $ref: "#/components/parameters/ResourceId"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/ComboUpdate"
       responses:
         "200":
           description: Updated combo
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboRecord" }
         "400":
           description: Invalid body, or the resulting combo fails validation
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
         "404":
           description: Combo not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "409":
           description: Name already taken, or the combo is quota-share managed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiCombosById
       tags: [Combos]
       summary: Delete combo
       parameters:
         - $ref: "#/components/parameters/ResourceId"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Combo deleted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Combo not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Combo is quota-share managed and cannot be deleted directly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Combo deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/combos/metrics:
     get:
       operationId: getApiCombosMetrics
       tags: [Combos]
       summary: Get combo metrics
+      description: Returns one combo's metrics when `combo` is specified, otherwise a map of all in-memory combo metrics.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: combo
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         "200":
-          description: Metrics for combos
+          description: Combo metrics, or null plus a message when the selected combo has no metrics yet.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboMetricsResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo metrics lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiCombosMetrics
       tags: [Combos]
       summary: Reset combo metrics
       description: Resets one combo's metrics when combo is set, or all combo metrics otherwise.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: combo
           in: query
+          required: false
           schema: { type: string }
       responses:
         "200":
-          description: Combo metrics reset
+          description: Per-combo or global in-memory metrics reset result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboMetricsResetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo metrics reset failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/combos/test:
     post:
       operationId: postApiCombosTest
       tags: [Combos]
       summary: Test a combo configuration
+      description: >-
+        Sends a real internal chat or embedding request to each resolved target and returns per-target
+        status/latency plus the first successful model. This may call configured provider accounts;
+        management authorization is configuration-dependent.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [comboName]
-              properties:
-                comboName:
-                  type: string
-                  minLength: 1
+              $ref: "#/components/schemas/ComboTestRequest"
       responses:
         "200":
-          description: Test result
+          description: Per-target test outcomes and the resolved successful model, if any.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboTestResponse" }
         "400":
-          description: Missing or invalid combo name
+          description: Invalid request or combo has no testable models.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
         "404":
-          description: Combo not found
+          description: Combo not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo test failed before returning per-target results.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/settings:
     get:
@@ -7812,7 +8054,20 @@ paths:
           callback actions return 410. Other OAuth import routes have their own paths.
         schema:
           type: string
-          enum: [authorize, device-code, start-callback-server, public-link-status, exchange, poll, cancel, poll-callback, import-token, public-link, device-complete]
+          enum:
+            [
+              authorize,
+              device-code,
+              start-callback-server,
+              public-link-status,
+              exchange,
+              poll,
+              cancel,
+              poll-callback,
+              import-token,
+              public-link,
+              device-complete,
+            ]
     get:
       operationId: getApiOauthByProviderByAction
       tags: [OAuth]
@@ -7831,7 +8086,11 @@ paths:
         - name: action
           in: path
           required: true
-          schema: { type: string, enum: [authorize, device-code, start-callback-server, public-link-status] }
+          schema:
+            {
+              type: string,
+              enum: [authorize, device-code, start-callback-server, public-link-status],
+            }
         - name: redirect_uri
           in: query
           required: false
@@ -7933,7 +8192,12 @@ paths:
         - name: action
           in: path
           required: true
-          schema: { type: string, enum: [exchange, poll, cancel, poll-callback, import-token, public-link, device-complete] }
+          schema:
+            {
+              type: string,
+              enum:
+                [exchange, poll, cancel, poll-callback, import-token, public-link, device-complete],
+            }
       requestBody:
         required: false
         description: >-
@@ -12460,37 +12724,136 @@ paths:
       operationId: getApiCombosAuto
       tags:
         - Combos
-      summary: "GET combos › auto"
+      summary: List virtual auto-combo candidates
+      description: >-
+        Enumerates built-in auto variants, templates, family selectors and tier suffixes. A failing
+        individual variant is skipped; a top-level failure returns an empty `combos` array.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Virtual auto-combo definitions and candidate provider/model ids.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboAutoResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/combos/builder/options:
     get:
       operationId: getApiCombosBuilderOptions
       tags:
         - Combos
-      summary: "GET combos › builder › options"
+      summary: Get combo builder provider/model/connection options
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Snapshot used by the dashboard combo builder.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboBuilderOptions" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Builder option lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/combos/duplicate:
     post:
       operationId: postApiCombosDuplicate
       tags:
         - Combos
-      summary: "POST combos › duplicate"
+      summary: Snapshot a virtual auto combo into a static combo
+      description: Resolves a built-in `auto/*` template into concrete models, normalizes weights, and creates a new editable combo.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ComboDuplicateRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Static combo created from the resolved virtual template.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboRecord" }
+        "400":
+          description: Invalid JSON or duplicate request body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "422":
+          description: Unknown auto template or it resolved to no valid models.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Auto template resolution or combo persistence failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/combos/reorder:
     post:
       operationId: postApiCombosReorder
       tags:
         - Combos
-      summary: "POST combos › reorder"
+      summary: Persist combo ordering
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ComboReorderRequest" }
       responses:
         "200":
-          description: OK
+          description: Reordered combo list.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboReorderResponse" }
+        "400":
+          description: Invalid JSON or invalid/duplicate combo id list.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo reorder failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/compression/compare:
     post:
       operationId: postApiCompressionCompare
@@ -20478,7 +20841,7 @@ paths:
           required: true
           schema:
             type: string
-            pattern: '^[A-Za-z0-9._-]{1,80}$'
+            pattern: "^[A-Za-z0-9._-]{1,80}$"
         - name: connectionId
           in: query
           required: false
@@ -21071,7 +21434,11 @@ paths:
         - name: status
           in: query
           required: false
-          schema: { type: string, enum: [queued, running, awaiting_approval, completed, failed, cancelled] }
+          schema:
+            {
+              type: string,
+              enum: [queued, running, awaiting_approval, completed, failed, cancelled],
+            }
         - name: limit
           in: query
           required: false
@@ -21654,7 +22021,11 @@ paths:
                 file: { type: string, format: binary }
                 purpose: { type: string, minLength: 1 }
                 expires_after[anchor]: { type: string, enum: [created_at] }
-                expires_after[seconds]: { type: string, description: Parsed as an integer when supplied with the `created_at` anchor. }
+                expires_after[seconds]:
+                  {
+                    type: string,
+                    description: Parsed as an integer when supplied with the `created_at` anchor.,
+                  }
               additionalProperties: true
       responses:
         "200":
@@ -24015,7 +24386,8 @@ paths:
                       required: [id, state, skill, createdAt, updatedAt, completedAt]
                       properties:
                         id: { type: string }
-                        state: { type: string, enum: [submitted, working, completed, failed, cancelled] }
+                        state:
+                          { type: string, enum: [submitted, working, completed, failed, cancelled] }
                         skill: { type: [string, "null"] }
                         createdAt: { type: string, format: date-time }
                         updatedAt: { type: string, format: date-time }
@@ -24423,7 +24795,8 @@ paths:
         "200":
           description: Gzip-compressed raw client request bytes
           headers:
-            X-Diagnostic-Capture-State: { schema: { type: string, enum: [capturing, complete, incomplete] } }
+            X-Diagnostic-Capture-State:
+              { schema: { type: string, enum: [capturing, complete, incomplete] } }
             X-Diagnostic-Capture-Complete: { schema: { type: string, enum: ["true", "false"] } }
             Content-Disposition: { schema: { type: string } }
           content:
@@ -24496,7 +24869,8 @@ paths:
         "200":
           description: Gzip-compressed request or response capture
           headers:
-            X-Diagnostic-Capture-State: { schema: { type: string, enum: [capturing, complete, incomplete] } }
+            X-Diagnostic-Capture-State:
+              { schema: { type: string, enum: [capturing, complete, incomplete] } }
             X-Diagnostic-Capture-Complete: { schema: { type: string, enum: ["true", "false"] } }
             Content-Disposition: { schema: { type: string } }
           content:
@@ -25043,7 +25417,23 @@ components:
   schemas:
     FreeProxyRecord:
       type: object
-      required: [id, source, host, port, type, countryCode, qualityScore, latencyMs, anonymity, lastValidated, inPool, poolProxyId, createdAt, updatedAt]
+      required:
+        [
+          id,
+          source,
+          host,
+          port,
+          type,
+          countryCode,
+          qualityScore,
+          latencyMs,
+          anonymity,
+          lastValidated,
+          inPool,
+          poolProxyId,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         source: { type: string, enum: [1proxy, proxifly, iplocate, webshare] }
@@ -25186,7 +25576,12 @@ components:
           required: [enabled, intervalMs]
           properties:
             enabled: { type: boolean }
-            intervalMs: { type: integer, minimum: 300000, description: Scheduler interval in milliseconds; values are clamped to at least 5 minutes. }
+            intervalMs:
+              {
+                type: integer,
+                minimum: 300000,
+                description: Scheduler interval in milliseconds; values are clamped to at least 5 minutes.,
+              }
           additionalProperties: false
       additionalProperties: false
     FreeProxySyncRequest:
@@ -25310,7 +25705,14 @@ components:
       required: [success, connection]
       properties:
         success: { type: boolean, const: true }
-        warning: { type: string }
+        warning:
+          type: object
+          required: [code, modelId, providerId]
+          properties:
+            code: { type: string, const: COMBO_NAME_SHADOWS_MODEL }
+            modelId: { type: string }
+            providerId: { type: string }
+          additionalProperties: false
         connection: { $ref: "#/components/schemas/OAuthConnectionSummary" }
       additionalProperties: false
     OAuthPollResultResponse:
@@ -25427,7 +25829,8 @@ components:
         filename: { type: string }
         object: { type: string, const: file }
         purpose: { type: string }
-        expires_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds when set. }
+        expires_at:
+          { type: [integer, "null"], minimum: 0, description: Unix epoch seconds when set. }
       additionalProperties: false
     V1FileListResponse:
       type: object
@@ -25452,17 +25855,65 @@ components:
       additionalProperties: false
     V1BatchObject:
       type: object
-      required: [id, object, endpoint, errors, input_file_id, completion_window, status, output_file_id, error_file_id, created_at, in_progress_at, expires_at, finalizing_at, completed_at, failed_at, expired_at, cancelling_at, cancelled_at, request_counts, metadata, model, usage]
+      required:
+        [
+          id,
+          object,
+          endpoint,
+          errors,
+          input_file_id,
+          completion_window,
+          status,
+          output_file_id,
+          error_file_id,
+          created_at,
+          in_progress_at,
+          expires_at,
+          finalizing_at,
+          completed_at,
+          failed_at,
+          expired_at,
+          cancelling_at,
+          cancelled_at,
+          request_counts,
+          metadata,
+          model,
+          usage,
+        ]
       properties:
         id: { type: string, pattern: "^batch_[0-9a-f]{24}$" }
         object: { type: string, const: batch }
         endpoint:
           type: string
-          enum: [/v1/responses, /v1/chat/completions, /v1/embeddings, /v1/completions, /v1/moderations, /v1/images/generations, /v1/videos/generations]
-        errors: { description: Nullable structured batch-level errors; provider/worker shape may vary. }
+          enum:
+            [
+              /v1/responses,
+              /v1/chat/completions,
+              /v1/embeddings,
+              /v1/completions,
+              /v1/moderations,
+              /v1/images/generations,
+              /v1/videos/generations,
+            ]
+        errors:
+          { description: Nullable structured batch-level errors; provider/worker shape may vary. }
         input_file_id: { type: string, pattern: "^file-[0-9a-f]{24}$" }
         completion_window: { type: string, const: 24h }
-        status: { type: string, enum: [validating, failed, in_progress, finalizing, completed, expired, cancelling, cancelled] }
+        status:
+          {
+            type: string,
+            enum:
+              [
+                validating,
+                failed,
+                in_progress,
+                finalizing,
+                completed,
+                expired,
+                cancelling,
+                cancelled,
+              ],
+          }
         output_file_id: { type: [string, "null"], pattern: "^file-[0-9a-f]{24}$" }
         error_file_id: { type: [string, "null"], pattern: "^file-[0-9a-f]{24}$" }
         created_at: { type: integer, minimum: 0, description: Unix epoch seconds. }
@@ -25488,7 +25939,8 @@ components:
           propertyNames: { type: string, maxLength: 64 }
           additionalProperties: { type: string }
         model: { type: [string, "null"] }
-        usage: { description: Nullable worker-supplied usage object; fields are not fixed by the route. }
+        usage:
+          { description: Nullable worker-supplied usage object; fields are not fixed by the route. }
       additionalProperties: false
     V1BatchCreateRequest:
       type: object
@@ -25497,7 +25949,16 @@ components:
         input_file_id: { type: string, pattern: "^file-[0-9a-f]{24}$" }
         endpoint:
           type: string
-          enum: [/v1/responses, /v1/chat/completions, /v1/embeddings, /v1/completions, /v1/moderations, /v1/images/generations, /v1/videos/generations]
+          enum:
+            [
+              /v1/responses,
+              /v1/chat/completions,
+              /v1/embeddings,
+              /v1/completions,
+              /v1/moderations,
+              /v1/images/generations,
+              /v1/videos/generations,
+            ]
         completion_window: { type: string, const: 24h }
         metadata:
           type: object
@@ -25546,7 +26007,11 @@ components:
       required: [providerId, apiKey, baseUrl, updatedAt]
       properties:
         providerId: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
-        apiKey: { type: string, description: API key masked to its final four characters; raw credentials are never returned. }
+        apiKey:
+          {
+            type: string,
+            description: API key masked to its final four characters; raw credentials are never returned.,
+          }
         baseUrl: { type: [string, "null"], format: uri }
         updatedAt: { type: string }
       additionalProperties: false
@@ -25636,12 +26101,28 @@ components:
       additionalProperties: true
     CloudAgentTask:
       type: object
-      required: [id, providerId, externalId, status, prompt, source, options, result, activities, error, createdAt, updatedAt, completedAt]
+      required:
+        [
+          id,
+          providerId,
+          externalId,
+          status,
+          prompt,
+          source,
+          options,
+          result,
+          activities,
+          error,
+          createdAt,
+          updatedAt,
+          completedAt,
+        ]
       properties:
         id: { type: string }
         providerId: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
         externalId: { type: [string, "null"] }
-        status: { type: string, enum: [queued, running, awaiting_approval, completed, failed, cancelled] }
+        status:
+          { type: string, enum: [queued, running, awaiting_approval, completed, failed, cancelled] }
         prompt: { type: string }
         source: { $ref: "#/components/schemas/CloudAgentTaskSource" }
         options: { $ref: "#/components/schemas/CloudAgentTaskOptions" }
@@ -25691,7 +26172,11 @@ components:
             id: { type: string }
             providerId: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
             externalId: { type: string }
-            status: { type: string, enum: [queued, running, awaiting_approval, completed, failed, cancelled] }
+            status:
+              {
+                type: string,
+                enum: [queued, running, awaiting_approval, completed, failed, cancelled],
+              }
             prompt: { type: string }
             source: { $ref: "#/components/schemas/CloudAgentTaskSource" }
             options: { $ref: "#/components/schemas/CloudAgentTaskOptions" }
@@ -25735,7 +26220,16 @@ components:
       additionalProperties: false
     V1AccountKeyLimits:
       type: object
-      required: [accountId, maxActiveKeys, dailyIssueLimit, hourlyIssueLimit, dailyIssued, hourlyIssued, updatedAt]
+      required:
+        [
+          accountId,
+          maxActiveKeys,
+          dailyIssueLimit,
+          hourlyIssueLimit,
+          dailyIssued,
+          hourlyIssued,
+          updatedAt,
+        ]
       properties:
         accountId: { type: string }
         maxActiveKeys: { type: [integer, "null"], minimum: 1 }
@@ -25747,7 +26241,16 @@ components:
       additionalProperties: false
     V1ProviderKeyLimits:
       type: object
-      required: [provider, maxActiveKeys, dailyIssueLimit, hourlyIssueLimit, dailyIssued, hourlyIssued, updatedAt]
+      required:
+        [
+          provider,
+          maxActiveKeys,
+          dailyIssueLimit,
+          hourlyIssueLimit,
+          dailyIssued,
+          hourlyIssued,
+          updatedAt,
+        ]
       properties:
         provider: { type: string }
         maxActiveKeys: { type: [integer, "null"], minimum: 1 }
@@ -25786,7 +26289,24 @@ components:
       additionalProperties: false
     V1RegisteredKey:
       type: object
-      required: [id, keyPrefix, name, provider, accountId, isActive, revokedAt, expiresAt, idempotencyKey, dailyBudget, hourlyBudget, dailyUsed, hourlyUsed, createdAt, updatedAt]
+      required:
+        [
+          id,
+          keyPrefix,
+          name,
+          provider,
+          accountId,
+          isActive,
+          revokedAt,
+          expiresAt,
+          idempotencyKey,
+          dailyBudget,
+          hourlyBudget,
+          dailyUsed,
+          hourlyUsed,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string, format: uuid }
         keyPrefix: { type: string, description: Non-secret prefix shown in management listings. }
@@ -25827,7 +26347,8 @@ components:
         provider: { type: string, maxLength: 80, default: "" }
         accountId: { type: string, maxLength: 120, default: "" }
         idempotencyKey: { type: string, maxLength: 256 }
-        expiresAt: { type: string, format: date-time, description: RFC 3339 timestamp with timezone offset. }
+        expiresAt:
+          { type: string, format: date-time, description: RFC 3339 timestamp with timezone offset. }
         dailyBudget: { type: integer, minimum: 1 }
         hourlyBudget: { type: integer, minimum: 1 }
       additionalProperties: true
@@ -25835,7 +26356,12 @@ components:
       type: object
       required: [key, keyId, keyPrefix, name, provider, accountId, expiresAt, createdAt, warning]
       properties:
-        key: { type: string, description: Raw registered API key returned only once at creation., x-sensitive: true }
+        key:
+          {
+            type: string,
+            description: Raw registered API key returned only once at creation.,
+            x-sensitive: true,
+          }
         keyId: { type: string, format: uuid }
         keyPrefix: { type: string }
         name: { type: string }
@@ -25870,15 +26396,18 @@ components:
       additionalProperties: false
     CanaryReadiness:
       type: object
-      required: [schema, generation, ready, databaseReady, coordination, conversationState, lifecycle]
+      required:
+        [schema, generation, ready, databaseReady, coordination, conversationState, lifecycle]
       properties:
         schema: { type: string, const: omni-canary-readiness/v1 }
-        generation: { type: string, description: Active OMNIROUTE_APP_GENERATION; empty before bootstrap. }
+        generation:
+          { type: string, description: Active OMNIROUTE_APP_GENERATION; empty before bootstrap. }
         ready: { type: boolean }
         databaseReady: { type: boolean }
         coordination:
           type: object
-          required: [protocol, accountAdmission, refreshOwnership, backgroundOwnership, conversationState]
+          required:
+            [protocol, accountAdmission, refreshOwnership, backgroundOwnership, conversationState]
           properties:
             protocol: { type: string, const: omni-coordination/v1 }
             accountAdmission: { type: boolean }
@@ -25898,7 +26427,17 @@ components:
             reason: { type: [string, "null"] }
         lifecycle:
           type: object
-          required: [activeResponses, activeWebSockets, pendingUploads, queuedRequests, conversationPins, upstreamLeases, diagnosticCaptureWork, draining]
+          required:
+            [
+              activeResponses,
+              activeWebSockets,
+              pendingUploads,
+              queuedRequests,
+              conversationPins,
+              upstreamLeases,
+              diagnosticCaptureWork,
+              draining,
+            ]
           properties:
             activeResponses: { type: [integer, "null"], minimum: 0 }
             activeWebSockets: { type: [integer, "null"], minimum: 0 }
@@ -25931,11 +26470,23 @@ components:
         - activeConnections
         - errorRate
       properties:
-        count: { type: integer, minimum: 0, description: Number of recorded requests in the window. }
+        count:
+          { type: integer, minimum: 0, description: Number of recorded requests in the window. }
         avg: { type: number, minimum: 0, description: Mean total request duration in milliseconds. }
-        p50: { type: number, minimum: 0, description: Median total request duration in milliseconds. }
-        p95: { type: number, minimum: 0, description: 95th percentile total request duration in milliseconds. }
-        p99: { type: number, minimum: 0, description: 99th percentile total request duration in milliseconds. }
+        p50:
+          { type: number, minimum: 0, description: Median total request duration in milliseconds. }
+        p95:
+          {
+            type: number,
+            minimum: 0,
+            description: 95th percentile total request duration in milliseconds.,
+          }
+        p99:
+          {
+            type: number,
+            minimum: 0,
+            description: 99th percentile total request duration in milliseconds.,
+          }
         phaseBreakdown:
           type: object
           description: Per-phase timing summaries keyed by request phase name.
@@ -25945,7 +26496,12 @@ components:
             properties:
               count: { type: integer, minimum: 0 }
               p50: { type: number, minimum: 0, description: Median phase duration in milliseconds. }
-              p95: { type: number, minimum: 0, description: 95th percentile phase duration in milliseconds. }
+              p95:
+                {
+                  type: number,
+                  minimum: 0,
+                  description: 95th percentile phase duration in milliseconds.,
+                }
               avg: { type: number, minimum: 0, description: Mean phase duration in milliseconds. }
             additionalProperties: false
         totalRequests: { type: integer, minimum: 0 }
@@ -25985,10 +26541,22 @@ components:
             rss: { type: integer, minimum: 0, description: Resident set size in bytes. }
             heapTotal: { type: integer, minimum: 0, description: V8 heap capacity in bytes. }
             heapUsed: { type: integer, minimum: 0, description: V8 heap currently used in bytes. }
-            external: { type: integer, minimum: 0, description: Native memory associated with JavaScript objects, in bytes. }
-            arrayBuffers: { type: integer, minimum: 0, description: ArrayBuffer and SharedArrayBuffer memory in bytes. }
+            external:
+              {
+                type: integer,
+                minimum: 0,
+                description: Native memory associated with JavaScript objects,
+                in bytes.,
+              }
+            arrayBuffers:
+              {
+                type: integer,
+                minimum: 0,
+                description: ArrayBuffer and SharedArrayBuffer memory in bytes.,
+              }
           additionalProperties: true
-        activeConnections: { type: integer, minimum: 0, description: Number of currently active provider sessions. }
+        activeConnections:
+          { type: integer, minimum: 0, description: Number of currently active provider sessions. }
         errorRate:
           type: number
           minimum: 0
@@ -26067,12 +26635,23 @@ components:
           description: PSI comes from host /proc/pressure/memory, not the container cgroup.
         state:
           type: object
-          required: [severity, reason, elevatedStreak, recoveryStreak, lastTransitionAtMs, observedAtMs]
+          required:
+            [severity, reason, elevatedStreak, recoveryStreak, lastTransitionAtMs, observedAtMs]
           properties:
             severity: { type: string, enum: [normal, high, critical] }
             reason:
               type: string
-              enum: [none, v8_heap_ratio, v8_heap_absolute, cgroup_ratio, cgroup_high, psi_some, psi_full, oom_event]
+              enum:
+                [
+                  none,
+                  v8_heap_ratio,
+                  v8_heap_absolute,
+                  cgroup_ratio,
+                  cgroup_high,
+                  psi_some,
+                  psi_full,
+                  oom_event,
+                ]
             elevatedStreak: { type: integer, minimum: 0 }
             recoveryStreak: { type: integer, minimum: 0 }
             lastTransitionAtMs: { type: number, minimum: 0 }
@@ -26095,7 +26674,8 @@ components:
                   additionalProperties: false
                 process:
                   type: object
-                  required: [rssBytes, externalBytes, arrayBuffersBytes, availableBytes, constrainedBytes]
+                  required:
+                    [rssBytes, externalBytes, arrayBuffersBytes, availableBytes, constrainedBytes]
                   properties:
                     rssBytes: { type: number, minimum: 0 }
                     externalBytes: { type: number, minimum: 0 }
@@ -26145,7 +26725,12 @@ components:
       properties:
         representation:
           type: string
-          enum: [parsed_json_reserialized_utf8, serialized_provider_request_utf8, decoded_upstream_bytes]
+          enum:
+            [
+              parsed_json_reserialized_utf8,
+              serialized_provider_request_utf8,
+              decoded_upstream_bytes,
+            ]
         state: { type: string, enum: [capturing, complete, incomplete] }
         complete: { type: boolean }
         reason: { type: string }
@@ -27237,7 +27822,6 @@ components:
       properties:
         name: { type: string, minLength: 1, maxLength: 120 }
       additionalProperties: true
-
 
     QuotaPoolListResponse:
       type: object
@@ -28592,7 +29176,8 @@ components:
           type: array
           items:
             type: object
-            required: [name, displayName, supportedGenerationMethods, inputTokenLimit, outputTokenLimit]
+            required:
+              [name, displayName, supportedGenerationMethods, inputTokenLimit, outputTokenLimit]
             properties:
               name: { type: string, description: Fully qualified Gemini model name. }
               displayName: { type: string }
@@ -28733,7 +29318,8 @@ components:
 
     ProviderPluginManifestEntry:
       type: object
-      required: [id, format, executor, auth, endpoints, capabilities, passthroughModels, models, sidecar]
+      required:
+        [id, format, executor, auth, endpoints, capabilities, passthroughModels, models, sidecar]
       properties:
         id: { type: string }
         alias: { type: string }
@@ -29910,7 +30496,8 @@ components:
         provider: { type: string }
         connectionName: { type: string }
         expiresAt: { type: [string, "null"] }
-        expiryType: { type: string, enum: [oauth_token, subscription, api_credits, free_tier_reset] }
+        expiryType:
+          { type: string, enum: [oauth_token, subscription, api_credits, free_tier_reset] }
         alertDays: { type: number }
         lastChecked: { type: string, format: date-time }
         status: { type: string, enum: [active, expiring_soon, expired, unknown] }
@@ -30105,7 +30692,8 @@ components:
               properties:
                 type: { type: string, const: string }
                 title: { type: string, const: Reasoning effort }
-                description: { type: string, const: Controls how much reasoning effort the model uses. }
+                description:
+                  { type: string, const: Controls how much reasoning effort the model uses. }
                 default: { type: string }
                 enum:
                   type: array
@@ -30122,7 +30710,18 @@ components:
 
     VscodeOllamaShowResponse:
       type: object
-      required: [model, remote_model, license, modelfile, parameters, template, details, model_info, capabilities]
+      required:
+        [
+          model,
+          remote_model,
+          license,
+          modelfile,
+          parameters,
+          template,
+          details,
+          model_info,
+          capabilities,
+        ]
       properties:
         model: { type: string }
         remote_model: { type: string }
@@ -30312,7 +30911,18 @@ components:
 
     VscodeComboShowResponse:
       type: object
-      required: [model, remote_model, license, modelfile, parameters, template, details, model_info, capabilities]
+      required:
+        [
+          model,
+          remote_model,
+          license,
+          modelfile,
+          parameters,
+          template,
+          details,
+          model_info,
+          capabilities,
+        ]
       properties:
         model: { type: string }
         remote_model: { type: string }
@@ -31069,7 +31679,21 @@ components:
     ConversationSummary:
       type: object
       required:
-        [id, apiKeyId, fingerprintHash, turnCount, firstSeenAt, lastSeenAt, lastCallLogId, lastModel, lastProvider, lastStatus, isActive, activeCallLogId, isGenuineContinuation]
+        [
+          id,
+          apiKeyId,
+          fingerprintHash,
+          turnCount,
+          firstSeenAt,
+          lastSeenAt,
+          lastCallLogId,
+          lastModel,
+          lastProvider,
+          lastStatus,
+          isActive,
+          activeCallLogId,
+          isGenuineContinuation,
+        ]
       properties:
         id: { type: string }
         apiKeyId: { type: [string, "null"] }
@@ -31159,7 +31783,22 @@ components:
     InFlightLogDetailResponse:
       type: object
       required:
-        [id, timestamp, method, path, status, model, provider, connectionId, duration, detailState, active, pipelinePayloads, hasPipelineDetails, partialAssistantText]
+        [
+          id,
+          timestamp,
+          method,
+          path,
+          status,
+          model,
+          provider,
+          connectionId,
+          duration,
+          detailState,
+          active,
+          pipelinePayloads,
+          hasPipelineDetails,
+          partialAssistantText,
+        ]
       properties:
         id: { type: string }
         timestamp: { type: string, format: date-time }
@@ -31181,7 +31820,20 @@ components:
     InMemoryLogDetailResponse:
       type: object
       required:
-        [id, timestamp, path, status, model, provider, connectionId, duration, detailState, active, pipelinePayloads, hasPipelineDetails]
+        [
+          id,
+          timestamp,
+          path,
+          status,
+          model,
+          provider,
+          connectionId,
+          duration,
+          detailState,
+          active,
+          pipelinePayloads,
+          hasPipelineDetails,
+        ]
       properties:
         id: { type: string }
         timestamp: { type: string, format: date-time }
@@ -31458,7 +32110,17 @@ components:
 
     QuotaProviderEntry:
       type: object
-      required: [name, provider, connectionId, quotaUsed, quotaTotal, percentRemaining, resetAt, tokenStatus]
+      required:
+        [
+          name,
+          provider,
+          connectionId,
+          quotaUsed,
+          quotaTotal,
+          percentRemaining,
+          resetAt,
+          tokenStatus,
+        ]
       properties:
         name: { type: string }
         provider: { type: string }
@@ -31496,7 +32158,24 @@ components:
 
     ComboHealthTargetHealth:
       type: object
-      required: [executionKey, stepId, model, provider, connectionId, label, requests, successRate, avgLatencyMs, lastStatus, lastUsedAt, quotaRemainingPct, quotaIsExhausted, quotaTrend, quotaScope]
+      required:
+        [
+          executionKey,
+          stepId,
+          model,
+          provider,
+          connectionId,
+          label,
+          requests,
+          successRate,
+          avgLatencyMs,
+          lastStatus,
+          lastUsedAt,
+          quotaRemainingPct,
+          quotaIsExhausted,
+          quotaTrend,
+          quotaScope,
+        ]
       properties:
         executionKey: { type: string }
         stepId: { type: string }
@@ -31591,7 +32270,18 @@ components:
 
     ComboForecastHistorySummary:
       type: object
-      required: [requests, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, reasoningTokens, totalTokens, costUsd, avgDailyCostUsd]
+      required:
+        [
+          requests,
+          inputTokens,
+          outputTokens,
+          cacheReadTokens,
+          cacheCreationTokens,
+          reasoningTokens,
+          totalTokens,
+          costUsd,
+          avgDailyCostUsd,
+        ]
       properties:
         requests: { type: number, minimum: 0 }
         inputTokens: { type: number, minimum: 0 }
@@ -31625,7 +32315,19 @@ components:
 
     ComboForecastTarget:
       type: object
-      required: [executionKey, stepId, provider, model, connectionId, label, trafficShare, history, forecast, quota]
+      required:
+        [
+          executionKey,
+          stepId,
+          provider,
+          model,
+          connectionId,
+          label,
+          trafficShare,
+          history,
+          forecast,
+          quota,
+        ]
       properties:
         executionKey: { type: string }
         stepId: { type: [string, "null"] }
@@ -31652,7 +32354,15 @@ components:
           additionalProperties: false
         quota:
           type: object
-          required: [scope, remainingPct, depletionPctPerDay, projectedRemainingPct, timeToExhaustDays, risk]
+          required:
+            [
+              scope,
+              remainingPct,
+              depletionPctPerDay,
+              projectedRemainingPct,
+              timeToExhaustDays,
+              risk,
+            ]
           properties:
             scope: { type: string, enum: [connection, provider, none] }
             remainingPct: { type: [number, "null"] }
@@ -31665,7 +32375,18 @@ components:
 
     ComboForecastMetrics:
       type: object
-      required: [comboId, comboName, strategy, confidence, history, forecast, quotaRisk, targets, dataQuality]
+      required:
+        [
+          comboId,
+          comboName,
+          strategy,
+          confidence,
+          history,
+          forecast,
+          quotaRisk,
+          targets,
+          dataQuality,
+        ]
       properties:
         comboId: { type: string }
         comboName: { type: string }
@@ -31802,7 +32523,19 @@ components:
         score: { type: number }
         signals:
           type: object
-          required: [totalRequests, successRate, avgLatencyMs, worstQuotaRemainingPct, forecastRisk, forecastConfidence, usageSkew, targetCount, providerIssueCount, dataQualityNotes]
+          required:
+            [
+              totalRequests,
+              successRate,
+              avgLatencyMs,
+              worstQuotaRemainingPct,
+              forecastRisk,
+              forecastConfidence,
+              usageSkew,
+              targetCount,
+              providerIssueCount,
+              dataQualityNotes,
+            ]
           properties:
             totalRequests: { type: number, minimum: 0 }
             successRate: { type: number, minimum: 0, maximum: 1 }
@@ -31838,7 +32571,8 @@ components:
         horizon: { type: string, enum: [24h, 7d, 30d] }
         summary:
           type: object
-          required: [comboCount, healthyCount, degradedCount, downCount, issueCount, suggestionCount]
+          required:
+            [comboCount, healthyCount, degradedCount, downCount, issueCount, suggestionCount]
           properties:
             comboCount: { type: integer, minimum: 0 }
             healthyCount: { type: integer, minimum: 0 }
@@ -31940,7 +32674,17 @@ components:
 
     ResilienceAccountExplanation:
       type: object
-      required: [connectionId, state, reasonCode, retryAfterMs, testStatus, lastErrorType, errorCode, backoffLevel]
+      required:
+        [
+          connectionId,
+          state,
+          reasonCode,
+          retryAfterMs,
+          testStatus,
+          lastErrorType,
+          errorCode,
+          backoffLevel,
+        ]
       properties:
         connectionId: { type: string }
         state:
@@ -32012,7 +32756,8 @@ components:
 
     ComboScoringInspectorTarget:
       type: object
-      required: [executionKey, stepId, provider, model, connectionId, label, rank, score, factors, signals]
+      required:
+        [executionKey, stepId, provider, model, connectionId, label, rank, score, factors, signals]
       properties:
         executionKey: { type: string }
         stepId: { type: [string, "null"] }
@@ -32028,7 +32773,16 @@ components:
             $ref: "#/components/schemas/ComboScoringInspectorFactor"
         signals:
           type: object
-          required: [quotaRemainingPct, projectedQuotaRemainingPct, successRate, avgLatencyMs, forecastRisk, autopilotIssueCount, resilience]
+          required:
+            [
+              quotaRemainingPct,
+              projectedQuotaRemainingPct,
+              successRate,
+              avgLatencyMs,
+              forecastRisk,
+              autopilotIssueCount,
+              resilience,
+            ]
           properties:
             quotaRemainingPct: { type: [number, "null"] }
             projectedQuotaRemainingPct: { type: [number, "null"] }
@@ -32047,7 +32801,19 @@ components:
 
     ComboScoringInspectorCombo:
       type: object
-      required: [comboId, comboName, strategy, taskType, weights, weightSource, modePack, selectedExecutionKey, targets, warnings]
+      required:
+        [
+          comboId,
+          comboName,
+          strategy,
+          taskType,
+          weights,
+          weightSource,
+          modePack,
+          selectedExecutionKey,
+          targets,
+          warnings,
+        ]
       properties:
         comboId: { type: string }
         comboName: { type: string }
@@ -32167,7 +32933,19 @@ components:
 
     TokenLimit:
       type: object
-      required: [id, apiKeyId, scopeType, scopeValue, tokenLimit, resetInterval, resetTime, enabled, createdAt, updatedAt]
+      required:
+        [
+          id,
+          apiKeyId,
+          scopeType,
+          scopeValue,
+          tokenLimit,
+          resetInterval,
+          resetTime,
+          enabled,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string }
         apiKeyId: { type: string }
@@ -32191,7 +32969,24 @@ components:
 
     TokenLimitWithUsage:
       type: object
-      required: [id, apiKeyId, scopeType, scopeValue, tokenLimit, resetInterval, resetTime, enabled, createdAt, updatedAt, tokensUsed, windowStart, periodStartAt, nextResetAt, remaining]
+      required:
+        [
+          id,
+          apiKeyId,
+          scopeType,
+          scopeValue,
+          tokenLimit,
+          resetInterval,
+          resetTime,
+          enabled,
+          createdAt,
+          updatedAt,
+          tokensUsed,
+          windowStart,
+          periodStartAt,
+          nextResetAt,
+          remaining,
+        ]
       properties:
         id: { type: string }
         apiKeyId: { type: string }
@@ -32362,7 +33157,8 @@ components:
 
     UsageBudgetCheck:
       type: object
-      required: [allowed, dailyUsed, dailyLimit, warningReached, remaining, periodUsed, activeLimitUsd]
+      required:
+        [allowed, dailyUsed, dailyLimit, warningReached, remaining, periodUsed, activeLimitUsd]
       properties:
         allowed: { type: boolean }
         reason: { type: string }
@@ -32381,7 +33177,17 @@ components:
 
     UsageBudgetStatusResponse:
       type: object
-      required: [budgetCheck, dailyTotal, monthlyTotal, totalEntries, totalCostToday, totalCostMonth, totalCostPeriod, activeLimitUsd]
+      required:
+        [
+          budgetCheck,
+          dailyTotal,
+          monthlyTotal,
+          totalEntries,
+          totalCostToday,
+          totalCostMonth,
+          totalCostPeriod,
+          activeLimitUsd,
+        ]
       properties:
         budgetCheck:
           $ref: "#/components/schemas/UsageBudgetCheck"
@@ -32745,7 +33551,16 @@ components:
     ClaudeAuthApplyLocalResponse:
       type: object
       required:
-        [success, connectionId, connectionLabel, authPath, savedBakPath, centralizedBackupPath, mcpOAuthPreserved, writtenAt]
+        [
+          success,
+          connectionId,
+          connectionLabel,
+          authPath,
+          savedBakPath,
+          centralizedBackupPath,
+          mcpOAuthPreserved,
+          writtenAt,
+        ]
       properties:
         success: { type: boolean, const: true }
         connectionId: { type: string }
@@ -33033,7 +33848,8 @@ components:
 
     AntigravityMitmStatus:
       type: object
-      required: [running, pid, dnsConfigured, certExists, hasCachedPassword, isWin, needsSudoPassword]
+      required:
+        [running, pid, dnsConfigured, certExists, hasCachedPassword, isWin, needsSudoPassword]
       properties:
         running: { type: boolean }
         pid:
@@ -33496,7 +34312,7 @@ components:
       type: object
       required: [invocationId, createdAt, strategy, comboName, decisions, terminal]
       properties:
-        invocationId: { type: string, pattern: '^combo-' }
+        invocationId: { type: string, pattern: "^combo-" }
         createdAt: { type: number, description: Unix epoch time in milliseconds. }
         strategy: { type: [string, "null"] }
         comboName: { type: [string, "null"] }
@@ -33582,7 +34398,19 @@ components:
 
     RouteExplainTarget:
       type: object
-      required: [id, timestamp, status, provider, model, comboStepId, comboExecutionKey, durationMs, outcome, reason]
+      required:
+        [
+          id,
+          timestamp,
+          status,
+          provider,
+          model,
+          comboStepId,
+          comboExecutionKey,
+          durationMs,
+          outcome,
+          reason,
+        ]
       properties:
         id: { type: string }
         timestamp: { type: [string, "null"] }
@@ -33617,7 +34445,21 @@ components:
 
     RouteExplainDecisionReplayCandidate:
       type: object
-      required: [executionKey, stepId, provider, model, connectionId, label, rank, score, isRuntimeSelected, wouldSelectNow, factors, signals]
+      required:
+        [
+          executionKey,
+          stepId,
+          provider,
+          model,
+          connectionId,
+          label,
+          rank,
+          score,
+          isRuntimeSelected,
+          wouldSelectNow,
+          factors,
+          signals,
+        ]
       properties:
         executionKey: { type: string }
         stepId: { type: [string, "null"] }
@@ -33639,7 +34481,21 @@ components:
 
     RouteExplainDecisionReplayRuntime:
       type: object
-      required: [source, exact, selectedCallLogId, comboName, comboStepId, comboExecutionKey, provider, model, connectionId, status, timestamp, durationMs]
+      required:
+        [
+          source,
+          exact,
+          selectedCallLogId,
+          comboName,
+          comboStepId,
+          comboExecutionKey,
+          provider,
+          model,
+          connectionId,
+          status,
+          timestamp,
+          durationMs,
+        ]
       properties:
         source: { type: string, const: call_logs }
         exact: { type: boolean, const: true }
@@ -33657,7 +34513,25 @@ components:
 
     RouteExplainDecisionReplayRecompute:
       type: object
-      required: [source, method, exactRuntimeReplay, asOf, timeRange, horizon, comboId, comboName, strategy, taskType, recomputedSelectedExecutionKey, runtimeSelectedRank, runtimeSelectedScore, alignment, candidates, warnings]
+      required:
+        [
+          source,
+          method,
+          exactRuntimeReplay,
+          asOf,
+          timeRange,
+          horizon,
+          comboId,
+          comboName,
+          strategy,
+          taskType,
+          recomputedSelectedExecutionKey,
+          runtimeSelectedRank,
+          runtimeSelectedScore,
+          alignment,
+          candidates,
+          warnings,
+        ]
       properties:
         source: { type: string, const: comboScoringInspector }
         method: { type: string, const: read_only_recompute }
@@ -33700,7 +34574,32 @@ components:
 
     RouteExplainabilityResponse:
       type: object
-      required: [requestId, generatedAt, routeType, confidence, summary, comboUsed, providerSelected, modelUsed, score, costActual, latencyActual, decision, request, selectedTarget, targetStats, fallbacksTriggered, relatedTargets, evidence, recommendations, limitations, decisionReplay, resilience, reasoningRouting]
+      required:
+        [
+          requestId,
+          generatedAt,
+          routeType,
+          confidence,
+          summary,
+          comboUsed,
+          providerSelected,
+          modelUsed,
+          score,
+          costActual,
+          latencyActual,
+          decision,
+          request,
+          selectedTarget,
+          targetStats,
+          fallbacksTriggered,
+          relatedTargets,
+          evidence,
+          recommendations,
+          limitations,
+          decisionReplay,
+          resilience,
+          reasoningRouting,
+        ]
       properties:
         requestId: { type: string }
         generatedAt: { type: string, format: date-time }
@@ -33715,7 +34614,18 @@ components:
         latencyActual: { type: number }
         decision:
           type: object
-          required: [comboUsed, providerSelected, modelUsed, status, score, factors, fallbacksTriggered, costActual, latencyActual]
+          required:
+            [
+              comboUsed,
+              providerSelected,
+              modelUsed,
+              status,
+              score,
+              factors,
+              fallbacksTriggered,
+              costActual,
+              latencyActual,
+            ]
           properties:
             comboUsed: { type: [string, "null"] }
             providerSelected: { type: [string, "null"] }
@@ -33735,7 +34645,19 @@ components:
           additionalProperties: false
         request:
           type: object
-          required: [id, timestamp, method, path, requestedModel, requestType, sourceFormat, targetFormat, cacheSource, apiKeyName]
+          required:
+            [
+              id,
+              timestamp,
+              method,
+              path,
+              requestedModel,
+              requestType,
+              sourceFormat,
+              targetFormat,
+              cacheSource,
+              apiKeyName,
+            ]
           properties:
             id: { type: string }
             timestamp: { type: [string, "null"] }
@@ -33750,7 +34672,19 @@ components:
           additionalProperties: false
         selectedTarget:
           type: object
-          required: [provider, model, account, connectionId, comboStepId, comboExecutionKey, durationMs, status, tokensIn, tokensOut]
+          required:
+            [
+              provider,
+              model,
+              account,
+              connectionId,
+              comboStepId,
+              comboExecutionKey,
+              durationMs,
+              status,
+              tokensIn,
+              tokensOut,
+            ]
           properties:
             provider: { type: [string, "null"] }
             model: { type: [string, "null"] }
@@ -33917,7 +34851,7 @@ components:
       type: object
       required: [currency, extraUsageStatus, additionalCreditsUrl]
       properties:
-        currency: { type: string, pattern: '^[A-Z]{3}$' }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
         extraCreditsMinorUnits: { type: integer, minimum: 0 }
         monthlyUsedMinorUnits: { type: integer, minimum: 0 }
         monthlyLimitEnabled: { type: boolean }
@@ -34095,66 +35029,578 @@ components:
         date: { type: [string, "null"], format: date }
       additionalProperties: false
 
+    ComboModelEntry:
+      oneOf:
+        - type: string
+          minLength: 1
+          maxLength: 300
+          description: Legacy provider/model reference string.
+        - type: object
+          required: [model]
+          properties:
+            kind: { type: string, const: model }
+            id: { type: string, minLength: 1, maxLength: 200 }
+            provider: { type: string, minLength: 1, maxLength: 120 }
+            providerId: { type: string, minLength: 1, maxLength: 120 }
+            model: { type: string, minLength: 1, maxLength: 300 }
+            connectionId: { type: [string, "null"] }
+            allowedConnectionIds:
+              type: array
+              maxItems: 50
+              items: { type: string, minLength: 1, maxLength: 200 }
+            tags:
+              type: array
+              maxItems: 20
+              items: { type: string, minLength: 1, maxLength: 100 }
+            prompt: { type: string, minLength: 1, maxLength: 20000 }
+            weight: { type: number, minimum: 0, maximum: 100 }
+            label: { type: string, minLength: 1, maxLength: 200 }
+            fallbackOnlyOnQuotaExhaustion: { type: boolean }
+          additionalProperties: true
+        - type: object
+          required: [kind, comboName]
+          properties:
+            kind: { type: string, const: combo-ref }
+            comboName: { type: string, minLength: 1, maxLength: 100 }
+            id: { type: string, minLength: 1, maxLength: 200 }
+            weight: { type: number, minimum: 0, maximum: 100 }
+            label: { type: string, minLength: 1, maxLength: 200 }
+            fallbackOnlyOnQuotaExhaustion: { type: boolean }
+          additionalProperties: true
+    ComboRuntimeConfig:
+      type: object
+      description: >-
+        Runtime behavior settings for a combo. Known fields below cover retry, timeout, stickiness,
+        compression, fallback, SLA, context filtering, and routing weights; this object is
+        passthrough in the source schema for forward-compatible config additions.
+      properties:
+        strategy:
+          {
+            type: string,
+            enum:
+              [
+                priority,
+                weighted,
+                round-robin,
+                context-relay,
+                fill-first,
+                p2c,
+                random,
+                least-used,
+                cost-optimized,
+                reset-aware,
+                reset-window,
+                headroom,
+                quota-weighted,
+                strict-random,
+                auto,
+                lkgp,
+                context-optimized,
+                cache-optimized,
+                fusion,
+                pipeline,
+              ],
+          }
+        maxRetries: { type: integer, minimum: 0, maximum: 10 }
+        retryDelayMs: { type: integer, minimum: 0, maximum: 60000 }
+        timeoutMs: { type: integer, minimum: 1000 }
+        targetTimeoutMs: { type: integer, minimum: 0, maximum: 600000 }
+        concurrencyPerModel: { type: integer, minimum: 1, maximum: 20 }
+        queueTimeoutMs: { type: integer, minimum: 1000, maximum: 120000 }
+        disableSessionStickiness: { type: boolean }
+        nestedComboMode: { type: string, enum: [flatten, execute] }
+        trackMetrics: { type: boolean }
+        compressionMode:
+          {
+            type: string,
+            enum:
+              [off, lite, standard, aggressive, ultra, rtk, stacked, codex-responses, omniglyph],
+          }
+        failoverBeforeRetry: { type: boolean }
+        zeroLatencyOptimizationsEnabled: { type: boolean }
+        hedging: { type: boolean }
+        hedgeDelayMs: { type: integer, minimum: 0, maximum: 60000 }
+        fallbackCompressionMode:
+          {
+            type: string,
+            enum:
+              [off, lite, standard, aggressive, ultra, rtk, stacked, codex-responses, omniglyph],
+          }
+        fallbackCompressionThreshold: { type: integer, minimum: 0, maximum: 2000000 }
+        predictiveTtftMs: { type: integer, minimum: 0, maximum: 300000 }
+        relayMode: { type: string, enum: [schema-locked, standard] }
+        candidatePool: { type: array, items: { type: string, minLength: 1 } }
+        weights: { type: object, additionalProperties: { type: number, minimum: 0, maximum: 1 } }
+        budgetCap: { type: number, exclusiveMinimum: 0 }
+        explorationRate: { type: number, minimum: 0, maximum: 1 }
+        sla:
+          type: object
+          properties:
+            targetP95Ms: { type: integer, minimum: 1, maximum: 300000 }
+            maxErrorRate: { type: number, minimum: 0, maximum: 1 }
+            maxCostPer1MTokens: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
+            hardConstraints: { type: boolean }
+          additionalProperties: false
+        contextRequirements:
+          type: object
+          properties:
+            minContextWindow: { type: integer, minimum: 0, maximum: 10000000 }
+            maxContextWindow: { type: integer, minimum: 0, maximum: 10000000 }
+            preferLargeContext: { type: boolean }
+            contextFilterMode: { type: string, enum: [strict, lenient] }
+          additionalProperties: false
+      additionalProperties: true
+    ComboRecord:
+      type: object
+      required: [id, name, models]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/ComboModelEntry" }
+        strategy:
+          {
+            type: string,
+            enum:
+              [
+                priority,
+                weighted,
+                round-robin,
+                context-relay,
+                fill-first,
+                p2c,
+                random,
+                least-used,
+                cost-optimized,
+                reset-aware,
+                reset-window,
+                headroom,
+                quota-weighted,
+                strict-random,
+                auto,
+                lkgp,
+                context-optimized,
+                cache-optimized,
+                fusion,
+                pipeline,
+                quota-share,
+              ],
+          }
+        config: { $ref: "#/components/schemas/ComboRuntimeConfig" }
+        version: { type: integer }
+        isActive: { type: boolean }
+        allowedProviders: { type: array, items: { type: string } }
+        allowedModelFamilies: { type: array, items: { type: string } }
+        system_message: { type: [string, "null"] }
+        tool_filter_regex: { type: [string, "null"] }
+        context_cache_protection: { type: [boolean, "null"] }
+        context_length: { type: [integer, "null"], minimum: 1000, maximum: 2000000 }
+        dimensions: { type: [string, "null"], pattern: "^[0-9]+$" }
+        computed_context_length: { type: integer, minimum: 0 }
+        warning:
+          type: object
+          required: [code, modelId, providerId]
+          properties:
+            code: { type: string, const: COMBO_NAME_SHADOWS_MODEL }
+            modelId: { type: string }
+            providerId: { type: string }
+          additionalProperties: false
+      additionalProperties: true
     ComboCreate:
       type: object
       required: [name, models]
       properties:
-        name:
-          type: string
+        name: { type: string, minLength: 1, maxLength: 100, pattern: '^[a-zA-Z0-9_/\.\-\[\] ]+$' }
+        description: { type: string, maxLength: 2000 }
         models:
           type: array
           minItems: 1
-          items:
-            oneOf:
-              - type: string
-                description: "provider/model reference"
-              - type: object
-                description: "structured combo step (provider, model, weight, ...)"
-                additionalProperties: true
+          items: { $ref: "#/components/schemas/ComboModelEntry" }
         strategy:
-          type: string
-          enum:
-            - priority
-            - weighted
-            - round-robin
-            - context-relay
-            - fill-first
-            - p2c
-            - random
-            - least-used
-            - cost-optimized
-            - reset-aware
-            - reset-window
-            - headroom
-            - strict-random
-            - auto
-            - lkgp
-            - context-optimized
-            - fusion
-          default: priority
-
+          {
+            type: string,
+            enum:
+              [
+                priority,
+                weighted,
+                round-robin,
+                context-relay,
+                fill-first,
+                p2c,
+                random,
+                least-used,
+                cost-optimized,
+                reset-aware,
+                reset-window,
+                headroom,
+                quota-weighted,
+                strict-random,
+                auto,
+                lkgp,
+                context-optimized,
+                cache-optimized,
+                fusion,
+                pipeline,
+              ],
+            default: priority,
+          }
+        config: { $ref: "#/components/schemas/ComboRuntimeConfig" }
+        allowedProviders:
+          { type: array, maxItems: 100, items: { type: string, minLength: 1, maxLength: 200 } }
+        allowedModelFamilies:
+          { type: array, maxItems: 100, items: { type: string, minLength: 1, maxLength: 100 } }
+        system_message: { type: string, maxLength: 50000 }
+        tool_filter_regex: { type: string, maxLength: 1000 }
+        context_cache_protection: { type: boolean }
+        context_length: { type: integer, minimum: 1000, maximum: 2000000 }
+        dimensions: { type: [string, "null"], pattern: "^[0-9]+$" }
+      additionalProperties: true
+    ComboUpdate:
+      type: object
+      description: Partial update; omitted fields remain unchanged and arrays replace stored arrays.
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100, pattern: '^[a-zA-Z0-9_/\.\-\[\] ]+$' }
+        description: { type: [string, "null"], maxLength: 2000 }
+        models:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/ComboModelEntry" }
+        strategy:
+          {
+            type: string,
+            enum:
+              [
+                priority,
+                weighted,
+                round-robin,
+                context-relay,
+                fill-first,
+                p2c,
+                random,
+                least-used,
+                cost-optimized,
+                reset-aware,
+                reset-window,
+                headroom,
+                quota-weighted,
+                strict-random,
+                auto,
+                lkgp,
+                context-optimized,
+                cache-optimized,
+                fusion,
+                pipeline,
+              ],
+          }
+        config: { $ref: "#/components/schemas/ComboRuntimeConfig" }
+        isActive: { type: boolean }
+        allowedProviders:
+          { type: array, maxItems: 100, items: { type: string, minLength: 1, maxLength: 200 } }
+        allowedModelFamilies:
+          { type: array, maxItems: 100, items: { type: string, minLength: 1, maxLength: 100 } }
+        system_message: { type: [string, "null"], maxLength: 50000 }
+        tool_filter_regex: { type: [string, "null"], maxLength: 1000 }
+        context_cache_protection: { type: [boolean, "null"] }
+        context_length: { type: [integer, "null"], minimum: 1000, maximum: 2000000 }
+        compressionOverride:
+          {
+            type: string,
+            enum:
+              [
+                "",
+                off,
+                lite,
+                standard,
+                aggressive,
+                ultra,
+                rtk,
+                stacked,
+                codex-responses,
+                omniglyph,
+              ],
+          }
+        dimensions: { type: [string, "null"], pattern: "^[0-9]+$" }
+      anyOf:
+        - required: [name]
+        - required: [description]
+        - required: [models]
+        - required: [strategy]
+        - required: [config]
+        - required: [isActive]
+        - required: [allowedProviders]
+        - required: [allowedModelFamilies]
+        - required: [system_message]
+        - required: [tool_filter_regex]
+        - required: [context_cache_protection]
+        - required: [context_length]
+        - required: [compressionOverride]
+        - required: [dimensions]
+      additionalProperties: true
     ComboListResponse:
       type: object
       required: [combos, total]
       properties:
         combos:
           type: array
+          items: { $ref: "#/components/schemas/ComboRecord" }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ComboMetricsModel:
+      type: object
+      required:
+        [
+          requests,
+          successes,
+          failures,
+          totalLatencyMs,
+          lastStatus,
+          lastUsedAt,
+          avgLatencyMs,
+          successRate,
+        ]
+      properties:
+        requests: { type: integer, minimum: 0 }
+        successes: { type: integer, minimum: 0 }
+        failures: { type: integer, minimum: 0 }
+        totalLatencyMs: { type: number, minimum: 0 }
+        lastStatus: { type: [string, "null"], enum: [ok, error, null] }
+        lastUsedAt: { type: [string, "null"] }
+        avgLatencyMs: { type: number, minimum: 0 }
+        successRate: { type: number, minimum: 0, maximum: 100 }
+      additionalProperties: true
+    ComboMetricEntry:
+      type: object
+      properties:
+        totalRequests: { type: integer, minimum: 0 }
+        totalSuccesses: { type: integer, minimum: 0 }
+        totalFailures: { type: integer, minimum: 0 }
+        totalFallbacks: { type: integer, minimum: 0 }
+        totalLatencyMs: { type: number, minimum: 0 }
+        strategy: { type: string }
+        lastUsedAt: { type: [string, "null"] }
+        productionTraffic: { type: boolean }
+        avgLatencyMs: { type: number, minimum: 0 }
+        successRate: { type: number, minimum: 0, maximum: 100 }
+        fallbackRate: { type: number, minimum: 0, maximum: 100 }
+        intentCounts: { type: object, additionalProperties: { type: integer, minimum: 0 } }
+        byModel:
+          { type: object, additionalProperties: { $ref: "#/components/schemas/ComboMetricsModel" } }
+        byTarget:
+          { type: object, additionalProperties: { $ref: "#/components/schemas/ComboMetricsModel" } }
+        shadow: { type: object, additionalProperties: true }
+      additionalProperties: true
+    ComboMetricsResponse:
+      type: object
+      required: [metrics]
+      properties:
+        metrics:
+          anyOf:
+            - type: object
+              additionalProperties: { $ref: "#/components/schemas/ComboMetricEntry" }
+            - $ref: "#/components/schemas/ComboMetricEntry"
+            - type: "null"
+        message: { type: string }
+      additionalProperties: false
+    ComboMetricsResetResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+      additionalProperties: false
+    ComboTestRequest:
+      type: object
+      required: [comboName]
+      properties:
+        comboName: { type: string, minLength: 1 }
+      additionalProperties: true
+    ComboTestResult:
+      type: object
+      required: [status, latencyMs]
+      properties:
+        model: { type: string }
+        provider: { type: [string, "null"] }
+        stepId: { type: [string, "null"] }
+        executionKey: { type: [string, "null"] }
+        connectionId: { type: [string, "null"] }
+        label: { type: [string, "null"] }
+        status: { type: string, enum: [ok, error] }
+        statusCode: { type: integer, minimum: 100, maximum: 599 }
+        error: { type: string }
+        responseText: { type: string }
+        latencyMs: { type: number, minimum: 0 }
+      additionalProperties: false
+    ComboTestResponse:
+      type: object
+      required:
+        [
+          comboName,
+          strategy,
+          resolvedBy,
+          resolvedByExecutionKey,
+          resolvedByTarget,
+          results,
+          testedAt,
+        ]
+      properties:
+        comboName: { type: string }
+        strategy: { type: string }
+        resolvedBy: { type: [string, "null"] }
+        resolvedByExecutionKey: { type: [string, "null"] }
+        resolvedByTarget: { type: [object, "null"], additionalProperties: true }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/ComboTestResult" }
+        testedAt: { type: string, format: date-time }
+      additionalProperties: false
+    ComboAutoResponse:
+      type: object
+      required: [combos]
+      properties:
+        combos:
+          type: array
           items:
             type: object
+            required:
+              [
+                id,
+                name,
+                variant,
+                type,
+                isHidden,
+                candidatePool,
+                candidateCount,
+                context_length,
+                max_output_tokens,
+                config,
+              ]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              variant: { type: [string, "null"] }
+              type: { type: string, const: auto }
+              isHidden: { type: boolean }
+              candidatePool: { type: array, items: { type: string } }
+              candidateCount: { type: integer, minimum: 0 }
+              context_length: { type: integer, minimum: 0 }
+              max_output_tokens: { type: integer, minimum: 0 }
+              config: { type: object, additionalProperties: true }
+            additionalProperties: true
+      additionalProperties: false
+    ComboBuilderOptions:
+      type: object
+      required: [schemaVersion, generatedAt, providers, comboRefs]
+      properties:
+        schemaVersion: { type: integer, minimum: 1 }
+        generatedAt: { type: string, format: date-time }
+        providers:
+          type: array
+          items:
+            type: object
+            required:
+              [
+                providerId,
+                providerType,
+                displayName,
+                alias,
+                icon,
+                color,
+                source,
+                acceptsArbitraryModel,
+                connectionCount,
+                activeConnectionCount,
+                modelCount,
+                connections,
+                models,
+              ]
+            properties:
+              providerId: { type: string }
+              providerType: { type: string }
+              displayName: { type: string }
+              alias: { type: string }
+              prefix: { type: [string, "null"] }
+              icon: { type: string }
+              color: { type: string }
+              source: { type: string, enum: [system, provider-node] }
+              acceptsArbitraryModel: { type: boolean }
+              connectionCount: { type: integer, minimum: 0 }
+              activeConnectionCount: { type: integer, minimum: 0 }
+              modelCount: { type: integer, minimum: 0 }
+              connections: { type: array, items: { type: object, additionalProperties: true } }
+              models: { type: array, items: { type: object, additionalProperties: true } }
+            additionalProperties: true
+        comboRefs:
+          type: array
+          items:
+            type: object
+            required: [id, name, strategy, stepCount, version]
             properties:
               id: { type: string }
               name: { type: string }
               strategy: { type: string }
-              models:
-                type: array
-                items:
-                  oneOf:
-                    - type: string
-                    - type: object
-                      additionalProperties: true
-              computed_context_length: { type: integer, minimum: 0 }
-            additionalProperties: true
-        total: { type: integer, minimum: 0 }
+              stepCount: { type: integer, minimum: 0 }
+              version: { type: integer }
+              sortOrder: { type: integer }
+            additionalProperties: false
+      additionalProperties: false
+    ComboDuplicateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          {
+            type: string,
+            minLength: 1,
+            description: Auto-combo template id such as `auto/best-coding`.,
+          }
+        strategy:
+          {
+            type: string,
+            enum:
+              [
+                priority,
+                weighted,
+                round-robin,
+                context-relay,
+                fill-first,
+                p2c,
+                random,
+                least-used,
+                cost-optimized,
+                reset-aware,
+                reset-window,
+                headroom,
+                quota-weighted,
+                strict-random,
+                auto,
+                lkgp,
+                context-optimized,
+                cache-optimized,
+                fusion,
+                pipeline,
+              ],
+          }
+      additionalProperties: true
+    ComboReorderRequest:
+      type: object
+      required: [comboIds]
+      properties:
+        comboIds:
+          {
+            type: array,
+            minItems: 1,
+            maxItems: 1000,
+            uniqueItems: true,
+            items: { type: string, minLength: 1, maxLength: 200 },
+          }
+      additionalProperties: true
+    ComboReorderResponse:
+      type: object
+      required: [combos]
+      properties:
+        combos: { type: array, items: { $ref: "#/components/schemas/ComboRecord" } }
       additionalProperties: false
 
     ModelCapabilityOverrideNumeric:
@@ -34963,7 +36409,17 @@ components:
 
     ProviderModelSyncCuratedResponse:
       type: object
-      required: [provider, connectionId, source, skipped, syncedModels, availableModelsCount, models, cleanup]
+      required:
+        [
+          provider,
+          connectionId,
+          source,
+          skipped,
+          syncedModels,
+          availableModelsCount,
+          models,
+          cleanup,
+        ]
       properties:
         provider: { type: string }
         connectionId: { type: string }
@@ -34983,7 +36439,19 @@ components:
 
     ProviderModelSyncVolcPlanResponse:
       type: object
-      required: [ok, provider, connectionId, source, plan, mode, syncedModels, availableModelsCount, modelChanges, models]
+      required:
+        [
+          ok,
+          provider,
+          connectionId,
+          source,
+          plan,
+          mode,
+          syncedModels,
+          availableModelsCount,
+          modelChanges,
+          models,
+        ]
       properties:
         ok: { type: boolean, const: true }
         provider: { type: string }
@@ -35020,17 +36488,46 @@ components:
       description: >-
         Registry proxy record. Management lookups and create/update responses can include raw
         username, password, and relay auth in notes; the unfiltered list masks credential fields.
-      required: [id, name, type, host, port, username, password, region, notes, status, source, family, subscriptionId, createdAt, updatedAt]
+      required:
+        [
+          id,
+          name,
+          type,
+          host,
+          port,
+          username,
+          password,
+          region,
+          notes,
+          status,
+          source,
+          family,
+          subscriptionId,
+          createdAt,
+          updatedAt,
+        ]
       properties:
         id: { type: string }
         name: { type: string }
         type: { type: string }
         host: { type: string }
         port: { type: integer }
-        username: { type: string, description: May contain the stored proxy username or the list-mask value `***`. }
-        password: { type: string, description: May contain the stored proxy password or the list-mask value `***`. }
+        username:
+          {
+            type: string,
+            description: May contain the stored proxy username or the list-mask value `***`.,
+          }
+        password:
+          {
+            type: string,
+            description: May contain the stored proxy password or the list-mask value `***`.,
+          }
         region: { type: [string, "null"] }
-        notes: { type: [string, "null"], description: May contain relay authentication on single-record lookups and mutations. }
+        notes:
+          {
+            type: [string, "null"],
+            description: May contain relay authentication on single-record lookups and mutations.,
+          }
         status: { type: string }
         source: { type: string }
         family: { type: string }
@@ -35081,7 +36578,11 @@ components:
         region: { type: [string, "null"], maxLength: 64 }
         notes: { type: [string, "null"], maxLength: 1000 }
         status: { type: string, enum: [active, inactive, dead], default: active }
-        source: { type: string, enum: [manual, oneproxy, dashboard-custom, vercel-relay, deno-relay, cloudflare-relay] }
+        source:
+          {
+            type: string,
+            enum: [manual, oneproxy, dashboard-custom, vercel-relay, deno-relay, cloudflare-relay],
+          }
         family: { type: string, enum: [auto, ipv4, ipv6], default: auto }
         assignment:
           $ref: "#/components/schemas/ProxyInlineAssignmentRequest"
@@ -35107,7 +36608,11 @@ components:
         region: { type: [string, "null"], maxLength: 64 }
         notes: { type: [string, "null"], maxLength: 1000 }
         status: { type: string, enum: [active, inactive, dead] }
-        source: { type: string, enum: [manual, oneproxy, dashboard-custom, vercel-relay, deno-relay, cloudflare-relay] }
+        source:
+          {
+            type: string,
+            enum: [manual, oneproxy, dashboard-custom, vercel-relay, deno-relay, cloudflare-relay],
+          }
         family: { type: string, enum: [auto, ipv4, ipv6] }
         assignment:
           $ref: "#/components/schemas/ProxyInlineAssignmentRequest"
@@ -35351,7 +36856,11 @@ components:
         region: { type: [string, "null"], maxLength: 64 }
         notes: { type: [string, "null"], maxLength: 1000 }
         status: { type: string, enum: [active, inactive, dead], default: active }
-        source: { type: string, enum: [manual, oneproxy, dashboard-custom, vercel-relay, deno-relay, cloudflare-relay] }
+        source:
+          {
+            type: string,
+            enum: [manual, oneproxy, dashboard-custom, vercel-relay, deno-relay, cloudflare-relay],
+          }
         family: { type: string, enum: [auto, ipv4, ipv6], default: auto }
       additionalProperties: false
 
@@ -35411,7 +36920,14 @@ components:
             additionalProperties: false
         summary:
           type: object
-          required: [windowStart, windowEnd, distinctEgressIps, sharingByRotationGroup, maxAccountsSharingOneIp]
+          required:
+            [
+              windowStart,
+              windowEnd,
+              distinctEgressIps,
+              sharingByRotationGroup,
+              maxAccountsSharingOneIp,
+            ]
           properties:
             windowStart: { type: string }
             windowEnd: { type: string }
@@ -35472,7 +36988,22 @@ components:
           type: array
           items:
             type: object
-            required: [proxyId, name, type, host, port, status, totalRequests, successCount, errorCount, timeoutCount, successRate, avgLatencyMs, lastSeenAt]
+            required:
+              [
+                proxyId,
+                name,
+                type,
+                host,
+                port,
+                status,
+                totalRequests,
+                successCount,
+                errorCount,
+                timeoutCount,
+                successRate,
+                avgLatencyMs,
+                lastSeenAt,
+              ]
             properties:
               proxyId: { type: string }
               name: { type: string }
