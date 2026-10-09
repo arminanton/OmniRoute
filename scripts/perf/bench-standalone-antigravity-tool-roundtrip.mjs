@@ -15,6 +15,8 @@
  *
  * Capture modes: none (default), artifact, private. The default phases are
  * 1,30,70,100 conversations; override with ANTIGRAVITY_CAPTURE_SESSION_COUNTS.
+ * Override the direct Undici socket-pool size with --direct-dispatcher-connections=N
+ * to compare queueing behavior; the default mirrors production (32).
  * Set OMNIROUTE_KEEP_STANDALONE_E2E_FAILURES=1 to retain only failed-run scratch
  * for diagnosis. Successful runs always remove their temporary files.
  * This harness intentionally refuses to build the standalone artifact.
@@ -628,7 +630,11 @@ async function waitForCallLogs(dataDir, apiKeyId, expected) {
   let rows = [];
   while (Date.now() < deadline) {
     rows = readCallLogRows(dataDir, apiKeyId);
-    if (rows.length >= expected && rows.every((row) => row.detailState === "ready")) return rows;
+    // A call-log row is committed only after detail preparation and artifact
+    // persistence have finished. `missing` (for example, the preparation
+    // memory budget refusing capture) is terminal too; wait for the expected
+    // rows, then let inspectCapture report ready/missing/corrupt counts.
+    if (rows.length >= expected) return rows;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return rows;
@@ -996,7 +1002,14 @@ async function main() {
   );
   const unknown = Object.keys(options).filter(
     (key) =>
-      !["capture", "phases", "context-bytes", "request-timeout-ms", "standalone-dir"].includes(key)
+      ![
+        "capture",
+        "phases",
+        "context-bytes",
+        "request-timeout-ms",
+        "standalone-dir",
+        "direct-dispatcher-connections",
+      ].includes(key)
   );
   if (unknown.length) throw new Error(`Unknown options: ${unknown.join(", ")}`);
 
@@ -1015,6 +1028,13 @@ async function main() {
     120_000,
     "request-timeout-ms",
     600_000
+  );
+  const directDispatcherConnections = positiveInt(
+    options["direct-dispatcher-connections"] ||
+      process.env.ANTIGRAVITY_CAPTURE_DIRECT_DISPATCHER_CONNECTIONS,
+    32,
+    "direct-dispatcher-connections",
+    256
   );
   const sessionCount = phases.reduce((total, count) => total + count, 0);
   const expectedRequests = sessionCount * 2;
@@ -1115,7 +1135,7 @@ async function main() {
     PROVIDER_LIMITS_POST_USAGE_REFRESH_DELAY_MS: "3600000",
     ANTIGRAVITY_CREDITS: "never",
     ENABLE_TLS_FINGERPRINT: "false",
-    OMNIROUTE_DIRECT_DISPATCHER_CONNECTIONS: "32",
+    OMNIROUTE_DIRECT_DISPATCHER_CONNECTIONS: String(directDispatcherConnections),
     INITIAL_PASSWORD: "synthetic-standalone-admin-password",
     APP_LOG_TO_FILE: "false",
     APP_LOG_LEVEL: "error",
@@ -1398,6 +1418,7 @@ async function main() {
         readyArtifacts: artifactResult.artifacts,
         completePrivateTraces: artifactResult.traces,
         contextBytesPerUserTurn: contextBytes,
+        directDispatcherConnections,
         availableScratchBytesBefore: availableDiskBefore,
         hostMemoryAvailableBytes,
         fetchAudit: audit,
