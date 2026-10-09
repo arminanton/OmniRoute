@@ -23849,10 +23849,54 @@ paths:
       operationId: postApiV1Antigravity
       tags:
         - V1 Antigravity
-      summary: "POST antigravity"
+      summary: Antigravity Cloud Code-compatible generation
+      description: >-
+        Accepts the Antigravity IDE/cloudcode envelope, translates it to the configured target
+        provider, and translates the result back into a Cloud Code response. Both the nested
+        `{model, request:{...}}` envelope and the compatible direct `{model, contents, ...}` shape
+        are accepted. Streaming requests return Cloud Code response envelopes as SSE `data` events;
+        non-streaming requests return one JSON envelope.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AntigravityCloudCodeRequest" }
       responses:
         "200":
-          description: OK
+          description: Cloud Code generation result; SSE when requested, JSON otherwise.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AntigravityCloudCodeResponse" }
+            text/event-stream:
+              schema: { type: string }
+        "400":
+          description: Invalid request or unsupported content.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: API key authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          description: All eligible upstream accounts are rate limited.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "502":
+          description: All eligible upstream providers failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/auto-combo/{channel}/candidates:
     parameters:
       - name: channel
@@ -43488,4 +43532,184 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/MuseCodeModel" }
+      additionalProperties: false
+
+    AntigravityCloudCodePart:
+      type: object
+      properties:
+        text: { type: string }
+        thought: { type: boolean }
+        thoughtSignature: { type: string }
+        inlineData:
+          type: object
+          properties:
+            mimeType: { type: string }
+            data: { type: string, description: Base64-encoded inline media data. }
+          additionalProperties: true
+        functionCall:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+            args: { type: object, additionalProperties: true }
+          additionalProperties: true
+        functionResponse:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+            response: { type: object, additionalProperties: true }
+          additionalProperties: true
+      additionalProperties: true
+
+    AntigravityCloudCodeContent:
+      type: object
+      required: [role, parts]
+      properties:
+        role: { type: string, enum: [user, model] }
+        parts:
+          type: array
+          items: { $ref: "#/components/schemas/AntigravityCloudCodePart" }
+      additionalProperties: true
+
+    AntigravityCloudCodeSystemInstruction:
+      oneOf:
+        - type: string
+        - type: object
+          properties:
+            parts:
+              type: array
+              items: { $ref: "#/components/schemas/AntigravityCloudCodePart" }
+          additionalProperties: true
+
+    AntigravityCloudCodeFunctionDeclaration:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        parameters: { type: object, additionalProperties: true }
+      additionalProperties: true
+
+    AntigravityCloudCodeTool:
+      type: object
+      properties:
+        functionDeclarations:
+          type: array
+          items: { $ref: "#/components/schemas/AntigravityCloudCodeFunctionDeclaration" }
+      additionalProperties: true
+
+    AntigravityCloudCodeGenerationConfig:
+      type: object
+      properties:
+        maxOutputTokens: { type: integer, minimum: 1 }
+        temperature: { type: number }
+        topP: { type: number }
+        topK: { type: integer, minimum: 1 }
+        thinkingConfig:
+          type: object
+          properties:
+            thinkingBudget: { type: integer, minimum: 0 }
+          additionalProperties: true
+      additionalProperties: true
+
+    AntigravityCloudCodeGenerationRequest:
+      type: object
+      properties:
+        contents:
+          type: array
+          items: { $ref: "#/components/schemas/AntigravityCloudCodeContent" }
+        systemInstruction: { $ref: "#/components/schemas/AntigravityCloudCodeSystemInstruction" }
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/AntigravityCloudCodeTool" }
+        toolConfig: { type: object, additionalProperties: true }
+        generationConfig: { $ref: "#/components/schemas/AntigravityCloudCodeGenerationConfig" }
+        sessionId: { type: string }
+      additionalProperties: true
+
+    AntigravityCloudCodeRequest:
+      type: object
+      description: >-
+        Cloud Code request. The Antigravity IDE normally sends generation fields under `request`;
+        the translator also accepts the same generation fields directly beside `model`.
+      required: [model]
+      properties:
+        model: { type: string }
+        project: { type: string }
+        userAgent: { type: string }
+        requestType: { type: string }
+        requestId: { type: string }
+        stream: { type: boolean }
+        reasoningEffortOverride: { type: string }
+        request: { $ref: "#/components/schemas/AntigravityCloudCodeGenerationRequest" }
+        contents:
+          type: array
+          items: { $ref: "#/components/schemas/AntigravityCloudCodeContent" }
+        systemInstruction: { $ref: "#/components/schemas/AntigravityCloudCodeSystemInstruction" }
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/AntigravityCloudCodeTool" }
+        toolConfig: { type: object, additionalProperties: true }
+        generationConfig: { $ref: "#/components/schemas/AntigravityCloudCodeGenerationConfig" }
+        sessionId: { type: string }
+      additionalProperties: true
+
+    AntigravityCloudCodeResponsePart:
+      type: object
+      properties:
+        text: { type: string }
+        thought: { type: boolean }
+        functionCall:
+          type: object
+          required: [name, args]
+          properties:
+            name: { type: string }
+            args: { type: object, additionalProperties: true }
+          additionalProperties: false
+      additionalProperties: true
+
+    AntigravityCloudCodeCandidate:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: object
+          required: [role, parts]
+          properties:
+            role: { type: string, const: model }
+            parts:
+              type: array
+              items: { $ref: "#/components/schemas/AntigravityCloudCodeResponsePart" }
+          additionalProperties: true
+        finishReason: { type: string, enum: [STOP, MAX_TOKENS, SAFETY] }
+      additionalProperties: true
+
+    AntigravityCloudCodeUsageMetadata:
+      type: object
+      required: [promptTokenCount, candidatesTokenCount, totalTokenCount]
+      properties:
+        promptTokenCount: { type: integer, minimum: 0 }
+        candidatesTokenCount: { type: integer, minimum: 0 }
+        totalTokenCount: { type: integer, minimum: 0 }
+        thoughtsTokenCount: { type: integer, minimum: 0 }
+        cachedContentTokenCount: { type: integer, minimum: 0 }
+      additionalProperties: true
+
+    AntigravityCloudCodeResponsePayload:
+      type: object
+      required: [candidates, modelVersion, responseId]
+      properties:
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/AntigravityCloudCodeCandidate" }
+        modelVersion: { type: string }
+        responseId: { type: string }
+        usageMetadata: { $ref: "#/components/schemas/AntigravityCloudCodeUsageMetadata" }
+      additionalProperties: true
+
+    AntigravityCloudCodeResponse:
+      type: object
+      required: [response]
+      properties:
+        response: { $ref: "#/components/schemas/AntigravityCloudCodeResponsePayload" }
       additionalProperties: false
