@@ -442,6 +442,8 @@ test("buildHealthPayload projects allowlisted structural chatAdmission fields on
     ],
     // #503-fanout additions.
     inflightBytes: 131_072,
+    byteBudgetQueuedBytes: 262_144,
+    byteBudgetWaiting: 4,
     maxInflightBytes: 134_217_728,
     budgetSource: "v8_heap",
     pressureSeverity: "normal",
@@ -486,6 +488,8 @@ test("buildHealthPayload projects allowlisted structural chatAdmission fields on
       { key: "anonymous", waiting: 1 },
     ],
     inflightBytes: 131_072,
+    byteBudgetQueuedBytes: 262_144,
+    byteBudgetWaiting: 4,
     maxInflightBytes: 134_217_728,
     budgetSource: "v8_heap",
     pressureSeverity: "normal",

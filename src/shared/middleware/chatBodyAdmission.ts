@@ -648,6 +648,10 @@ export class ChatAdmissionController {
     return this.#ingestBudget.queuedBytes;
   }
 
+  get byteBudgetWaiting(): number {
+    return this.#ingestBudget.waitingCount;
+  }
+
   get budgetSource(): IngestBudgetSource {
     return this.#ingestBudget.budgetSource;
   }
@@ -756,6 +760,8 @@ export class PerConnectionAdmissionController {
     inflightBytes: number;
     /** #503-fanout: queued body bytes waiting for a byte-budget lease. */
     byteBudgetQueuedBytes: number;
+    /** #503-fanout: request count parked on the ingest-byte budget. */
+    byteBudgetWaiting: number;
     /** #503-fanout: the auto-derived (or overridden) budget ceiling. */
     maxInflightBytes: number;
     /** #503-fanout: which signal the budget was derived from. */
@@ -776,6 +782,7 @@ export class PerConnectionAdmissionController {
       shedsByReason: this.#controller.shedsByReason,
       inflightBytes: this.#controller.inflightBytes,
       byteBudgetQueuedBytes: this.#controller.byteBudgetQueuedBytes,
+      byteBudgetWaiting: this.#controller.byteBudgetWaiting,
       maxInflightBytes: this.#controller.maxInflightBytes,
       budgetSource: this.#controller.budgetSource,
       pressureSeverity: this.#controller.pressureSeverity(),

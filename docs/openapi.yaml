@@ -37019,7 +37019,7 @@ components:
       additionalProperties: true
     AuthenticatedSystemHealthResponse:
       type: object
-      required: [status, timestamp, system, callLogArtifacts]
+      required: [status, timestamp, system, chatAdmission, callLogArtifacts]
       properties:
         status: { type: string, const: healthy }
         timestamp: { type: string, format: date-time }
@@ -37058,6 +37058,14 @@ components:
             external: { type: number, minimum: 0 }
             arrayBuffers: { type: number, minimum: 0 }
           additionalProperties: true
+        chatAdmission:
+          description: >-
+            Process-local structural and ingest-byte admission gauges. `waiting` counts structural
+            waiters; `byteBudgetWaiting` counts requests parked on the ingest-byte gate. `queuedBytes`
+            is the combined byte reservation, and `byteBudgetQueuedBytes` is its ingest-byte subset.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/ChatAdmissionHealthSummary"
         callLogArtifacts:
           description: >-
             Process-local call-log artifact queue gauges and cumulative counters. This contains no
@@ -37066,6 +37074,57 @@ components:
             - type: "null"
             - $ref: "#/components/schemas/CallLogArtifactWriterSnapshot"
       additionalProperties: true
+    ChatAdmissionHealthSummary:
+      type: object
+      required:
+        - activeHeavy
+        - activeHealthyHeadroom
+        - waiting
+        - queuedBytes
+        - shedTotal
+        - shedsByReason
+        - lanes
+        - inflightBytes
+        - byteBudgetQueuedBytes
+        - byteBudgetWaiting
+        - maxInflightBytes
+        - budgetSource
+        - pressureSeverity
+        - countCapEnabled
+      properties:
+        activeHeavy: { type: integer, minimum: 0 }
+        activeHealthyHeadroom: { type: integer, minimum: 0 }
+        waiting:
+          type: integer
+          minimum: 0
+          description: Structural-gate waiters only; ingest-byte waiters are reported separately.
+        queuedBytes:
+          type: integer
+          minimum: 0
+          description: Aggregate byte charge across structural and ingest-byte queues.
+        shedTotal: { type: integer, minimum: 0 }
+        shedsByReason:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        lanes:
+          type: array
+          items:
+            type: object
+            required: [key, waiting]
+            properties:
+              key:
+                type: string
+                description: Opaque HMAC fairness key; never a raw credential or session id.
+              waiting: { type: integer, minimum: 0 }
+            additionalProperties: false
+        inflightBytes: { type: integer, minimum: 0 }
+        byteBudgetQueuedBytes: { type: integer, minimum: 0 }
+        byteBudgetWaiting: { type: integer, minimum: 0 }
+        maxInflightBytes: { type: integer, minimum: 0 }
+        budgetSource: { type: string, enum: [override, cgroup, v8_heap] }
+        pressureSeverity: { type: string, enum: [normal, high, critical] }
+        countCapEnabled: { type: boolean }
+      additionalProperties: false
     PublicHealthResponse:
       type: object
       required: [status]

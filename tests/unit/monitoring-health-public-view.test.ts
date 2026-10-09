@@ -67,6 +67,17 @@ test("management session sees the full health payload", async () => {
     JSON.stringify(callLogArtifacts),
     /requestId|artifactPath|payload|credential/i
   );
+  const chatAdmission = body.chatAdmission as Record<string, unknown> | null;
+  assert.ok(
+    chatAdmission,
+    "management health includes structural and byte-budget admission gauges"
+  );
+  assert.equal(typeof chatAdmission.byteBudgetWaiting, "number");
+  assert.equal(typeof chatAdmission.byteBudgetQueuedBytes, "number");
+  assert.equal(typeof chatAdmission.waiting, "number");
+  assert.equal(typeof chatAdmission.queuedBytes, "number");
+  assert.equal(chatAdmission.byteBudgetWaiting, 0, "test has no ingest-byte admission waiters");
+  assert.equal(chatAdmission.byteBudgetQueuedBytes, 0, "test has no queued ingest bytes");
 });
 
 /**

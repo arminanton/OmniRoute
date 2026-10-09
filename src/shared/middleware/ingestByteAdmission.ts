@@ -73,6 +73,13 @@ export class IngestByteAdmissionController {
     return this.#queuedBytes;
   }
 
+  /** Number of requests waiting for an ingest-byte lease across all fairness lanes. */
+  get waitingCount(): number {
+    let total = 0;
+    for (const queue of this.#queues.values()) total += queue.length;
+    return total;
+  }
+
   pressureSeverity(correlationId?: string | null): PressureSeverity {
     return this.#checkPressureSeverity(correlationId);
   }

@@ -26,13 +26,18 @@ export type ChatAdmissionSnapshot = ReturnType<PerConnectionAdmissionController[
 export type ChatAdmissionHealthSummary = {
   activeHeavy: number;
   activeHealthyHeadroom: number;
+  /** Structural-gate waiters only; byte-budget waiters are reported separately. */
   waiting: number;
+  /** Aggregate queued-byte charge shared by structural and ingest-byte queues. */
   queuedBytes: number;
   shedTotal: number;
   shedsByReason: Record<string, number>;
   lanes: Array<{ key: string; waiting: number }>;
   /** #503-fanout: live ingest bytes reserved through the byte-budget gate. */
   inflightBytes: number;
+  /** #503-fanout: bytes and requests parked specifically on the ingest-byte gate. */
+  byteBudgetQueuedBytes: number;
+  byteBudgetWaiting: number;
   /** #503-fanout: the auto-derived (or overridden) budget ceiling. */
   maxInflightBytes: number;
   /** #503-fanout: which signal the budget was derived from. */
@@ -120,6 +125,8 @@ export function projectChatAdmissionSummary(
     shedsByReason: { ...(snapshot.shedsByReason ?? {}) },
     lanes: (snapshot.lanes ?? []).map((lane) => ({ key: lane.key, waiting: lane.waiting })),
     inflightBytes: snapshot.inflightBytes,
+    byteBudgetQueuedBytes: snapshot.byteBudgetQueuedBytes,
+    byteBudgetWaiting: snapshot.byteBudgetWaiting,
     maxInflightBytes: snapshot.maxInflightBytes,
     budgetSource: snapshot.budgetSource,
     pressureSeverity: snapshot.pressureSeverity,

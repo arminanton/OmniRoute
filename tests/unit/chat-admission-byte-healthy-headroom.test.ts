@@ -116,7 +116,12 @@ test("normal-pressure byte admission waits for the configured queue window", asy
     checkPressureSeverity: () => "normal",
   });
   const body = byteHeavyBody(90_000);
-  const options = { controller, largeBodyBytes: 64 * 1024, hardMaxBytes: 512 * 1024, queueMs: 1_000 };
+  const options = {
+    controller,
+    largeBodyBytes: 64 * 1024,
+    hardMaxBytes: 512 * 1024,
+    queueMs: 1_000,
+  };
   const first = await admitChatRequest(responsesRequest(body), options);
   assert.equal(first.admit, true);
   if (!first.admit) return;
@@ -130,11 +135,13 @@ test("normal-pressure byte admission waits for the configured queue window", asy
     await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(secondSettled, false, "the byte-stage waiter must survive the old 250ms cutoff");
     assert.ok(controller.byteBudgetQueuedBytes > 0);
+    assert.equal(controller.byteBudgetWaiting, 1);
     first.lease?.release();
     const second = await secondPromise;
     assert.equal(second.admit, true);
     if (second.admit) second.lease?.release();
     assert.equal(controller.byteBudgetQueuedBytes, 0);
+    assert.equal(controller.byteBudgetWaiting, 0);
     assert.equal(controller.inflightBytes, 0);
   } finally {
     first.lease?.release();
@@ -148,7 +155,12 @@ test("normal-pressure byte waiter budget bounds queued ingest bytes", async () =
     budgetSource: "override",
     checkPressureSeverity: () => "normal",
   });
-  const largeOptions = { controller, largeBodyBytes: 8 * 1024, hardMaxBytes: 512 * 1024, queueMs: 1_000 };
+  const largeOptions = {
+    controller,
+    largeBodyBytes: 8 * 1024,
+    hardMaxBytes: 512 * 1024,
+    queueMs: 1_000,
+  };
   const first = await admitChatRequest(responsesRequest(byteHeavyBody(90_000)), largeOptions);
   assert.equal(first.admit, true);
   if (!first.admit) return;
@@ -157,6 +169,7 @@ test("normal-pressure byte waiter budget bounds queued ingest bytes", async () =
   try {
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.ok(controller.byteBudgetQueuedBytes > 0);
+    assert.equal(controller.byteBudgetWaiting, 1);
     const third = await admitChatRequest(responsesRequest(byteHeavyBody(30_000)), largeOptions);
     assert.equal(third.admit, false);
     if (!third.admit) {
@@ -168,6 +181,7 @@ test("normal-pressure byte waiter budget bounds queued ingest bytes", async () =
     assert.equal(second.admit, true);
     if (second.admit) second.lease?.release();
     assert.equal(controller.byteBudgetQueuedBytes, 0);
+    assert.equal(controller.byteBudgetWaiting, 0);
     assert.equal(controller.inflightBytes, 0);
   } finally {
     first.lease?.release();
