@@ -1298,6 +1298,43 @@ original object layout. No substring, approximate, or lossy text deduplication o
 300 KiB, and a separate cap test confirms that fallback artifacts do not retain references after
 their body-bearing pipeline is omitted. The focused artifact-cap/worker/drain suites passed 28/28.
 
+## Structured-clone versus transferable artifact handoff (2026-10-09)
+
+`scripts/perf/bench-call-log-transfer-handoff.mjs` compares the current
+`writeCallArtifactAsync(artifact)` structured-clone boundary with a benchmark-only path that
+serializes the already-protected artifact to UTF-8 and transfers its `ArrayBuffer` to a writer
+worker. The bounded v6 run used one CPU and a 1 GiB cgroup limit in tmux. Its fixture exercises
+`protectPipelinePayloads()` with client/OpenAI/provider request stages sharing a body,
+client/provider response stages sharing a body, and repeated provider/OpenAI/client stream chunks.
+It includes synthetic `api_key` and `Authorization: Bearer benchmark-only` values. Transfer
+serialization uses the production stream-chunk and exact-text compaction helpers; a test-only
+stage-reference projection supplies the same fixed-fixture shape as the writer's private transform.
+The transfer bytes are checked against the exact SHA-256 output of the production writer for that
+fixture. Both stored files are read through `readCallArtifact()`, which verifies body-reference and
+stream-table expansion; assertions confirm that neither secret value appears in either artifact.
+
+| Path                                         | Logical source JSON | Stored bytes | Process peak RSS | End-to-end | Synchronous caller section |
+| -------------------------------------------- | ------------------: | -----------: | ---------------: | ---------: | -------------------------: |
+| Current structured clone + production writer |         9,128,017 B |  3,178,149 B |    213,897,216 B |  263.77 ms |                    8.81 ms |
+| Transferable serialized-buffer prototype     |         9,128,017 B |  3,178,149 B |    204,361,728 B |  279.18 ms |                   12.34 ms |
+
+For this one protected artifact, the transfer prototype reduced peak process RSS by 9,535,488 B
+(about 4.5%) but increased synchronous caller work by 3.53 ms and total elapsed time by 15.41 ms.
+The synchronous section includes estimation, compaction, JSON serialization, encoding, worker
+creation, and `postMessage`; it moves substantial work back to the SSE caller. This is a no-go for
+production adoption despite the modest isolated RSS reduction. The test writer imports the
+production artifact module and writes the byte-identical stored representation, but skips the
+production writer's checksum/result bookkeeping, runs one artifact without queue contention, and
+does not measure a live SSE event loop.
+
+The earlier one-request-stage/one-response-stage fixture (v5) measured a 34,443,264 B (14.6%) peak
+RSS reduction and a 12.58 ms increase in synchronous caller time. V6 supersedes those figures as the
+representative comparison: it includes the shared-stage graph handled by the production protection
+helper, and its smaller RSS delta demonstrates why omitting those aliases overstates the expected
+benefit. V5 also calculated the test-only oracle hash on the caller thread; v6 performs that
+validation in the writer worker. Neither run changed production code, moved redaction earlier, or
+altered reservation/admission policy.
+
 The request logger reuses identical bounded body snapshots across client/OpenAI/provider request
 stages and provider/client response stages. Schema 8 stores repeated exact stream-chunk text once in a
 per-artifact dictionary with integer references; `readCallArtifact()` expands it before returning
