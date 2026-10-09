@@ -8,6 +8,7 @@ const completedAtBySession = new Map();
 const profiles = new Set();
 const errors = [];
 let received = 0;
+let egressProbes = 0;
 
 async function bodyOf(request) {
   const chunks = [];
@@ -16,6 +17,13 @@ async function bodyOf(request) {
 }
 
 const server = http.createServer(async (incoming, outgoing) => {
+  if (incoming.method === "GET" && incoming.url === "/__echo") {
+    egressProbes++;
+    outgoing.writeHead(200, { "content-type": "application/json" });
+    outgoing.end(JSON.stringify({ ip: "192.0.2.1" }));
+    return;
+  }
+
   if (incoming.method === "GET" && incoming.url === "/__stats") {
     outgoing.writeHead(200, { "content-type": "application/json" });
     outgoing.end(
@@ -26,6 +34,7 @@ const server = http.createServer(async (incoming, outgoing) => {
         receivedAtBySession: Object.fromEntries(receivedAtBySession),
         completedAtBySession: Object.fromEntries(completedAtBySession),
         profiles: [...profiles].sort(),
+        egressProbes,
         errors,
         processMemory:
           process.env.ANTIGRAVITY_CAPTURE_MEMORY_BENCH === "1"
