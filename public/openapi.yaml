@@ -14800,35 +14800,267 @@ paths:
       operationId: deleteApiCacheEntries
       tags:
         - Cache
-      summary: "DELETE cache › entries"
+      summary: Delete semantic-cache entries
+      description: >-
+        Deletes by `signature` when that parameter is nonempty; otherwise deletes by `model`. At
+        least one must be provided. A supplied signature takes precedence if both are present. The
+        signature is a SHA-256 cache key and may include a plaintext internal API-key ID prefix;
+        it is not the cached response body. The signature branch reports `deleted: 1` after the
+        delete statement even when no row matched, while the model branch reports the SQLite row
+        count. This management route uses `isAuthenticated()`: when login is required, a dashboard
+        session or manage/admin API key is accepted; standalone `requireLogin=false` can permit
+        anonymous access. Locked management remains authenticated. The legacy handler does not
+        validate `oma_` access tokens or loopback CLI tokens when authentication is required.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: signature
+          in: query
+          required: false
+          description: Semantic-cache signature to delete; takes precedence over `model`.
+          schema: { type: string }
+        - name: model
+          in: query
+          required: false
+          description: Delete all semantic-cache entries for this model when `signature` is absent or empty.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Cache entry deletion result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SemanticCacheDeleteResponse" }
+        "400":
+          description: Neither a nonempty `signature` nor a nonempty `model` parameter was supplied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication is required or the legacy route handler rejected the credential.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Semantic-cache deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiCacheEntries
       tags:
         - Cache
-      summary: "GET cache › entries"
+      summary: List semantic-cache entries
+      description: >-
+        Returns a paginated list of semantic-cache metadata; cached response bodies are not
+        included. The signature is a SHA-256 cache key and may include a plaintext internal API-key
+        ID prefix. Unknown `sortBy` values fall back to `created_at`; only `sortOrder=asc` selects
+        ascending order, and other values use descending order. This management route uses
+        `isAuthenticated()`: when login is required, a dashboard session or manage/admin API key is
+        accepted; standalone `requireLogin=false` can permit anonymous access. Locked management
+        remains authenticated. The legacy handler does not validate `oma_` access tokens or
+        loopback CLI tokens when authentication is required.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: page
+          in: query
+          required: false
+          description: >-
+            Base-10 integer page number, clamped to at least 1. Nonnumeric values are not validated
+            separately and may cause the cache query to fail with 500.
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Base-10 integer page size, clamped to the inclusive range 1–100. Nonnumeric values are
+            not validated separately and may cause the cache query to fail with 500.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: search
+          in: query
+          required: false
+          description: Substring search across signature and model.
+          schema: { type: string, default: "" }
+        - name: model
+          in: query
+          required: false
+          description: Exact model filter.
+          schema: { type: string, default: "" }
+        - name: sortBy
+          in: query
+          required: false
+          description: >-
+            Sort column: `created_at`, `expires_at`, `hit_count`, `tokens_saved`, or `model`.
+            Unsupported values fall back to `created_at`.
+          schema: { type: string, default: created_at }
+        - name: sortOrder
+          in: query
+          required: false
+          description: Only `asc` selects ascending order; every other value selects descending order.
+          schema: { type: string, default: desc }
       responses:
         "200":
-          description: OK
+          description: Paginated semantic-cache metadata; no cached response body is returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SemanticCacheEntriesResponse" }
+        "401":
+          description: Authentication is required or the legacy route handler rejected the credential.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Semantic-cache entries could not be listed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cache/reasoning:
     delete:
       operationId: deleteApiCacheReasoning
       tags:
         - Cache
-      summary: "DELETE cache › reasoning"
+      summary: Clear cached reasoning
+      description: >-
+        Clears one reasoning-cache entry by the opaque `toolCallId` returned by GET, all entries for
+        a `provider`, or all entries when neither is supplied. A present `toolCallId` takes
+        precedence and must match `rc2h:` followed by 64 lowercase hexadecimal characters; raw
+        client tool-call IDs are rejected. Provider/global clears reset the in-memory hit, miss, and
+        replay counters. This management route uses `isAuthenticated()`: when login is required, a
+        dashboard session or manage/admin API key is accepted; standalone `requireLogin=false` can
+        permit anonymous access. Locked management remains authenticated. The legacy handler does
+        not validate `oma_` access tokens or loopback CLI tokens when authentication is required.
+        Persistence errors are suppressed by the service; a successful response can report zero
+        cleared rows even after the in-memory cache was cleared.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: toolCallId
+          in: query
+          required: false
+          description: Opaque storage ID from GET; if present, takes precedence over `provider`.
+          schema:
+            type: string
+            pattern: "^rc2h:[a-f0-9]{64}$"
+        - name: provider
+          in: query
+          required: false
+          description: Clear entries for this provider; omitted provider clears all entries.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Cleared count and scope; the response shape depends on the selected clear mode.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReasoningCacheDeleteResponse" }
+        "400":
+          description: A supplied `toolCallId` is not a valid opaque storage ID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication is required or the legacy route handler rejected the credential.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Reasoning-cache entries could not be cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiCacheReasoning
       tags:
         - Cache
-      summary: "GET cache › reasoning"
+      summary: List cached reasoning
+      description: >-
+        Returns reasoning-cache counters and paginated entries, including raw model reasoning text.
+        Treat the response as sensitive. The `limit` is clamped to 1–200 and `offset` to at least
+        zero. Database read failures in the reasoning-cache service degrade stats/entries to its
+        available in-memory counters or an empty entry list rather than necessarily returning 500.
+        This management route uses `isAuthenticated()`: when login is required, a dashboard session
+        or manage/admin API key is accepted; standalone `requireLogin=false` can permit anonymous
+        access. Locked management remains authenticated. The legacy handler does not validate
+        `oma_` access tokens or loopback CLI tokens when authentication is required.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          description: Exact provider filter.
+          schema: { type: string }
+        - name: model
+          in: query
+          required: false
+          description: Exact model filter.
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          description: >-
+            Requested base-10 integer page size, clamped to the inclusive range 1–200. The route
+            does not reject nonnumeric input before passing the resulting value to the cache service.
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          description: >-
+            Zero-based base-10 row offset, clamped to at least 0. The route does not reject
+            nonnumeric input before passing the resulting value to the cache service.
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
         "200":
-          description: OK
+          description: Reasoning-cache counters and entries, including sensitive reasoning text.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ReasoningCacheResponse" }
+        "401":
+          description: Authentication is required or the legacy route handler rejected the credential.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Reasoning-cache status failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/chaos/config:
     delete:
       operationId: deleteApiChaosConfig
@@ -31677,6 +31909,139 @@ components:
             invalidated: { type: integer, minimum: 0 }
             scope: { type: string, const: stale }
             maxAgeMs: { type: integer, minimum: 1 }
+          additionalProperties: false
+    SemanticCacheEntry:
+      type: object
+      description: >-
+        Semantic-cache metadata row. `signature` is a deterministic SHA-256 cache key and may
+        include an internal API-key ID prefix; the response body stored in the cache is not returned.
+      required: [id, signature, model, hit_count, tokens_saved, created_at, expires_at]
+      properties:
+        id: { type: string }
+        signature: { type: string }
+        model: { type: string }
+        hit_count: { type: integer, minimum: 0 }
+        tokens_saved: { type: integer, minimum: 0 }
+        created_at: { type: string }
+        expires_at: { type: string }
+      additionalProperties: false
+    SemanticCachePagination:
+      type: object
+      required: [page, limit, total, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+      additionalProperties: false
+    SemanticCacheEntriesResponse:
+      type: object
+      required: [entries, pagination]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/SemanticCacheEntry" }
+        pagination: { $ref: "#/components/schemas/SemanticCachePagination" }
+      additionalProperties: false
+    SemanticCacheDeleteResponse:
+      type: object
+      description: >-
+        `deleted` is 1 for the signature path after the SQL delete statement even if no row matched;
+        the model path reports the actual number of rows removed.
+      required: [ok, deleted]
+      properties:
+        ok: { type: boolean, const: true }
+        deleted: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ReasoningCacheProviderStats:
+      type: object
+      required: [entries, chars]
+      properties:
+        entries: { type: integer, minimum: 0 }
+        chars: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ReasoningCacheStats:
+      type: object
+      required:
+        [memoryEntries, dbEntries, totalEntries, totalChars, hits, misses, replays, replayRate, byProvider, byModel, oldestEntry, newestEntry]
+      properties:
+        memoryEntries: { type: integer, minimum: 0 }
+        dbEntries: { type: integer, minimum: 0 }
+        totalEntries: { type: integer, minimum: 0 }
+        totalChars: { type: integer, minimum: 0 }
+        hits: { type: integer, minimum: 0 }
+        misses: { type: integer, minimum: 0 }
+        replays: { type: integer, minimum: 0 }
+        replayRate: { type: string }
+        byProvider:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ReasoningCacheProviderStats" }
+        byModel:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ReasoningCacheProviderStats" }
+        oldestEntry: { type: [string, "null"] }
+        newestEntry: { type: [string, "null"] }
+      additionalProperties: false
+    ReasoningCacheEntry:
+      type: object
+      description: >-
+        Reasoning-cache row returned to the management dashboard. The `reasoning` field contains raw
+        model reasoning text and is sensitive.
+      x-sensitive: true
+      required: [toolCallId, provider, model, reasoning, charCount, createdAt, expiresAt]
+      properties:
+        toolCallId:
+          type: string
+          pattern: "^rc2h:[a-f0-9]{64}$"
+          description: Opaque HMAC storage ID; not the provider/client tool-call ID.
+        provider: { type: string }
+        model: { type: string }
+        reasoning:
+          type: string
+          x-sensitive: true
+          description: Raw cached model reasoning content.
+        charCount: { type: integer, minimum: 0 }
+        createdAt: { type: string }
+        expiresAt:
+          type: string
+          description: ISO timestamp when parseable; otherwise the unrecognized stored value.
+      additionalProperties: false
+    ReasoningCacheResponse:
+      type: object
+      x-sensitive: true
+      required: [stats, entries]
+      properties:
+        stats: { $ref: "#/components/schemas/ReasoningCacheStats" }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/ReasoningCacheEntry" }
+      additionalProperties: false
+    ReasoningCacheDeleteResponse:
+      oneOf:
+        - type: object
+          required: [ok, cleared, scope, toolCallId]
+          properties:
+            ok: { type: boolean, const: true }
+            cleared: { type: integer, minimum: 0 }
+            scope: { type: string, const: toolCallId }
+            toolCallId:
+              type: string
+              pattern: "^rc2h:[a-f0-9]{64}$"
+          additionalProperties: false
+        - type: object
+          required: [ok, cleared, scope, provider]
+          properties:
+            ok: { type: boolean, const: true }
+            cleared: { type: integer, minimum: 0 }
+            scope: { type: string, const: provider }
+            provider: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [ok, cleared, scope]
+          properties:
+            ok: { type: boolean, const: true }
+            cleared: { type: integer, minimum: 0 }
+            scope: { type: string, const: all }
           additionalProperties: false
     MemoryCacheStats:
       type: object
