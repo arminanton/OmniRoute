@@ -1819,8 +1819,10 @@ resolved CLI versions in the image/build evidence.
 - A separate 100-session, 700,000-byte run with call-log capture disabled measured the pre-provider
   admission path. The V8-derived ingest budget was 140,509,184 bytes; peak ingress use reached
   140,041,906 bytes (99.7%), while byte-queued charge peaked at 31,457,280 of 67,108,864 bytes
-  (46.9%). No request was shed. The structural `waiting` counter stayed at zero even while the
-  byte queue held work; use the queued-byte gauge alongside it. Body completion p95 was 37.86 s,
+  (46.9%). No request was shed. The structural `waiting` counter stayed at zero while byte-budget
+  waiters existed. A following health-projection change added separate `byteBudgetWaiting` and
+  `byteBudgetQueuedBytes` gauges so these requests are visible without conflating them with the
+  structural queue. Body completion p95 was 37.86 s,
   while provider fetch followed body completion within 293 ms at p95. A test-only override to 280 MB
   reduced queued bytes to 11.01 MB and improved route-ready p50 from 22.3 s to 17.3 s, but worsened
   p95 from 42.5 s to 48.9 s, maximum from 46.8 s to 54.1 s, and event-loop p95 from 1.34 s to 1.90
