@@ -60,6 +60,7 @@ test("write_failed worker reply persists only a bounded private-overflow pointer
     error: "upstream unavailable",
     pipeline: { diagnosticOverflow },
   };
+  const beforeMetrics = artifactWriter.getCallLogArtifactWriterSnapshot();
   const originalWarn = console.warn;
   const warnings: string[] = [];
   console.warn = (message?: unknown) => warnings.push(String(message ?? ""));
@@ -73,7 +74,17 @@ test("write_failed worker reply persists only a bounded private-overflow pointer
     console.warn = originalWarn;
   }
 
+  const afterMetrics = artifactWriter.getCallLogArtifactWriterSnapshot();
   assert.ok(warnings.some((message) => message.includes("reason=write_failed")));
+  assert.equal(afterMetrics.workerFailuresTotal, beforeMetrics.workerFailuresTotal + 1);
+  assert.equal(afterMetrics.detailOmissionsTotal, beforeMetrics.detailOmissionsTotal + 1);
+  assert.equal(afterMetrics.pointerFallbacksTotal, beforeMetrics.pointerFallbacksTotal + 1);
+  assert.equal(
+    afterMetrics.pointerFallbackFailuresTotal,
+    beforeMetrics.pointerFallbackFailuresTotal
+  );
+  assert.equal(afterMetrics.diagnosticStubRefusalsTotal, beforeMetrics.diagnosticStubRefusalsTotal);
+  assert.equal(afterMetrics.preparationRefusalsTotal, beforeMetrics.preparationRefusalsTotal);
   assert.ok(result?.diagnosticOverflowStub);
   const serialized = fs.readFileSync(path.join(TEST_DATA_DIR, "call_logs", result.relPath), "utf8");
   const saved = JSON.parse(serialized);

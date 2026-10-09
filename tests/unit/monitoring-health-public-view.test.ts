@@ -45,6 +45,28 @@ test("management session sees the full health payload", async () => {
     Object.keys(body).length > 2,
     "a management caller must still receive the detailed payload"
   );
+  const callLogArtifacts = body.callLogArtifacts as Record<string, unknown> | null;
+  assert.ok(callLogArtifacts, "management health includes bounded call-log writer metrics");
+  assert.deepEqual(Object.keys(callLogArtifacts).sort(), [
+    "activeJobs",
+    "artifactFootprintLimitBytes",
+    "detailOmissionsTotal",
+    "diagnosticStubFootprintLimitBytes",
+    "diagnosticStubRefusalsTotal",
+    "pointerFallbackFailuresTotal",
+    "pointerFallbacksTotal",
+    "preparationRefusalsTotal",
+    "queuedArtifacts",
+    "queuedDiagnosticStubs",
+    "reservedArtifactBytes",
+    "reservedDiagnosticStubBytes",
+    "workerFailuresTotal",
+    "workerState",
+  ]);
+  assert.doesNotMatch(
+    JSON.stringify(callLogArtifacts),
+    /requestId|artifactPath|payload|credential/i
+  );
 });
 
 /**

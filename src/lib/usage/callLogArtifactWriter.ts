@@ -59,6 +59,66 @@ let closeWaiters: Array<() => void> = [];
 const lastWarningAt = new Map<string, number>();
 let reservedArtifactFootprintBytes = 0;
 let reservedDiagnosticStubBytes = 0;
+let preparationRefusalsTotal = 0;
+let detailOmissionsTotal = 0;
+let workerFailuresTotal = 0;
+let pointerFallbacksTotal = 0;
+let pointerFallbackFailuresTotal = 0;
+let diagnosticStubRefusalsTotal = 0;
+
+function incrementCounter(value: number, amount = 1): number {
+  if (!Number.isSafeInteger(amount) || amount <= 0) return value;
+  return Math.min(Number.MAX_SAFE_INTEGER, value + amount);
+}
+
+function notePointerFallbackFailure(refused = false): void {
+  pointerFallbackFailuresTotal = incrementCounter(pointerFallbackFailuresTotal);
+  if (refused) diagnosticStubRefusalsTotal = incrementCounter(diagnosticStubRefusalsTotal);
+}
+
+export type CallLogArtifactWriterSnapshot = Readonly<{
+  /** The worker is serial, so this is always zero or one. */
+  activeJobs: number;
+  queuedArtifacts: number;
+  queuedDiagnosticStubs: number;
+  /** Includes pre-clone preparation reservations and active/queued writes. */
+  reservedArtifactBytes: number;
+  artifactFootprintLimitBytes: number;
+  /** Separate bounded budget for pointer-only diagnostic artifacts. */
+  reservedDiagnosticStubBytes: number;
+  diagnosticStubFootprintLimitBytes: number;
+  workerState: "not_started" | "idle" | "active" | "closing";
+  preparationRefusalsTotal: number;
+  detailOmissionsTotal: number;
+  workerFailuresTotal: number;
+  pointerFallbacksTotal: number;
+  pointerFallbackFailuresTotal: number;
+  diagnosticStubRefusalsTotal: number;
+}>;
+
+/**
+ * Fixed-shape process-local counters for the authenticated health projection.
+ * This reads only scalar queue state; it never traverses queued artifacts or
+ * exposes request/provider identifiers, payloads, paths, or error strings.
+ */
+export function getCallLogArtifactWriterSnapshot(): CallLogArtifactWriterSnapshot {
+  return {
+    activeJobs: active ? 1 : 0,
+    queuedArtifacts: queue.length,
+    queuedDiagnosticStubs: diagnosticStubQueue.length,
+    reservedArtifactBytes: reservedArtifactFootprintBytes,
+    artifactFootprintLimitBytes: MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES,
+    reservedDiagnosticStubBytes,
+    diagnosticStubFootprintLimitBytes: MAX_QUEUED_DIAGNOSTIC_STUB_BYTES,
+    workerState: closing ? "closing" : active ? "active" : worker ? "idle" : "not_started",
+    preparationRefusalsTotal,
+    detailOmissionsTotal,
+    workerFailuresTotal,
+    pointerFallbacksTotal,
+    pointerFallbackFailuresTotal,
+    diagnosticStubRefusalsTotal,
+  };
+}
 
 function compactArtifactForFootprint(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
@@ -256,6 +316,8 @@ export function reserveCallLogArtifactPreparation(
 ): CallLogArtifactReservation | null {
   const estimate = estimateCallLogArtifactFootprint(compactArtifactForFootprint(rawPayloads));
   if (estimate.reason) {
+    preparationRefusalsTotal = incrementCounter(preparationRefusalsTotal);
+    detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
     warnRateLimited(
       `[callLogs] Call-log detail preparation refused (reason=${estimate.reason}, estimateMiB=${(estimate.estimatedBytes / (1024 * 1024)).toFixed(1)}, reservedMiB=${(reservedArtifactFootprintBytes / (1024 * 1024)).toFixed(1)}).`,
       `preparation_refused:${estimate.reason}`
@@ -272,6 +334,8 @@ export function reserveCallLogArtifactPreparation(
     estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES ||
     reservedArtifactFootprintBytes + estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
   ) {
+    preparationRefusalsTotal = incrementCounter(preparationRefusalsTotal);
+    detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
     const reason =
       !Number.isSafeInteger(estimatedBytes) || estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
         ? "single_artifact_budget"
@@ -486,27 +550,39 @@ function enqueueDiagnosticOverflowStub(
   reference: unknown
 ): Promise<CallLogArtifactWriteResult | null> | null {
   const stub = buildDiagnosticOverflowStub(summary, reference);
-  if (!stub) return null;
+  if (!stub) {
+    notePointerFallbackFailure(true);
+    return null;
+  }
 
   const estimate = estimateCallLogArtifactFootprint(stub);
   if (
     estimate.reason ||
     diagnosticStubQueue.length >= MAX_QUEUED_DIAGNOSTIC_STUBS ||
     reservedDiagnosticStubBytes + estimate.estimatedBytes > MAX_QUEUED_DIAGNOSTIC_STUB_BYTES
-  )
+  ) {
+    notePointerFallbackFailure(true);
     return null;
+  }
 
   warnRateLimited(
     "[callLogs] Full call-log artifact omitted; preserving private diagnostic reference only."
   );
-  return enqueueArtifact(stub, estimate.estimatedBytes, "diagnostic_stub");
+  return enqueueArtifact(stub, estimate.estimatedBytes, "diagnostic_stub").then((result) => {
+    if (result) pointerFallbacksTotal = incrementCounter(pointerFallbacksTotal);
+    else pointerFallbackFailuresTotal = incrementCounter(pointerFallbackFailuresTotal);
+    return result;
+  });
 }
 
 export function writeDiagnosticOverflowStubAsync(
   summary: CallLogArtifact["summary"],
   reference: unknown
 ): Promise<CallLogArtifactWriteResult | null> {
-  if (closing) return Promise.resolve(null);
+  if (closing) {
+    notePointerFallbackFailure(true);
+    return Promise.resolve(null);
+  }
   const queued = enqueueDiagnosticOverflowStub(summary, reference);
   return queued ?? Promise.resolve(null);
 }
@@ -517,15 +593,17 @@ export function writeDiagnosticOverflowStubAsync(
  * sanitized pointer artifact synchronously; never traverse or serialize the
  * large request/response payload that the worker would have handled.
  */
-export function writeDiagnosticOverflowStubSync(
+function writeDiagnosticOverflowStubSyncInternal(
   summary: CallLogArtifact["summary"],
   reference: unknown,
-  reason:
-    | "call_log_artifact_worker_missing"
-    | "call_log_artifact_worker_failure" = "call_log_artifact_worker_missing"
+  reason: "call_log_artifact_worker_missing" | "call_log_artifact_worker_failure",
+  countFallbackMetrics: boolean
 ): CallLogArtifactWriteResult | null {
   const stub = buildDiagnosticOverflowStub(summary, reference, reason);
-  if (!stub) return null;
+  if (!stub) {
+    if (countFallbackMetrics) notePointerFallbackFailure(true);
+    return null;
+  }
 
   const estimate = estimateCallLogArtifactFootprint(stub);
   const activeStubCount = active?.reservationClass === "diagnostic_stub" ? 1 : 0;
@@ -534,6 +612,7 @@ export function writeDiagnosticOverflowStubSync(
     diagnosticStubQueue.length + activeStubCount >= MAX_QUEUED_DIAGNOSTIC_STUBS ||
     reservedDiagnosticStubBytes + estimate.estimatedBytes > MAX_QUEUED_DIAGNOSTIC_STUB_BYTES
   ) {
+    if (countFallbackMetrics) notePointerFallbackFailure(true);
     warnRateLimited(
       `[callLogs] Private diagnostic pointer stub refused (reason=stub_budget, source=${reason}).`,
       `sync_diagnostic_stub_refused:${reason}`
@@ -545,12 +624,14 @@ export function writeDiagnosticOverflowStubSync(
   try {
     const result = writeCallArtifact(stub);
     if (!result) {
+      if (countFallbackMetrics) notePointerFallbackFailure();
       warnRateLimited(
         `[callLogs] Private diagnostic pointer stub was not persisted (reason=write_failed, source=${reason}).`,
         `sync_diagnostic_stub_write_failed:${reason}`
       );
       return null;
     }
+    if (countFallbackMetrics) pointerFallbacksTotal = incrementCounter(pointerFallbacksTotal);
     warnRateLimited(
       reason === "call_log_artifact_worker_missing"
         ? "[callLogs] Artifact worker is missing; synchronously preserved the private diagnostic reference."
@@ -564,6 +645,16 @@ export function writeDiagnosticOverflowStubSync(
       reservedDiagnosticStubBytes - estimate.estimatedBytes
     );
   }
+}
+
+export function writeDiagnosticOverflowStubSync(
+  summary: CallLogArtifact["summary"],
+  reference: unknown,
+  reason:
+    | "call_log_artifact_worker_missing"
+    | "call_log_artifact_worker_failure" = "call_log_artifact_worker_missing"
+): CallLogArtifactWriteResult | null {
+  return writeDiagnosticOverflowStubSyncInternal(summary, reference, reason, true);
 }
 
 function fileExistsAtRuntime(candidate: string): boolean {
@@ -636,6 +727,7 @@ export function isCallLogArtifactWorkerAvailable(context?: WorkerResolutionConte
   const exists = context?.fileExists ?? fileExistsAtRuntime;
   const available = exists(resolution.workerFile);
   if (!context && !available) {
+    detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
     warnRateLimited(
       "[callLogs] Call-log artifact worker is missing; detail payload capture will be skipped.",
       "worker_file_missing"
@@ -699,7 +791,10 @@ function takeDiagnosticStubInputs(item: QueueItem): {
 }
 
 function failOpen(warn = false, reason = "worker_error"): void {
+  const failedNormalJobs = (active?.reservationClass === "normal" ? 1 : 0) + queue.length;
+  const failedJobs = (active ? 1 : 0) + queue.length + diagnosticStubQueue.length;
   if (warn) {
+    workerFailuresTotal = incrementCounter(workerFailuresTotal, failedJobs);
     warnRateLimited(
       `[callLogs] Call-log artifact worker failed (reason=${reason}); detail omitted.`,
       `worker_failure:${reason}`
@@ -708,6 +803,7 @@ function failOpen(warn = false, reason = "worker_error"): void {
   const failed = active
     ? [active, ...queue, ...diagnosticStubQueue]
     : [...queue, ...diagnosticStubQueue];
+  detailOmissionsTotal = incrementCounter(detailOmissionsTotal, failedNormalJobs);
   active = null;
   queue.length = 0;
   diagnosticStubQueue.length = 0;
@@ -733,6 +829,12 @@ function ensureWorker(): Worker {
     let result = reply.result;
     if (!reply.result) {
       const reason = reply.failureReason ?? "no_result";
+      if (reason !== "build_phase" && reason !== "storage_unavailable") {
+        workerFailuresTotal = incrementCounter(workerFailuresTotal);
+      }
+      if (completed.reservationClass === "normal") {
+        detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
+      }
       warnRateLimited(
         `[callLogs] Call-log artifact worker returned no stored artifact (reason=${reason}).`,
         `write_no_result:${reason}`
@@ -740,13 +842,21 @@ function ensureWorker(): Worker {
       const stubInputs = takeDiagnosticStubInputs(completed);
       if (stubInputs && (reason === "write_failed" || reason === "worker_exception")) {
         try {
-          result = writeDiagnosticOverflowStubSync(
+          result = writeDiagnosticOverflowStubSyncInternal(
             stubInputs.summary,
             stubInputs.reference,
-            "call_log_artifact_worker_failure"
+            "call_log_artifact_worker_failure",
+            false
           );
+          if (completed.reservationClass === "normal") {
+            if (result) pointerFallbacksTotal = incrementCounter(pointerFallbacksTotal);
+            else pointerFallbackFailuresTotal = incrementCounter(pointerFallbackFailuresTotal);
+          }
         } catch {
           result = null;
+          if (completed.reservationClass === "normal") {
+            pointerFallbackFailuresTotal = incrementCounter(pointerFallbackFailuresTotal);
+          }
           warnRateLimited(
             "[callLogs] Private diagnostic pointer fallback threw (reason=stub_write_exception).",
             "sync_diagnostic_stub_write_exception"
@@ -802,12 +912,14 @@ export function writeCallArtifactAsync(
   preparationReservation?: CallLogArtifactReservation | null
 ): Promise<CallLogArtifactWriteResult | null> {
   if (closing) {
+    detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
     releaseCallLogArtifactPreparation(preparationReservation);
     warnRateLimited("[callLogs] Call-log artifact queue unavailable; detail omitted.");
     return Promise.resolve(null);
   }
 
   if (queue.length >= MAX_QUEUED_JOBS) {
+    detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
     releaseCallLogArtifactPreparation(preparationReservation);
     const stub = enqueueDiagnosticOverflowStub(
       artifact.summary,
@@ -823,6 +935,7 @@ export function writeCallArtifactAsync(
     ? reservationStates.get(preparationReservation)
     : undefined;
   if (preparationReservation && (!reservationState || reservationState.state !== "reserved")) {
+    detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
     warnRateLimited(
       "[callLogs] Call-log artifact preparation reservation is unavailable; detail omitted."
     );
@@ -836,6 +949,7 @@ export function writeCallArtifactAsync(
       : reservedArtifactFootprintBytes + estimate.estimatedBytes >
         MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES)
   ) {
+    detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
     releaseCallLogArtifactPreparation(preparationReservation);
     const stub = enqueueDiagnosticOverflowStub(
       artifact.summary,

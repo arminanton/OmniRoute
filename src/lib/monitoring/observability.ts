@@ -10,6 +10,7 @@ import {
 import { HEAP_PRESSURE_THRESHOLD_MB } from "@omniroute/open-sse/utils/heapPressure.ts";
 import type { PerConnectionAdmissionController } from "@/shared/middleware/chatBodyAdmission";
 import type { WalMaintenanceState } from "@/lib/db/walMaintenance";
+import type { CallLogArtifactWriterSnapshot } from "@/lib/usage/callLogArtifactWriter";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -51,6 +52,39 @@ export type WalMaintenanceSnapshot = Pick<
   WalMaintenanceState,
   "ticks" | "busyStreak" | "busyTotal" | "lastBusyAt" | "lastOkAt"
 >;
+
+/** Bounded call-log writer gauges/counters; never includes queued artifact data. */
+export type CallLogArtifactWriterHealthSummary = CallLogArtifactWriterSnapshot;
+
+/** Explicit allowlisted projection; never spreads the writer's internal state. */
+export function projectCallLogArtifactWriterSummary(
+  snapshot: CallLogArtifactWriterSnapshot | null | undefined
+): CallLogArtifactWriterHealthSummary | null {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const count = (value: unknown): number =>
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+  const workerState = ["not_started", "idle", "active", "closing"].includes(
+    String(snapshot.workerState)
+  )
+    ? snapshot.workerState
+    : "not_started";
+  return {
+    activeJobs: count(snapshot.activeJobs),
+    queuedArtifacts: count(snapshot.queuedArtifacts),
+    queuedDiagnosticStubs: count(snapshot.queuedDiagnosticStubs),
+    reservedArtifactBytes: count(snapshot.reservedArtifactBytes),
+    artifactFootprintLimitBytes: count(snapshot.artifactFootprintLimitBytes),
+    reservedDiagnosticStubBytes: count(snapshot.reservedDiagnosticStubBytes),
+    diagnosticStubFootprintLimitBytes: count(snapshot.diagnosticStubFootprintLimitBytes),
+    workerState,
+    preparationRefusalsTotal: count(snapshot.preparationRefusalsTotal),
+    detailOmissionsTotal: count(snapshot.detailOmissionsTotal),
+    workerFailuresTotal: count(snapshot.workerFailuresTotal),
+    pointerFallbacksTotal: count(snapshot.pointerFallbacksTotal),
+    pointerFallbackFailuresTotal: count(snapshot.pointerFallbackFailuresTotal),
+    diagnosticStubRefusalsTotal: count(snapshot.diagnosticStubRefusalsTotal),
+  };
+}
 
 /**
  * Explicit allowlisted projection of the WAL maintenance state.
@@ -321,6 +355,8 @@ interface BuildHealthPayloadOptions {
   chatAdmission?: ChatAdmissionSnapshot | null;
   /** #12853: optional WAL maintenance snapshot; projected, never raw-spread. */
   walMaintenance?: WalMaintenanceSnapshot | null;
+  /** Bounded call-log writer gauges/counters; projected, never raw-spread. */
+  callLogArtifacts?: CallLogArtifactWriterSnapshot | null;
 }
 
 function limitMonitors(monitors: QuotaMonitorSnapshot[], maxItems = 8): QuotaMonitorSnapshot[] {
@@ -510,6 +546,7 @@ export function buildHealthPayload({
   adaptiveAdmission = null,
   chatAdmission = null,
   walMaintenance = null,
+  callLogArtifacts = null,
   buildSha = null,
 }: BuildHealthPayloadOptions) {
   const timestamp = new Date().toISOString();
@@ -619,6 +656,7 @@ export function buildHealthPayload({
     // #12853: WAL maintenance next to the admission gates — additive key,
     // nothing existing moves.
     walMaintenance: projectWalMaintenanceSummary(walMaintenance),
+    callLogArtifacts: projectCallLogArtifactWriterSummary(callLogArtifacts),
     dedup: {
       inflightRequests,
     },

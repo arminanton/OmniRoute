@@ -101,6 +101,7 @@ export async function GET(request: Request) {
       sessions: { activeCount: 0, stickyBoundCount: 0, byApiKey: {}, top: [] },
       adaptiveAdmission: null,
       chatAdmission: null,
+      callLogArtifacts: null,
       dedup: { inflightRequests: 0 },
     });
   }
@@ -140,6 +141,7 @@ async function rebuildHealthPayload(): Promise<unknown> {
     localHealthModule,
     adaptiveAdmissionModule,
     chatAdmissionModule,
+    callLogArtifactWriterModule,
     settingsResult,
     connectionsResult,
   ] = await Promise.allSettled([
@@ -153,6 +155,7 @@ async function rebuildHealthPayload(): Promise<unknown> {
     import("@/lib/localHealthCheck"),
     import("@omniroute/open-sse/services/admission/runtime.ts"),
     import("@/shared/middleware/chatBodyAdmission"),
+    import("@/lib/usage/callLogArtifactWriter"),
     getCachedSettings(),
     getProviderConnections(),
   ]);
@@ -242,6 +245,14 @@ async function rebuildHealthPayload(): Promise<unknown> {
           null
         )
       : null;
+  const callLogArtifacts =
+    callLogArtifactWriterModule.status === "fulfilled"
+      ? readHealthValue(
+          "call-log artifact writer",
+          () => callLogArtifactWriterModule.value.getCallLogArtifactWriterSnapshot(),
+          null
+        )
+      : null;
   // #12853: WAL maintenance state (ticks/busy streak + totals) next to the
   // admission gates. getWalMaintenanceState never throws and never touches
   // the DB — a monitoring read stays cheap. Additive key, nothing moves.
@@ -272,6 +283,7 @@ async function rebuildHealthPayload(): Promise<unknown> {
     adaptiveAdmission,
     chatAdmission,
     walMaintenance,
+    callLogArtifacts,
   });
 
   if (generation === healthPayloadCacheGeneration) {

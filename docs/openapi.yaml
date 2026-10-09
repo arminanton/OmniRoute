@@ -10604,7 +10604,8 @@ paths:
       summary: System health check
       description: >-
         A valid management credential receives the full system, memory, provider, quota, session,
-        admission, and latest cached resource-pressure snapshot. Anonymous callers and credentials
+        admission, call-log artifact queue, and latest cached resource-pressure snapshot. Anonymous
+        callers and credentials
         that fail management auth receive only the public liveness view; the route returns HTTP 200
         for both views. `system.resourcePressure.signals` is null until the pressure sampler has
         produced its first sample; `sampleAgeMs` makes cached readings explicit.
@@ -33626,7 +33627,7 @@ components:
       additionalProperties: true
     AuthenticatedSystemHealthResponse:
       type: object
-      required: [status, timestamp, system]
+      required: [status, timestamp, system, callLogArtifacts]
       properties:
         status: { type: string, const: healthy }
         timestamp: { type: string, format: date-time }
@@ -33665,6 +33666,13 @@ components:
             external: { type: number, minimum: 0 }
             arrayBuffers: { type: number, minimum: 0 }
           additionalProperties: true
+        callLogArtifacts:
+          description: >-
+            Process-local call-log artifact queue gauges and cumulative counters. This contains no
+            artifact payloads, request identifiers, provider labels, paths, or error strings.
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/CallLogArtifactWriterSnapshot"
       additionalProperties: true
     PublicHealthResponse:
       type: object
@@ -33681,6 +33689,44 @@ components:
         timestamp: { type: string, format: date-time }
         error: { type: string }
       additionalProperties: true
+    CallLogArtifactWriterSnapshot:
+      type: object
+      description: >-
+        Fixed-shape process-local call-log writer metrics. Cumulative counters reset on process
+        restart. Queue contents and request/provider identifiers are never included.
+      required:
+        - activeJobs
+        - queuedArtifacts
+        - queuedDiagnosticStubs
+        - reservedArtifactBytes
+        - artifactFootprintLimitBytes
+        - reservedDiagnosticStubBytes
+        - diagnosticStubFootprintLimitBytes
+        - workerState
+        - preparationRefusalsTotal
+        - detailOmissionsTotal
+        - workerFailuresTotal
+        - pointerFallbacksTotal
+        - pointerFallbackFailuresTotal
+        - diagnosticStubRefusalsTotal
+      properties:
+        activeJobs: { type: integer, minimum: 0, maximum: 1 }
+        queuedArtifacts: { type: integer, minimum: 0, maximum: 1024 }
+        queuedDiagnosticStubs: { type: integer, minimum: 0, maximum: 1024 }
+        reservedArtifactBytes: { type: integer, minimum: 0, maximum: 134217728 }
+        artifactFootprintLimitBytes: { type: integer, const: 134217728 }
+        reservedDiagnosticStubBytes: { type: integer, minimum: 0, maximum: 16777216 }
+        diagnosticStubFootprintLimitBytes: { type: integer, const: 16777216 }
+        workerState:
+          type: string
+          enum: [not_started, idle, active, closing]
+        preparationRefusalsTotal: { type: integer, minimum: 0 }
+        detailOmissionsTotal: { type: integer, minimum: 0 }
+        workerFailuresTotal: { type: integer, minimum: 0 }
+        pointerFallbacksTotal: { type: integer, minimum: 0 }
+        pointerFallbackFailuresTotal: { type: integer, minimum: 0 }
+        diagnosticStubRefusalsTotal: { type: integer, minimum: 0 }
+      additionalProperties: false
     RuntimeMemoryPressureSnapshot:
       type: object
       required: [heapPressureThresholdMb, psiSource, state, sampleAgeMs, signals]

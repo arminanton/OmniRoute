@@ -6,6 +6,7 @@ import {
   buildSessionsSummary,
   buildTelemetryPayload,
   projectAdaptiveAdmissionSummary,
+  projectCallLogArtifactWriterSummary,
   projectChatAdmissionSummary,
   projectResourcePressureObservation,
   projectWalMaintenanceSummary,
@@ -501,6 +502,104 @@ test("buildHealthPayload projects allowlisted structural chatAdmission fields on
   // Absent / null snapshot projects to null (degraded path parity).
   assert.equal(projectChatAdmissionSummary(null), null);
   assert.equal(projectChatAdmissionSummary(undefined), null);
+});
+
+test("call-log writer health projection allows only bounded scalar gauges and counters", () => {
+  const snapshot = {
+    activeJobs: 1,
+    queuedArtifacts: 3,
+    queuedDiagnosticStubs: 1,
+    reservedArtifactBytes: 2 * 1024 * 1024,
+    artifactFootprintLimitBytes: 128 * 1024 * 1024,
+    reservedDiagnosticStubBytes: 4_096,
+    diagnosticStubFootprintLimitBytes: 16 * 1024 * 1024,
+    workerState: "active",
+    preparationRefusalsTotal: 7,
+    detailOmissionsTotal: 9,
+    workerFailuresTotal: 2,
+    pointerFallbacksTotal: 4,
+    pointerFallbackFailuresTotal: 1,
+    diagnosticStubRefusalsTotal: 3,
+    requestId: "request-secret",
+    apiKey: "sk-secret",
+    resourcePath: "/private/path",
+    body: { messages: [{ content: "private-body" }] },
+    queueItems: [{ artifact: "private-artifact" }],
+  } as unknown as import("../../src/lib/usage/callLogArtifactWriter.ts").CallLogArtifactWriterSnapshot;
+
+  const projected = projectCallLogArtifactWriterSummary(snapshot);
+  assert.deepEqual(projected, {
+    activeJobs: 1,
+    queuedArtifacts: 3,
+    queuedDiagnosticStubs: 1,
+    reservedArtifactBytes: 2 * 1024 * 1024,
+    artifactFootprintLimitBytes: 128 * 1024 * 1024,
+    reservedDiagnosticStubBytes: 4_096,
+    diagnosticStubFootprintLimitBytes: 16 * 1024 * 1024,
+    workerState: "active",
+    preparationRefusalsTotal: 7,
+    detailOmissionsTotal: 9,
+    workerFailuresTotal: 2,
+    pointerFallbacksTotal: 4,
+    pointerFallbackFailuresTotal: 1,
+    diagnosticStubRefusalsTotal: 3,
+  });
+  const json = JSON.stringify(projected);
+  assert.doesNotMatch(json, /request-secret|sk-secret|private\/path|private-body|private-artifact/);
+
+  assert.equal(
+    projectCallLogArtifactWriterSummary({
+      ...snapshot,
+      activeJobs: Number.NaN,
+      workerState: "worker-at-private-path",
+    } as never)?.activeJobs,
+    0
+  );
+  assert.equal(projectCallLogArtifactWriterSummary(null), null);
+  assert.equal(projectCallLogArtifactWriterSummary(undefined), null);
+});
+
+test("buildHealthPayload projects call-log writer metrics as an additive health field", () => {
+  const payload = buildHealthPayload({
+    appVersion: "1.2.3",
+    settings: {},
+    connections: [],
+    circuitBreakers: [],
+    rateLimitStatus: {},
+    learnedLimits: {},
+    lockouts: {},
+    localProviders: {},
+    inflightRequests: 0,
+    quotaMonitorSummary: {
+      active: 0,
+      alerting: 0,
+      exhausted: 0,
+      errors: 0,
+      statusCounts: { starting: 0, idle: 0, healthy: 0, warning: 0, exhausted: 0, error: 0 },
+      byProvider: {},
+    },
+    quotaMonitorMonitors: [],
+    activeSessions: [],
+    callLogArtifacts: {
+      activeJobs: 0,
+      queuedArtifacts: 0,
+      queuedDiagnosticStubs: 0,
+      reservedArtifactBytes: 0,
+      artifactFootprintLimitBytes: 128 * 1024 * 1024,
+      reservedDiagnosticStubBytes: 0,
+      diagnosticStubFootprintLimitBytes: 16 * 1024 * 1024,
+      workerState: "not_started",
+      preparationRefusalsTotal: 0,
+      detailOmissionsTotal: 0,
+      workerFailuresTotal: 0,
+      pointerFallbacksTotal: 0,
+      pointerFallbackFailuresTotal: 0,
+      diagnosticStubRefusalsTotal: 0,
+    },
+  });
+
+  assert.equal(payload.callLogArtifacts?.artifactFootprintLimitBytes, 128 * 1024 * 1024);
+  assert.equal(payload.callLogArtifacts?.workerState, "not_started");
 });
 
 test("buildHealthPayload projects allowlisted walMaintenance fields only", () => {

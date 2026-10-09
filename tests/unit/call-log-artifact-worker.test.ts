@@ -13,6 +13,7 @@ const {
   closeCallLogArtifactWriter,
   resolveCallLogArtifactWorker,
   estimateCallLogArtifactFootprint,
+  getCallLogArtifactWriterSnapshot,
   reserveCallLogArtifactPreparation,
   releaseCallLogArtifactPreparation,
   writeDiagnosticOverflowStubAsync,
@@ -253,6 +254,60 @@ test("preparation reservation counts exact shared stage bodies once", () => {
     sharedBytes < distinctBytes,
     `shared body reservations should be smaller (${sharedBytes} < ${distinctBytes})`
   );
+});
+
+test("writer health snapshot tracks bounded reservations and exposes no artifact data", async () => {
+  const before = getCallLogArtifactWriterSnapshot();
+  const reservation = reserveCallLogArtifactPreparation({
+    requestBody: { content: "x".repeat(16 * 1024) },
+  });
+  assert.ok(reservation);
+
+  const reserved = getCallLogArtifactWriterSnapshot();
+  assert.equal(
+    reserved.reservedArtifactBytes,
+    before.reservedArtifactBytes + reservation.estimatedBytes
+  );
+  assert.equal(reserved.artifactFootprintLimitBytes, 128 * 1024 * 1024);
+  assert.equal(reserved.reservedArtifactBytes <= reserved.artifactFootprintLimitBytes, true);
+  assert.equal(reserved.activeJobs <= 1, true);
+  const serialized = JSON.stringify(reserved);
+  assert.doesNotMatch(serialized, /corr-worker-artifact|test-account|private-body|requestBody/);
+
+  releaseCallLogArtifactPreparation(reservation);
+  assert.equal(
+    getCallLogArtifactWriterSnapshot().reservedArtifactBytes,
+    before.reservedArtifactBytes
+  );
+
+  const refusalsBefore = before.preparationRefusalsTotal;
+  const omissionCountBefore = before.detailOmissionsTotal;
+  assert.equal(
+    reserveCallLogArtifactPreparation({ requestBody: "x".repeat(7 * 1024 * 1024) }),
+    null
+  );
+  const refused = getCallLogArtifactWriterSnapshot();
+  assert.equal(refused.preparationRefusalsTotal, refusalsBefore + 1);
+  assert.equal(refused.detailOmissionsTotal, omissionCountBefore + 1);
+
+  const diagnosticOverflow = {
+    schema: "omni-diagnostic-overflow/v1" as const,
+    traceId: "00000000-0000-4000-8000-000000000101",
+    state: "complete" as const,
+  };
+  const fallbackBefore = getCallLogArtifactWriterSnapshot();
+  const result = await writeDiagnosticOverflowStubAsync(
+    buildArtifact("snapshot-pointer-only").summary,
+    diagnosticOverflow
+  );
+  assert.ok(result?.diagnosticOverflowStub);
+  const fallbackAfter = getCallLogArtifactWriterSnapshot();
+  assert.equal(fallbackAfter.pointerFallbacksTotal, fallbackBefore.pointerFallbacksTotal + 1);
+  assert.equal(
+    fallbackAfter.reservedDiagnosticStubBytes,
+    fallbackBefore.reservedDiagnosticStubBytes
+  );
+  assert.deepEqual(fallbackAfter.workerState, "idle");
 });
 
 test("aggregate artifact budget includes active writes and releases reservations on completion", async () => {
