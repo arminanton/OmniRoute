@@ -1477,9 +1477,41 @@ removed after recording these measurements.
 
 This establishes that Webpack can complete on this host when its page-data worker count and build
 cgroup are controlled, while showing that cold compilation can still consume about 16 GiB and take
-over 12 minutes. Cache state alone reduced elapsed time by roughly five minutes. It does not settle
-Node/Turbopack versus Bun/Turbopack, since those full builds have not yet been completed under the
-same lockfile, cache state, and resource limits.
+over 12 minutes. Cache state alone reduced elapsed time by roughly five minutes. The Bun/Turbopack run below also completes, but uses Bun's separate lockfile and different pressure
+controls, so the results do not isolate runtime or bundler effects.
+
+#### Bun 1.4.2/Turbopack full standalone build (2026-10-09)
+
+This run used a clean source archive of commit `2711006466` in `/tmp`, Bun 1.4.2 from the official
+ARM64 release archive (SHA-256 verified against its release checksum file), and the committed
+`bun.lock`. The install used `HUSKY=0 bun install --include=optional --frozen-lockfile`; 2,204
+packages installed in 62 seconds. The `wreq-js` transport export and `bun:sqlite` in-memory query
+smokes passed before build. Next.js 16.3.8 ran Turbopack with `workerThreads`, full memory eviction,
+`CIRCLE_NODE_TOTAL=2` (one page-data worker), and the standard prebuild/postbuild hooks.
+
+| Stage                        |        Elapsed | Exit | Result                                                                      |
+| ---------------------------- | -------------: | ---: | --------------------------------------------------------------------------- |
+| Frozen Bun install           |           62 s |    0 | 2,204 packages; `wreq-js` and `bun:sqlite` smokes passed.                   |
+| Full `bun run --quiet build` | 944 s (15m44s) |    0 | Turbopack, all routes, standalone traces, and worker co-location completed. |
+| Bun standalone health smoke  |      under 3 s |    0 | `GET /api/health/ping` returned HTTP 200; cgroup peak was 288 MiB.          |
+
+The build started with a 16 GiB cgroup cap, two-CPU quota, and I/O weight 50. As memory pressure
+rose, the build-only limits were raised in small steps to a 17 GiB hard cap and 16.75 GiB soft
+threshold; CPU quota was reduced from two cores to one. The highest sampled cgroup peak was 16.25
+GiB. Host-available RAM stayed around 9 GiB at the peak, swap reached about 6.6 GiB, and one short
+host PSI sample reached about 34%; after reducing CPU quota and raising the soft threshold, PSI fell
+below 1%. The cgroup recorded no OOM or OOM-kill events, and the host remained available. The
+generated `.env` matched `.env.example` byte-for-byte, so the scratch build did not use this
+instance's credentials.
+
+The resulting standalone directory measured 1.9 GiB and the Next cache 3.4 GiB, compared with 999
+MiB standalone and 5.9 GiB cache for the Node/Webpack output. Bun's separate lockfile and larger
+standalone tree mean the 15m44s result is not an apples-to-apples runtime comparison: it was about
+26% slower than the cold Node/Webpack run and roughly twice the warm Node/Webpack time, but had a
+different dependency resolution and pressure history. The health smoke verified the Bun runtime
+and SQLite path only. The Bun Dockerfile does not build the TPROXY Node-API addon, and the smoke did
+not exercise TPROXY; this remains an acceptance gap. The scratch source, `node_modules`, cache,
+runtime, and logs were removed after recording the run.
 
 A no-emit TypeScript check limited to the changed files still pulled in the broad `chat.ts` import
 graph. Node spent about 3 minutes at 1.5–1.6 CPU cores and hit its default 4 GiB V8 heap limit;
