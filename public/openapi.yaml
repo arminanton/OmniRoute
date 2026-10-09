@@ -1352,16 +1352,20 @@ paths:
               additionalProperties: false
       responses:
         "200":
-          description: Search results
+          description: >-
+            Semantic-search result. When Qdrant is disabled or not configured, the route returns
+            `ok: false` with an empty `results` array and HTTP 200.
+          x-sensitive: true
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  results:
-                    type: array
-                    items:
-                      type: object
+                $ref: "#/components/schemas/QdrantSearchResponse"
+              examples:
+                qdrantNotConfigured:
+                  summary: Qdrant is disabled or not configured
+                  value:
+                    ok: false
+                    results: []
         "400":
           description: Validation error
         "401":
@@ -23435,9 +23439,16 @@ paths:
       tags:
         - Settings
       summary: "GET settings › authz inventory"
+      description: >-
+        Returns the effective route-tier prefixes, manage-scope bypass settings, spawn-capable
+        prefixes, and CORS status for this instance.
       responses:
         "200":
-          description: OK
+          description: Effective authorization and CORS configuration inventory.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthzInventoryResponse"
   /api/settings/auto-disable-accounts:
     get:
       operationId: getApiSettingsAutoDisableAccounts
@@ -39269,6 +39280,31 @@ components:
         deletedCount: { type: integer, minimum: 0 }
         retentionDays: { type: integer, minimum: 0 }
       additionalProperties: false
+    QdrantSearchResult:
+      type: object
+      required: [id, score]
+      properties:
+        id: { type: string }
+        score: { type: number }
+        payload:
+          type: object
+          description: >-
+            Sensitive stored-memory payload attached to this result, when present. It may contain
+            memory content and metadata; no payload values are included in the example.
+          x-sensitive: true
+          additionalProperties: true
+      additionalProperties: false
+    QdrantSearchResponse:
+      type: object
+      required: [ok, results]
+      properties:
+        ok:
+          type: boolean
+          description: False when Qdrant is disabled, unconfigured, or the search fails.
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/QdrantSearchResult" }
+      additionalProperties: false
     MitmTargetRoute:
       type: object
       required: [id, name, targetHost, targetPort, localPort, endpoints, enabled]
@@ -40917,6 +40953,49 @@ components:
           items: { type: string }
         stats: { $ref: "#/components/schemas/BackgroundDegradationStats" }
       additionalProperties: true
+
+    AuthzInventoryTier:
+      type: object
+      required: [name, prefixes, description, bypassable]
+      properties:
+        name:
+          type: string
+          enum: [LOCAL_ONLY, ALWAYS_PROTECTED, MANAGEMENT, CLIENT_API, PUBLIC]
+        prefixes:
+          type: array
+          items: { type: string }
+        description: { type: string }
+        bypassable: { type: boolean }
+      additionalProperties: false
+
+    AuthzInventoryCorsStatus:
+      type: object
+      required: [allowAll, allowedOrigins]
+      properties:
+        allowAll: { type: boolean }
+        allowedOrigins:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    AuthzInventoryResponse:
+      type: object
+      required: [tiers, bypassEnabled, bypassPrefixes, spawnCapablePrefixes, cors]
+      properties:
+        tiers:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items: { $ref: "#/components/schemas/AuthzInventoryTier" }
+        bypassEnabled: { type: boolean }
+        bypassPrefixes:
+          type: array
+          items: { type: string }
+        spawnCapablePrefixes:
+          type: array
+          items: { type: string }
+        cors: { $ref: "#/components/schemas/AuthzInventoryCorsStatus" }
+      additionalProperties: false
 
     BackgroundDegradationUpdateRequest:
       type: object
