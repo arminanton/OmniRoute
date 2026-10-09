@@ -7840,29 +7840,153 @@ paths:
       operationId: getApiCliToolsCodexSettings
       tags: [CLI Tools]
       summary: Get Codex CLI settings
+      description: >-
+        Probes the local Codex executable (trying `--version` and then `-v`) and returns either
+        runtime status plus a not-installed or not-runnable message, or the full
+        `~/.codex/config.toml` text, OmniRoute-detection flag, and config path. The config text and
+        filesystem path are sensitive and may contain arbitrary user configuration. This uses
+        conditional management authentication. In an unlocked profile, `requireLogin=false`
+        bypasses credentials regardless of peer address. A fresh, incomplete setup
+        without a configured password/OIDC/`INITIAL_PASSWORD` also permits anonymous loopback
+        bootstrap access. This route is neither loopback-only nor always-protected, so a reachable
+        no-login server can expose the config text and trigger the local CLI version probe.
+        Protected profiles accept a `read` Access Token, a `manage` or `admin` API key, a dashboard
+        session, or trusted loopback CLI or internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Codex CLI configuration
+          description: Runtime status and either an unavailable message or the full config text.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexCliSettingsStatusResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Runtime probe or config-file read failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCliToolsCodexSettings
       tags: [CLI Tools]
       summary: Apply Codex CLI settings
+      description: >-
+        Merges OmniRoute settings into the user's Codex TOML configuration, writes the supplied
+        API key to `~/.codex/auth.json` as `OPENAI_API_KEY`, and preserves unrelated auth fields.
+        Before writing, the handler asks the CLI backup service to snapshot the existing config and
+        auth files; backup copies can contain credentials. The write gate must allow CLI config
+        changes (`CLI_ALLOW_CONFIG_WRITES` defaults to enabled). Unknown request fields are stripped
+        by validation, except `keyId`, which is read first and, when it resolves, replaces the
+        supplied API key with that stored key. The supplied `apiKey` must still be nonempty. An
+        omitted `wireApi` defaults to `responses`; an empty/omitted `modelMappings` removes the
+        existing model-migration section. Authentication is conditional. Protected profiles accept
+        a `write` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted
+        loopback CLI or internal-service credentials. In an unlocked profile, `requireLogin=false`
+        bypasses credentials regardless of peer address; fresh incomplete setup permits anonymous
+        loopback bootstrap access when no password/OIDC/`INITIAL_PASSWORD` is configured. This
+        route is neither loopback-only nor always-protected, so a reachable no-login server can
+        accept anonymous local config writes.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/CodexSettingsUpdateRequest"
       responses:
         "200":
-          description: Codex CLI settings applied
+          description: Settings were applied; the response exposes the config path but not the API key.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexSettingsUpdateResponse" }
+        "400":
+          description: Malformed JSON, invalid settings, or missing API key.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential was rejected or CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Locked-capability check, backup, or config/auth file update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiCliToolsCodexSettings
       tags: [CLI Tools]
       summary: Reset Codex CLI settings
+      description: >-
+        Removes only OmniRoute-owned Codex config entries and deletes `OPENAI_API_KEY` from
+        `~/.codex/auth.json`, preserving other config and auth fields. Before attempting the reset,
+        the handler asks the CLI backup service to snapshot the existing config and auth files;
+        backup copies can contain credentials. If `config.toml` is absent, it returns a successful
+        no-config message before editing `auth.json`. The write gate must allow CLI config changes
+        (`CLI_ALLOW_CONFIG_WRITES` defaults to enabled). Authentication is conditional. Protected
+        profiles accept a `write` Access Token, a `manage` or `admin` API key, a dashboard session,
+        or trusted loopback CLI or internal-service credentials. In an unlocked profile,
+        `requireLogin=false` bypasses credentials regardless of peer address; fresh incomplete
+        setup permits anonymous loopback bootstrap access when no password/OIDC/`INITIAL_PASSWORD`
+        is configured. This route is neither loopback-only nor always-protected, so a reachable
+        no-login server can accept anonymous local file writes.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Codex CLI settings reset
+          description: OmniRoute settings were removed, or there was no config file to reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexSettingsResetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential was rejected or CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Locked-capability check, backup, or config/auth file update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/cli-tools/droid-settings:
     get:
@@ -36217,6 +36341,100 @@ components:
       properties:
         success: { type: boolean, const: true }
         message: { type: string }
+      additionalProperties: false
+    CodexCliSettingsStatusResponse:
+      x-sensitive: true
+      oneOf:
+        - $ref: "#/components/schemas/CodexCliSettingsUnavailableStatusResponse"
+        - $ref: "#/components/schemas/CodexCliSettingsReadyStatusResponse"
+    CodexCliSettingsUnavailableStatusResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, config, message]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean, const: false }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        config: { type: "null" }
+        message:
+          type: string
+          enum: [Codex CLI is installed but not runnable, Codex CLI is not installed]
+      additionalProperties: false
+    CodexCliSettingsReadyStatusResponse:
+      type: object
+      x-sensitive: true
+      required:
+        [installed, runnable, command, commandPath, runtimeMode, reason, config, hasOmniRoute, configPath]
+      properties:
+        installed: { type: boolean, const: true }
+        runnable: { type: boolean, const: true }
+        command: { type: string }
+        commandPath: { type: string }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        config:
+          type: [string, "null"]
+          x-sensitive: true
+          description: Full raw config.toml text, or null if no config file exists.
+        hasOmniRoute: { type: boolean }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    CodexSettingsUpdateRequest:
+      type: object
+      x-sensitive: true
+      required: [baseUrl, apiKey, model]
+      properties:
+        keyId:
+          type: string
+          description: >-
+            Optional API-key record id read before Zod validation. When the record resolves, its
+            full key replaces apiKey; apiKey must still be supplied as a nonempty string.
+        baseUrl:
+          type: string
+          minLength: 1
+          pattern: "\\S"
+          description: Trimmed base URL; the path is normalized for the selected wire API.
+        apiKey: { type: string, minLength: 1, x-sensitive: true }
+        model:
+          type: string
+          minLength: 1
+          pattern: "\\S"
+        reasoningEffort:
+          type: string
+          enum: [none, low, medium, high, xhigh, max, ultra]
+        wireApi:
+          type: string
+          enum: [chat, responses]
+          default: responses
+        modelMappings:
+          type: object
+          propertyNames: { type: string, minLength: 1, pattern: "\\S" }
+          additionalProperties: { type: string, minLength: 1, pattern: "\\S" }
+      description: >-
+        `reasoningEffort`, `wireApi`, and `modelMappings` follow the shared CLI model-config
+        validator. Unknown fields are accepted and stripped; `keyId` is extracted before
+        validation. A nonempty `modelMappings` merges into Codex model migrations; an omitted or
+        empty map removes that section. This body carries an API credential.
+      additionalProperties: true
+    CodexSettingsUpdateResponse:
+      type: object
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Codex settings applied successfully! }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    CodexSettingsResetResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          enum: [OmniRoute settings removed successfully, No config file to reset]
       additionalProperties: false
     ClaudeCliSettingsStatusResponse:
       type: object
