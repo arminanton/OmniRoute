@@ -88,7 +88,7 @@ export class DiagnosticOverflowWriter {
     this.reason ??= safeReason(reason);
     this.incomplete(this.reason);
   }
-  write(chunk: Uint8Array): Promise<void> {
+  write(chunk: Uint8Array, reservationChunkBytes = RESERVATION_CHUNK_BYTES): Promise<void> {
     if (this.stopped || this.sealed) return Promise.resolve();
     if (this.queuedBytes > 0 && this.queuedBytes + chunk.byteLength > MAX_QUEUED_BYTES) {
       this.stop("backpressure_overflow");
@@ -117,7 +117,7 @@ export class DiagnosticOverflowWriter {
                 this.attemptId,
                 this.kind,
                 Math.min(
-                  RESERVATION_CHUNK_BYTES,
+                  reservationChunkBytes,
                   this.coordinator.maxFileBytes - this.rawBytes - this.credit
                 )
               );
@@ -171,16 +171,51 @@ export class DiagnosticOverflowWriter {
     return this.closePromise;
   }
   async writeBody(body: string | Uint8Array): Promise<void> {
+    if (this.stopped || this.sealed) return;
+    const bodyBytes = typeof body === "string" ? Buffer.byteLength(body, "utf8") : body.byteLength;
+    if (bodyBytes > 0) {
+      const fileRemaining = Math.max(
+        0,
+        this.coordinator.maxFileBytes - this.rawBytes - this.credit
+      );
+      const bodyBytesNeedingCredit = Math.max(0, bodyBytes - this.credit);
+      const reservationTarget = Math.min(
+        bodyBytesNeedingCredit,
+        RESERVATION_CHUNK_BYTES,
+        fileRemaining
+      );
+      if (reservationTarget > 0) {
+        try {
+          this.credit += this.coordinator.reserve(
+            this.traceId,
+            this.owner,
+            this.attemptId,
+            this.kind,
+            reservationTarget
+          );
+        } catch (error) {
+          this.stop(
+            error instanceof Error && error.message === "lease_lost" ? "lease_lost" : "write_error"
+          );
+          return;
+        }
+      }
+    }
+
     if (typeof body !== "string") {
       for (
         let offset = 0;
         offset < body.byteLength && !this.stopped;
         offset += WRITE_BODY_CHUNK_BYTES
       )
-        await this.write(body.subarray(offset, offset + WRITE_BODY_CHUNK_BYTES));
+        await this.write(
+          body.subarray(offset, offset + WRITE_BODY_CHUNK_BYTES),
+          Math.min(RESERVATION_CHUNK_BYTES, body.byteLength - offset)
+        );
       return;
     }
     // Preserve UTF-8 across JavaScript surrogate boundaries without duplicating the whole body.
+    let byteOffset = 0;
     for (let offset = 0; offset < body.length && !this.stopped;) {
       let end = Math.min(body.length, offset + WRITE_BODY_CHUNK_BYTES);
       if (
@@ -189,7 +224,9 @@ export class DiagnosticOverflowWriter {
         body.charCodeAt(end - 1) <= 0xdbff
       )
         end--;
-      await this.write(Buffer.from(body.slice(offset, end), "utf8"));
+      const chunk = Buffer.from(body.slice(offset, end), "utf8");
+      await this.write(chunk, Math.min(RESERVATION_CHUNK_BYTES, bodyBytes - byteOffset));
+      byteOffset += chunk.byteLength;
       offset = end;
     }
   }

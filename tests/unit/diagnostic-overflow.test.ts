@@ -133,6 +133,64 @@ test("actual files retain exact >10MiB client/request/decodedresponse bytes, UTF
   }
 });
 
+test("known client body reserves its exact UTF-8 size instead of a full reservation block", async () => {
+  const directory = root();
+  const store = new DiagnosticOverflowStore({ root: directory });
+  const trace = store.createTrace({ provider: "antigravity" });
+  const bodyBytes = Math.floor(1.31 * 1024 * 1024);
+  const body = "a".repeat(bodyBytes - 4) + "😀";
+  const requestedReservations: number[] = [];
+  const originalReserve = store.coordinator.reserve;
+  const boundReserve = originalReserve.bind(store.coordinator);
+  store.coordinator.reserve = function (traceId, owner, attemptId, kind, requested) {
+    requestedReservations.push(requested);
+    return boundReserve(traceId, owner, attemptId, kind, requested);
+  };
+
+  try {
+    assert.equal(Buffer.byteLength(body, "utf8"), bodyBytes);
+    await trace.writeClientRequest(body);
+    await trace.finish();
+
+    assert.deepEqual(requestedReservations, [bodyBytes]);
+    const manifest = store.read(trace.traceId)!;
+    assert.equal(manifest.clientRequest?.complete, true);
+    assert.equal(manifest.clientRequest?.rawBytes, bodyBytes);
+  } finally {
+    store.coordinator.reserve = originalReserve;
+    await trace.abort();
+    store.close();
+    fs.rmSync(directory, { recursive: true });
+  }
+});
+
+test("concurrent known request bodies fit the aggregate budget without 4 MiB over-reservations", async () => {
+  const directory = root();
+  const budget = 5 * 1024 * 1024;
+  const bodyBytes = Math.floor(1.31 * 1024 * 1024);
+  const body = Buffer.alloc(bodyBytes, 97);
+  const store = new DiagnosticOverflowStore({ root: directory, maxTotalBytes: budget });
+  const traces = [
+    store.createTrace({ provider: "antigravity" }),
+    store.createTrace({ provider: "antigravity" }),
+  ];
+
+  try {
+    await Promise.all(traces.map((trace) => trace.writeClientRequest(body)));
+    await Promise.all(traces.map((trace) => trace.finish()));
+
+    const manifests = traces.map((trace) => store.read(trace.traceId)!);
+    assert.ok(manifests.every((manifest) => manifest.state === "complete"));
+    assert.ok(manifests.every((manifest) => manifest.clientRequest?.complete === true));
+    assert.ok(manifests.every((manifest) => manifest.clientRequest?.rawBytes === bodyBytes));
+    assert.ok(store.coordinator.used() <= budget);
+  } finally {
+    await Promise.all(traces.map((trace) => trace.abort()));
+    store.close();
+    fs.rmSync(directory, { recursive: true });
+  }
+});
+
 test("file limit and abort seal exact available prefixes as incomplete without throwing into generation", async () => {
   const directory = root(),
     store = new DiagnosticOverflowStore({ root: directory, maxFileBytes: 1024 });
