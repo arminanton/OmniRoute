@@ -224,16 +224,20 @@ def request_body(session_index, turn, context_bytes, api_path, model):
     ).encode("utf8")
 
 
-async def call_on_connection(reader, writer, request_id, body, timeout, cancel_after_ms, api_path):
+async def call_on_connection(
+    reader, writer, request_id, body, timeout, cancel_after_ms, api_path, auth_token
+):
     started = time.perf_counter()
     phase = "request_write"
     try:
         headers_started = time.perf_counter()
+        auth_header = f"Authorization: Bearer {auth_token}\r\n" if auth_token else ""
         request = (
             f"POST {api_path} HTTP/1.1\r\n"
             "Host: 127.0.0.1\r\n"
             "Content-Type: application/json\r\n"
             f"Content-Length: {len(body)}\r\n"
+            f"{auth_header}"
             f"X-Request-ID: bench-{request_id}\r\n"
             "Connection: keep-alive\r\n\r\n"
         ).encode("ascii")
@@ -288,6 +292,7 @@ async def run_session(
     context_bytes,
     api_path,
     model,
+    auth_token,
 ):
     results = []
     writer = None
@@ -307,6 +312,7 @@ async def run_session(
                 timeout,
                 cancel_after_ms,
                 "/v1/chat/completions" if api_path == "chat-completions" else "/v1/responses",
+                auth_token,
             )
             phase = result.get("phase", "response_body")
             result["turn"] = turn
@@ -353,6 +359,10 @@ async def main():
     )
     parser.add_argument("--model", default="mock/model")
     parser.add_argument(
+        "--auth-token",
+        help="Optional synthetic client bearer token for authenticated prototype gateways.",
+    )
+    parser.add_argument(
         "--sample-pid",
         type=int,
         help="Optional host PID whose RSS and CPU time should be sampled during the load",
@@ -384,6 +394,7 @@ async def main():
                 args.context_bytes,
                 args.api_path,
                 args.model,
+                args.auth_token,
             )
             for index in range(args.clients)
         ]

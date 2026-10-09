@@ -14,7 +14,8 @@ stream their bodies through their native HTTP/fetch APIs.
 Build the Rust candidate once:
 
 ```bash
-cargo build --release --manifest-path benchmarks/runtime-proxy/Cargo.toml
+cargo build --release --bins --manifest-path benchmarks/runtime-proxy/Cargo.toml
+cargo test --manifest-path benchmarks/runtime-proxy/Cargo.toml --bin rust-chat-gateway
 ```
 
 Run one runtime at a time. Container modes use the pinned official Node/Bun images and sample the
@@ -75,9 +76,39 @@ When using an external gateway, configure its provider to the same local mock up
 same request/response protocol and stream shape, and collect process or container memory separately.
 Pass `--sample-pid <host-pid>` to include the external gateway process's peak RSS and CPU time in
 the loader output. This samples one host process only; it does not replace a container cgroup memory
-measurement.
+measurement. `run_bench.py` records 25 ms sampled peak RSS and `/proc/<pid>/status` `VmHWM` for its
+local gateway process.
 The Rust adapter is a transparent transport prototype; it does not yet implement Bifrost or OmniRoute
 provider routing, authentication, retries, quotas, or request/response translation.
+
+### Rust policy-aware chat prototype
+
+`rust-chat-gateway` is a second, isolated prototype for measuring a little more of the real chat
+hot path. It accepts one configured client API key, enforces a fixed per-key request window and
+global in-flight cap, validates OpenAI Chat Completions JSON, holds a shared body-memory budget in
+64 KiB permits, optionally rewrites model aliases, replaces the caller credential with a configured
+upstream bearer key, and streams the upstream response with cancellation-aware lease release. The
+budget reserves four times encoded body bytes plus 128 bytes per observed JSON structural token, up
+to 100,000 tokens, before buffering/deserializing; this conservative charge accounts for the raw
+buffer, parsed JSON tree, and normalized outbound body. Model alias count/name size, request body,
+total body budget, and in-flight configuration all have hard limits. It preserves tool-call/tool-result
+JSON but does not execute tools.
+
+This trial does not load keys or policies from OmniRoute's database and does not implement multiple
+employee keys, account scheduling, distributed quotas, provider retries, compression, call-log
+capture, or response protocol translation. The benchmark runner supplies synthetic credentials; do
+not use real secrets for this harness. It binds to loopback and is not a deployable replacement.
+
+```bash
+python3 benchmarks/runtime-proxy/run_bench.py \
+  --runtime rust-chat-gateway --api-path chat-completions --model cx/gpt-5.6 \
+  --clients 100 --rounds 5 --context-bytes 262144 --chunks 100 --chunk-delay-ms 10
+```
+
+The runner injects fake client/upstream keys, maps the requested model to a fake upstream label, and
+adds the fake client bearer to each generated request. To target a separately configured gateway,
+`load.py --auth-token <synthetic-key>` adds a bearer header; it never prints the token. The response
+path remains streaming while the bounded chat request is read and validated before forwarding.
 
 ### Bifrost comparison
 

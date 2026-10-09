@@ -21,19 +21,21 @@ NODE_IMAGE = "docker.io/library/node:26.10.0-trixie-slim@sha256:ec7758ee051e457b
 
 def read_process_metrics(pid):
     rss_bytes = None
+    high_water_rss_bytes = None
     cpu_ticks = None
     try:
         with open(f"/proc/{pid}/status", encoding="utf8") as status_file:
             for line in status_file:
                 if line.startswith("VmRSS:"):
                     rss_bytes = int(line.split()[1]) * 1024
-                    break
+                elif line.startswith("VmHWM:"):
+                    high_water_rss_bytes = int(line.split()[1]) * 1024
         with open(f"/proc/{pid}/stat", encoding="utf8") as stat_file:
             fields = stat_file.read().split()
         cpu_ticks = int(fields[13]) + int(fields[14])
     except (OSError, ValueError, IndexError):
         pass
-    return rss_bytes, cpu_ticks
+    return rss_bytes, high_water_rss_bytes, cpu_ticks
 
 
 async def wait_for_server(url, process, timeout=20):
@@ -60,20 +62,25 @@ async def wait_for_server(url, process, timeout=20):
 
 def sample_metrics(pid, stop):
     peak_rss = 0
+    high_water_rss = 0
     cpu_start = None
     cpu_end = None
     ticks_per_second = os.sysconf("SC_CLK_TCK")
     while not stop.is_set():
-        rss, ticks = read_process_metrics(pid)
+        rss, hwm, ticks = read_process_metrics(pid)
         if rss is not None:
             peak_rss = max(peak_rss, rss)
+        if hwm is not None:
+            high_water_rss = max(high_water_rss, hwm)
         if ticks is not None:
             cpu_start = ticks if cpu_start is None else cpu_start
             cpu_end = ticks
         time.sleep(0.025)
-    rss, ticks = read_process_metrics(pid)
+    rss, hwm, ticks = read_process_metrics(pid)
     if rss is not None:
         peak_rss = max(peak_rss, rss)
+    if hwm is not None:
+        high_water_rss = max(high_water_rss, hwm)
     if ticks is not None:
         cpu_start = ticks if cpu_start is None else cpu_start
         cpu_end = ticks
@@ -84,6 +91,7 @@ def sample_metrics(pid, stop):
     )
     return {
         "gatewayPeakRssMiB": round(peak_rss / (1024 * 1024), 3),
+        "gatewayVmHwmMiB": round(high_water_rss / (1024 * 1024), 3),
         "gatewayCpuSeconds": None if cpu_seconds is None else round(cpu_seconds, 3),
     }
 
@@ -121,6 +129,7 @@ def runtime_command(
     max_inflight,
     gateway_cpus=None,
     api_path="/v1/responses",
+    rust_chat_gateway_bin=None,
 ):
     if runtime == "node":
         return apply_cpu_affinity(["node", str(ROOT / "proxy-node.mjs")], gateway_cpus), None
@@ -139,6 +148,10 @@ def runtime_command(
         return apply_cpu_affinity([bun_bin, "--smol", str(ROOT / "proxy-bun.ts")], gateway_cpus), None
     if runtime == "rust":
         return apply_cpu_affinity([rust_bin], gateway_cpus), None
+    if runtime == "rust-chat-gateway":
+        if not rust_chat_gateway_bin:
+            raise RuntimeError("Rust chat-gateway binary path is required")
+        return apply_cpu_affinity([rust_chat_gateway_bin], gateway_cpus), None
     if runtime in {"node26-container", "bun140-container", "bun142-container", "bun142-smol-container"}:
         # Pin the live container PID with taskset after startup; rootless Podman may not have a
         # delegated cpuset controller.
@@ -195,6 +208,7 @@ async def main():
             "bun",
             "bun-smol",
             "rust",
+            "rust-chat-gateway",
             "node26-container",
             "bun140-container",
             "bun142-container",
@@ -234,6 +248,10 @@ async def main():
         "--rust-bin",
         default=str(ROOT / "target" / "release" / "omniroute-runtime-proxy-bench"),
     )
+    parser.add_argument(
+        "--rust-chat-gateway-bin",
+        default=str(ROOT / "target" / "release" / "rust-chat-gateway"),
+    )
     args = parser.parse_args()
     if any([args.gateway_cpus, args.upstream_cpus, args.load_cpus]) and not shutil.which("taskset"):
         parser.error("CPU affinity options require taskset on this Linux host")
@@ -254,6 +272,14 @@ async def main():
         "MAX_BODY_BYTES": str(4 * 1024 * 1024),
         "API_PATH": api_path,
     })
+    if args.runtime == "rust-chat-gateway":
+        gateway_env.update({
+            "CLIENT_API_KEY": "benchmark-client-key",
+            "UPSTREAM_API_KEY": "benchmark-provider-key",
+            "BODY_BUDGET_BYTES": str(512 * 1024 * 1024),
+            "MAX_REQUESTS_PER_MINUTE": "100000",
+            "MODEL_ALIASES_JSON": json.dumps({args.model: "benchmark-upstream/model"}),
+        })
 
     upstream = None
     if args.runtime != "omni-admission-node":
@@ -287,6 +313,7 @@ async def main():
             args.max_inflight,
             args.gateway_cpus,
             api_path,
+            args.rust_chat_gateway_bin,
         )
         gateway = subprocess.Popen(
             command,
@@ -351,6 +378,8 @@ async def main():
         loader_command = apply_cpu_affinity(loader_command, args.load_cpus)
         if args.cancel_after_ms is not None:
             loader_command.extend(["--cancel-after-ms", str(args.cancel_after_ms)])
+        if args.runtime == "rust-chat-gateway":
+            loader_command.extend(["--auth-token", gateway_env["CLIENT_API_KEY"]])
         loader = subprocess.run(
             loader_command,
             cwd=ROOT,
@@ -380,7 +409,7 @@ async def main():
             result["upstreamCpuAffinity"] = args.upstream_cpus
         if args.load_cpus:
             result["loadCpuAffinity"] = args.load_cpus
-        if args.runtime == "omni-admission-node":
+        if args.runtime in {"omni-admission-node", "rust-chat-gateway"}:
             with urllib.request.urlopen(
                 "http://127.0.0.1:%d/health" % args.gateway_port, timeout=2
             ) as response:
@@ -390,33 +419,34 @@ async def main():
             active = None
             while time.monotonic() < deadline:
                 try:
-                    health_port = (
-                        args.gateway_port
-                        if args.runtime == "omni-admission-node"
-                        else args.upstream_port
-                    )
+                    health_port = args.upstream_port
+                    if args.runtime in {"omni-admission-node", "rust-chat-gateway"}:
+                        health_port = args.gateway_port
                     with urllib.request.urlopen(
                         "http://127.0.0.1:%d/health" % health_port, timeout=1
                     ) as response:
                         health = json.load(response)
-                        active = (
-                            health.get("admission", {}).get("activeHeavy")
-                            if args.runtime == "omni-admission-node"
-                            else health.get("activeStreams")
-                        )
+                        if args.runtime == "omni-admission-node":
+                            active = health.get("admission", {}).get("activeHeavy")
+                        elif args.runtime == "rust-chat-gateway":
+                            active = health.get("active")
+                        else:
+                            active = health.get("activeStreams")
                     if active == 0:
                         break
                 except Exception:
                     pass
                 time.sleep(0.05)
-            result[
-                "admissionActiveAfterCancel"
-                if args.runtime == "omni-admission-node"
-                else "upstreamActiveAfterCancel"
-            ] = active
+            if args.runtime == "omni-admission-node":
+                result["admissionActiveAfterCancel"] = active
+            elif args.runtime == "rust-chat-gateway":
+                result["gatewayActiveAfterCancel"] = active
+            else:
+                result["upstreamActiveAfterCancel"] = active
         print(json.dumps(result, separators=(",", ":")))
         leaked_active = result.get(
-            "admissionActiveAfterCancel", result.get("upstreamActiveAfterCancel", 0)
+                "admissionActiveAfterCancel",
+                result.get("gatewayActiveAfterCancel", result.get("upstreamActiveAfterCancel", 0)),
         )
         if (result["failed"] and not args.allow_non2xx) or (
             args.cancel_after_ms is not None and leaked_active != 0

@@ -554,6 +554,47 @@ leases and queues returned to zero. The adapter exercises the production admissi
 Chat Completions-shaped request bodies, but its deterministic SSE response is not an upstream
 provider's Chat Completions stream.
 
+## Rust policy-aware chat prototype
+
+The separate `rust-chat-gateway` benchmark binary adds one static client key, constant-time bearer
+comparison, a fixed per-key requests-per-minute window, and a global in-flight semaphore. It charges
+request bodies against a shared 64 KiB-unit budget at four times encoded body bytes plus 128 bytes
+per observed JSON structural token, capped at 100,000 tokens. It validates the chat shape, rewrites
+model aliases, replaces the caller credential with an upstream credential, streams responses, and
+releases leases on disconnect. Body size, aggregate body budget, in-flight concurrency, and alias
+table size have hard limits. It does not read employee keys or policy from OmniRoute storage, select
+provider accounts, execute tools, apply distributed quotas, retry providers, write call logs, or
+translate provider protocols.
+
+On the 8-logical-CPU devvm with 14 GiB RAM reported by the guest, I compared this prototype with the
+transparent Rust transport adapter using the same local Rust mock, synthetic chat tool history,
+262,144 bytes of user text per turn, five sequential turns per session, and 100 SSE chunks at 10 ms.
+The benchmark processes were pinned to gateway CPUs 6–7, mock CPU 5, and load CPU 4. Each row is one
+trial; the request bodies reached 1,312,156 bytes. Linux `VmHWM` is included as a kernel-maintained
+process high-water measurement alongside the harness's 25 ms RSS samples.
+
+| Sessions | Rust path                   | Completed | First-body p95 | Completion p95 |  Throughput |    VmHWM | Gateway CPU |
+| -------: | --------------------------- | --------: | -------------: | -------------: | ----------: | -------: | ----------: |
+|       70 | Transparent stream proxy    |   350/350 |        68.3 ms |       1,199 ms | 59.34 req/s | 47.3 MiB |      0.41 s |
+|       70 | Policy-aware chat prototype |   350/350 |        68.3 ms |       1,185 ms | 59.39 req/s | 61.6 MiB |      0.92 s |
+|      100 | Transparent stream proxy    |   500/500 |        55.2 ms |       1,192 ms | 82.78 req/s | 64.5 MiB |      0.58 s |
+|      100 | Policy-aware chat prototype |   500/500 |        84.4 ms |       1,227 ms | 82.18 req/s | 82.9 MiB |      1.31 s |
+
+Both completed every synthetic request. At 100 sessions, the policy-aware prototype used about 18
+MiB more process high-water RSS and 0.73 seconds more gateway CPU than the streaming-only adapter;
+throughput was within 1 request/second. At 70 sessions, the differences were about 14 MiB and 0.51
+CPU seconds. First-body p95 differed by 29 ms and completion p95 by 35 ms at 100 sessions; one run
+per path cannot separate that spread from host/test noise. A 70-client
+cancellation probe also returned all 70 HTTP 200 headers, cancelled all 70 response reads after
+100 ms, and finished with zero active gateway streams and the full 512 MiB body budget available;
+five focused Rust gateway tests passed, including rejection of high-structure JSON before parsing
+and client-disconnect lease release.
+
+This shows that these bounded gateway steps have a small footprint in this synthetic workload. It
+does not establish performance parity with OmniRoute's TypeScript route or real provider capacity.
+The next useful comparison is the same auth, account-policy, model-selection, and stream workload
+through the actual TypeScript path, Bun/Turbopack candidate, and Rust prototype with matched behavior.
+
 ## Antigravity CLI/IDE tool-roundtrip and capture check
 
 The existing `tests/integration/antigravity-parallel-tool-roundtrip-http.test.ts` exercises the
@@ -1144,10 +1185,12 @@ no-auth catalog filter with the optional model ID shape.
   shutdown differences.
 - Exercise the full OmniRoute app with mock provider credentials at 70 and 100 active sessions,
   including actual tool-call cycles, authentication, account-level limits, and verified artifact
-  capture. The current long-stream test covers only the production admission middleware plus mock
-  streaming.
-- Compare the current TypeScript route, Rust proxy, and Bifrost only with identical provider mocks
-  and request policy; no language-wide performance conclusion follows from the current harness.
+  capture. The current TypeScript long-stream adapter exercises admission but not the full route;
+  the Rust policy prototype has one static key and alias map but no database-backed policies.
+- Compare the current TypeScript route, Bun/Turbopack candidate, Rust policy-aware prototype, and
+  Bifrost only with equivalent authentication, model/account policy, request bodies, and provider
+  mocks. Current Rust-vs-Rust rows isolate a few extra gateway stages only; they do not rank entire
+  languages or runtimes.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
