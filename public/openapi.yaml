@@ -96,7 +96,10 @@ tags:
   - name: System
     description: System management (restart, shutdown, backup)
   - name: Pricing
-    description: Model pricing configuration
+    description: >-
+      Model prices use USD per one million tokens for token rates; source-synced non-token rates use
+      absolute USD per operation unit. The merged map precedence is hardcoded defaults, LiteLLM,
+      models.dev, then user overrides.
   - name: Cloud
     description: >-
       Cloud worker compatibility routes. The auth, model-resolve, and model-alias GET operations
@@ -6539,50 +6542,170 @@ paths:
       operationId: getApiPricing
       tags: [Pricing]
       summary: Get model pricing
+      description: >-
+        Returns pricing merged in precedence order: hardcoded defaults, LiteLLM sync,
+        models.dev sync, then user overrides. Only the exact query value `includeSources=1` wraps
+        this map as `{pricing, sourceMap}`; omitted or other values preserve the legacy direct-map
+        response. A read-scoped access token is sufficient; manage/admin API keys, dashboard
+        sessions, loopback CLI tokens and trusted loopback internal-service credentials are also
+        accepted. An unlocked standalone install with `requireLogin=false` may allow anonymous
+        access; locked management requires authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: includeSources
+          in: query
+          required: false
+          description: Set exactly to `1` to include per-model source provenance.
+          schema: { type: string }
       responses:
         "200":
-          description: Current pricing configuration
+          description: Merged map, or `{pricing, sourceMap}` when includeSources=1.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingGetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Pricing configuration could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiPricing
       tags: [Pricing]
       summary: Update model pricing
+      description: >-
+        Partially merges user-provided model price fields into the user-override namespace. It does
+        not replace the full pricing configuration; the response contains user overrides only, not
+        the merged defaults/synced map. Accepted override fields are input, output, cached,
+        reasoning, and cache_creation, each nonnegative. A write-scoped access token is sufficient;
+        manage/admin API keys, dashboard sessions, loopback CLI tokens and trusted loopback
+        internal-service credentials are also accepted. An unlocked standalone install with
+        `requireLogin=false` may allow anonymous access; locked management requires authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties:
-                type: object
-                additionalProperties: true
+            schema: { $ref: "#/components/schemas/PricingOverrideRequestMap" }
       responses:
         "200":
-          description: Updated pricing
+          description: Current user override map after the partial merge.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingOverrideMap" }
         "400":
-          description: Invalid pricing data
+          description: Malformed JSON or pricing fields failed validation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Pricing overrides could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiPricing
       tags: [Pricing]
       summary: Reset model pricing
+      description: >-
+        Resets user overrides to the merged default/synced values returned by GET. When both
+        `provider` and `model` are nonempty, resets that model; provider alone resets that provider.
+        If `provider` is absent, resets all user overrides, even if `model` was supplied. A
+        write-scoped access token is sufficient; manage/admin API keys, dashboard sessions,
+        loopback CLI tokens and trusted loopback internal-service credentials are also accepted. An
+        unlocked standalone install with `requireLogin=false` may allow anonymous access; locked
+        management requires authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: provider
           in: query
+          required: false
           schema: { type: string }
         - name: model
           in: query
+          required: false
           schema: { type: string }
       responses:
         "200":
-          description: Pricing reset
+          description: Current merged pricing map after user overrides were reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingMap" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Pricing reset failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/pricing/defaults:
     get:
       operationId: getApiPricingDefaults
       tags: [Pricing]
       summary: Get default pricing
+      description: >-
+        Returns the hardcoded pricing map without synced or user override layers. The central
+        management route policy applies; a read-scoped access token is sufficient, while
+        manage/admin API keys, dashboard sessions, loopback CLI tokens, or trusted loopback
+        internal-service credentials also work. An unlocked standalone install with
+        `requireLogin=false` may allow anonymous access; locked management requires authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Default pricing data
+          description: Hardcoded provider/model pricing map.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingMap" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Default pricing could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/pricing/models:
     get:
@@ -18732,25 +18855,119 @@ paths:
       tags:
         - Pricing
       summary: "DELETE pricing › sync"
+      description: >-
+        Clears only the external `pricing_synced` namespace; hardcoded defaults, models.dev data,
+        and user overrides remain. A write-scoped access token is sufficient; manage/admin API
+        keys, dashboard sessions, loopback CLI tokens and trusted loopback internal-service
+        credentials are also accepted. An unlocked standalone install with `requireLogin=false` may
+        allow anonymous access; locked management requires authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Synced pricing data was cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingSyncClearResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Synced pricing data could not be cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiPricingSync
       tags:
         - Pricing
       summary: "GET pricing › sync"
+      description: >-
+        Returns persisted manual/periodic synchronization status. A read-scoped access token is
+        sufficient; manage/admin API keys, dashboard sessions, loopback CLI tokens and trusted
+        loopback internal-service credentials are also accepted. An unlocked standalone install
+        with `requireLogin=false` may allow anonymous access; locked management requires
+        authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current pricing synchronization status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingSyncStatusResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Synchronization status could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiPricingSync
       tags:
         - Pricing
       summary: "POST pricing › sync"
+      description: >-
+        Fetches the configured external pricing sources and replaces the synced pricing namespace;
+        `dryRun=true` returns the transformed map without persistence. Only LiteLLM is currently
+        supported. A write-scoped access token is sufficient; manage/admin API keys, dashboard
+        sessions, loopback CLI tokens and trusted loopback internal-service credentials are also
+        accepted. An unlocked standalone install with `requireLogin=false` may allow anonymous
+        access; locked management requires authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PricingSyncRequest" }
       responses:
         "200":
-          description: OK
+          description: Sync completed successfully; dry runs may include unpersisted data.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingSyncSuccessResponse" }
+        "400":
+          description: Malformed JSON or invalid source-selection body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: The sync route failed before the sync engine returned a result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "502":
+          description: The sync engine returned success=false, such as an external fetch failure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PricingSyncFailureResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/provider-metrics:
     get:
       operationId: getApiProviderMetrics
@@ -41127,6 +41344,142 @@ components:
             items: { type: string }
       additionalProperties: false
 
+    PricingRateEntry:
+      type: object
+      description: >-
+        Token prices (`input`, `output`, `cached`, `reasoning`, `cache_creation`) are USD per one
+        million tokens. Synced non-token dimensions are absolute USD per image, pixel, second,
+        character, search unit, or OCR page. Additional fields are preserved from legacy or external
+        pricing sources.
+      properties:
+        input: { type: number, minimum: 0 }
+        output: { type: number, minimum: 0 }
+        cached: { type: number, minimum: 0 }
+        reasoning: { type: number, minimum: 0 }
+        cache_creation: { type: number, minimum: 0 }
+        mode: { type: string }
+        prompt: { type: number, description: Legacy pricing key retained when present. }
+        completion: { type: number, description: Legacy pricing key retained when present. }
+        input_cost_per_second: { type: number, minimum: 0 }
+        output_cost_per_second: { type: number, minimum: 0 }
+        input_cost_per_image: { type: number, minimum: 0 }
+        output_cost_per_image: { type: number, minimum: 0 }
+        input_cost_per_pixel: { type: number, minimum: 0 }
+        output_cost_per_pixel: { type: number, minimum: 0 }
+        input_cost_per_character: { type: number, minimum: 0 }
+        output_cost_per_character: { type: number, minimum: 0 }
+        input_cost_per_video_per_second: { type: number, minimum: 0 }
+        output_cost_per_video_per_second: { type: number, minimum: 0 }
+        search_unit_cost: { type: number, minimum: 0 }
+        ocr_cost_per_page: { type: number, minimum: 0 }
+      additionalProperties: true
+    PricingMap:
+      type: object
+      description: Provider alias → model ID → price fields.
+      additionalProperties:
+        type: object
+        additionalProperties: { $ref: "#/components/schemas/PricingRateEntry" }
+    PricingWithSourcesResponse:
+      type: object
+      required: [pricing, sourceMap]
+      properties:
+        pricing: { $ref: "#/components/schemas/PricingMap" }
+        sourceMap:
+          type: object
+          description: Provider alias → model ID → layer that supplied the merged price.
+          additionalProperties:
+            type: object
+            additionalProperties:
+              type: string
+              enum: [default, litellm, modelsDev, user]
+      additionalProperties: false
+    PricingGetResponse:
+      oneOf:
+        - $ref: "#/components/schemas/PricingMap"
+        - $ref: "#/components/schemas/PricingWithSourcesResponse"
+      description: Direct merged map, or `{pricing, sourceMap}` when includeSources=1.
+    PricingOverrideRate:
+      type: object
+      description: Strict user override. Each supplied value is a nonnegative USD per one-million-token rate.
+      properties:
+        input: { type: number, minimum: 0 }
+        output: { type: number, minimum: 0 }
+        cached: { type: number, minimum: 0 }
+        reasoning: { type: number, minimum: 0 }
+        cache_creation: { type: number, minimum: 0 }
+      additionalProperties: false
+    PricingOverrideMap:
+      type: object
+      description: >-
+        Current provider alias → model ID → user override map. Stored legacy override entries may
+        include fields outside the current PATCH validator, so response entries remain open-ended.
+      additionalProperties:
+        type: object
+        additionalProperties: { $ref: "#/components/schemas/PricingRateEntry" }
+    PricingOverrideRequestMap:
+      type: object
+      description: Provider alias → model ID → strict partial user-override fields.
+      additionalProperties:
+        type: object
+        additionalProperties: { $ref: "#/components/schemas/PricingOverrideRate" }
+    PricingSyncRequest:
+      type: object
+      properties:
+        sources:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [litellm] }
+        dryRun:
+          type: boolean
+          default: false
+      additionalProperties: false
+    PricingSyncStatusResponse:
+      type: object
+      required: [enabled, lastSync, lastSyncModelCount, nextSync, intervalMs, sources]
+      properties:
+        enabled: { type: boolean }
+        lastSync: { type: [string, "null"], format: date-time }
+        lastSyncModelCount: { type: integer, minimum: 0 }
+        nextSync: { type: [string, "null"], format: date-time }
+        intervalMs: { type: integer, minimum: 1 }
+        sources:
+          type: array
+          items: { type: string, enum: [litellm] }
+      additionalProperties: false
+    PricingSyncSuccessResponse:
+      type: object
+      required: [success, modelCount, providerCount, source, dryRun]
+      properties:
+        success: { type: boolean, const: true }
+        modelCount: { type: integer, minimum: 0 }
+        providerCount: { type: integer, minimum: 0 }
+        source: { type: string }
+        dryRun: { type: boolean }
+        data:
+          description: Present only for a successful dry run; it is not persisted.
+          $ref: "#/components/schemas/PricingMap"
+        warnings:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+    PricingSyncFailureResponse:
+      type: object
+      required: [success, modelCount, providerCount, source, dryRun, error]
+      properties:
+        success: { type: boolean, const: false }
+        modelCount: { type: integer, minimum: 0 }
+        providerCount: { type: integer, minimum: 0 }
+        source: { type: string }
+        dryRun: { type: boolean }
+        error: { type: string }
+      additionalProperties: false
+    PricingSyncClearResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Synced pricing data cleared }
+      additionalProperties: false
     PricingModelCatalogResponse:
       type: object
       description: Provider IDs or aliases map to their model catalog entry.
