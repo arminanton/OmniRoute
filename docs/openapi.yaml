@@ -17258,10 +17258,50 @@ paths:
       operationId: postApiEvalsSuites
       tags:
         - Evals
-      summary: "POST evals › suites"
+      summary: Create or replace a custom evaluation suite
+      description: >-
+        Saves a suite with one or more evaluation cases. Without `id` it creates a generated suite;
+        when `id` is supplied and already exists, the helper replaces that suite's cases even though
+        the route still responds with 201. Suite prompts, expected outputs, and tags are supplied in
+        the request and should be treated as sensitive. Authentication follows the management
+        policy: a `write` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted
+        loopback CLI/internal-service credentials are accepted; an unlocked `requireLogin=false`
+        install may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EvalSuiteSaveRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Suite saved; this status is used for both generated and caller-supplied ids.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvalSuiteSaveResponse" }
+        "400":
+          description: Invalid JSON or request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Suite persistence failed; the handler returns an error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/evals/suites/{suiteId}:
     parameters:
       - name: suiteId
@@ -17273,26 +17313,133 @@ paths:
       operationId: deleteApiEvalsSuitesBySuiteId
       tags:
         - Evals
-      summary: "DELETE evals › suites › <suiteId>"
+      summary: Delete a custom evaluation suite
+      description: >-
+        Deletes the suite and all of its stored cases; returns 404 when it does not exist. Suite
+        content may include prompts, expected output text, and tags. Authentication follows the
+        management policy: a `write` Access Token, a `manage` or `admin` API key, a dashboard
+        session, or trusted loopback CLI/internal-service credentials are accepted; an unlocked
+        `requireLogin=false` install may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Suite deletion succeeded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvalSuiteDeleteResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Suite does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Suite deletion failed; the handler returns an error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiEvalsSuitesBySuiteId
       tags:
         - Evals
-      summary: "GET evals › suites › <suiteId>"
+      summary: Get a custom evaluation suite
+      description: >-
+        Returns a suite's full case definitions, including prompt messages and expected outputs.
+        Treat the response as sensitive. Authentication follows the management policy: a `read`
+        Access Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
+        CLI/internal-service credentials are accepted; an unlocked `requireLogin=false` install
+        may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Full evaluation suite record and cases.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvalSuiteGetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Suite does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Suite lookup failed; the handler returns an error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiEvalsSuitesBySuiteId
       tags:
         - Evals
-      summary: "PUT evals › suites › <suiteId>"
+      summary: Replace a custom evaluation suite
+      description: >-
+        Replaces the suite's name, description, and case list. The path `suiteId` is authoritative;
+        any `id` in the request body is overwritten. Suite prompts, expected outputs, and tags in
+        the response should be treated as sensitive. Authentication follows the management policy:
+        a `write` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted
+        loopback CLI/internal-service credentials are accepted; an unlocked `requireLogin=false`
+        install may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EvalSuiteSaveRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated suite and full case definitions.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvalSuiteSaveResponse" }
+        "400":
+          description: Invalid JSON or request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Suite does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Suite persistence failed; the handler returns an error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/files:
     get:
       operationId: getApiFiles
@@ -35872,6 +36019,140 @@ components:
       properties:
         config: { $ref: "#/components/schemas/ChaosConfig" }
         message: { type: string, const: Chaos config reset to defaults }
+      additionalProperties: false
+    EvalMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, minLength: 1, maxLength: 50, pattern: "\\S" }
+        content: { type: string, minLength: 1, maxLength: 20000, pattern: "\\S", x-sensitive: true }
+      description: Unknown fields are accepted by Zod and stripped.
+      additionalProperties: true
+    EvalCaseSaveRequest:
+      type: object
+      required: [name, input, expected]
+      properties:
+        id: { type: string, minLength: 1, pattern: "\\S" }
+        name: { type: string, minLength: 1, maxLength: 200, pattern: "\\S" }
+        model: { type: [string, "null"], minLength: 1, maxLength: 300, pattern: "\\S" }
+        input:
+          type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              minItems: 1
+              maxItems: 32
+              items: { $ref: "#/components/schemas/EvalMessage" }
+            max_tokens: { type: integer, minimum: 1, maximum: 8192 }
+          additionalProperties: true
+        expected:
+          type: object
+          required: [strategy, value]
+          properties:
+            strategy: { type: string, enum: [contains, exact, regex] }
+            value: { type: string, minLength: 1, maxLength: 20000, pattern: "\\S", x-sensitive: true }
+          additionalProperties: true
+        tags:
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 64, pattern: "\\S" }
+      description: Unknown fields are accepted by Zod and stripped.
+      additionalProperties: true
+    EvalSuiteSaveRequest:
+      type: object
+      required: [name, cases]
+      properties:
+        id:
+          type: string
+          minLength: 1
+          pattern: "\\S"
+          description: Optional id; POST updates an existing suite when that id already exists.
+        name: { type: string, minLength: 1, maxLength: 200, pattern: "\\S" }
+        description: { type: string, maxLength: 2000 }
+        cases:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items: { $ref: "#/components/schemas/EvalCaseSaveRequest" }
+      description: Unknown fields are accepted by Zod and stripped.
+      additionalProperties: true
+    EvalMessageRecord:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string }
+        content: { type: string, x-sensitive: true }
+      additionalProperties: false
+    EvalCaseInputRecord:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/EvalMessageRecord" }
+        max_tokens: { type: integer }
+      additionalProperties: false
+    EvalCaseExpectedRecord:
+      type: object
+      required: [strategy]
+      properties:
+        strategy: { type: string, enum: [contains, exact, regex, custom] }
+        value: { type: string, x-sensitive: true }
+      additionalProperties: false
+    EvalCaseRecord:
+      type: object
+      x-sensitive: true
+      required: [id, suiteId, name, input, expected, tags, sortOrder, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        suiteId: { type: string }
+        name: { type: string }
+        model: { type: string }
+        input: { $ref: "#/components/schemas/EvalCaseInputRecord" }
+        expected: { $ref: "#/components/schemas/EvalCaseExpectedRecord" }
+        tags:
+          type: array
+          items: { type: string }
+        sortOrder: { type: integer }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      additionalProperties: false
+    EvalSuiteRecord:
+      type: object
+      x-sensitive: true
+      required: [id, name, source, caseCount, cases, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        source: { type: string, const: custom }
+        caseCount: { type: integer, minimum: 0 }
+        cases:
+          type: array
+          items: { $ref: "#/components/schemas/EvalCaseRecord" }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      additionalProperties: false
+    EvalSuiteGetResponse:
+      type: object
+      x-sensitive: true
+      required: [suite]
+      properties:
+        suite: { $ref: "#/components/schemas/EvalSuiteRecord" }
+      additionalProperties: false
+    EvalSuiteSaveResponse:
+      type: object
+      x-sensitive: true
+      required: [suite]
+      properties:
+        suite: { $ref: "#/components/schemas/EvalSuiteRecord" }
+      additionalProperties: false
+    EvalSuiteDeleteResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
       additionalProperties: false
     V1AccountKeyLimits:
       type: object
