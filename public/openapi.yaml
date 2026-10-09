@@ -19476,25 +19476,115 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › feature flags"
+      description: Clears every database-backed feature-flag override; environment/default values remain effective.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Number of removed database overrides and a result message.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeatureFlagsDeleteResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          description: Runtime policy prevented clearing feature flags.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Feature-flag overrides could not be cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiSettingsFeatureFlags
       tags:
         - Settings
       summary: "GET settings › feature flags"
+      description: Returns definitions with database/environment/default precedence and resolved values.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Feature flag definitions, effective values and source counts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeatureFlagsListResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          description: Runtime policy prevented reading feature flags.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Feature flags could not be resolved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsFeatureFlags
       tags:
         - Settings
       summary: "PUT settings › feature flags"
+      description: >-
+        Sets a database override for a known flag. Omitting `value` removes the override and restores
+        environment/default precedence. Enum values are checked against that flag's definition.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FeatureFlagUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Effective value, source and previous value after mutation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeatureFlagUpdateResponse" }
+        "400":
+          description: Invalid JSON, unknown flag key or invalid enum value.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          description: Runtime policy prevented changing this feature flag.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Feature flag could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/free-proxies:
     delete:
       operationId: deleteApiSettingsFreeProxies
@@ -38571,6 +38661,86 @@ components:
       required: [success]
       properties:
         success: { type: boolean, const: true }
+      additionalProperties: false
+
+    FeatureFlagDefinitionResponse:
+      type: object
+      required:
+        [
+          key,
+          label,
+          description,
+          category,
+          type,
+          enumValues,
+          defaultValue,
+          effectiveValue,
+          source,
+          requiresRestart,
+        ]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        description: { type: string }
+        category: { type: string, enum: [security, network, policies, runtime, cli, health] }
+        type: { type: string, enum: [boolean, enum] }
+        enumValues:
+          type: [array, "null"]
+          items: { type: string }
+        defaultValue: { type: string }
+        effectiveValue: { type: string }
+        source: { type: string, enum: [db, env, default] }
+        requiresRestart: { type: boolean }
+        warningLevel: { type: string, enum: [info, caution, danger] }
+      additionalProperties: false
+
+    FeatureFlagsSummary:
+      type: object
+      required: [total, active, inactive, overriddenByDb, overriddenByEnv]
+      properties:
+        total: { type: integer, minimum: 0 }
+        active: { type: integer, minimum: 0 }
+        inactive: { type: integer, minimum: 0 }
+        overriddenByDb: { type: integer, minimum: 0 }
+        overriddenByEnv: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    FeatureFlagsListResponse:
+      type: object
+      required: [flags, summary]
+      properties:
+        flags:
+          type: array
+          items: { $ref: "#/components/schemas/FeatureFlagDefinitionResponse" }
+        summary: { $ref: "#/components/schemas/FeatureFlagsSummary" }
+      additionalProperties: false
+
+    FeatureFlagUpdateRequest:
+      type: object
+      required: [key]
+      properties:
+        key: { type: string, minLength: 1 }
+        value: { type: string, description: Omit to remove the stored override. }
+      additionalProperties: true
+
+    FeatureFlagUpdateResponse:
+      type: object
+      required: [key, effectiveValue, source, previousValue, previousSource, requiresRestart]
+      properties:
+        key: { type: string }
+        effectiveValue: { type: string }
+        source: { type: string, enum: [db, env, default] }
+        previousValue: { type: string }
+        previousSource: { type: string, enum: [db, env, default] }
+        requiresRestart: { type: boolean }
+      additionalProperties: false
+
+    FeatureFlagsDeleteResponse:
+      type: object
+      required: [cleared, message]
+      properties:
+        cleared: { type: integer, minimum: 0 }
+        message: { type: string }
       additionalProperties: false
 
     RestartResponse:

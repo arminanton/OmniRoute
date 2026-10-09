@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 760
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 766
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 496 operations have success
-response content schemas and 411 declare operation-level security. Of 1,001 operations with a
-non-`204` success status, 505 still lack an explicit success-body schema; 13 operations have no
+contract is still stronger on route coverage than schema completeness: 499 operations have success
+response content schemas and 414 declare operation-level security. Of 1,001 operations with a
+non-`204` success status, 502 still lack an explicit success-body schema; 13 operations have no
 declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -143,8 +143,10 @@ compression-run summaries, including the status-200 zero summary on telemetry-st
 database-maintenance pass documents editable settings sections, read-only location/health details,
 database statistics table/index rows, and the vacuum scheduler/manual-run status and error variants.
 The manual VACUUM contract test uses a temporary SQLite database and executes the maintenance
-operation there. The current spec inventory is 760 schemas, 496 success-body operations, and 411
-security declarations; 505 non-`204` successes still lack bodies.
+operation there. The feature-flags pass documents conditional management authentication, resolved
+database/environment/default precedence, flag summaries, one-flag mutation and override clearing.
+The current spec inventory is 766 schemas, 499 success-body operations, and 414 security declarations;
+502 non-`204` successes still lack bodies.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
