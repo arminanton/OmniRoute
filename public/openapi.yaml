@@ -6873,38 +6873,105 @@ paths:
     get:
       operationId: getApiCliTokens
       tags: [CLI Remote Mode]
-      summary: List access tokens (masked) — admin scope
+      summary: List scoped CLI access tokens (masked)
+      description: >-
+        Lists token metadata, including revoked records; the stored hash and plaintext credential
+        are never returned. This path requires an `admin` scoped Access Token when login is
+        required or locked management is active. A management API key with `manage` or `admin`
+        scope, a dashboard session, or trusted loopback CLI/internal-service credentials also
+        pass. In an unlocked install with `requireLogin=false`, the central and handler auth gates
+        may permit anonymous access; this route is not marked always-protected.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Masked token list
+          description: All access-token records with secrets and hashes masked.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliAccessTokenListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          description: Insufficient scope
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: An uncaught access-token storage failure is handled by the framework.
     post:
       operationId: postApiCliTokens
       tags: [CLI Remote Mode]
       summary: Create a scoped access token — admin scope
+      description: >-
+        Creates a scoped `oma_live_` Access Token and returns its plaintext once; only its display
+        prefix is stored and later listed. `scope` defaults to `read`. This path requires an
+        `admin` scoped Access Token when login is required or locked management is active. A
+        management API key with `manage` or `admin` scope, a dashboard session, or trusted loopback
+        CLI/internal-service credentials also pass. In an unlocked install with
+        `requireLogin=false`, the central and handler auth gates may permit anonymous access; this
+        route is not marked always-protected. Because `scope: admin` is a supported request value,
+        that unlocked profile can permit anonymous callers to mint an admin-scoped token.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
-              type: object
-              required: [name]
-              properties:
-                name: { type: string }
-                scope: { type: string, enum: [read, write, admin] }
-                expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
+              $ref: "#/components/schemas/CliAccessTokenCreateRequest"
       responses:
         "200":
-          description: Token created (token returned once)
+          description: Token metadata and its one-time plaintext credential.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliAccessTokenCreatedResponse" }
+        "400":
+          description: Invalid JSON, name/scope/expiry validation failure.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          description: Insufficient scope
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: An uncaught token-storage/helper failure is handled by the framework.
 
   /api/cli/tokens/{id}:
     delete:
       operationId: deleteApiCliTokensById
       tags: [CLI Remote Mode]
       summary: Revoke an access token by id or display prefix — admin scope
+      description: >-
+        Revokes by token id or exact display prefix. Re-revocation and unknown identifiers return
+        404. On success, the response `id` echoes the identifier supplied in the path, which may
+        be a display prefix rather than the token's canonical id. This path requires an `admin`
+        scoped Access Token when login is required or locked management is active. A management
+        API key with `manage` or `admin` scope, a dashboard session, or trusted loopback
+        CLI/internal-service credentials also pass. In an unlocked install with `requireLogin=false`,
+        the central and handler auth gates may permit anonymous access; this route is not marked
+        always-protected.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -6912,11 +6979,23 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: Token revoked
+          description: Token revoked; `id` echoes the id or display prefix supplied in the path.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliAccessTokenRevokedResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          description: Insufficient scope
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: Token not found or already revoked
+          description: Token not found or already revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: An uncaught access-token storage failure is handled by the framework.
 
   # ─── CLI Tools ─────────────────────────────────────────────────
 
@@ -34705,6 +34784,71 @@ components:
       required: [ok]
       properties:
         ok: { type: boolean, const: true }
+      additionalProperties: false
+    CliAccessTokenRecord:
+      type: object
+      required: [id, name, scope, tokenPrefix, createdAt, lastUsedAt, expiresAt, revokedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        scope: { type: string, enum: [read, write, admin] }
+        tokenPrefix:
+          type: string
+          pattern: "^oma_live_[A-Za-z0-9_-]{6}$"
+          description: Display prefix only; never the full token or its stored hash.
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        expiresAt: { type: [string, "null"], format: date-time }
+        revokedAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+    CliAccessTokenListResponse:
+      type: object
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items: { $ref: "#/components/schemas/CliAccessTokenRecord" }
+      additionalProperties: false
+    CliAccessTokenCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          pattern: "\\S"
+          description: The helper trims the name before persistence; an all-whitespace value fails there.
+        scope:
+          type: string
+          enum: [read, write, admin]
+          default: read
+        expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
+      description: Unknown top-level fields are accepted by Zod and stripped.
+      additionalProperties: true
+    CliAccessTokenCreatedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, token, id, name, scope, tokenPrefix, createdAt, expiresAt]
+      properties:
+        success: { type: boolean, const: true }
+        token:
+          type: string
+          x-sensitive: true
+          description: Plaintext oma_live_ credential; shown only in this create response.
+        id: { type: string }
+        name: { type: string }
+        scope: { type: string, enum: [read, write, admin] }
+        tokenPrefix: { type: string, description: Non-secret display prefix. }
+        createdAt: { type: string, format: date-time }
+        expiresAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+    CliAccessTokenRevokedResponse:
+      type: object
+      required: [success, id]
+      properties:
+        success: { type: boolean, const: true }
+        id: { type: string, description: Echoes the id or display prefix supplied in the path. }
       additionalProperties: false
     V1AccountKeyLimits:
       type: object
