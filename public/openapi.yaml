@@ -11219,22 +11219,38 @@ paths:
       operationId: getApiSettingsQuotaStore
       tags: [Settings]
       summary: Get current quota store driver settings
-      description: Redis URL is masked in the response (shows only scheme+host).
+      description: >-
+        Returns the active quota-store driver and whether a Redis URL is configured. The credential is
+        always redacted: `redisUrl` is `null`, never a masked URL or the stored value.
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: QuotaStoreSettings (driver + masked redisUrl)
+          description: Driver, Redis-URL configured flag, and redacted URL placeholder.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaStoreSettingsResponse" }
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Internal server error
+          description: Quota store settings could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsQuotaStore
       tags: [Settings]
       summary: Update quota store driver settings
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -11243,13 +11259,26 @@ paths:
               $ref: "#/components/schemas/QuotaStoreSettings"
       responses:
         "200":
-          description: Settings updated
+          description: Updated driver settings with the Redis URL redacted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaStoreSettingsResponse" }
         "400":
           description: Validation error (Zod) — e.g. driver=redis without valid URL
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Internal server error
+          description: Quota store settings could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   # ─── v1beta (Gemini-Compatible) ─────────────────────────────────
 
@@ -30455,15 +30484,26 @@ components:
     QuotaStoreSettings:
       type: object
       required: [driver]
+      description: Request body. The Redis URL is an input credential and is never returned by the API.
       properties:
         driver:
           type: string
           enum: [sqlite, redis]
         redisUrl:
-          type: string
+          type: [string, "null"]
           format: uri
-          nullable: true
-          description: Redis connection URL (write-only; masked in GET responses)
+          writeOnly: true
+          description: Redis credential URL; required when driver is redis and never echoed in responses.
+      additionalProperties: true
+
+    QuotaStoreSettingsResponse:
+      type: object
+      required: [driver, redisUrlConfigured, redisUrl]
+      properties:
+        driver: { type: string, enum: [sqlite, redis] }
+        redisUrlConfigured: { type: boolean }
+        redisUrl: { type: "null", const: null, description: Redis URL is never returned. }
+      additionalProperties: false
 
     ServiceStatus:
       type: object
