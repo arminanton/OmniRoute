@@ -21367,17 +21367,59 @@ paths:
       tags:
         - Settings
       summary: "GET settings › tier config"
+      description: Returns the normalized routing-tier configuration, using built-in defaults if no valid database value exists.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Full normalized tier configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TierConfigResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsTierConfig
       tags:
         - Settings
       summary: "PUT settings › tier config"
+      description: >-
+        Adds, replaces, or removes one case-insensitive provider-tier override. A null tier removes
+        the override; custom provider IDs are accepted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TierConfigProviderOverrideRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated normalized tier configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TierConfigResponse" }
+        "400":
+          description: Invalid JSON or provider-tier override payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/skills:
     get:
       operationId: getApiSkills
@@ -38990,6 +39032,62 @@ components:
             taskType: { $ref: "#/components/schemas/TaskRoutingTaskType" }
             preferredModel: { type: string }
           additionalProperties: false
+
+    ProviderTier:
+      type: string
+      enum: [free, cheap, premium]
+
+    ProviderTierOverride:
+      type: object
+      required: [provider, tier]
+      properties:
+        provider: { type: string, minLength: 1 }
+        tier: { $ref: "#/components/schemas/ProviderTier" }
+      additionalProperties: false
+
+    ModelTierOverride:
+      type: object
+      required: [provider, modelPattern, tier]
+      properties:
+        provider: { type: string, minLength: 1 }
+        modelPattern: { type: string, minLength: 1 }
+        tier: { $ref: "#/components/schemas/ProviderTier" }
+      additionalProperties: false
+
+    TierConfigDefaults:
+      type: object
+      required: [freeThreshold, cheapThreshold]
+      properties:
+        freeThreshold: { type: number, minimum: 0 }
+        cheapThreshold: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    TierConfigResponse:
+      type: object
+      required: [version, defaults, providerOverrides, modelOverrides, freeProviders]
+      properties:
+        version: { type: string }
+        defaults: { $ref: "#/components/schemas/TierConfigDefaults" }
+        providerOverrides:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderTierOverride" }
+        modelOverrides:
+          type: array
+          items: { $ref: "#/components/schemas/ModelTierOverride" }
+        freeProviders:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    TierConfigProviderOverrideRequest:
+      type: object
+      required: [provider, tier]
+      properties:
+        provider: { type: string, minLength: 1 }
+        tier:
+          type: [string, "null"]
+          enum: [free, cheap, premium, null]
+      additionalProperties: false
 
     RestartResponse:
       type: object
