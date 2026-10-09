@@ -214,6 +214,46 @@ test("file limit and abort seal exact available prefixes as incomplete without t
   }
 });
 
+test("private attempt manifests retain bounded transport failure identity without credentials", async () => {
+  const directory = root();
+  const store = new DiagnosticOverflowStore({ root: directory });
+  const trace = store.createTrace({ provider: "antigravity" });
+  try {
+    const attempt = await trace.beginAttempt({
+      requestBody: "synthetic request",
+      url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?token=secret",
+    });
+    await attempt.fail("upstream_error", {
+      transportFailure: {
+        name: "TypeError",
+        code: "UND_ERR_SOCKET",
+        causeName: "SocketError",
+        causeCode: "ECONNRESET",
+        message: "fetch failed",
+      },
+    });
+    await trace.finish();
+
+    const manifest = store.read(trace.traceId)!;
+    assert.equal(manifest.state, "incomplete");
+    assert.deepEqual(manifest.attempts[0].transportFailure, {
+      name: "TypeError",
+      code: "UND_ERR_SOCKET",
+      causeName: "SocketError",
+      causeCode: "ECONNRESET",
+      message: "fetch failed",
+    });
+    assert.ok(!JSON.stringify(manifest).includes("token=secret"));
+    assert.equal(
+      manifest.attempts[0].url,
+      "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent"
+    );
+  } finally {
+    store.close();
+    fs.rmSync(directory, { recursive: true });
+  }
+});
+
 test("readers reject same-size corruption, symlinks, unsafe file permissions and arbitrary references", async () => {
   const directory = root(),
     store = new DiagnosticOverflowStore({ root: directory });

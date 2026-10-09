@@ -21,6 +21,45 @@ const STATUSES = new Set([
   "DATA_LOSS",
   "UNAUTHENTICATED",
 ]);
+const TRANSPORT_ERROR_CODES = new Set([
+  "ABORT_ERR",
+  "ANTIGRAVITY_PRE_RESPONSE_TIMEOUT",
+  "DIRECT_RESPONSE_START_TIMEOUT",
+  "EAI_AGAIN",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+  "ETIMEDOUT",
+  "PROXY_UNREACHABLE",
+  "SEMAPHORE_QUEUE_FULL",
+  "SEMAPHORE_TIMEOUT",
+  "TLS_FINGERPRINT_FAILED",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "ERR_CANCELED",
+  "ERR_NETWORK",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+const TRANSPORT_ERROR_NAMES = new Set([
+  "AbortError",
+  "BodyTimeoutError",
+  "ConnectTimeoutError",
+  "DOMException",
+  "Error",
+  "FetchError",
+  "HeadersTimeoutError",
+  "SocketError",
+  "SystemError",
+  "TimeoutError",
+  "TypeError",
+]);
 function record(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -244,19 +283,35 @@ export function projectGoogleAttemptError(input: {
   return result;
 }
 
-/** Safe transport failure metadata for attempts that never received HTTP headers. */
-export function projectGoogleAttemptTransportError(url: string, error: unknown) {
+/** Safe error identity for attempts that fail before receiving HTTP headers. */
+export function projectGoogleTransportFailure(error: unknown) {
   const source = record(error);
   const cause = record(source?.cause);
+  const nestedCause = record(cause?.cause);
+  const safeName = (value: unknown) =>
+    typeof value === "string" && TRANSPORT_ERROR_NAMES.has(value) ? value : undefined;
   const safeCode = (value: unknown) =>
-    typeof value === "string" && /^[A-Z0-9_.-]{1,80}$/i.test(value) ? value : undefined;
-  const code = safeCode(source?.code) ?? safeCode(cause?.code);
+    typeof value === "string" &&
+    (TRANSPORT_ERROR_CODES.has(value) || /^UND_ERR_[A-Z0-9_]{1,48}$/.test(value)) &&
+    !containsSensitiveErrorCredential(value)
+      ? value
+      : undefined;
+  const causeCode = safeCode(cause?.code) ?? safeCode(nestedCause?.code);
   const message = error instanceof Error ? sanitizeErrorMessage(error.message).slice(0, 384) : "";
+  return {
+    ...(safeName(source?.name) ? { name: safeName(source?.name) } : {}),
+    ...(safeCode(source?.code) ? { code: safeCode(source?.code) } : {}),
+    ...(safeName(cause?.name) ? { causeName: safeName(cause?.name) } : {}),
+    ...(causeCode ? { causeCode } : {}),
+    ...(message ? { message } : {}),
+  };
+}
+
+/** Safe transport failure metadata for attempts that never received HTTP headers. */
+export function projectGoogleAttemptTransportError(url: string, error: unknown) {
   return {
     kind: "transport_error",
     url: projectAttemptUrl(url),
-    ...(typeof source?.name === "string" ? { name: source.name.slice(0, 80) } : {}),
-    ...(code ? { code } : {}),
-    ...(message ? { message } : {}),
+    ...projectGoogleTransportFailure(error),
   };
 }

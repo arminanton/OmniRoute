@@ -6,7 +6,10 @@ import {
   captureCurrentProviderAttempt,
   getCurrentDiagnosticOverflowTrace,
 } from "../../utils/providerRequestLogging.ts";
-import { projectGoogleAttemptTransportError } from "../../utils/googleErrorDiagnostics.ts";
+import {
+  projectGoogleAttemptTransportError,
+  projectGoogleTransportFailure,
+} from "../../utils/googleErrorDiagnostics.ts";
 import {
   getLogicalRetryBudget,
   type LogicalRetryBudget,
@@ -107,10 +110,10 @@ function captureResponse(response: Response, capture: OwnedCapture): Response {
             } catch (error) {
               if (!done) {
                 done = true;
-                void capture.attempt.fail(
-                  capture.signal?.aborted ? "abort" : "read_error",
-                  capture.metadata
-                );
+                void capture.attempt.fail(capture.signal?.aborted ? "abort" : "read_error", {
+                  ...capture.metadata,
+                  transportFailure: projectGoogleTransportFailure(error),
+                });
                 try {
                   reader?.releaseLock();
                 } catch {}
@@ -176,13 +179,19 @@ export async function captureAntigravityFetch(
       metadata: { status: response.status, headers: response.headers },
     });
   } catch (error) {
-    captureCurrentProviderAttempt(projectGoogleAttemptTransportError(url, error));
+    const failure = projectGoogleTransportFailure(error);
+    captureCurrentProviderAttempt({
+      kind: "transport_error",
+      url: projectGoogleAttemptTransportError(url, error).url,
+      ...failure,
+    });
     void attempt.fail(
       init.signal?.aborted
         ? "abort"
         : isLogicalRetryBudgetError(error)
           ? "deadline"
-          : "upstream_error"
+          : "upstream_error",
+      { transportFailure: failure }
     );
     throw error;
   }

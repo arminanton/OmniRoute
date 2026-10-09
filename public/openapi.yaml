@@ -35469,6 +35469,19 @@ components:
               method: { type: string }
               url: { type: string, format: uri }
               status: { type: integer }
+              transportFailure:
+                type: object
+                description: >-
+                  Bounded error class for a transport failure or a response-body
+                  read failure. Messages are credential-redacted.
+                minProperties: 1
+                additionalProperties: false
+                properties:
+                  name: { type: string, maxLength: 64 }
+                  code: { type: string, maxLength: 64 }
+                  causeName: { type: string, maxLength: 64 }
+                  causeCode: { type: string, maxLength: 64 }
+                  message: { type: string, maxLength: 384 }
               headers:
                 type: object
                 additionalProperties: { type: string }

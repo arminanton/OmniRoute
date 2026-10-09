@@ -50,6 +50,7 @@ const versionHosts = new Set([
 ]);
 const syntheticHosts = new Set([...cloudCodeHosts, ...versionHosts]);
 const bridgeOrigin = new URL(`https://${LOOPBACK_HOST}:${bridgePort}`);
+const auditStartedAt = process.hrtime.bigint();
 let audit = makeAudit();
 let undici;
 let originalUndiciFetch;
@@ -78,8 +79,36 @@ function makeAudit() {
     },
     blockedSocketTargets: [],
     blockedDatagrams: 0,
+    tcpSocketErrors: 0,
+    tlsSocketErrors: 0,
+    socketInformationalEvents: 0,
+    socketErrorsByCode: {},
+    socketErrorEvents: [],
     preloadLocalTlsSelfChecks: 0,
   };
+}
+
+function recordSocketError(transport, error) {
+  const rawCode = typeof error?.code === "string" ? error.code : "";
+  if (rawCode === "UND_ERR_INFO") {
+    audit.socketInformationalEvents++;
+    return;
+  }
+  const code = /^(?:ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|UND_ERR_[A-Z0-9_]{1,48})$/.test(rawCode)
+    ? rawCode
+    : "other";
+  if (transport === "tls") audit.tlsSocketErrors++;
+  else audit.tcpSocketErrors++;
+  const key = `${transport}:${code}`;
+  audit.socketErrorsByCode[key] = (audit.socketErrorsByCode[key] || 0) + 1;
+  if (audit.socketErrorEvents.length < 32) {
+    audit.socketErrorEvents.push({
+      transport,
+      code,
+      timestamp: Date.now(),
+      elapsedMs: Number(process.hrtime.bigint() - auditStartedAt) / 1_000_000,
+    });
+  }
 }
 
 function normalizedHost(value) {
@@ -267,6 +296,8 @@ function socketConnectArguments(args) {
 function guardedSocketConnect(...args) {
   const parsed = socketConnectArguments(args);
   const options = routeSocketOptions(parsed.options);
+  const bridgeSocket = options.host === LOOPBACK_HOST && Number(options.port) === bridgePort;
+  if (bridgeSocket) this.once("error", (error) => recordSocketError("tcp", error));
   return nativeSocketConnect.call(this, options, ...parsed.rest);
 }
 
@@ -318,7 +349,14 @@ function guardedTlsConnect(...args) {
   } else if (!isLoopbackHost(host)) {
     blockSocket("nonLoopbackTls", "non-loopback TLS socket", host, Number(options.port || 443));
   }
-  return nativeTlsConnect.call(tls, options, ...parsed.rest);
+  try {
+    const socket = nativeTlsConnect.call(tls, options, ...parsed.rest);
+    if (syntheticDestination) socket.once("error", (error) => recordSocketError("tls", error));
+    return socket;
+  } catch (error) {
+    if (syntheticDestination) recordSocketError("tls", error);
+    throw error;
+  }
 }
 
 function blockDatagramSend(...args) {

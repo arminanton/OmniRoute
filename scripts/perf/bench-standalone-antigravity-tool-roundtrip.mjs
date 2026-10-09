@@ -429,7 +429,21 @@ function createSyntheticTlsCertificate(scratchRoot) {
 
 async function startSyntheticTlsBridge(mockUrl, certificate) {
   const mock = new URL(mockUrl);
-  const state = { providerRequests: 0, versionResponses: 0, unexpectedRequests: 0, errors: 0 };
+  const bridgeStartedAt = Date.now();
+  const state = {
+    providerRequests: 0,
+    versionResponses: 0,
+    unexpectedRequests: 0,
+    errors: 0,
+    requestBodiesAborted: 0,
+    upstreamResponsesStarted: 0,
+    upstreamResponsesCompleted: 0,
+    upstreamResponsesAborted: 0,
+    clientResponsesCompleted: 0,
+    clientResponsesAborted: 0,
+    upstreamErrorsByCode: {},
+    upstreamErrorEvents: [],
+  };
   const server = https.createServer(
     {
       key: fs.readFileSync(certificate.keyPath),
@@ -465,6 +479,15 @@ async function startSyntheticTlsBridge(mockUrl, certificate) {
       }
 
       state.providerRequests++;
+      incoming.once("aborted", () => {
+        state.requestBodiesAborted++;
+      });
+      outgoing.once("finish", () => {
+        state.clientResponsesCompleted++;
+      });
+      outgoing.once("close", () => {
+        if (!outgoing.writableFinished) state.clientResponsesAborted++;
+      });
       const upstream = http.request(
         {
           hostname: "127.0.0.1",
@@ -474,6 +497,13 @@ async function startSyntheticTlsBridge(mockUrl, certificate) {
           headers: { ...incoming.headers, host: `127.0.0.1:${mock.port}` },
         },
         (response) => {
+          state.upstreamResponsesStarted++;
+          response.once("end", () => {
+            state.upstreamResponsesCompleted++;
+          });
+          response.once("aborted", () => {
+            state.upstreamResponsesAborted++;
+          });
           const headers = { ...response.headers };
           delete headers.connection;
           delete headers["keep-alive"];
@@ -486,8 +516,22 @@ async function startSyntheticTlsBridge(mockUrl, certificate) {
       outgoing.once("close", () => {
         if (!outgoing.writableEnded) upstream.destroy();
       });
-      upstream.once("error", () => {
+      upstream.once("error", (error) => {
         state.errors++;
+        const rawCode = typeof error.code === "string" ? error.code : "";
+        const code = /^(?:ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|UND_ERR_[A-Z0-9_]{1,48})$/.test(
+          rawCode
+        )
+          ? rawCode
+          : "other";
+        state.upstreamErrorsByCode[code] = (state.upstreamErrorsByCode[code] || 0) + 1;
+        if (state.upstreamErrorEvents.length < 32) {
+          state.upstreamErrorEvents.push({
+            timestamp: Date.now(),
+            elapsedMs: Date.now() - bridgeStartedAt,
+            code,
+          });
+        }
         if (!outgoing.headersSent) outgoing.writeHead(502);
         outgoing.end();
       });
@@ -507,7 +551,21 @@ async function startSyntheticTlsBridge(mockUrl, certificate) {
   return {
     server,
     port: address.port,
-    snapshot: () => ({ ...state }),
+    snapshot: () => ({
+      ...state,
+      upstreamErrorsByCode: { ...state.upstreamErrorsByCode },
+      upstreamErrorEvents: [...state.upstreamErrorEvents],
+      upstreamResponsesActive: Math.max(
+        0,
+        state.upstreamResponsesStarted -
+          state.upstreamResponsesCompleted -
+          state.upstreamResponsesAborted
+      ),
+      clientResponsesActive: Math.max(
+        0,
+        state.providerRequests - state.clientResponsesCompleted - state.clientResponsesAborted
+      ),
+    }),
     close: async () => {
       server.closeAllConnections();
       if (server.listening) await new Promise((resolve) => server.close(() => resolve()));
@@ -669,6 +727,11 @@ function parseAuditFiles(auditDirectory) {
     },
     blockedSocketTargets: [],
     blockedDatagrams: 0,
+    tcpSocketErrors: 0,
+    tlsSocketErrors: 0,
+    socketInformationalEvents: 0,
+    socketErrorsByCode: {},
+    socketErrorEvents: [],
     preloadLocalTlsSelfChecks: 0,
   };
   for (const name of fs.readdirSync(auditDirectory)) {
@@ -689,6 +752,19 @@ function parseAuditFiles(auditDirectory) {
               existing.port === target.port
           );
           if (!duplicate) result.blockedSocketTargets.push(target);
+        }
+      } else if (key === "socketErrorsByCode") {
+        for (const [code, count] of Object.entries(item.socketErrorsByCode || {})) {
+          result.socketErrorsByCode[code] =
+            (result.socketErrorsByCode[code] || 0) + Number(count || 0);
+        }
+      } else if (key === "socketErrorEvents") {
+        for (const event of item.socketErrorEvents || []) {
+          if (result.socketErrorEvents.length >= 64) break;
+          result.socketErrorEvents.push({
+            processId: Number.parseInt(name, 10),
+            ...event,
+          });
         }
       } else {
         result[key] += Number(item[key] || 0);
@@ -844,13 +920,16 @@ async function inspectCapture({
 
 async function seedDatabase(dataDir, env, mockUrl, captureMode) {
   Object.assign(process.env, env, { DATA_DIR: dataDir, NODE_ENV: "test" });
+  console.error("[standalone-antigravity-e2e] seed_stage=imports");
   const [core, providers, apiKeys, settings] = await Promise.all([
     import("../../src/lib/db/core.ts"),
     import("../../src/lib/db/providers.ts"),
     import("../../src/lib/db/apiKeys.ts"),
     import("../../src/lib/db/settings.ts"),
   ]);
+  console.error("[standalone-antigravity-e2e] seed_stage=database_init");
   await core.ensureDbInitialized();
+  console.error("[standalone-antigravity-e2e] seed_stage=settings");
   await settings.updateSettings({
     requireLogin: false,
     setupComplete: true,
@@ -868,6 +947,7 @@ async function seedDatabase(dataDir, env, mockUrl, captureMode) {
     },
   });
   for (const profile of ["cli", "ide"]) {
+    console.error(`[standalone-antigravity-e2e] seed_stage=connection_${profile}`);
     await providers.createProviderConnection({
       provider: "antigravity",
       authType: "oauth",
@@ -880,6 +960,7 @@ async function seedDatabase(dataDir, env, mockUrl, captureMode) {
       providerSpecificData: { projectId: "synthetic-project", clientProfile: profile },
     });
   }
+  console.error("[standalone-antigravity-e2e] seed_stage=api_keys");
   const apiKey = await apiKeys.createApiKey("standalone-antigravity-e2e", "synthetic-e2e-machine");
   const cancelApiKey = await apiKeys.createApiKey(
     "standalone-antigravity-cancel-e2e",
@@ -893,11 +974,13 @@ async function seedDatabase(dataDir, env, mockUrl, captureMode) {
     noLog: true,
     compressionEnabled: false,
   });
+  console.error("[standalone-antigravity-e2e] seed_stage=database_close");
   // An active dummy OpenAI connection is not needed: the provider URL is routed
   // by the test-only fetch preloader, while the Antigravity credentials remain
   // synthetic OAuth values stored only in this temporary database.
   assert.match(mockUrl, /^http:\/\/127\.0\.0\.1:\d+$/);
   core.closeDbInstance({ checkpointMode: null });
+  console.error("[standalone-antigravity-e2e] seed_stage=complete");
   return { apiKey, cancelApiKey };
 }
 
@@ -925,7 +1008,7 @@ async function main() {
     options["context-bytes"] || process.env.ANTIGRAVITY_CAPTURE_CONTEXT_BYTES,
     200_000,
     "context-bytes",
-    500_000
+    1_000_000
   );
   const requestTimeoutMs = positiveInt(
     options["request-timeout-ms"] || process.env.ANTIGRAVITY_CAPTURE_REQUEST_TIMEOUT_MS,
@@ -1077,25 +1160,40 @@ async function main() {
   let apiKey = null;
   let resultError = null;
   let dbApiKeyId = null;
+  let currentStage = "preflight";
+  let forcedExitTimer = null;
   const createdChildren = new Set();
   const onSignal = (signal) => {
     for (const child of createdChildren) child.kill(signal);
+    if (process.env.OMNIROUTE_KEEP_STANDALONE_E2E_FAILURES === "1") preserveFailureScratch = true;
+    forcedExitTimer ??= setTimeout(() => {
+      if (server?.unit) stopStandaloneService(server.unit);
+      process.exitCode = signal === "SIGINT" ? 130 : 143;
+      process.exit();
+    }, 5_000);
   };
   process.once("SIGINT", onSignal);
   process.once("SIGTERM", onSignal);
 
   try {
+    currentStage = "start_mock";
+    console.error(`[standalone-antigravity-e2e] stage=${currentStage}`);
     mock = await startMock(
       path.join(PROJECT_ROOT, "tests/fixtures/antigravity-parallel-mock-upstream.mjs")
     );
     createdChildren.add(mock.child);
+    currentStage = "start_tls_bridge";
+    console.error(`[standalone-antigravity-e2e] stage=${currentStage}`);
     tlsBridge = await startSyntheticTlsBridge(mock.url, tlsCertificate);
+    currentStage = "seed_database";
+    console.error(`[standalone-antigravity-e2e] stage=${currentStage}`);
     const seedEnv = {
       ...baseEnv,
       NODE_ENV: "test",
       OMNIROUTE_MIGRATIONS_DIR: path.join(PROJECT_ROOT, "src/lib/db/migrations"),
     };
     const keys = await seedDatabase(dataDir, seedEnv, mock.url, captureMode);
+    console.error(`[standalone-antigravity-e2e] stage=${currentStage}_complete`);
     apiKey = keys.apiKey;
     dbApiKeyId = apiKey.id;
     Object.assign(process.env, baseEnv);
@@ -1108,6 +1206,8 @@ async function main() {
     };
     writeSystemdEnvironmentFile(serviceEnvironmentFile, serviceEnv);
     server = { unit: serviceUnit, startOutput: "" };
+    currentStage = "start_standalone";
+    console.error(`[standalone-antigravity-e2e] stage=${currentStage}`);
     server.startOutput = startStandaloneService({
       unit: serviceUnit,
       standaloneDir,
@@ -1158,7 +1258,10 @@ async function main() {
       }
     }, 500);
     appCgroupSampler.unref?.();
+    currentStage = "wait_for_ready";
+    console.error(`[standalone-antigravity-e2e] stage=${currentStage}`);
     await waitForReady(baseUrl, server, apiKey.key);
+    console.error(`[standalone-antigravity-e2e] stage=${currentStage}_complete`);
 
     // Confirm the route enforces the configured key before the authenticated load.
     const unauthenticated = await harnessFetch(`${baseUrl}/v1/chat/completions`, {
@@ -1187,6 +1290,8 @@ async function main() {
       { cwd: PROJECT_ROOT, env: clientEnv, stdio: ["ignore", "pipe", "pipe"] }
     );
     createdChildren.add(client.child);
+    currentStage = "client_load";
+    console.error(`[standalone-antigravity-e2e] stage=${currentStage}`);
     const clientClose = once(client.child, "close");
     const [clientCode, clientSignal] = await clientClose;
     assert.equal(clientCode, 0, `synthetic client failed (${clientSignal ?? clientCode})`);
@@ -1215,6 +1320,18 @@ async function main() {
     }
     const postCancelStats = await runCancellationProbe(baseUrl, mock.url, keys.cancelApiKey.key);
     assert.equal(postCancelStats.received, expectedRequests + 1);
+    assert.equal(
+      postCancelStats.providerResponsesCompleted,
+      expectedRequests,
+      "every normal synthetic upstream response must finish"
+    );
+    assert.equal(
+      postCancelStats.providerResponsesAborted,
+      1,
+      "the cancellation probe must interrupt exactly one synthetic upstream response"
+    );
+    assert.equal(postCancelStats.providerResponsesActive, 0);
+    assert.deepEqual(postCancelStats.errors, []);
     if (appStopReason) throw new Error(appStopReason);
 
     let artifactResult = { rows: 0, artifacts: 0, traces: 0 };
@@ -1255,6 +1372,13 @@ async function main() {
       expectedRequests + 1,
       "all synthetic Cloud Code stream requests must reach only the local TLS bridge"
     );
+    assert.equal(bridgeStats.upstreamResponsesStarted, expectedRequests + 1);
+    assert.equal(bridgeStats.upstreamResponsesCompleted, expectedRequests);
+    assert.equal(bridgeStats.upstreamResponsesAborted, 1);
+    assert.equal(bridgeStats.upstreamResponsesActive, 0);
+    assert.equal(bridgeStats.clientResponsesCompleted, expectedRequests);
+    assert.equal(bridgeStats.clientResponsesAborted, 1);
+    assert.equal(bridgeStats.clientResponsesActive, 0);
     assert.equal(bridgeStats.unexpectedRequests, 0, "the app requested an unexpected bridge path");
     assert.equal(bridgeStats.errors, 0, "the local TLS bridge encountered a proxy error");
 
@@ -1287,6 +1411,7 @@ async function main() {
     );
   } catch (error) {
     resultError = error;
+    console.error(`[standalone-antigravity-e2e] failed_stage=${currentStage}`);
     console.error(
       `[standalone-antigravity-e2e] ${error instanceof Error ? error.message : String(error)}`
     );
@@ -1303,6 +1428,7 @@ async function main() {
       );
     if (mock?.output) console.error(`[standalone-antigravity-e2e] mock tail:\n${mock.output}`);
   } finally {
+    if (forcedExitTimer) clearTimeout(forcedExitTimer);
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     if (appCgroupSampler) clearInterval(appCgroupSampler);
@@ -1341,6 +1467,10 @@ async function main() {
             received: stats.received,
             profiles: stats.profiles,
             egressProbes: stats.egressProbes,
+            providerResponsesCompleted: stats.providerResponsesCompleted,
+            providerResponsesAborted: stats.providerResponsesAborted,
+            providerResponsesActive: stats.providerResponsesActive,
+            providerRequestsAborted: stats.providerRequestsAborted,
             errorCount: stats.errors?.length ?? 0,
             errorSamples: (stats.errors ?? []).slice(0, 5),
           };

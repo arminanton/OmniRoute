@@ -744,6 +744,78 @@ test("an aborted pre-response attempt is retained as incomplete without adding a
   }
 });
 
+test("Antigravity pre-header transport failures retain safe codes in private traces", async () => {
+  const originalFetch = globalThis.fetch;
+  const secret = "synthetic-auth-secret";
+  let traceId = "";
+  let pipeline: import("../../open-sse/utils/requestLogger.ts").RequestPipelinePayloads | null =
+    null;
+  try {
+    globalThis.fetch = async () => {
+      const cause = Object.assign(new Error("socket reset"), { code: "ECONNRESET" });
+      throw Object.assign(new TypeError("fetch failed"), {
+        code: "UND_ERR_SOCKET",
+        cause,
+      });
+    };
+    const result = await runWithDiagnosticCaptureLifecycle(async () => {
+      const { raw, log } = await logger({
+        model: "agy/gemini-3.8-flash",
+        messages: [{ role: "user", content: "synthetic transport-error fixture" }],
+      });
+      traceId = log.getDiagnosticOverflowTrace()!.traceId;
+      log.logClientRawRequest("/v1/chat/completions", raw.body);
+      const prepared = JSON.stringify({
+        project: "synthetic-project",
+        request: { contents: [{ role: "user", parts: [{ text: "synthetic" }] }] },
+      });
+      await assert.rejects(
+        runWithCapture(
+          createPreparedRequestLogger(log, {
+            id: "transport-failure",
+            model: "gemini-3.8-flash",
+            provider: "antigravity",
+          }),
+          () =>
+            fetchAntigravityWithReadinessTimeout(
+              "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse&token=PRIVATE_QUERY_SECRET",
+              {
+                method: "POST",
+                body: prepared,
+                headers: { authorization: `Bearer ${secret}` },
+              },
+              1000,
+              1000,
+              prepared
+            )
+        )
+      );
+      pipeline = log.getPipelinePayloads();
+      return new Response("synthetic failure observed");
+    });
+    await result.text();
+    const manifest = await waitForFinalManifest(traceId);
+    assert.ok(manifest);
+    assert.equal(manifest.state, "incomplete");
+    assert.equal(manifest.attempts.length, 1);
+    assert.deepEqual(manifest.attempts[0].transportFailure, {
+      name: "TypeError",
+      code: "UND_ERR_SOCKET",
+      causeName: "Error",
+      causeCode: "ECONNRESET",
+      message: "fetch failed",
+    });
+    const diagnostics = pipeline?.providerAttemptDiagnostics ?? [];
+    assert.equal(diagnostics.length, 1);
+    assert.equal(diagnostics[0].code, "UND_ERR_SOCKET");
+    const serialized = JSON.stringify(manifest) + JSON.stringify(diagnostics);
+    assert.ok(!serialized.includes(secret));
+    assert.ok(!serialized.includes("PRIVATE_QUERY_SECRET"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("already-aborted fake fetch matches native contract and records no provider send", async () => {
   const originalFetch = globalThis.fetch;
   let sends = 0;

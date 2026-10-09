@@ -91,6 +91,13 @@ type DiagnosticOverflowAttemptSummary = {
   method?: string;
   url?: string;
   status?: number;
+  transportFailure?: {
+    name?: string;
+    code?: string;
+    causeName?: string;
+    causeCode?: string;
+    message?: string;
+  };
   request?: { state?: string; complete?: boolean; rawBytes?: number; reason?: string };
   response?: { state?: string; complete?: boolean; rawBytes?: number; reason?: string };
 };
@@ -131,6 +138,12 @@ function projectDiagnosticOverflowAttempts(value: unknown): DiagnosticOverflowAt
     const attempt = candidate as Record<string, unknown>;
     if (typeof attempt.attemptId !== "string" || !DIAGNOSTIC_UUID_RE.test(attempt.attemptId))
       return [];
+    const failure =
+      attempt.transportFailure &&
+      typeof attempt.transportFailure === "object" &&
+      !Array.isArray(attempt.transportFailure)
+        ? (attempt.transportFailure as Record<string, unknown>)
+        : {};
     return [
       {
         attemptId: attempt.attemptId,
@@ -138,6 +151,13 @@ function projectDiagnosticOverflowAttempts(value: unknown): DiagnosticOverflowAt
         method: typeof attempt.method === "string" ? attempt.method : undefined,
         url: typeof attempt.url === "string" ? attempt.url : undefined,
         status: typeof attempt.status === "number" ? attempt.status : undefined,
+        transportFailure: {
+          name: typeof failure.name === "string" ? failure.name : undefined,
+          code: typeof failure.code === "string" ? failure.code : undefined,
+          causeName: typeof failure.causeName === "string" ? failure.causeName : undefined,
+          causeCode: typeof failure.causeCode === "string" ? failure.causeCode : undefined,
+          message: typeof failure.message === "string" ? failure.message : undefined,
+        },
         request: projectDiagnosticOverflowFile(attempt.request),
         response: projectDiagnosticOverflowFile(attempt.response),
       },
@@ -1263,6 +1283,26 @@ export default function RequestLoggerDetail({
                             {attempt.status ? ` · HTTP ${attempt.status}` : ""}
                             {attempt.method ? ` · ${attempt.method}` : ""}
                           </span>
+                          {attempt.transportFailure &&
+                            Object.values(attempt.transportFailure).some(Boolean) && (
+                              <span
+                                className="font-mono text-error"
+                                title={attempt.transportFailure.message}
+                              >
+                                {[
+                                  attempt.transportFailure.name,
+                                  attempt.transportFailure.code,
+                                  attempt.transportFailure.causeName
+                                    ? `cause ${attempt.transportFailure.causeName}`
+                                    : undefined,
+                                  attempt.transportFailure.causeCode
+                                    ? `cause ${attempt.transportFailure.causeCode}`
+                                    : undefined,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ")}
+                              </span>
+                            )}
                           {(attempt.request?.rawBytes ?? 0) > 0 && (
                             <a
                               className="text-primary underline underline-offset-2"

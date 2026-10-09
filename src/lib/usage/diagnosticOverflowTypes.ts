@@ -16,12 +16,21 @@ export interface DiagnosticOverflowFile {
   sha256?: string;
   gzipSha256?: string;
 }
+export interface DiagnosticOverflowTransportFailure {
+  name?: string;
+  code?: string;
+  causeName?: string;
+  causeCode?: string;
+  message?: string;
+}
 export interface DiagnosticOverflowAttemptMetadata {
   transport?: string;
   method?: string;
   url?: string;
   status?: number;
   headers?: Headers | Record<string, string>;
+  /** Bounded, credential-redacted failure classification for requests without a response. */
+  transportFailure?: DiagnosticOverflowTransportFailure;
 }
 export interface DiagnosticOverflowManifest {
   schema: typeof DIAGNOSTIC_OVERFLOW_SCHEMA;

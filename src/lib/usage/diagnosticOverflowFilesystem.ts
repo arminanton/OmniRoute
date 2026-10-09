@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { containsSensitiveErrorCredential } from "@omniroute/open-sse/utils/errorSanitization.ts";
+import {
+  containsSensitiveErrorCredential,
+  sanitizeErrorMessage,
+} from "@omniroute/open-sse/utils/errorSanitization.ts";
 import { DIAGNOSTIC_ID } from "./diagnosticOverflowTypes";
 import type {
   DiagnosticOverflowAttemptMetadata,
@@ -111,6 +114,76 @@ export function safeMetadata(
       result[name] = input[name];
   if (Number.isInteger(input.status) && Number(input.status) >= 100 && Number(input.status) <= 599)
     result.status = input.status;
+  const safeErrorName = (value: unknown) => {
+    const allowed = new Set([
+      "AbortError",
+      "BodyTimeoutError",
+      "ConnectTimeoutError",
+      "DOMException",
+      "Error",
+      "FetchError",
+      "HeadersTimeoutError",
+      "SocketError",
+      "SystemError",
+      "TimeoutError",
+      "TypeError",
+    ]);
+    return typeof value === "string" && allowed.has(value) ? value : undefined;
+  };
+  const safeErrorCode = (value: unknown) => {
+    const known = new Set([
+      "ABORT_ERR",
+      "ANTIGRAVITY_PRE_RESPONSE_TIMEOUT",
+      "DIRECT_RESPONSE_START_TIMEOUT",
+      "EAI_AGAIN",
+      "ECONNABORTED",
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "EHOSTUNREACH",
+      "ENETDOWN",
+      "ENETUNREACH",
+      "ENOTFOUND",
+      "EPIPE",
+      "ETIMEDOUT",
+      "PROXY_UNREACHABLE",
+      "SEMAPHORE_QUEUE_FULL",
+      "SEMAPHORE_TIMEOUT",
+      "TLS_FINGERPRINT_FAILED",
+      "UND_ERR_BODY_TIMEOUT",
+      "UND_ERR_CONNECT_TIMEOUT",
+      "UND_ERR_HEADERS_TIMEOUT",
+      "UND_ERR_SOCKET",
+      "ERR_CANCELED",
+      "ERR_NETWORK",
+      "ERR_TLS_CERT_ALTNAME_INVALID",
+    ]);
+    return typeof value === "string" &&
+      (known.has(value) || /^UND_ERR_[A-Z0-9_]{1,48}$/.test(value))
+      ? value
+      : undefined;
+  };
+  const sourceFailure = input.transportFailure;
+  if (sourceFailure && typeof sourceFailure === "object") {
+    const transportFailure = {
+      ...(safeErrorName(sourceFailure.name) ? { name: safeErrorName(sourceFailure.name) } : {}),
+      ...(safeErrorCode(sourceFailure.code) ? { code: safeErrorCode(sourceFailure.code) } : {}),
+      ...(safeErrorName(sourceFailure.causeName)
+        ? { causeName: safeErrorName(sourceFailure.causeName) }
+        : {}),
+      ...(safeErrorCode(sourceFailure.causeCode)
+        ? { causeCode: safeErrorCode(sourceFailure.causeCode) }
+        : {}),
+    };
+    if (
+      typeof sourceFailure.message === "string" &&
+      sourceFailure.message.length <= 768 &&
+      !containsSensitiveErrorCredential(sourceFailure.message)
+    ) {
+      const message = sanitizeErrorMessage(sourceFailure.message).slice(0, 384);
+      if (message) Object.assign(transportFailure, { message });
+    }
+    if (Object.keys(transportFailure).length > 0) result.transportFailure = transportFailure;
+  }
   if (input.url)
     try {
       const url = new URL(input.url);

@@ -9,6 +9,9 @@ const profiles = new Set();
 const errors = [];
 let received = 0;
 let egressProbes = 0;
+let providerResponsesCompleted = 0;
+let providerResponsesAborted = 0;
+let providerRequestsAborted = 0;
 
 async function bodyOf(request) {
   const chunks = [];
@@ -35,6 +38,13 @@ const server = http.createServer(async (incoming, outgoing) => {
         completedAtBySession: Object.fromEntries(completedAtBySession),
         profiles: [...profiles].sort(),
         egressProbes,
+        providerResponsesCompleted,
+        providerResponsesAborted,
+        providerResponsesActive: Math.max(
+          0,
+          received - providerResponsesCompleted - providerResponsesAborted
+        ),
+        providerRequestsAborted,
         errors,
         processMemory:
           process.env.ANTIGRAVITY_CAPTURE_MEMORY_BENCH === "1"
@@ -44,6 +54,16 @@ const server = http.createServer(async (incoming, outgoing) => {
     );
     return;
   }
+
+  incoming.once("aborted", () => {
+    providerRequestsAborted++;
+  });
+  outgoing.once("finish", () => {
+    providerResponsesCompleted++;
+  });
+  outgoing.once("close", () => {
+    if (!outgoing.writableFinished) providerResponsesAborted++;
+  });
 
   try {
     const body = await bodyOf(incoming);

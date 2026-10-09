@@ -181,4 +181,11 @@ test("transport attempt projection retains the failure class without URL query d
   );
   assert.equal(diagnostic.code, "UND_ERR_HEADERS_OVERFLOW");
   assert.ok(!JSON.stringify(diagnostic).includes("token=secret"));
+
+  const customCode = projectGoogleAttemptTransportError(
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+    Object.assign(new TypeError("fetch failed"), { code: "PRIVATE_SECRET_VALUE" })
+  );
+  assert.equal(customCode.code, undefined);
+  assert.ok(!JSON.stringify(customCode).includes("PRIVATE_SECRET_VALUE"));
 });
