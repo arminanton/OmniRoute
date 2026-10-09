@@ -12902,13 +12902,47 @@ paths:
       tags:
         - Settings
       summary: Purge usage history
-      description: Dashboard-only. Purges stored usage-history records.
+      description: >-
+        Dashboard-only. Removes usage and related history older than the selected period; `all`
+        clears all supported history tables and local call-log artifacts. A nonzero error count is
+        returned with status 500 and the full cleanup summary.
       x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResetUsageHistoryRequest" }
       responses:
         "200":
-          description: Usage history purged.
+          description: Cleanup summary when no sub-operation reported an error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResetUsageHistoryResponse" }
+        "400":
+          description: Invalid JSON or unsupported period.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: A cleanup error occurred; response may be a summary with errors or a server error.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ResetUsageHistoryResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/oauth/codex/import-token:
     post:
       operationId: postApiOauthCodexImportToken
@@ -19907,9 +19941,27 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › lkgp cache"
+      description: Clears the entire local keep-good-provider cache.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Cache cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LkgpCacheClearedResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Cache could not be cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/settings/local-corpus:
     delete:
       operationId: deleteApiSettingsLocalCorpus
@@ -21268,36 +21320,108 @@ paths:
       tags:
         - Settings
       summary: "POST settings › purge call logs"
+      description: Deletes every call-log row and purges the local call-log artifact directory.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Number of deleted rows and artifacts, plus any best-effort cleanup errors.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurgeCallLogsResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Call-log purge failed before producing its cleanup result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/settings/purge-detailed-logs:
     post:
       operationId: postApiSettingsPurgeDetailedLogs
       tags:
         - Settings
       summary: "POST settings › purge detailed logs"
+      description: Deletes every row in the legacy request-detail log table.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Count of deleted detailed-log rows and cleanup errors.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurgeCountWithErrorsResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Detailed logs could not be purged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/settings/purge-logs:
     post:
       operationId: postApiSettingsPurgeLogs
       tags:
         - Settings
       summary: "POST settings › purge logs"
+      description: Deletes call-log rows and artifacts older than the configured call-log retention cutoff.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Count of deleted call-log rows and local artifacts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurgeLogsResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Retention purge failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/settings/purge-quota-snapshots:
     post:
       operationId: postApiSettingsPurgeQuotaSnapshots
       tags:
         - Settings
       summary: "POST settings › purge quota snapshots"
+      description: Deletes every stored provider quota snapshot, regardless of retention age.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Count of deleted snapshots and cleanup errors.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurgeCountWithErrorsResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Quota snapshots could not be purged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/settings/quota/state:
     description: CORS preflight is handled by the route's OPTIONS export; OPTIONS is intentionally omitted from the published API surface as transport boilerplate.
     get:
@@ -39765,6 +39889,83 @@ components:
           type: object
           propertyNames: { minLength: 1, pattern: "\\S" }
           additionalProperties: { type: string, minLength: 1, pattern: "\\S" }
+
+    ResetUsageHistoryRequest:
+      type: object
+      required: [period]
+      properties:
+        period: { type: string, enum: [5m, 1h, 3h, 6h, 12h, 1d, 7d, 30d, all] }
+      additionalProperties: true
+
+    ResetUsageHistoryResponse:
+      type: object
+      required:
+        [
+          deleted,
+          deletedUsageHistory,
+          deletedDailySummary,
+          deletedHourlySummary,
+          deletedCallLogs,
+          deletedCallLogArtifacts,
+          deletedRequestDetailLogs,
+          deletedProxyLogs,
+          deletedRelayLogs,
+          deletedCompressionAnalytics,
+          deletedCompressionRunTelemetry,
+          deletedRoutingDecisions,
+          deletedQuotaConsumption,
+          deletedTokenLedger,
+          errors,
+        ]
+      properties:
+        deleted: { type: integer, minimum: 0 }
+        deletedUsageHistory: { type: integer, minimum: 0 }
+        deletedDailySummary: { type: integer, minimum: 0 }
+        deletedHourlySummary: { type: integer, minimum: 0 }
+        deletedCallLogs: { type: integer, minimum: 0 }
+        deletedCallLogArtifacts: { type: integer, minimum: 0 }
+        deletedRequestDetailLogs: { type: integer, minimum: 0 }
+        deletedProxyLogs: { type: integer, minimum: 0 }
+        deletedRelayLogs: { type: integer, minimum: 0 }
+        deletedCompressionAnalytics: { type: integer, minimum: 0 }
+        deletedCompressionRunTelemetry: { type: integer, minimum: 0 }
+        deletedRoutingDecisions: { type: integer, minimum: 0 }
+        deletedQuotaConsumption: { type: integer, minimum: 0 }
+        deletedTokenLedger: { type: integer, minimum: 0 }
+        errors: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    PurgeCallLogsResponse:
+      type: object
+      required: [deleted, deletedArtifacts, errors]
+      properties:
+        deleted: { type: integer, minimum: 0 }
+        deletedArtifacts: { type: integer, minimum: 0 }
+        errors: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    PurgeCountWithErrorsResponse:
+      type: object
+      required: [deleted, errors]
+      properties:
+        deleted: { type: integer, minimum: 0 }
+        errors: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    PurgeLogsResponse:
+      type: object
+      required: [deleted, deletedArtifacts]
+      properties:
+        deleted: { type: integer, minimum: 0 }
+        deletedArtifacts: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    LkgpCacheClearedResponse:
+      type: object
+      required: [cleared]
+      properties:
+        cleared: { type: boolean, const: true }
+      additionalProperties: false
 
     RestartResponse:
       type: object
