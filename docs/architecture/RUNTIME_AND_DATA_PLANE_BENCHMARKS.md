@@ -1792,13 +1792,30 @@ resolved CLI versions in the image/build evidence.
   captured 402/402. The default is unchanged; decide whether a temporary 4 GiB diagnostic budget is
   acceptable only after checking image/container free space and retention cleanup.
 - Complete standalone Next/middleware E2E at 70 and 100 active sessions with mock provider
-  credentials, tool-call cycles, authentication, account limits, and verified artifacts. Current
-  local evidence is mixed: 100 conversations at 200,000 synthetic context bytes per user turn
-  completed 200/200 turns with 200/200 artifacts and private traces; a 70-conversation run at
-  700,000 bytes completed 140/140 turns but omitted 120/140 details at the 128 MiB preparation
-  reservation ceiling, with no worker failures. The test passed requests through the local
-  standalone bridge/mock but is not external-provider or deployed-image acceptance. The Rust
-  policy prototype remains benchmark-only and has no database-backed policies.
+  credentials, tool-call cycles, authentication, account limits, and verified artifacts. At
+  200,000 synthetic context bytes per user turn, 100 conversations completed 200/200 turns with
+  200/200 artifacts and private traces. At 700,000 bytes, ordinary artifact capture alone completed
+  140/140 turns but omitted 120/140 details at the 128 MiB preparation reservation ceiling. A new
+  test-only run enabled private overflow capture at a 512 KiB threshold: all 70 conversations
+  completed 140/140 turns, all 140 call-log rows and private traces were ready, all 420 client and
+  provider request/response files were streamed and verified, and preparation refusals, omissions,
+  worker failures, and pointer-fallback failures were all zero. The trace set contained
+  980,396,926 raw bytes and 738,464,149 compressed bytes. Gateway peak RSS was 2.58 GiB; host
+  memory pressure stayed at zero, while CPU and I/O pressure rose briefly and recovered after the
+  test. A matched dispatcher comparison at 8 versus the production-default 32 connections only
+  modestly changed 70-session route-ready p50/p95 (15.1/31.0 s to 14.1/28.9 s); 27 sessions still
+  crossed the 25 s timer, and worst-case latency rose from 36.6 to 39.4 s. A 100-conversation
+  repeat at dispatcher 32 also completed all 200/200 turns and verified 200/200 complete private
+  traces with zero writer refusals, omissions, or failures. It captured 1,400,569,993 raw bytes
+  (1,054,951,891 compressed) with gateway peak RSS 3.24 GiB. Route-ready latency was p50 23.5 s,
+  p95 42.9 s, max 51.1 s; 87 sessions crossed 25 s. Request-body completion p95 was 39.0 s and
+  provider fetch began within 0.49 s of body completion at p95, so the measured delay precedes the
+  outbound provider fetch; the exact ingress/client contribution remains unisolated. Exhaustive
+  private-file readback briefly raised host I/O PSI (about 15.7% some / 12.0% full avg10), then
+  returned near zero after cleanup; memory pressure stayed zero. The 512 KiB overflow threshold was
+  test-only; the production default remains 4 MiB. These are in-process route-handler tests with
+  local mocks, not full standalone Next/middleware, external-provider, or deployed-image acceptance.
+  The Rust policy prototype remains benchmark-only and has no database-backed policies.
 - Compare the current TypeScript route, Bun/Turbopack candidate, Rust policy-aware prototype, and
   Bifrost only with equivalent authentication, model/account policy, request bodies, and provider
   mocks. The new Node/Bun rows compare one direct route handler; current Rust-vs-Rust rows isolate
@@ -1806,7 +1823,7 @@ resolved CLI versions in the image/build evidence.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the source audit for response schemas and conditional auth behavior. After the Claude CLI
-  settings batch, the measured inventory is 985 response-contract candidates: 652 typed and 333
-  remaining gaps; route coverage is 705/705. This count is a contract-coverage inventory, not proof
-  that all security conditions or response semantics have been verified.
+- Continue the source audit for response schemas and conditional auth behavior. After the Claude
+  and Cline CLI settings batches, 655 of 985 response-contract candidates are typed and 330 gaps
+  remain; route coverage is 705/705. This count is a contract-coverage inventory, not proof that
+  all security conditions or response semantics have been verified.
