@@ -166,6 +166,46 @@ as an unauthenticated network request. Focused tests run with:
 cargo test --offline --manifest-path benchmarks/runtime-proxy/Cargo.toml --lib policy_context::tests
 ```
 
+### API-key validation cache parity slice
+
+`src/api_key_validation_cache.rs` models only the process-local positive validation cache from
+`src/lib/db/apiKeys.ts`: successful validations are reused for a strict 60-second window, denied
+keys are not cached, and a successful key mutation clears the local validation/metadata caches.
+The TypeScript validator checks banned/active/revoked/expiry state; a revoke writes
+`revoked_at` and `is_active = 0` before clearing local caches, then attempts to delete the optional
+Redis auth entry. Redis stores auth snapshots for up to one hour, and Redis read/write/delete
+failures are swallowed. This means this Rust model does not establish cross-process revocation
+freshness: a process-local positive can remain in another process for its remaining minute, and a
+stale Redis positive may be reused after a failed delete until its TTL expires. Rust uses a local
+generation number to express cache invalidation, but TypeScript does not currently export such a
+generation. This is a bounded cache-behavior probe, not a Rust key validator, Redis parity
+implementation, or authorization guarantee.
+
+In `PolicyContextV1`, `schema_version` guards the wire shape only; it is not a policy/config
+generation. The 30-second context expiry bounds reuse but cannot actively invalidate a snapshot
+when a key or connection changes. No cross-process invalidation epoch is currently shared with
+the Rust prototype.
+
+The surrounding policy differences remain material. TypeScript connection reads are process-local
+5-second TTL caches invalidated by connection writes; account selection then filters active
+connections by exclusions, connection model rules/inventory, terminal status, future
+`rateLimitedUntil`, provider-specific scopes, model/family lockouts, quota policy/exhaustion,
+affinity, and configured routing strategy. Combo/suppression paths can intentionally retain
+otherwise suppressed accounts, so those predicates are not unconditional.
+The Rust context collapses those into TypeScript-provided booleans, one cooldown timestamp, one
+quota enum, and an in-flight cap. TypeScript provider-quota reads mark an expired window unknown
+only when `now > windowReset`; missing/error reads can return no record and some schedulers treat
+unconfigured quota tracking as available. The Rust projection rejects `Unknown`. These are not
+semantically equivalent and remain TypeScript-owned until separately specified and tested.
+
+Focused tests reuse the cached build tree:
+
+```bash
+. "$HOME/.cargo/env"
+CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target cargo test --offline \
+  --manifest-path benchmarks/runtime-proxy/Cargo.toml --lib api_key_validation_cache::tests
+```
+
 ### Synthetic multi-level admission contention
 
 Run the independent atomic global/provider/account gate model with:
