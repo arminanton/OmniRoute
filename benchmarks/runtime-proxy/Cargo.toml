@@ -17,6 +17,10 @@ name = "omniroute-multigate-admission-bench"
 path = "src/bin/multigate-admission-bench.rs"
 
 [[bin]]
+name = "omniroute-composed-capacity-bench"
+path = "src/bin/composed-capacity-bench.rs"
+
+[[bin]]
 name = "omniroute-coordination-probe"
 path = "src/bin/coordination-probe.rs"
 

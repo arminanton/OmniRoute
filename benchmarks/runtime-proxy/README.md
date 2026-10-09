@@ -133,9 +133,9 @@ probe aborts requests while they hold leases and checks that every slot is relea
 
 The TypeScript source compares connection eligibility from cached DB snapshots, `isActive`/API-key
 allowlists, exclusions, terminal/cooldown/model locks, and quota state before selecting an account.
-Session affinity reuses an eligible pin or chooses an LRU candidate for a new session. Later
-`acquireMany` takes global/provider/account gates atomically and releases them idempotently; it
-supports FIFO waiters, timeouts/abort cleanup, blocked-until gates, and optional shared admission.
+Session affinity reuses an eligible pin or chooses an LRU candidate for a new session. The Rust
+`MultiGateAdmission` is a separate model of global/provider/account gates; it is not wired into
+`AccountScheduler` or used by production TypeScript.
 The synthetic model applies only enabled/cooldown/quota eligibility, one of the two listed account
 selection modes, optional session pins, and a per-account in-flight cap. It reassigns a full affinity
 pin to an eligible account with capacity, and its waiter wake-up is not FIFO. It does not reproduce
@@ -163,6 +163,116 @@ CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target cargo test --offline \
   --manifest-path benchmarks/runtime-proxy/Cargo.toml --bin rust-chat-gateway \
   account_scheduler::tests
 ```
+
+Recorded one-run measurements on the 4-CPU ARM64 host on 2026-10-09 UTC. Each run used four turns
+per session, an 8 ms synthetic service delay, one CPU, six eligible accounts capped at eight
+in-flight leases each, and no session affinity. `capacity_wait_requests` counts distinct acquire
+calls that encountered a full eligible pool at least once. The separate cancellation probe is not
+included in workload throughput.
+
+| Sessions | Strategy | Throughput | Elapsed | Capacity waits | Timeouts | Per-account selections | Max:min skew | CV | Peak/account |
+|---:|---|---:|---:|---:|---:|---|---:|---:|---:|
+| 70 | Least-loaded | 3,596 req/s | 77.85 ms | 22 | 0 | 47 / 47 / 48 / 48 / 45 / 45 | 1.07 | 0.027 | 8 |
+| 70 | Priority fill-first | 3,510 req/s | 79.78 ms | 22 | 0 | 64 / 64 / 52 / 32 / 32 / 36 | 2.00 | 0.300 | 8 |
+| 100 | Least-loaded | 3,492 req/s | 114.55 ms | 52 | 0 | 67 / 68 / 67 / 68 / 66 / 64 | 1.06 | 0.021 | 8 |
+| 100 | Priority fill-first | 3,651 req/s | 109.56 ms | 52 | 0 | 76 / 64 / 64 / 68 / 64 / 64 | 1.19 | 0.066 | 8 |
+
+All four workloads completed every requested turn. Each separate cancel probe acquired four leases,
+aborted all four holders, observed all four slots released, and successfully reacquired capacity.
+These are single synthetic samples: throughput changed direction between the 70- and 100-session
+runs, so they do not establish a faster strategy. They do show the fill-first distribution can be
+more skewed under this contention shape. The probe does not model real request bodies, provider
+latency, database/Redis work, retries, adaptive gates, or a production 70/100-agent OmniRoute load.
+
+The captured runs used the cached Cargo target, `cargo run --offline`, CPU 0 affinity, and a
+systemd user scope with `MemoryMax=1G` and `CPUQuota=100%`; no image build or egress was involved.
+The first run compiled only the benchmark crate in 2.41 seconds; the second was incremental
+(0.15 seconds). Sampled host headroom stayed near 20 GiB available RAM and 11 GiB free disk;
+memory PSI remained zero and I/O PSI avg10 stayed below 0.2%. The cached target was about 1.10 GB
+at that point (later composition-probe compilation increased it to about 1.20 GB). To reproduce
+each single-size run, launch one tmux session per size:
+
+```bash
+tmux new-session -d -s omni-account-strategy-70 \
+  'systemd-run --user --scope -p MemoryMax=1G -p CPUQuota=100% -- /usr/bin/env CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target /usr/bin/taskset -c 0 /home/ubuntu/.cargo/bin/cargo run --offline --manifest-path /home/ubuntu/_/omni/blue/benchmarks/runtime-proxy/Cargo.toml --bin omniroute-account-scheduler-bench -- 70'
+tmux new-session -d -s omni-account-strategy-100 \
+  'systemd-run --user --scope -p MemoryMax=1G -p CPUQuota=100% -- /usr/bin/env CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target /usr/bin/taskset -c 0 /home/ubuntu/.cargo/bin/cargo run --offline --manifest-path /home/ubuntu/_/omni/blue/benchmarks/runtime-proxy/Cargo.toml --bin omniroute-account-scheduler-bench -- 100'
+```
+
+### Composed account and multi-gate lease probe
+
+`src/bin/composed-capacity-bench.rs` checks the composition boundary missing from the separate
+`account_scheduler.rs` and `multi_gate_admission.rs` prototypes. A synthetic request first reserves
+an account-selection slot, then atomically acquires a global, provider, and selected-account gate;
+one composite lease owns both reservations. Three cap profiles make each distinct gate binding in
+turn (global 20, provider 16, or per-account 4) for both 70- and 100-session groups, four turns
+each. It reports completed turns, queue waits/timeouts, per-gate peaks, account selections, and
+then exercises cancellation while queued and while holding a composite lease. It checks that
+waiter cancellation removes the request from every gate, releases the preliminary account slot,
+and that aborting an admitted request releases every gate and leaves capacity reusable.
+
+This is a future-design experiment, not TypeScript parity. `withChatAdmission` owns a process-local,
+cost-weighted global admission lease through the response lifecycle (the source default is
+`mode: "shadow"`; enforcement is configurable); provider account selection happens later.
+`applyExclusiveConnectionLeasePolicy` separately uses a database-backed exclusive connection
+owner/lease, not an atomic numeric global/provider/account gate set. The Rust wrapper also reserves
+an account slot before waiting on global/provider gates, so an account slot can be held while
+another gate is full. The test checks cleanup and hard caps, not that this sequential ordering is
+fair or optimal.
+
+The single synthetic test run completed all 70/100-session turns with zero timeouts or queue-full
+rejections. Each profile deliberately made a different gate binding so its cap was observed:
+
+| Sessions | Binding profile | Global peak | Provider peak | Account-gate peak | Account-slot peak | Gate-queue peak | Throughput |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 70 | Global 20 | 20/20 | 20/40 | 5/8 | 8/8 | 28 | 2,511 req/s |
+| 70 | Provider 16 | 16/40 | 16/16 | 4/8 | 8/8 | 32 | 1,896 req/s |
+| 70 | Account 4 | 24/40 | 24/40 | 4/4 | 4/4 | 0 | 3,097 req/s |
+| 100 | Global 20 | 20/20 | 20/40 | 5/8 | 8/8 | 28 | 2,152 req/s |
+| 100 | Provider 16 | 16/40 | 16/16 | 5/8 | 8/8 | 32 | 1,785 req/s |
+| 100 | Account 4 | 24/40 | 24/40 | 4/4 | 4/4 | 0 | 2,745 req/s |
+
+The provider-bound cancel probe held 16 composite leases, queued four more, cancelled two, observed
+account reservations fall from 20 to 18 and the provider queue from four to two, then released the
+original leases and let the remaining two complete. A separate in-flight task abort also released
+its global/provider/account gates and account slot; a new composite request reacquired capacity.
+These short samples verify caps and cleanup, not production throughput or fairness.
+
+Run the 70/100 composition test in a tmux session under the same cached, bounded toolchain:
+
+```bash
+tmux new-session -d -s omni-rust-composed-capacity \
+  'sleep 1; systemd-run --user --scope -p MemoryMax=1G -p CPUQuota=100% -- /bin/bash -lc \
+    "cd /home/ubuntu/_/omni/blue/benchmarks/runtime-proxy && /home/ubuntu/.cargo/bin/cargo fmt --check --manifest-path Cargo.toml && CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target /usr/bin/taskset -c 0 /home/ubuntu/.cargo/bin/cargo test --offline --manifest-path Cargo.toml --bin omniroute-composed-capacity-bench -- --nocapture"'
+tmux set-option -p -t omni-rust-composed-capacity:0 remain-on-exit on
+```
+
+Recorded composition-test result on 2026-10-09 UTC: `cargo fmt --check` passed; Cargo reported 10
+tests passed (the composition test plus the included account-scheduler and multi-gate tests), with
+the 70/100 workload running inside that test. The new test-profile binary compiled in 3.84 seconds
+and tests finished in 0.94 seconds. It used the cached target, offline Cargo, CPU 0, and the 1 GiB
+memory / one-CPU scope above. Host headroom stayed near 20 GiB available RAM and 11 GiB free disk;
+memory PSI was zero and sampled I/O PSI avg10 stayed below 1%. No image or production path was
+touched.
+
+| Sessions | Binding profile | Global peak | Provider peak | Account-gate peak | Account-slot peak | Gate-queue peak | Throughput |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 70 | Global 20 | 20/20 | 20/40 | 5/8 | 8/8 | 28 | 2,511 req/s |
+| 70 | Provider 16 | 16/40 | 16/16 | 4/8 | 8/8 | 32 | 1,896 req/s |
+| 70 | Account 4 | 24/40 | 24/40 | 4/4 | 4/4 | 0 | 3,097 req/s |
+| 100 | Global 20 | 20/20 | 20/40 | 5/8 | 8/8 | 28 | 2,152 req/s |
+| 100 | Provider 16 | 16/40 | 16/16 | 5/8 | 8/8 | 32 | 1,785 req/s |
+| 100 | Account 4 | 24/40 | 24/40 | 4/4 | 4/4 | 0 | 2,745 req/s |
+
+All workloads completed all requested turns with zero timeout/queue-full failures, and every final
+gate and account-slot snapshot was idle. In the provider-bound cancel probe, four queued requests
+were created while 16 leases occupied the provider gate; cancelling two removed them from the
+queues and released their account slots (20 reservations became 18). After releasing the held
+leases, the two remaining waiters completed; aborting a separate admitted task then returned every
+gate and account slot to zero and capacity was reacquired. These short synthetic measurements
+verify cap enforcement and cleanup, not production throughput or fairness. The measured order is
+account-slot reservation followed by gate admission, so head-of-line effects while waiting remain
+part of the design tradeoff.
 
 ### Credential-free TypeScript policy-context adapter
 
