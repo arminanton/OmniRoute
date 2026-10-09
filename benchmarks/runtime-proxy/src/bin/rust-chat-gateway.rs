@@ -37,6 +37,10 @@ use tokio::{
 #[path = "../account_scheduler.rs"]
 mod account_scheduler;
 
+#[cfg(test)]
+#[path = "../multi_gate_admission.rs"]
+mod multi_gate_admission;
+
 const BODY_UNIT_BYTES: usize = 64 * 1024;
 const RATE_WINDOW: Duration = Duration::from_secs(60);
 const MAX_CONFIG_BODY_BYTES: usize = 16 * 1024 * 1024;

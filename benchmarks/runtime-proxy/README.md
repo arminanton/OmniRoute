@@ -139,6 +139,22 @@ eligible account with capacity, and its waiter wake-up is not FIFO. It does not 
 database-backed account selection, model/API-key filters, provider/global caps, distributed leases,
 provider quotas, or adaptive/shared admission.
 
+### Synthetic multi-level admission contention
+
+Run the independent atomic global/provider/account gate model with:
+
+```bash
+cargo run --manifest-path benchmarks/runtime-proxy/Cargo.toml --bin omniroute-multigate-admission-bench
+```
+
+It runs 70- and 100-session groups, four turns per session, with global cap 20, Codex-provider cap
+16, and five synthetic account gates capped at four each. It prints requested/completed/rejected
+counts, observed gate peaks, queue depth, and elapsed time; timed-out acquisition fails the run. The
+prototype normalizes duplicate requirements to the strictest cap, sorts gate keys, admits all gates
+atomically, and drops every reservation when a waiter or lease is cancelled. It is process-local
+with a 10-second wait limit and 256 queued waiters per gate. It does not implement shared Redis
+admission or the production adaptive-controller feedback loop.
+
 ```bash
 python3 benchmarks/runtime-proxy/run_bench.py \
   --runtime rust-chat-gateway --api-path chat-completions --model cx/gpt-5.6 \

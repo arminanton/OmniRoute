@@ -12,6 +12,10 @@ path = "src/bin/mock_upstream.rs"
 name = "omniroute-account-scheduler-bench"
 path = "src/bin/account-scheduler-bench.rs"
 
+[[bin]]
+name = "omniroute-multigate-admission-bench"
+path = "src/bin/multigate-admission-bench.rs"
+
 [dependencies]
 async-stream = "0.3"
 axum = "0.8.9"
