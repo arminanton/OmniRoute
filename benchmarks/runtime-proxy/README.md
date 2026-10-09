@@ -162,6 +162,7 @@ only consume it over a trusted in-process/IPC boundary after TypeScript policy e
 as an unauthenticated network request. Focused tests run with:
 
 ```bash
+. "$HOME/.cargo/env" # use the Rustup toolchain rather than an older distro cargo
 cargo test --offline --manifest-path benchmarks/runtime-proxy/Cargo.toml --lib policy_context::tests
 ```
 
