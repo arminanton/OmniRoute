@@ -1816,6 +1816,17 @@ resolved CLI versions in the image/build evidence.
   test-only; the production default remains 4 MiB. These are in-process route-handler tests with
   local mocks, not full standalone Next/middleware, external-provider, or deployed-image acceptance.
   The Rust policy prototype remains benchmark-only and has no database-backed policies.
+- A separate 100-session, 700,000-byte run with call-log capture disabled measured the pre-provider
+  admission path. The V8-derived ingest budget was 140,509,184 bytes; peak ingress use reached
+  140,041,906 bytes (99.7%), while byte-queued charge peaked at 31,457,280 of 67,108,864 bytes
+  (46.9%). No request was shed. The structural `waiting` counter stayed at zero even while the
+  byte queue held work; use the queued-byte gauge alongside it. Body completion p95 was 37.86 s,
+  while provider fetch followed body completion within 293 ms at p95. A test-only override to 280 MB
+  reduced queued bytes to 11.01 MB and improved route-ready p50 from 22.3 s to 17.3 s, but worsened
+  p95 from 42.5 s to 48.9 s, maximum from 46.8 s to 54.1 s, and event-loop p95 from 1.34 s to 1.90
+  s; gateway peak RSS rose from 2.09 to 2.27 GiB. Both exploratory runs passed without memory
+  pressure. This does not support raising the production budget on its own; lower median wait came
+  with worse tail latency under the larger concurrent body-reading burst.
 - Compare the current TypeScript route, Bun/Turbopack candidate, Rust policy-aware prototype, and
   Bifrost only with equivalent authentication, model/account policy, request bodies, and provider
   mocks. The new Node/Bun rows compare one direct route handler; current Rust-vs-Rust rows isolate
@@ -1823,7 +1834,7 @@ resolved CLI versions in the image/build evidence.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the source audit for response schemas and conditional auth behavior. After the Claude
-  and Cline CLI settings batches, 655 of 985 response-contract candidates are typed and 330 gaps
-  remain; route coverage is 705/705. This count is a contract-coverage inventory, not proof that
-  all security conditions or response semantics have been verified.
+- Continue the source audit for response schemas and conditional auth behavior. After the Claude,
+  Cline, and Droid CLI settings batches, 658 of 985 response-contract candidates are typed and 327
+  gaps remain; route coverage is 705/705. This count is a contract-coverage inventory, not proof
+  that all security conditions or response semantics have been verified.
