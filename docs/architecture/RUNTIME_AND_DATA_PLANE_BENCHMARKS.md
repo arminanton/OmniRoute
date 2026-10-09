@@ -974,6 +974,8 @@ API-key safety limiter is not automatically enabled for those providers. An oper
 explicitly enable rate-limit protection on an OAuth connection, in which case the queue settings
 apply. This A/B therefore demonstrates the API-key path's local queue ceiling; it does not explain
 the Codex OAuth or Antigravity 429/503 failures shown in the incident reports.
+A regression test in `tests/unit/rate-limit-manager.test.ts` verifies the API-key auto-enable,
+OAuth exclusion, and explicit per-connection opt-in branches.
 
 With `RATE_LIMIT_AUTO_ENABLE=false` applied only to the isolated test process, the same HTTP/tool
 workload completed through 100 concurrent conversations:

@@ -934,6 +934,43 @@ test("rate limit manager recomputes auto-enabled API key connections when queue 
   assert.ok(rateLimitManager.getAllRateLimitStatus()[`openai:${autoConnection.id}`]);
 });
 
+test("automatic queue protection is API-key-only; OAuth providers require explicit opt-in", async () => {
+  const apiKeyConnection = await providersDb.createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    name: "auto API-key queue fixture",
+    apiKey: "sk-auto-queue-fixture",
+    isActive: true,
+  });
+  const codexConnection = await providersDb.createProviderConnection({
+    provider: "codex",
+    authType: "oauth",
+    name: "Codex OAuth queue fixture",
+    apiKey: "oauth-codex-fixture",
+    email: "codex-fixture@example.test",
+    isActive: true,
+  });
+  const antigravityConnection = await providersDb.createProviderConnection({
+    provider: "antigravity",
+    authType: "oauth",
+    name: "Antigravity OAuth queue fixture",
+    apiKey: "oauth-antigravity-fixture",
+    email: "antigravity-fixture@example.test",
+    isActive: true,
+    rateLimitProtection: true,
+  });
+
+  await rateLimitManager.initializeRateLimits();
+
+  assert.equal(rateLimitManager.isRateLimitEnabled(apiKeyConnection.id), true);
+  assert.equal(rateLimitManager.isRateLimitEnabled(codexConnection.id), false);
+  assert.equal(
+    rateLimitManager.isRateLimitEnabled(antigravityConnection.id),
+    true,
+    "explicit connection protection still opts an OAuth provider into the queue"
+  );
+});
+
 test("withRateLimit rejects cleanly when the caller aborts with the default DOMException reason", async () => {
   // `AbortController.abort()` called with no argument (e.g. modelTestRunner's
   // timeout path) produces a native DOMException as `signal.reason`, whose
