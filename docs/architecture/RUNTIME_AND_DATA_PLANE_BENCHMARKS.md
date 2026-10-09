@@ -707,6 +707,25 @@ table size have hard limits. It does not read employee keys or policy from OmniR
 provider accounts, execute tools, apply distributed quotas, retry providers, write call logs, or
 translate provider protocols.
 
+### Rust parity boundary
+
+OmniRoute already has an optional cross-process admission coordinator: `sharedSemaphore.ts` uses
+the separate `omni-coordination/v1` SQLite/WAL store for atomic leases, queueing, renewal, and
+fencing when `OMNI_SHARED_ADMISSION=true`. It expects a local POSIX filesystem; it is not the main
+migrated application database and must not be placed on NFS. The first Rust parity step should
+implement this coordinator contract behind an admission-backend interface, not substitute the
+current process-local gates.
+
+Do not have a Rust sidecar read `api_keys`, `provider_connections`, or other evolving application
+tables directly. Authentication and policy span key lifecycle, schedules/IP/endpoints, model and
+connection allowlists, budgets, token limits, and `no_log`; account eligibility adds provider quota,
+cooldown, affinity, and fallback state. Keep those decisions in the TypeScript domain services at
+first and expose a versioned, short-lived authorization/account-lease contract to Rust. Preserve one
+owner for usage and call-log writes while Rust is in shadow mode. Quota counters, provider quota
+snapshots, semantic response caching, and provider prompt-cache metadata are separate state and need
+independent parity tests. The exact `OMNI_SHARED_ADMISSION`, Redis, database-adapter, and filesystem
+settings of each runtime are still unverified; no Rust production integration is implemented.
+
 On the 8-logical-CPU devvm with 14 GiB RAM reported by the guest, I compared this prototype with the
 transparent Rust transport adapter using the same local Rust mock, synthetic chat tool history,
 262,144 bytes of user text per turn, five sequential turns per session, and 100 SSE chunks at 10 ms.
