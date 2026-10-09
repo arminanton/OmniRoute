@@ -84,20 +84,60 @@ provider routing, authentication, retries, quotas, or request/response translati
 ### Rust policy-aware chat prototype
 
 `rust-chat-gateway` is a second, isolated prototype for measuring a little more of the real chat
-hot path. It accepts one configured client API key, enforces a fixed per-key request window and
-global in-flight cap, validates OpenAI Chat Completions JSON, holds a shared body-memory budget in
-64 KiB permits, optionally rewrites model aliases, replaces the caller credential with a configured
-upstream bearer key, and streams the upstream response with cancellation-aware lease release. The
-budget reserves four times encoded body bytes plus 128 bytes per observed JSON structural token, up
-to 100,000 tokens, before buffering/deserializing; this conservative charge accounts for the raw
-buffer, parsed JSON tree, and normalized outbound body. Model alias count/name size, request body,
-total body budget, and in-flight configuration all have hard limits. It preserves tool-call/tool-result
-JSON but does not execute tools.
+hot path. It accepts a static table of client keys with unique non-secret IDs, independently enforces
+each key's fixed one-minute request budget and configured revocation flag, plus a global in-flight
+cap. It validates OpenAI Chat Completions JSON, holds a shared body-memory budget in 64 KiB permits,
+optionally rewrites model aliases, replaces the caller credential with a configured upstream bearer
+key, and streams the upstream response with cancellation-aware lease release. The budget reserves
+four times encoded body bytes plus 128 bytes per observed JSON structural token, up to 100,000
+tokens, before buffering/deserializing; this conservative charge accounts for the raw buffer, parsed
+JSON tree, and normalized outbound body. Client key count/ID/secret/limit size, model alias
+count/name size, request body, total body budget, and in-flight configuration all have hard limits.
+It preserves tool-call/tool-result JSON but does not execute tools.
 
-This trial does not load keys or policies from OmniRoute's database and does not implement multiple
-employee keys, account scheduling, distributed quotas, provider retries, compression, call-log
+Configure multiple synthetic clients with `CLIENT_KEYS_JSON`; IDs are non-secret state keys, while
+`apiKey` values remain credentials and are never logged or returned. `revoked` defaults to false and
+is loaded at process start, so this prototype does not provide live key updates or database-backed
+revocation. The legacy `CLIENT_API_KEY` mode remains supported; `CLIENT_KEY_ID` names its state key
+(default `default`) and `MAX_REQUESTS_PER_MINUTE` sets that client's limit.
+
+```json
+[
+  {"id":"agent-a","apiKey":"synthetic-agent-a","maxRequestsPerMinute":120},
+  {"id":"agent-b","apiKey":"synthetic-agent-b","maxRequestsPerMinute":240},
+  {"id":"retired-agent","apiKey":"synthetic-retired","maxRequestsPerMinute":10,"revoked":true}
+]
+```
+
+This trial does not load or dynamically revoke employee keys from OmniRoute's database, and it does
+not implement account scheduling, distributed quotas, provider retries, compression, call-log
 capture, or response protocol translation. The benchmark runner supplies synthetic credentials; do
 not use real secrets for this harness. It binds to loopback and is not a deployable replacement.
+
+### Synthetic account scheduler contention
+
+Run the isolated scheduler exercise with:
+
+```bash
+cargo run --manifest-path benchmarks/runtime-proxy/Cargo.toml --bin omniroute-account-scheduler-bench
+```
+
+It runs 70- and 100-agent groups for four sequential turns per agent against six eligible synthetic
+accounts (eight concurrent requests per account), plus disabled, cooling-down, and quota-exhausted
+decoys. It reports completed turns, elapsed time, session-affinity reuse, selection distribution,
+and observed peak per-account load. Each phase prints requested/completed/rejected counts; a wait
+timeout fails the run, while successful phases assert zero rejected turns.
+
+The TypeScript source compares connection eligibility from cached DB snapshots, `isActive`/API-key
+allowlists, exclusions, terminal/cooldown/model locks, and quota state before selecting an account.
+Session affinity reuses an eligible pin or chooses an LRU candidate for a new session. Later
+`acquireMany` takes global/provider/account gates atomically and releases them idempotently; it
+supports FIFO waiters, timeouts/abort cleanup, blocked-until gates, and optional shared admission.
+The synthetic model applies only enabled/cooldown/quota eligibility, least-loaded account choice,
+optional session pins, and a per-account in-flight cap. It reassigns a full affinity pin to an
+eligible account with capacity, and its waiter wake-up is not FIFO. It does not reproduce
+database-backed account selection, model/API-key filters, provider/global caps, distributed leases,
+provider quotas, or adaptive/shared admission.
 
 ```bash
 python3 benchmarks/runtime-proxy/run_bench.py \

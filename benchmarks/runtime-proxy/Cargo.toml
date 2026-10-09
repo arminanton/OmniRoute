@@ -8,6 +8,10 @@ publish = false
 name = "omniroute-runtime-mock-upstream-bench"
 path = "src/bin/mock_upstream.rs"
 
+[[bin]]
+name = "omniroute-account-scheduler-bench"
+path = "src/bin/account-scheduler-bench.rs"
+
 [dependencies]
 async-stream = "0.3"
 axum = "0.8.9"

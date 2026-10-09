@@ -1,12 +1,13 @@
 //! Loopback-only OpenAI chat data-plane trial.
 //!
-//! This deliberately small prototype exercises client authentication, a per-key request window,
-//! global stream admission, bounded request-body memory, optional model aliasing, provider-key
-//! replacement, and cancellation-aware SSE forwarding. It is not the production OmniRoute router:
-//! keys and policy are static process configuration, with one client key and one upstream.
+//! This deliberately small prototype exercises client authentication with static configured key
+//! identities, independent per-key request windows/revocation flags, global stream admission,
+//! bounded request-body memory, optional model aliasing, provider-key replacement, and
+//! cancellation-aware SSE forwarding. It is not the production OmniRoute router: keys and policy
+//! are static process configuration with one upstream.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env, io,
     pin::Pin,
     sync::{
@@ -32,11 +33,20 @@ use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
 };
 
+#[cfg(test)]
+#[path = "../account_scheduler.rs"]
+mod account_scheduler;
+
 const BODY_UNIT_BYTES: usize = 64 * 1024;
 const RATE_WINDOW: Duration = Duration::from_secs(60);
 const MAX_CONFIG_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CONFIG_BODY_BUDGET_BYTES: usize = 2 * 1024 * 1024 * 1024;
 const MAX_CONFIG_INFLIGHT: usize = 4096;
+const MAX_CONFIG_CLIENT_KEYS: usize = 256;
+const MAX_CONFIG_CLIENT_KEYS_JSON_BYTES: usize = 512 * 1024;
+const MAX_CLIENT_ID_BYTES: usize = 128;
+const MAX_CLIENT_KEY_BYTES: usize = 512;
+const MAX_CLIENT_REQUESTS_PER_MINUTE: u64 = 10_000_000;
 const MAX_MODEL_ALIASES: usize = 1000;
 const MAX_MODEL_NAME_BYTES: usize = 512;
 const MAX_JSON_STRUCTURAL_TOKENS: usize = 100_000;
@@ -47,12 +57,11 @@ const JSON_TOKEN_MEMORY_CHARGE_BYTES: usize = 128;
 struct GatewayConfig {
     upstream: String,
     api_path: String,
-    client_api_key: String,
+    client_keys: Vec<ClientKeyConfig>,
     upstream_api_key: Option<String>,
     max_body_bytes: usize,
     body_budget_bytes: usize,
     max_inflight: usize,
-    max_requests_per_minute: u64,
     model_aliases: HashMap<String, String>,
 }
 
@@ -61,12 +70,11 @@ struct AppState {
     client: Client,
     upstream: String,
     api_path: String,
-    client_api_key: Arc<[u8]>,
     upstream_authorization: Option<HeaderValue>,
     max_body_bytes: usize,
     max_body_budget_units: usize,
     max_inflight: usize,
-    max_requests_per_minute: u64,
+    client_keys: Arc<Vec<ClientKey>>,
     model_aliases: Arc<HashMap<String, String>>,
     inflight: Arc<Semaphore>,
     body_budget: Arc<Semaphore>,
@@ -76,7 +84,27 @@ struct AppState {
     rejected: Arc<AtomicU64>,
     input_bytes: Arc<AtomicU64>,
     output_bytes: Arc<AtomicU64>,
-    rate_window: Arc<Mutex<RateWindow>>,
+    rate_windows: Arc<Mutex<HashMap<String, RateWindow>>>,
+}
+
+#[derive(Clone)]
+struct ClientKeyConfig {
+    id: String,
+    api_key: String,
+    max_requests_per_minute: u64,
+    revoked: bool,
+}
+
+struct ClientKey {
+    id: String,
+    secret: Arc<[u8]>,
+    max_requests_per_minute: u64,
+    revoked: bool,
+}
+
+struct AuthenticatedClient {
+    id: String,
+    max_requests_per_minute: u64,
 }
 
 struct RateWindow {
@@ -152,18 +180,14 @@ fn estimated_body_reservation_bytes(input_bytes: usize, structural_tokens: usize
 
 impl AppState {
     fn new(config: GatewayConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        if config.client_api_key.is_empty() {
-            return Err("CLIENT_API_KEY must be set".into());
-        }
-        if config.client_api_key.len() > 512 {
-            return Err("CLIENT_API_KEY exceeds the 512-byte configuration limit".into());
-        }
         if !config.api_path.starts_with('/') {
             return Err("API_PATH must start with '/'".into());
         }
         if config.max_body_bytes > MAX_CONFIG_BODY_BYTES
             || config.body_budget_bytes > MAX_CONFIG_BODY_BUDGET_BYTES
             || config.max_inflight > MAX_CONFIG_INFLIGHT
+            || config.client_keys.is_empty()
+            || config.client_keys.len() > MAX_CONFIG_CLIENT_KEYS
             || config.model_aliases.len() > MAX_MODEL_ALIASES
             || config.model_aliases.iter().any(|(source, target)| {
                 source.is_empty()
@@ -174,13 +198,43 @@ impl AppState {
         {
             return Err("gateway configuration exceeds a fixed resource bound".into());
         }
+        let mut client_ids = HashSet::with_capacity(config.client_keys.len());
+        for (index, client_key) in config.client_keys.iter().enumerate() {
+            let valid_id = !client_key.id.is_empty()
+                && client_key.id.len() <= MAX_CLIENT_ID_BYTES
+                && client_key
+                    .id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte));
+            if !valid_id || !client_ids.insert(client_key.id.as_str()) {
+                return Err("client key ids must be unique non-secret identifiers".into());
+            }
+            if client_key.api_key.is_empty()
+                || client_key.api_key.len() > MAX_CLIENT_KEY_BYTES
+                || !client_key.api_key.is_ascii()
+                || client_key
+                    .api_key
+                    .bytes()
+                    .any(|byte| byte.is_ascii_control())
+                || client_key.max_requests_per_minute == 0
+                || client_key.max_requests_per_minute > MAX_CLIENT_REQUESTS_PER_MINUTE
+            {
+                return Err("client key credentials or per-key request limits are invalid".into());
+            }
+            if config.client_keys[..index]
+                .iter()
+                .any(|previous| previous.api_key == client_key.api_key)
+            {
+                return Err("client key credentials must be unique".into());
+            }
+        }
         if config.max_body_bytes == 0
             || config.body_budget_bytes < estimated_body_reservation_bytes(config.max_body_bytes, 0)
         {
             return Err("body budget must cover one maximum-sized encoded body reservation".into());
         }
-        if config.max_inflight == 0 || config.max_requests_per_minute == 0 {
-            return Err("in-flight and request-rate limits must be positive".into());
+        if config.max_inflight == 0 {
+            return Err("in-flight limits must be positive".into());
         }
 
         let body_budget_units = config.body_budget_bytes.div_ceil(BODY_UNIT_BYTES);
@@ -192,6 +246,16 @@ impl AppState {
             .filter(|key| !key.is_empty())
             .map(|key| HeaderValue::from_str(&format!("Bearer {key}")))
             .transpose()?;
+        let client_keys = config
+            .client_keys
+            .into_iter()
+            .map(|client_key| ClientKey {
+                id: client_key.id,
+                secret: Arc::from(client_key.api_key.into_bytes()),
+                max_requests_per_minute: client_key.max_requests_per_minute,
+                revoked: client_key.revoked,
+            })
+            .collect::<Vec<_>>();
 
         Ok(Self {
             client: Client::builder()
@@ -199,12 +263,11 @@ impl AppState {
                 .build()?,
             upstream: config.upstream.trim_end_matches('/').to_owned(),
             api_path: config.api_path,
-            client_api_key: Arc::from(config.client_api_key.into_bytes()),
             upstream_authorization,
             max_body_bytes: config.max_body_bytes,
             max_body_budget_units: body_budget_units,
             max_inflight: config.max_inflight,
-            max_requests_per_minute: config.max_requests_per_minute,
+            client_keys: Arc::new(client_keys),
             model_aliases: Arc::new(config.model_aliases),
             inflight: Arc::new(Semaphore::new(config.max_inflight)),
             body_budget: Arc::new(Semaphore::new(body_budget_units)),
@@ -214,24 +277,49 @@ impl AppState {
             rejected: Arc::new(AtomicU64::new(0)),
             input_bytes: Arc::new(AtomicU64::new(0)),
             output_bytes: Arc::new(AtomicU64::new(0)),
-            rate_window: Arc::new(Mutex::new(RateWindow {
-                started: Instant::now(),
-                requests: 0,
-            })),
+            rate_windows: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
-    fn rate_limit_retry_after(&self) -> Option<u64> {
+    fn authenticate_client(&self, token: &[u8]) -> Option<AuthenticatedClient> {
+        let mut selected_index = 0usize;
+        let mut match_count = 0usize;
+        for (index, client_key) in self.client_keys.iter().enumerate() {
+            let matched = usize::from(constant_time_eq(client_key.secret.as_ref(), token));
+            selected_index = selected_index * (1 - matched) + index * matched;
+            match_count += matched;
+        }
+        if match_count != 1 {
+            return None;
+        }
+
+        let client_key = &self.client_keys[selected_index];
+        if client_key.revoked {
+            return None;
+        }
+        Some(AuthenticatedClient {
+            id: client_key.id.clone(),
+            max_requests_per_minute: client_key.max_requests_per_minute,
+        })
+    }
+
+    fn rate_limit_retry_after(&self, client_id: &str, max_requests_per_minute: u64) -> Option<u64> {
         let now = Instant::now();
-        let mut window = self
-            .rate_window
+        let mut windows = self
+            .rate_windows
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let window = windows
+            .entry(client_id.to_owned())
+            .or_insert_with(|| RateWindow {
+                started: now,
+                requests: 0,
+            });
         if now.duration_since(window.started) >= RATE_WINDOW {
             window.started = now;
             window.requests = 0;
         }
-        if window.requests >= self.max_requests_per_minute {
+        if window.requests >= max_requests_per_minute {
             let elapsed = now.duration_since(window.started).as_secs();
             Some(60u64.saturating_sub(elapsed).max(1))
         } else {
@@ -373,12 +461,14 @@ async fn chat(State(state): State<AppState>, request: Request) -> Response {
         state.rejected.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::UNAUTHORIZED, "valid API key required", None);
     };
-    if !constant_time_eq(&state.client_api_key, client_token) {
+    let Some(client) = state.authenticate_client(client_token) else {
         state.rejected.fetch_add(1, Ordering::Relaxed);
         return error_response(StatusCode::UNAUTHORIZED, "valid API key required", None);
-    }
+    };
 
-    if let Some(retry_after) = state.rate_limit_retry_after() {
+    if let Some(retry_after) =
+        state.rate_limit_retry_after(&client.id, client.max_requests_per_minute)
+    {
         state.rejected.fetch_add(1, Ordering::Relaxed);
         return error_response(
             StatusCode::TOO_MANY_REQUESTS,
@@ -610,12 +700,121 @@ fn read_usize(
     }
 }
 
+fn parse_client_keys_json(raw: &str) -> Result<Vec<ClientKeyConfig>, io::Error> {
+    if raw.len() > MAX_CONFIG_CLIENT_KEYS_JSON_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CLIENT_KEYS_JSON exceeds the configuration byte limit",
+        ));
+    }
+
+    let value = serde_json::from_str::<serde_json::Value>(raw).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CLIENT_KEYS_JSON must be a JSON array of client-key entries",
+        )
+    })?;
+    let entries = value.as_array().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CLIENT_KEYS_JSON must be a JSON array of client-key entries",
+        )
+    })?;
+    if entries.is_empty() || entries.len() > MAX_CONFIG_CLIENT_KEYS {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "CLIENT_KEYS_JSON must contain between 1 and 256 entries",
+        ));
+    }
+
+    let mut client_keys = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let object = entry.as_object().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "each CLIENT_KEYS_JSON entry must be an object",
+            )
+        })?;
+        if object
+            .keys()
+            .any(|key| !["id", "apiKey", "maxRequestsPerMinute", "revoked"].contains(&key.as_str()))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "CLIENT_KEYS_JSON entries contain an unsupported field",
+            ));
+        }
+
+        let required_string = |field: &str| {
+            object
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "each client key requires string id and apiKey fields",
+                    )
+                })
+        };
+        let id = required_string("id")?;
+        let api_key = required_string("apiKey")?;
+        let max_requests_per_minute = object
+            .get("maxRequestsPerMinute")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "each client key requires an unsigned maxRequestsPerMinute value",
+                )
+            })?;
+        let revoked = match object.get("revoked") {
+            None => false,
+            Some(serde_json::Value::Bool(value)) => *value,
+            Some(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "client key revoked must be a boolean",
+                ));
+            }
+        };
+
+        client_keys.push(ClientKeyConfig {
+            id,
+            api_key,
+            max_requests_per_minute,
+            revoked,
+        });
+    }
+
+    Ok(client_keys)
+}
+
 fn configuration_from_env() -> Result<(u16, GatewayConfig), Box<dyn std::error::Error + Send + Sync>>
 {
     let port = env::var("PORT")
         .unwrap_or_else(|_| "3901".into())
         .parse::<u16>()?;
-    let client_api_key = env::var("CLIENT_API_KEY").map_err(|_| "CLIENT_API_KEY must be set")?;
+    let client_keys = match env::var("CLIENT_KEYS_JSON") {
+        Ok(raw) => parse_client_keys_json(&raw)?,
+        Err(_) => {
+            let api_key = env::var("CLIENT_API_KEY").map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "CLIENT_KEYS_JSON or CLIENT_API_KEY must be set",
+                )
+            })?;
+            let max_requests_per_minute = env::var("MAX_REQUESTS_PER_MINUTE")
+                .unwrap_or_else(|_| "10000".into())
+                .parse::<u64>()?;
+            vec![ClientKeyConfig {
+                id: env::var("CLIENT_KEY_ID").unwrap_or_else(|_| "default".into()),
+                api_key,
+                max_requests_per_minute,
+                revoked: false,
+            }]
+        }
+    };
     let model_aliases = match env::var("MODEL_ALIASES_JSON") {
         Ok(raw) => serde_json::from_str::<HashMap<String, String>>(&raw)?,
         Err(_) => HashMap::new(),
@@ -625,14 +824,11 @@ fn configuration_from_env() -> Result<(u16, GatewayConfig), Box<dyn std::error::
         GatewayConfig {
             upstream: env::var("UPSTREAM_URL").unwrap_or_else(|_| "http://127.0.0.1:3900".into()),
             api_path: env::var("API_PATH").unwrap_or_else(|_| "/v1/chat/completions".into()),
-            client_api_key,
+            client_keys,
             upstream_api_key: env::var("UPSTREAM_API_KEY").ok(),
             max_body_bytes: read_usize("MAX_BODY_BYTES", 4 * 1024 * 1024)?,
             body_budget_bytes: read_usize("BODY_BUDGET_BYTES", 512 * 1024 * 1024)?,
             max_inflight: read_usize("MAX_INFLIGHT", 128)?,
-            max_requests_per_minute: env::var("MAX_REQUESTS_PER_MINUTE")
-                .unwrap_or_else(|_| "10000".into())
-                .parse::<u64>()?,
             model_aliases,
         },
     ))
@@ -736,14 +932,18 @@ mod tests {
         AppState::new(GatewayConfig {
             upstream,
             api_path: "/v1/chat/completions".into(),
-            client_api_key: "client-secret".into(),
+            client_keys: vec![ClientKeyConfig {
+                id: "default".into(),
+                api_key: "client-secret".into(),
+                max_requests_per_minute: rpm,
+                revoked: false,
+            }],
             upstream_api_key: Some("provider-secret".into()),
             max_body_bytes,
             body_budget_bytes: (max_body_bytes * BODY_MEMORY_CHARGE_FACTOR
                 + MAX_JSON_STRUCTURAL_TOKENS * JSON_TOKEN_MEMORY_CHARGE_BYTES)
                 .max(64 * 1024),
             max_inflight: 8,
-            max_requests_per_minute: rpm,
             model_aliases: HashMap::from([("cx/gpt-5.6".into(), "gpt-5.6".into())]),
         })
         .unwrap()
@@ -869,6 +1069,133 @@ mod tests {
 
         gateway_task.abort();
         upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn rate_budgets_and_revocation_are_isolated_by_client_id() {
+        let (upstream, mut forwarded, upstream_task) = spawn_upstream(StatusCode::OK).await;
+        let max_body_bytes = 1024 * 1024;
+        let state = AppState::new(GatewayConfig {
+            upstream,
+            api_path: "/v1/chat/completions".into(),
+            client_keys: vec![
+                ClientKeyConfig {
+                    id: "agent-a".into(),
+                    api_key: "secret-a".into(),
+                    max_requests_per_minute: 1,
+                    revoked: false,
+                },
+                ClientKeyConfig {
+                    id: "agent-b".into(),
+                    api_key: "secret-b".into(),
+                    max_requests_per_minute: 2,
+                    revoked: false,
+                },
+                ClientKeyConfig {
+                    id: "revoked-agent".into(),
+                    api_key: "secret-revoked".into(),
+                    max_requests_per_minute: 100,
+                    revoked: true,
+                },
+            ],
+            upstream_api_key: Some("provider-secret".into()),
+            max_body_bytes,
+            body_budget_bytes: max_body_bytes * BODY_MEMORY_CHARGE_FACTOR
+                + MAX_JSON_STRUCTURAL_TOKENS * JSON_TOKEN_MEMORY_CHARGE_BYTES,
+            max_inflight: 8,
+            model_aliases: HashMap::new(),
+        })
+        .unwrap();
+        let (port, gateway_task) = spawn_gateway(state).await;
+
+        let revoked = send_chat(port, Some("secret-revoked"), chat_body()).await;
+        assert_eq!(revoked.status(), StatusCode::UNAUTHORIZED);
+        assert!(matches!(
+            forwarded.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+
+        let first_a = send_chat(port, Some("secret-a"), chat_body()).await;
+        assert_eq!(first_a.status(), StatusCode::OK);
+        assert!(first_a.text().await.unwrap().contains("[DONE]"));
+        assert_eq!(
+            forwarded.recv().await.unwrap().authorization.as_deref(),
+            Some("Bearer provider-secret")
+        );
+
+        let exhausted_a = send_chat(port, Some("secret-a"), chat_body()).await;
+        assert_eq!(exhausted_a.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(exhausted_a.headers().get(header::RETRY_AFTER).is_some());
+
+        // Agent A's exhausted window and the separately revoked identity do not consume B's quota.
+        for _ in 0..2 {
+            let accepted_b = send_chat(port, Some("secret-b"), chat_body()).await;
+            assert_eq!(accepted_b.status(), StatusCode::OK);
+            assert!(accepted_b.text().await.unwrap().contains("[DONE]"));
+            assert_eq!(
+                forwarded.recv().await.unwrap().authorization.as_deref(),
+                Some("Bearer provider-secret")
+            );
+        }
+
+        let exhausted_b = send_chat(port, Some("secret-b"), chat_body()).await;
+        assert_eq!(exhausted_b.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(exhausted_b.headers().get(header::RETRY_AFTER).is_some());
+        assert!(matches!(
+            forwarded.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+
+        gateway_task.abort();
+        upstream_task.abort();
+    }
+
+    #[test]
+    fn parses_client_key_id_limit_and_revocation_configuration() {
+        let keys = parse_client_keys_json(
+            r#"[
+                {"id":"agent-a","apiKey":"synthetic-secret-a","maxRequestsPerMinute":3},
+                {"id":"agent-b","apiKey":"synthetic-secret-b","maxRequestsPerMinute":7,"revoked":true}
+            ]"#,
+        )
+        .unwrap();
+
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].id, "agent-a");
+        assert_eq!(keys[0].max_requests_per_minute, 3);
+        assert!(!keys[0].revoked);
+        assert_eq!(keys[1].id, "agent-b");
+        assert_eq!(keys[1].max_requests_per_minute, 7);
+        assert!(keys[1].revoked);
+    }
+
+    #[test]
+    fn rejects_duplicate_client_identity_ids() {
+        let config = GatewayConfig {
+            upstream: "http://127.0.0.1:3900".into(),
+            api_path: "/v1/chat/completions".into(),
+            client_keys: vec![
+                ClientKeyConfig {
+                    id: "agent-a".into(),
+                    api_key: "secret-a".into(),
+                    max_requests_per_minute: 5,
+                    revoked: false,
+                },
+                ClientKeyConfig {
+                    id: "agent-a".into(),
+                    api_key: "secret-b".into(),
+                    max_requests_per_minute: 5,
+                    revoked: false,
+                },
+            ],
+            upstream_api_key: None,
+            max_body_bytes: 1024 * 1024,
+            body_budget_bytes: 8 * 1024 * 1024,
+            max_inflight: 8,
+            model_aliases: HashMap::new(),
+        };
+
+        assert!(AppState::new(config).is_err());
     }
 
     #[tokio::test]
