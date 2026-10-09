@@ -6203,8 +6203,18 @@ paths:
       tags: [Usage]
       summary: Get proxy logs
       description: >-
-        Reads the in-memory proxy-log ring (at most 200 entries). There is no route-local
-        management-auth check; deployment-wide authorization policy may still apply.
+        Reads the in-memory proxy-log ring (at most 200 entries). This is a MANAGEMENT route: the
+        central policy requires a management identity when login is required or locked management
+        authentication applies; on an unlocked deployment with `requireLogin=false`, it permits
+        anonymous access. Returned records can include inbound and egress IPs, target URLs, account
+        names, and connection identifiers, so treat the response as sensitive. Local CLI and
+        internal-service credentials are accepted only for loopback requests.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: status
           in: query
@@ -6236,6 +6246,7 @@ paths:
       responses:
         "200":
           description: Proxy log entries
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -6246,11 +6257,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProxyLogServerErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiUsageProxyLogs
       tags: [Usage]
       summary: Clear proxy logs
-      description: Clears the current in-memory ring and persisted proxy-log rows.
+      description: >-
+        Clears the current in-memory ring and attempts to delete persisted `proxy_logs` rows. A
+        database cleanup failure is logged but does not change the `{cleared:true}` response; new
+        proxy events can be recorded after the ring is cleared. This is a MANAGEMENT route: the
+        central policy requires a management identity when login is required or locked management
+        authentication applies; on an unlocked deployment with `requireLogin=false`, it permits
+        anonymous access. Local CLI and internal-service credentials are accepted only for loopback
+        requests.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Proxy logs cleared
@@ -6264,6 +6294,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProxyLogServerErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/usage/request-logs:
     get:
@@ -19515,9 +19551,11 @@ paths:
       summary: "GET logs › export"
       x-always-protected: true
       description: >-
-        Exports call/request rows or proxy rows as a JSON attachment. `hours` defaults to 24 and
-        is clamped to 1–168; malformed or zero values use 24. Unknown `type` strings are accepted
-        and produce an empty `logs` array while the requested type is echoed.
+        Exports raw call/request rows or proxy rows as a JSON attachment. Call-log rows can contain
+        prompts and responses; proxy-log rows can contain client and egress IPs and account details,
+        so treat the response as sensitive data. `hours` defaults to 24 and is clamped to 1–168;
+        malformed or zero values use 24. Unknown `type` strings are accepted and produce an empty
+        `logs` array while the requested type is echoed.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -19535,6 +19573,7 @@ paths:
       responses:
         "200":
           description: JSON log export with attachment filename
+          x-sensitive: true
           headers:
             Content-Disposition:
               schema: { type: string }
@@ -50339,12 +50378,15 @@ components:
     LogExportRow:
       type: object
       description: >-
-        Raw database row. Call-log rows use their call_logs fields; proxy-log rows preserve the
-        historical `public_ip` column name.
+        Sensitive raw database row. Call-log rows use their call_logs fields and can contain prompt
+        and response content; proxy-log rows preserve the historical `public_ip` field and can
+        contain client and egress IPs and account details.
+      x-sensitive: true
       additionalProperties: true
 
     LogExportResponse:
       type: object
+      x-sensitive: true
       required: [logs, count, hours, type]
       properties:
         logs:
