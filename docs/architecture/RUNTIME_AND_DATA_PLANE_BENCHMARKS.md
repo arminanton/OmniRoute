@@ -786,14 +786,15 @@ complete serialized JSON becomes smaller, and the reader expands the table befor
 or UI consumer sees it. Stream chunks continue to use their own encoding, and no table is shared
 across API keys or requests. On 100 synthetic artifacts already
 compacted for duplicate stage bodies, the extra text table reduced serialized size from 13,063,780
-bytes to 1,782,080 bytes (86.36%); the transform median was 0.177 ms and p95 was 0.478 ms per
-artifact on this host. A separate 100-artifact check with five unique 256 KiB context strings per
-artifact made no representation changes; its median scan was 0.022 ms and p95 was 0.045 ms. Re-run
+bytes to 1,782,080 bytes (86.36%); the latest rerun measured a transform median of 0.173 ms and
+p95 of 0.266 ms per artifact on this host. A separate 100-artifact check with five unique 256 KiB
+context strings per artifact made no representation changes; its median scan was 0.021 ms and p95
+was 0.044 ms. Re-run
 with `npm run bench:call-log-text-dedup`. These are sequential synthetic microbenchmarks. They
 measure disk representation and the dedup scan, not request heap reduction or real-prompt
 compression. A separate complete `writeCallArtifact()` sweep of 100 synthetic artifacts stored
-1,847,880 bytes instead of 50,537,450 bytes (96.34%); median write time was 0.755 ms and p95 was
-1.864 ms. That comparison includes the
+1,847,880 bytes instead of 50,537,450 bytes (96.34%); the latest run measured median write time of
+0.505 ms and p95 of 1.355 ms. That comparison includes the
 existing request/response stage references as well as the new text table, so it must not be
 attributed to the new table alone. The dictionaries are local to each artifact: cross-request blob
 sharing remains unimplemented, avoiding shared ownership, retention-reference, and cross-key
@@ -1071,7 +1072,7 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 259 operations with success-response content; 745
+- Continue the OpenAPI handler audit beyond the 263 operations with success-response content; 741
   of 1,004 non-`204` success operations still lack explicit success-body schemas. The
   path/method/security-tier inventory is
   complete, but remaining response schemas and conditional auth behavior have not all been

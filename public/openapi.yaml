@@ -4884,6 +4884,10 @@ paths:
       operationId: getApiUsageCallLogs
       tags: [Usage]
       summary: Get call logs
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: limit
           in: query
@@ -4956,6 +4960,11 @@ paths:
       operationId: getApiUsageCallLogsById
       tags: [Usage]
       summary: Get a specific call log
+      description: Returns the persisted call-log row; this route does not merge in-flight or completed in-memory detail.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
@@ -12083,15 +12092,19 @@ paths:
         Returns management-visible conversations that contain at least two turn nodes, with fresh
         request-activity and continuation annotations. `apiKeyId` is included for management
         clients; internal artifact paths and the last-call key ID are omitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: limit
           in: query
-          description: Maximum number of conversation rows to return.
-          schema: { type: number, default: 50 }
+          description: Maximum number of conversation rows to return; server caps this at 200.
+          schema: { type: integer, default: 50, minimum: 1, maximum: 200 }
         - name: offset
           in: query
           description: Number of conversation rows to skip.
-          schema: { type: number, default: 0 }
+          schema: { type: integer, default: 0, minimum: 0 }
       responses:
         "200":
           description: Conversation rows and total number of matching conversations
@@ -12113,6 +12126,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/conversations/{id}/tree:
     parameters:
       - name: id
@@ -12129,12 +12144,18 @@ paths:
         kind, and tool name are resolved from the associated call-log artifact when available;
         turns whose artifacts are missing return an empty text preview. With `afterSeq`, all newer
         rows are returned without a page cap; otherwise `limit` is capped at 500 and `hasMore`
-        indicates older rows remain.
+        indicates older rows remain. Invalid or nonpositive limits fall back to 20; when both
+        sequence cursors are supplied, `afterSeq` takes precedence. Unknown conversation IDs return
+        an empty page rather than 404.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: limit
           in: query
-          description: Page size, clamped by the server to the range 1–500 (default 20).
-          schema: { type: number, default: 20, minimum: 1, maximum: 500 }
+          description: Page size; invalid/nonpositive values use 20 and values above 500 are capped.
+          schema: { type: integer, default: 20, maximum: 500 }
         - name: beforeSeq
           in: query
           description: Return the page immediately before this sequence number.
@@ -12170,6 +12191,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/copilot/chat:
     post:
       operationId: postApiCopilotChat
@@ -13067,6 +13090,10 @@ paths:
         the management pipeline payload is returned in its expanded shape. Conversation and tool
         display details may be absent when capture was disabled, omitted by a size/memory limit, or
         the artifact was removed.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: In-flight, in-memory completed, or persisted request detail
@@ -13100,32 +13127,132 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/logs/console:
     get:
       operationId: getApiLogsConsole
       tags:
         - Logs
       summary: "GET logs › console"
+      description: >-
+        Reads structured log entries from the last hour. If the log file is absent, returns an
+        empty array. Unknown log levels are retained when no level filter is active; entries
+        preserve arbitrary original structured-log fields.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: level
+          in: query
+          required: false
+          description: >-
+            Minimum log level; defaults to all. Common levels are trace, debug, info, warn, error,
+            and fatal. An unknown value behaves like no level filter.
+          schema: { type: string, default: all }
+        - name: limit
+          in: query
+          required: false
+          description: Invalid/nonpositive values use 500; positive values are capped at 2000.
+          schema: { type: integer, default: 500, minimum: 1, maximum: 2000 }
+        - name: component
+          in: query
+          required: false
+          description: Case-insensitive component or module substring filter.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Normalized structured log entries from the previous hour
+          headers:
+            Cache-Control:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsoleLogEntryList"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Console logs could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/logs/detail:
     get:
       operationId: getApiLogsDetail
       tags:
         - Logs
       summary: "GET logs › detail"
+      description: Lists legacy detailed request-log rows and the current pipeline-capture setting.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Defaults to 50 and is capped at 200; the handler does not clamp negative values.
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: offset
+          in: query
+          required: false
+          description: Defaults to zero; passed to the database as provided.
+          schema: { type: integer, default: 0 }
       responses:
         "200":
-          description: OK
+          description: Legacy detailed rows and capture enabled state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetailLogListResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: The database query failed; framework error serialization applies.
     post:
       operationId: postApiLogsDetail
       tags:
         - Logs
       summary: "POST logs › detail"
+      description: >-
+        Enables capture only when `enabled` is the boolean true or the string `"1"`; any other
+        value (including omission) disables capture.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestDetailCaptureUpdate"
       responses:
         "200":
-          description: OK
+          description: Capture setting updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RequestDetailCaptureResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: Request parsing or persistence failed; framework error serialization applies.
   /api/logs/export:
     get:
       operationId: getApiLogsExport
@@ -13133,9 +13260,44 @@ paths:
         - Logs
       summary: "GET logs › export"
       x-always-protected: true
+      description: >-
+        Exports call/request rows or proxy rows as a JSON attachment. `hours` defaults to 24 and
+        is clamped to 1–168; malformed or zero values use 24. Unknown `type` strings are accepted
+        and produce an empty `logs` array while the requested type is echoed.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      parameters:
+        - name: hours
+          in: query
+          required: false
+          description: Number of hours to include; coerced and clamped by the handler.
+          schema: { type: integer, default: 24, minimum: 1, maximum: 168 }
+        - name: type
+          in: query
+          required: false
+          description: Supported data sources; unknown values return an empty array.
+          schema: { type: string, default: call-logs }
       responses:
         "200":
-          description: OK
+          description: JSON log export with attachment filename
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogExportResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Log export failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyLogServerErrorResponse"
   /api/mcp/audit:
     get:
       operationId: getApiMcpAudit
@@ -18996,7 +19158,12 @@ paths:
         Returns refreshed summary fields for the conversation modal, including active-request and
         genuine-continuation annotations. The management response includes `apiKeyId`, while
         internal artifact paths and the last-call key ID are omitted. Requires management
-        authentication when login policy is enabled.
+        authentication when the instance login policy requires it. `turnCount` counts requests
+        that touched the conversation, not tree nodes.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
@@ -19010,10 +19177,28 @@ paths:
                 properties:
                   conversation:
                     $ref: "#/components/schemas/ConversationSummary"
-        "400": { description: Missing conversation ID }
+        "400":
+          description: Missing conversation ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
-        "404": { description: Conversation not found }
-        "500": { description: Conversation could not be fetched }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Conversation could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/memory/rerank-providers:
     get:
@@ -19130,18 +19315,22 @@ paths:
       tags: [Usage]
       summary: List private diagnostic overflow traces
       description: >-
-        Lists bounded metadata for private request/response captures. Payload bytes are available
-        only through the authenticated download routes; trace ownership and capture state are
-        checked before file access.
+        Lists at most 100 newest private request/response capture manifests. `before` is an
+        exclusive Unix-millisecond timestamp cursor. Payload bytes are available only through the
+        authenticated download routes. The storage helper converts store read failures into an
+        empty list; a 503 is reserved for authentication infrastructure or an unexpected route-level
+        failure.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
       parameters:
         - name: limit
           in: query
+          description: Must be an integer from 1 through 100; invalid values return 400.
           schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
         - name: before
           in: query
+          description: Optional nonnegative Unix-millisecond timestamp cursor.
           schema: { type: integer, minimum: 0 }
       responses:
         "200":
@@ -19155,9 +19344,21 @@ paths:
                   traces:
                     type: array
                     items: { $ref: "#/components/schemas/DiagnosticOverflowManifest" }
-        "400": { description: Invalid pagination parameters }
+        "400":
+          description: Pagination parameters are invalid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
-        "503": { description: Diagnostic overflow store is unavailable }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503":
+          description: Authentication or diagnostic overflow storage is unavailable
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
     head:
       operationId: headApiUsageDiagnosticOverflow
       tags: [Usage]
@@ -19171,6 +19372,8 @@ paths:
           headers:
             Allow: { schema: { type: string, const: GET } }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /api/usage/diagnostic-overflow/{traceId}:
     parameters:
@@ -19191,10 +19394,26 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DiagnosticOverflowManifest" }
-        "400": { description: Trace ID is not a UUID }
+        "400":
+          description: Trace ID is not a UUID
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
-        "404": { description: Trace manifest not found }
-        "503": { description: Diagnostic overflow store is unavailable }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Trace manifest was not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
+        "503":
+          description: Authentication or diagnostic overflow storage is unavailable
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
     head:
       operationId: headApiUsageDiagnosticOverflowByTraceId
       tags: [Usage]
@@ -19208,6 +19427,8 @@ paths:
           headers:
             Allow: { schema: { type: string, const: GET } }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /api/usage/diagnostic-overflow/{traceId}/client-request:
     parameters:
@@ -19233,11 +19454,31 @@ paths:
           content:
             application/gzip:
               schema: { type: string, format: binary }
-        "400": { description: Trace ID is invalid }
+        "400":
+          description: Trace ID or requested file alias is invalid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
-        "404": { description: Client request capture not found }
-        "409": { description: Client request capture is not ready or its file alias is invalid }
-        "503": { description: Diagnostic overflow store is unavailable }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Client request file or its trace/alias mapping is missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowFileUnavailableResponse" }
+        "409":
+          description: Client request capture is still being written or the stored file is corrupt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowFileUnavailableResponse" }
+        "503":
+          description: Authentication or diagnostic overflow storage is unavailable
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
     head:
       operationId: headApiUsageDiagnosticOverflowByTraceIdClientRequest
       tags: [Usage]
@@ -19251,6 +19492,8 @@ paths:
           headers:
             Allow: { schema: { type: string, const: GET } }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /api/usage/diagnostic-overflow/{traceId}/{attemptId}/{kind}:
     parameters:
@@ -19284,11 +19527,31 @@ paths:
           content:
             application/gzip:
               schema: { type: string, format: binary }
-        "400": { description: Trace, attempt, or file alias is invalid }
+        "400":
+          description: Trace, attempt, or file alias is invalid
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
-        "404": { description: Capture file not found }
-        "409": { description: Capture is still being written or its alias is invalid }
-        "503": { description: Diagnostic overflow store is unavailable }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Capture file, trace, or requested attempt/alias mapping is missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowFileUnavailableResponse" }
+        "409":
+          description: Capture is still being written or the stored file is corrupt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowFileUnavailableResponse" }
+        "503":
+          description: Authentication or diagnostic overflow storage is unavailable
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
     head:
       operationId: headApiUsageDiagnosticOverflowByTraceIdByAttemptIdByKind
       tags: [Usage]
@@ -19302,6 +19565,8 @@ paths:
           headers:
             Allow: { schema: { type: string, const: GET } }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
   /api/v1/vscode/raw/{token}/responses:
     parameters:
@@ -20030,6 +20295,25 @@ components:
                 $ref: "#/components/schemas/DiagnosticOverflowFile"
               response:
                 $ref: "#/components/schemas/DiagnosticOverflowFile"
+    DiagnosticOverflowErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [category]
+          properties:
+            category: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+    DiagnosticOverflowFileUnavailableResponse:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [capturing, missing, corrupt] }
+        metadata:
+          $ref: "#/components/schemas/DiagnosticOverflowFile"
+      additionalProperties: false
     ExclusiveConnectionLeaseLifecycle:
       type: object
       description: >-
@@ -23911,6 +24195,10 @@ components:
           additionalProperties: true
         clientRawRequest:
           $ref: "#/components/schemas/CallLogClientRequestStage"
+        clientRequest:
+          type: [object, "null"]
+          description: Compatibility alias emitted by in-flight, in-memory, and legacy log-detail payloads.
+          additionalProperties: true
         openaiRequest:
           $ref: "#/components/schemas/CallLogBodyStage"
         providerRequest:
@@ -24165,7 +24453,10 @@ components:
         id: { type: string }
         apiKeyId: { type: [string, "null"] }
         fingerprintHash: { type: string }
-        turnCount: { type: integer, minimum: 1 }
+        turnCount:
+          type: integer
+          minimum: 1
+          description: Number of call requests that touched the conversation, not the number of turn nodes.
         firstSeenAt: { type: string, format: date-time }
         lastSeenAt: { type: string, format: date-time }
         lastCallLogId: { type: [string, "null"] }
@@ -24222,11 +24513,16 @@ components:
       allOf:
         - $ref: "#/components/schemas/CallLogSummary"
         - type: object
+          required: [requestBody, responseBody, active, detailState]
           properties:
             requestBody:
-              description: Raw request payload when detail capture is available.
+              description: Raw request payload; explicitly null when details are unavailable.
             responseBody:
-              description: Raw response payload when detail capture is available.
+              description: Raw response payload; explicitly null when details are unavailable.
+            active: { type: boolean, const: false }
+            detailState:
+              type: string
+              enum: [none, ready, missing, corrupt, legacy-inline]
             pipelinePayloads:
               $ref: "#/components/schemas/CallLogPipelinePayloads"
             previousResponseId: { type: [string, "null"] }
@@ -26680,6 +26976,95 @@ components:
         reasoningRouting:
           type: [object, "null"]
           additionalProperties: true
+      additionalProperties: false
+
+    ConsoleLogEntry:
+      type: object
+      required: [level, msg, message]
+      properties:
+        level: { type: string }
+        msg: { type: string }
+        message: { type: string }
+        time: {}
+        timestamp: {}
+        component: { type: string }
+        module: { type: string }
+        correlationId: { type: string }
+      description: >-
+        Normalized render-sensitive fields are strings; any other original structured log fields
+        are retained by the endpoint.
+      additionalProperties: true
+
+    ConsoleLogEntryList:
+      type: array
+      items:
+        $ref: "#/components/schemas/ConsoleLogEntry"
+
+    RequestDetailLogRow:
+      type: object
+      properties:
+        id: { type: string }
+        call_log_id: { type: [string, "null"] }
+        timestamp: { type: string, format: date-time }
+        client_request: {}
+        translated_request: {}
+        provider_response: {}
+        client_response: {}
+        provider: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+        source_format: { type: [string, "null"] }
+        target_format: { type: [string, "null"] }
+        duration_ms: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    RequestDetailLogListResponse:
+      type: object
+      required: [enabled, total, logs]
+      properties:
+        enabled: { type: boolean }
+        total: { type: integer, minimum: 0 }
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/RequestDetailLogRow"
+      additionalProperties: false
+
+    RequestDetailCaptureUpdate:
+      type: object
+      properties:
+        enabled:
+          oneOf:
+            - type: boolean
+            - type: string
+      additionalProperties: true
+
+    RequestDetailCaptureResponse:
+      type: object
+      required: [success, enabled, message]
+      properties:
+        success: { type: boolean, const: true }
+        enabled: { type: boolean }
+        message: { type: string }
+      additionalProperties: false
+
+    LogExportRow:
+      type: object
+      description: >-
+        Raw database row. Call-log rows use their call_logs fields; proxy-log rows preserve the
+        historical `public_ip` column name.
+      additionalProperties: true
+
+    LogExportResponse:
+      type: object
+      required: [logs, count, hours, type]
+      properties:
+        logs:
+          type: array
+          items:
+            $ref: "#/components/schemas/LogExportRow"
+        count: { type: integer, minimum: 0 }
+        hours: { type: integer, minimum: 1, maximum: 168 }
+        type: { type: string }
       additionalProperties: false
 
     GrokAutoTopUpStatus:
