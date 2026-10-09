@@ -18845,42 +18845,176 @@ paths:
       tags:
         - Settings
       summary: "GET settings › auto disable accounts"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Effective auto-disable flag, threshold and normalized account scope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoDisableAccountsSettingsResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Auto-disable settings could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsAutoDisableAccounts
       tags:
         - Settings
       summary: "PUT settings › auto disable accounts"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AutoDisableAccountsSettingsUpdate" }
       responses:
         "200":
-          description: OK
+          description: Updated and normalized auto-disable settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoDisableAccountsSettingsResponse" }
+        "400":
+          description: Invalid JSON or invalid auto-disable settings.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Auto-disable settings could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/background-degradation:
     get:
       operationId: getApiSettingsBackgroundDegradation
       tags:
         - Settings
       summary: "GET settings › background degradation"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Degradation configuration and the in-memory detected/token-saved counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackgroundDegradationConfigResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Background-degradation config could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsBackgroundDegradation
       tags:
         - Settings
       summary: "POST settings › background degradation"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackgroundDegradationResetRequest" }
       responses:
         "200":
-          description: OK
+          description: Reset confirmation and the zeroed stats counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackgroundDegradationStatsResetResponse" }
+        "400":
+          description: Invalid JSON or unsupported action.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Background-degradation stats could not be reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsBackgroundDegradation
       tags:
         - Settings
       summary: "PUT settings › background degradation"
+      description: >-
+        Updates detector enablement, model degradation mappings and prompt-detection patterns. A
+        mapping target is rejected with `PAID_MODEL_TARGET_BLOCKED` when hide-paid-models policy is
+        active and the target resolves to a paid-only model. Stats remain server-owned and are not
+        persisted from the request.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BackgroundDegradationUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Success flag and the effective config including current counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackgroundDegradationUpdateResponse" }
+        "400":
+          description: Invalid JSON or a paid-only model target is blocked.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Background-degradation config could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/cache-config:
     get:
       operationId: getApiSettingsCacheConfig
@@ -30503,6 +30637,93 @@ components:
         driver: { type: string, enum: [sqlite, redis] }
         redisUrlConfigured: { type: boolean }
         redisUrl: { type: "null", const: null, description: Redis URL is never returned. }
+      additionalProperties: false
+
+    AutoDisableAccountsSettingsUpdate:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        threshold: { type: integer, minimum: 1, maximum: 10 }
+        scope: { type: string, enum: [all, subscription] }
+      additionalProperties: false
+
+    AutoDisableAccountsSettingsResponse:
+      type: object
+      required: [enabled, threshold, scope]
+      properties:
+        enabled: { type: boolean }
+        threshold: { type: integer, minimum: 1, maximum: 10, default: 3 }
+        scope: { type: string, enum: [all, subscription], default: all }
+      additionalProperties: false
+
+    BackgroundDegradationStats:
+      type: object
+      required: [detected, tokensSaved]
+      properties:
+        detected: { type: integer, minimum: 0 }
+        tokensSaved: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    BackgroundDegradationConfigResponse:
+      type: object
+      required: [enabled, degradationMap, detectionPatterns, stats]
+      properties:
+        enabled: { type: boolean }
+        degradationMap:
+          type: object
+          additionalProperties: { type: string }
+        detectionPatterns:
+          type: array
+          items: { type: string }
+        stats: { $ref: "#/components/schemas/BackgroundDegradationStats" }
+      additionalProperties: true
+
+    BackgroundDegradationUpdateRequest:
+      type: object
+      description: >-
+        Open JSON object accepted by the route. Known settings are `enabled`, `degradationMap`, and
+        `detectionPatterns`; unknown keys are retained by the in-memory config spread. A `stats`
+        value in the request is ignored, because counters remain server-owned.
+      properties:
+        enabled: { type: boolean }
+        degradationMap:
+          type: object
+          additionalProperties: { type: string }
+        detectionPatterns:
+          type: array
+          items: { type: string }
+        stats: { $ref: "#/components/schemas/BackgroundDegradationStats" }
+      additionalProperties: true
+
+    BackgroundDegradationUpdateResponse:
+      type: object
+      required: [success, enabled, degradationMap, detectionPatterns, stats]
+      properties:
+        success: { type: boolean, const: true }
+        enabled: { type: boolean }
+        degradationMap:
+          type: object
+          additionalProperties: { type: string }
+        detectionPatterns:
+          type: array
+          items: { type: string }
+        stats: { $ref: "#/components/schemas/BackgroundDegradationStats" }
+      additionalProperties: true
+
+    BackgroundDegradationResetRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, const: reset-stats }
+      additionalProperties: true
+
+    BackgroundDegradationStatsResetResponse:
+      type: object
+      required: [success, stats]
+      properties:
+        success: { type: boolean, const: true }
+        stats: { $ref: "#/components/schemas/BackgroundDegradationStats" }
       additionalProperties: false
 
     ServiceStatus:
