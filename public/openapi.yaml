@@ -22167,18 +22167,96 @@ paths:
       operationId: getApiV1RegisteredKeys
       tags:
         - V1 Registered-keys
-      summary: "GET registered keys"
+      summary: List registered API keys with secrets masked
+      description: >-
+        Lists registered keys filtered by provider/accountId. Raw key material is never returned by
+        list or detail routes. Authentication is required when `REQUIRE_API_KEY` is enabled;
+        otherwise anonymous access is allowed by this route.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string }
+        - name: accountId
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Registered keys with prefix-only key material.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1RegisteredKeyListResponse" }
+        "401":
+          description: Authentication required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Registered-key storage lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiV1RegisteredKeys
       tags:
         - V1 Registered-keys
-      summary: "POST registered keys"
+      summary: Issue a registered API key
+      description: >-
+        Checks provider/account quotas before issue. The raw key is returned once and is never shown
+        again; store it securely. `idempotencyKey` conflicts return 409 with existing masked metadata.
+        Authentication follows the configured API-key policy.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/V1RegisteredKeyIssueRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: New key material, shown only in this response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1RegisteredKeyIssueResponse" }
+        "400":
+          description: Invalid JSON or key issue fields.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          description: Authentication required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Idempotency key was already used; existing masked key metadata is included.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1RegisteredKeyIssueConflictResponse" }
+        "429":
+          description: Provider/account issuance quota does not allow another key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1RegisteredKeyQuotaErrorResponse" }
+        "500":
+          description: Quota or key issue operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/v1/registered-keys/{id}:
     parameters:
       - name: id
@@ -22186,22 +22264,63 @@ paths:
         required: true
         schema:
           type: string
+          format: uuid
     delete:
       operationId: deleteApiV1RegisteredKeysById
       tags:
         - V1 Registered-keys
-      summary: "DELETE registered keys › <id>"
+      summary: Revoke a registered API key
+      description: Revokes the key by id; raw key material is never returned.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Key revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1RegisteredKeyRevokeResponse" }
+        "401":
+          description: Authentication required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Key not found or already revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     get:
       operationId: getApiV1RegisteredKeysById
       tags:
         - V1 Registered-keys
-      summary: "GET registered keys › <id>"
+      summary: Get registered API key metadata
+      description: Returns masked metadata only; the raw key is available only from initial creation.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Registered key metadata with key prefix and usage budgets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1RegisteredKeyResponse" }
+        "401":
+          description: Authentication required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Key not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/v1/registered-keys/{id}/revoke:
     parameters:
       - name: id
@@ -22209,14 +22328,35 @@ paths:
         required: true
         schema:
           type: string
+          format: uuid
     post:
       operationId: postApiV1RegisteredKeysByIdRevoke
       tags:
         - V1 Registered-keys
-      summary: "POST registered keys › <id> › revoke"
+      summary: Revoke a registered API key
+      description: Explicit revoke alias for clients that cannot issue DELETE; raw key material is never returned.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Key revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1RegisteredKeyRevokeResponse" }
+        "401":
+          description: Authentication required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Key not found or already revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/v1/relay/chat/completions:
     post:
       operationId: postApiV1RelayChatCompletions
@@ -25316,6 +25456,90 @@ components:
           oneOf:
             - $ref: "#/components/schemas/V1ProviderKeyLimits"
             - type: "null"
+      additionalProperties: false
+    V1RegisteredKey:
+      type: object
+      required: [id, keyPrefix, name, provider, accountId, isActive, revokedAt, expiresAt, idempotencyKey, dailyBudget, hourlyBudget, dailyUsed, hourlyUsed, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        keyPrefix: { type: string, description: Non-secret prefix shown in management listings. }
+        name: { type: string }
+        provider: { type: string }
+        accountId: { type: string }
+        isActive: { type: boolean }
+        revokedAt: { type: [string, "null"] }
+        expiresAt: { type: [string, "null"], format: date-time }
+        idempotencyKey: { type: [string, "null"] }
+        dailyBudget: { type: [integer, "null"], minimum: 1 }
+        hourlyBudget: { type: [integer, "null"], minimum: 1 }
+        dailyUsed: { type: integer, minimum: 0 }
+        hourlyUsed: { type: integer, minimum: 0 }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      additionalProperties: false
+    V1RegisteredKeyListResponse:
+      type: object
+      required: [keys, total]
+      properties:
+        keys:
+          type: array
+          items: { $ref: "#/components/schemas/V1RegisteredKey" }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+    V1RegisteredKeyResponse:
+      type: object
+      required: [key]
+      properties:
+        key: { $ref: "#/components/schemas/V1RegisteredKey" }
+      additionalProperties: false
+    V1RegisteredKeyIssueRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        provider: { type: string, maxLength: 80, default: "" }
+        accountId: { type: string, maxLength: 120, default: "" }
+        idempotencyKey: { type: string, maxLength: 256 }
+        expiresAt: { type: string, format: date-time, description: RFC 3339 timestamp with timezone offset. }
+        dailyBudget: { type: integer, minimum: 1 }
+        hourlyBudget: { type: integer, minimum: 1 }
+      additionalProperties: true
+    V1RegisteredKeyIssueResponse:
+      type: object
+      required: [key, keyId, keyPrefix, name, provider, accountId, expiresAt, createdAt, warning]
+      properties:
+        key: { type: string, description: Raw registered API key returned only once at creation., x-sensitive: true }
+        keyId: { type: string, format: uuid }
+        keyPrefix: { type: string }
+        name: { type: string }
+        provider: { type: string }
+        accountId: { type: string }
+        expiresAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: string }
+        warning: { type: string, const: Store this key securely — it will not be shown again. }
+      additionalProperties: false
+    V1RegisteredKeyIssueConflictResponse:
+      type: object
+      required: [error, errorCode, existing]
+      properties:
+        error: { type: string, const: Idempotency key already used }
+        errorCode: { type: string, const: IDEMPOTENCY_CONFLICT }
+        existing: { $ref: "#/components/schemas/V1RegisteredKey" }
+      additionalProperties: false
+    V1RegisteredKeyQuotaErrorResponse:
+      type: object
+      required: [error, errorCode]
+      properties:
+        error: { type: string }
+        errorCode: { type: string }
+      additionalProperties: false
+    V1RegisteredKeyRevokeResponse:
+      type: object
+      required: [success, id, revokedAt]
+      properties:
+        success: { type: boolean, const: true }
+        id: { type: string, format: uuid }
+        revokedAt: { type: string, format: date-time }
       additionalProperties: false
     CanaryReadiness:
       type: object
