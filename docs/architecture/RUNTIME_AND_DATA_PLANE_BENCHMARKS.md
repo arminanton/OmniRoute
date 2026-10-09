@@ -585,6 +585,24 @@ the scale test to the Rust mock removed those failures. These 5k/10k runs are on
 only this Rust transport adapter. The four-core 1k comparison above is the repeatable CPU-bounded
 result; neither benchmark executes model generation, tool calls, database policy, or call-log capture.
 
+### 100-client large-body Node/Rust transport probe (2026-10-09)
+
+Using the cached debug Rust gateway and local Rust mock (no build), I sent 100 concurrent
+3,670,016-byte JSON requests through each gateway in separate runs. The mock returned 50 SSE chunks
+at 200 ms intervals; gateway, mock, and load generator were pinned to CPUs 2, 3, and 0. Both
+completed 100/100 HTTP 200 requests with no sample failures.
+
+| Gateway                | Wall time |  Throughput | Header p50 / p95 | Completion p50 / p95 |  Peak RSS |    CPU |
+| ---------------------- | --------: | ----------: | ---------------: | -------------------: | --------: | -----: |
+| Rust/Axum debug binary |  11.864 s | 8.429 req/s |   906 / 1,710 ms |   10,063 / 10,073 ms |  58.8 MiB | 1.42 s |
+| Node 24.21.0           |  12.366 s | 8.087 req/s | 1,253 / 2,041 ms |   10,086 / 10,150 ms | 471.8 MiB | 2.94 s |
+
+The body was streamed transparently to the same local mock; these gateways did not parse the JSON,
+authenticate callers, apply model/account policy, translate provider protocols, or write call logs.
+The Rust executable was a debug build and the mock stream delay dominates completion time. The RSS
+difference is transport-only evidence, not a full OmniRoute capacity or release-performance
+comparison.
+
 ## Whole-host four-CPU saturation probe
 
 A separate single-trial probe pinned the Rust gateway, Rust mock, and Python load generator to the
