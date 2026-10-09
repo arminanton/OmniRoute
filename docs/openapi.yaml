@@ -7868,30 +7868,132 @@ paths:
     get:
       operationId: getApiCliToolsDroidSettings
       tags: [CLI Tools]
-      summary: Get Droid CLI settings
+      summary: Get Droid CLI runtime status and settings
+      description: >-
+        Probes the local Factory Droid executable and returns the full parsed settings file, which
+        may contain API keys in OmniRoute `customModels`. This response is sensitive. The route is
+        management-classified but is not marked LOCAL_ONLY or ALWAYS_PROTECTED; an unlocked
+        install with `requireLogin=false` may permit anonymous access. Protected profiles accept a
+        `read` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
+        CLI/internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Droid CLI configuration
+          description: Droid runtime status and, when readable, the full settings object.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DroidCliSettingsStatusResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Runtime status or settings lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCliToolsDroidSettings
       tags: [CLI Tools]
-      summary: Apply Droid CLI settings
+      summary: Add OmniRoute custom models to Droid
+      description: >-
+        Merges OmniRoute model entries into `~/.factory/settings.json` while preserving other
+        settings and custom models. The resolved API key (or `your_api_key` placeholder) is embedded
+        in each new model entry. `keyId` is resolved before schema validation; `reasoningEffort`,
+        `wireApi`, and `modelMappings` are accepted by the shared schema but ignored by this route.
+        The operation requires CLI-config writes to be enabled. This route is not ALWAYS_PROTECTED;
+        an unlocked `requireLogin=false` install may permit anonymous access and local file writes.
+        Treat the request as sensitive. Protected profiles accept a `write` Access Token, a `manage`
+        or `admin` API key, a dashboard session, or trusted loopback CLI/internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/DroidSettingsUpdateRequest"
       responses:
         "200":
-          description: Droid CLI settings applied
+          description: Settings were applied; the resolved API key is not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DroidSettingsUpdateResponse" }
+        "400":
+          description: Invalid JSON, invalid config fields, or no non-empty model id was supplied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Authentication was rejected or CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Droid settings file could not be read or written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiCliToolsDroidSettings
       tags: [CLI Tools]
-      summary: Reset Droid CLI settings
+      summary: Remove OmniRoute custom models from Droid
+      description: >-
+        Removes only custom models whose ids begin with `custom:OmniRoute`, preserving other Droid
+        settings and custom models. If the settings file is absent, returns a no-op success. The
+        operation requires CLI-config writes to be enabled. This route is not ALWAYS_PROTECTED; an
+        unlocked `requireLogin=false` install may permit anonymous access and local file writes.
+        Protected profiles accept a `write` Access Token, a `manage` or `admin` API key, a dashboard
+        session, or trusted loopback CLI/internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Droid CLI settings reset
+          description: OmniRoute models were removed or no settings file was present.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DroidSettingsResetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Authentication was rejected or CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Droid settings file could not be read or written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/cli-tools/kilo-settings:
     get:
@@ -36139,6 +36241,76 @@ components:
         message:
           type: string
           enum: [OmniRoute settings removed from Cline, No settings file to reset]
+      additionalProperties: false
+    DroidCliSettingsStatusResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, settings]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        settings:
+          type: [object, "null"]
+          x-sensitive: true
+          description: Full Droid settings, including customModels that may contain API keys.
+          additionalProperties: true
+        hasOmniRoute: { type: boolean }
+        settingsPath: { type: string }
+        message: { type: string }
+      additionalProperties: false
+    DroidSettingsUpdateRequest:
+      type: object
+      x-sensitive: true
+      required: [baseUrl, model]
+      properties:
+        keyId:
+          type: string
+          description: Optional API-key record id; if found, its key is embedded in the generated custom models.
+        baseUrl:
+          type: string
+          minLength: 1
+          pattern: "\\S"
+          description: A /v1 suffix is appended when absent.
+        apiKey: { type: [string, "null"], x-sensitive: true }
+        model: { type: string, minLength: 1, pattern: "\\S" }
+        models:
+          type: array
+          minItems: 1
+          items: { type: string, minLength: 1, pattern: "\\S" }
+        activeModel: { type: string }
+        reasoningEffort:
+          type: string
+          enum: [none, low, medium, high, xhigh, max, ultra]
+        wireApi: { type: string, enum: [chat, responses] }
+        modelMappings:
+          type: object
+          propertyNames: { type: string, minLength: 1, pattern: "\\S" }
+          additionalProperties: { type: string, minLength: 1, pattern: "\\S" }
+      description: >-
+        Unknown fields are accepted by Zod and stripped, except `keyId`, which is read before
+        validation. `reasoningEffort`, `wireApi`, and `modelMappings` are accepted but ignored by
+        this route. `models`, when supplied, takes precedence over the legacy `model` field.
+      additionalProperties: true
+    DroidSettingsUpdateResponse:
+      type: object
+      required: [success, message, settingsPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Factory Droid settings applied successfully! }
+        settingsPath: { type: string }
+      additionalProperties: false
+    DroidSettingsResetResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          enum: [OmniRoute settings removed successfully, No settings file to reset]
       additionalProperties: false
     A2ATaskState:
       type: string
