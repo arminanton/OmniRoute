@@ -22,7 +22,9 @@ process.env.API_KEY_SECRET = "synthetic-antigravity-e2e-signing-secret";
 process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
 process.env.APP_LOG_TO_FILE = "false";
 process.env.APP_LOG_LEVEL = "error";
-process.env.OMNIROUTE_DIRECT_DISPATCHER_CONNECTIONS = "8";
+// Preserve the conservative test default, but allow a higher-capacity diagnostic
+// run to match production's direct-dispatcher default of 32 connections.
+process.env.OMNIROUTE_DIRECT_DISPATCHER_CONNECTIONS ??= "8";
 process.env.ANTIGRAVITY_CREDITS = "never";
 const captureCallLogs = process.env.RUN_ANTIGRAVITY_CAPTURE_BENCH === "1";
 const capturePrivateOverflow =
@@ -182,6 +184,8 @@ test(
   async () => {
     let maxClientRequestBytes = 0;
     const errors: string[] = [];
+    const routeReadyLatenciesMs: number[] = [];
+    let routeHeadersPendingAt25s = 0;
     let upstreamFixture: Awaited<ReturnType<typeof startMockUpstream>> | null = null;
     let clientFixture: ReturnType<typeof spawnFixture> | null = null;
     const captureMemoryBench = process.env.ANTIGRAVITY_CAPTURE_MEMORY_BENCH === "1";
@@ -189,6 +193,18 @@ test(
     let clientMemorySnapshot: Record<string, unknown> | null = null;
     let upstreamMemorySnapshot: Record<string, unknown> | null = null;
     const gateway = http.createServer(async (incoming, outgoing) => {
+      const routeStartedAt = performance.now();
+      const sessionId =
+        typeof incoming.headers["x-omniroute-session-id"] === "string"
+          ? incoming.headers["x-omniroute-session-id"]
+          : "unknown";
+      const routePendingTimer = setTimeout(() => {
+        routeHeadersPendingAt25s++;
+        console.warn(
+          `ANTIGRAVITY_ROUTE_HEADERS_PENDING session=${sessionId} activeAt25s=${routeHeadersPendingAt25s}`
+        );
+      }, 25_000);
+      routePendingTimer.unref?.();
       try {
         let requestBytes = 0;
         const incomingBody = Readable.toWeb(incoming) as ReadableStream<Uint8Array>;
@@ -219,6 +235,8 @@ test(
             }
           )
         );
+        clearTimeout(routePendingTimer);
+        routeReadyLatenciesMs.push(performance.now() - routeStartedAt);
         outgoing.writeHead(response.status, Object.fromEntries(response.headers.entries()));
         if (response.body) {
           const reader = response.body.getReader();
@@ -234,6 +252,7 @@ test(
         }
         outgoing.end();
       } catch (error) {
+        clearTimeout(routePendingTimer);
         errors.push(String(error));
         outgoing.writeHead(500);
         outgoing.end('{"error":{"message":"isolated gateway test failed"}}');
@@ -324,6 +343,15 @@ test(
       }
       assert.equal(Object.keys(upstreamStats.identities).length, expectedRequests / 2);
       assert.deepEqual(errors, []);
+
+      if (captureMemoryBench) {
+        const sorted = [...routeReadyLatenciesMs].sort((left, right) => left - right);
+        const percentile = (value: number) =>
+          Math.round(sorted[Math.max(0, Math.ceil(sorted.length * value) - 1)] ?? 0);
+        console.log(
+          `ANTIGRAVITY_ROUTE_READY count=${sorted.length} p50Ms=${percentile(0.5)} p95Ms=${percentile(0.95)} maxMs=${Math.round(sorted.at(-1) ?? 0)} pendingAt25s=${routeHeadersPendingAt25s} dispatcherConnections=${process.env.OMNIROUTE_DIRECT_DISPATCHER_CONNECTIONS}`
+        );
+      }
 
       if (captureCallLogs) {
         const { closeCallLogSaves } = await import("../../src/lib/usage/callLogs.ts");
@@ -430,7 +458,7 @@ test(
           );
         }
         console.log(
-          `ANTIGRAVITY_CAPTURE records=${rows.length} artifacts=${artifactRows.length} maxRequestBytes=${maxClientRequestBytes} capturedUserBytes=${capturedUserBytes} streamChannels=${Object.keys(streamChunks).join(",")}`
+          `ANTIGRAVITY_CAPTURE records=${rows.length} artifacts=${artifactRows.length} maxRequestBytes=${maxClientRequestBytes} capturedUserBytes=${capturedUserBytes} dispatcherConnections=${process.env.OMNIROUTE_DIRECT_DISPATCHER_CONNECTIONS} streamChannels=${Object.keys(streamChunks).join(",")}`
         );
         if (capturePrivateOverflow) {
           const { projectDiagnosticOverflowReference } =
