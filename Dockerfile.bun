@@ -1,5 +1,7 @@
 # ── Multi-stage Dockerfile for Native Bun Runtime (web-latest-bun) ───────────
-FROM oven/bun:1.4.0-slim AS base
+ARG BUN_VERSION=1.4.2
+
+FROM oven/bun:${BUN_VERSION}-slim AS base
 WORKDIR /app
 
 RUN apt-get update \
@@ -20,7 +22,7 @@ FROM base AS builder
 WORKDIR /app
 
 # Cache dependency layer
-COPY package.json bun.lock* pnpm-workspace.yaml* ./
+COPY package.json bun.lock pnpm-workspace.yaml ./
 COPY open-sse/package.json ./open-sse/package.json
 COPY packages/ ./packages/
 
@@ -29,7 +31,10 @@ COPY scripts/build/ ./scripts/build/
 COPY scripts/dev/sync-env.mjs ./scripts/dev/sync-env.mjs
 
 # Fast Bun native package install
-RUN bun install --include=optional --quiet
+# Keep installation reproducible from the committed Bun lockfile. Husky hooks
+# are a workstation concern; disabling them in the image build lets the rest of
+# the lifecycle run without requiring a Git checkout hook installation.
+RUN HUSKY=0 bun install --include=optional --frozen-lockfile --quiet
 
 # Fail the build if wreq-js cannot resolve its current platform binding.
 RUN bun -e "const wreq = require('wreq-js'); if (typeof wreq.createTransport !== 'function') process.exit(1)"
@@ -63,7 +68,7 @@ ENV CIRCLE_NODE_TOTAL=${OMNIROUTE_BUILD_WORKERS}
 RUN bun run --quiet build
 
 # ── Runner Base stage (100% Bun Native Production Runtime) ──────────────────
-FROM oven/bun:1.4.0-slim AS runner-base
+FROM oven/bun:${BUN_VERSION}-slim AS runner-base
 
 LABEL org.opencontainers.image.title="omniroute" \
   org.opencontainers.image.description="Unified AI proxy — route any LLM through one endpoint (Bun Native)" \

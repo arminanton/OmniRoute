@@ -275,7 +275,7 @@
     "postinstall": "node scripts/build/postinstall.mjs",
     "uninstall": "node scripts/build/uninstall.mjs",
     "uninstall:full": "node scripts/build/uninstall.mjs --full",
-    "prepare": "node -e \"try{require.resolve('husky')}catch(e){process.exit(0)};require('child_process').execSync('husky',{stdio:'inherit'})\"",
+    "prepare": "node -e \"if(process.env.HUSKY==='0')process.exit(0);try{require.resolve('husky')}catch(e){process.exit(0)};require('child_process').execSync('husky',{stdio:'inherit'})\"",
     "system-info": "node scripts/dev/system-info.mjs",
     "build:cli-api": "node --import tsx/esm scripts/cli/generate-api-commands.mjs",
     "postbuild": "node scripts/build/colocate-standalone.mjs",
