@@ -885,6 +885,16 @@ zero max/OOM events; its aggregate memory and prior peak are not attributable to
 averages were zero. This one run is lower than the earlier process-RSS range, but without matched
 before/after runs it does not establish which source change caused the difference.
 
+After the SSE readiness-buffer and accepted-request retry changes, the capture-enabled route test
+was rerun at low context with `ANTIGRAVITY_CAPTURE_MEMORY_BENCH=1`. On 2026-10-09, all 402 requests
+across 1/30/70/100 conversations passed, all 402 call-log artifacts were readable, and provider
+and client stream channels were present. The gateway's measured high-water RSS was 795,389,952 bytes
+(about 759 MiB); the four-process test cgroup peaked at 823,279,616 bytes under a 4 GiB limit, with
+zero memory events, swap, or memory PSI. Wall time was 27.3 seconds. The request body maximum was
+603 bytes, so this validates the changed route under low-context tool-roundtrip concurrency only; it
+does not replace the high-context 1.31 MB capture run, standalone Next/middleware test, or real-
+provider quota/timeout investigation.
+
 ### Bun direct-route comparison at 100 sessions
 
 The official [Bun v1.4.2 ARM64 release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2)
