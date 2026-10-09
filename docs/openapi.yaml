@@ -15105,10 +15105,66 @@ paths:
       tags:
         - Providers
       summary: "POST providers › <id> › claude auth › apply local"
+      description: >-
+        Writes the connection's Claude OAuth credentials into the host user's Claude CLI
+        `credentials.json`, preserving unrelated keys such as `mcpOAuth`. An existing file is
+        backed up before replacement. The endpoint is always protected even when dashboard login
+        is disabled; the response contains paths and backup metadata, never the token values.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       x-always-protected: true
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
-          description: OK
+          description: Claude credentials were written to the local CLI config.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthApplyLocalResponse"
+        "400":
+          description: The provider connection is not an OAuth Claude connection or its credentials are invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management authorization failed or local CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Provider connection was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "409":
+          description: Claude credentials require reauthentication before they can be applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "500":
+          description: Claude auth path resolution, refresh, backup, or file writing failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "502":
+          description: Claude credentials could not be refreshed before writing the local file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/{id}/claude-auth/export:
     parameters:
       - name: id
@@ -15121,10 +15177,66 @@ paths:
       tags:
         - Providers
       summary: "POST providers › <id> › claude auth › export"
+      description: >-
+        Exports a raw Claude CLI `credentials.json` payload containing OAuth access and refresh
+        tokens. The response is sensitive credential material, is marked no-store, and this
+        endpoint is always protected even when dashboard login is disabled.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       x-always-protected: true
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
-          description: OK
+          description: Raw Claude CLI credentials.json attachment.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string, const: "no-store, max-age=0" }
+            X-Content-Type-Options:
+              schema: { type: string, const: nosniff }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFilePayload"
+        "400":
+          description: The provider connection is not an OAuth Claude connection or its credentials are invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Provider connection was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "409":
+          description: Claude credentials require reauthentication before they can be exported.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "500":
+          description: Claude credential file construction or refresh failed unexpectedly.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "502":
+          description: Claude credentials could not be refreshed before export.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaudeAuthFileErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/{id}/codex-auth/apply-local:
     parameters:
       - name: id
@@ -15387,10 +15499,64 @@ paths:
       tags:
         - Providers
       summary: "POST providers › <id> › login"
+      description: >-
+        Starts a provider-specific interactive sign-in flow and persists credentials when the
+        provider flow supports it. This endpoint is restricted to loopback/private-network
+        callers because web-cookie login can launch a local browser. For MaxAI (`maxai` or `mx`),
+        `step: request` sends a six-digit code to `email`; `step: verify` consumes that code (and
+        may include the same email). An absent or malformed JSON body is treated as `{}`.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       x-loopback-only: true
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProviderLoginRequest"
       responses:
         "200":
-          description: OK
+          description: Sign-in completed, including provider-specific result fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderLoginSuccessResponse"
+        "400":
+          description: Provider sign-in was invalid, incomplete, or could not retrieve credentials.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ProviderLoginErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management authorization failed or request did not satisfy the local-only policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Provider connection was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderLoginErrorResponse"
+        "500":
+          description: Sign-in succeeded but credentials could not be persisted, or the login flow failed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ProviderLoginErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/{id}/param-filters:
     parameters:
       - name: id
@@ -15502,9 +15668,66 @@ paths:
       tags:
         - Providers
       summary: "POST providers › <id> › refresh"
+      description: >-
+        Manually refresh OAuth credentials for a provider connection. Some rotating-token
+        providers intentionally return a successful `skipped` result because refresh is deferred
+        until the next inference request to avoid invalidating sibling tokens. This generic route
+        remains remotely reachable; unlike `/refresh-cursor`, it does not spawn a local CLI.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
-          description: OK
+          description: Credentials refreshed, already refreshed concurrently, or refresh intentionally skipped.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderTokenRefreshSuccessResponse"
+        "400":
+          description: Connection does not support this refresh operation or refresh failed validation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Provider connection was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "409":
+          description: Connection changed during refresh; retry against the latest connection state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "422":
+          description: Connection has no refreshable credentials or provider metadata is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "500":
+          description: Unexpected refresh or persistence failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "502":
+          description: Provider did not produce a refresh token or its refresh result was uncertain.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/{id}/refresh-cursor:
     parameters:
       - name: id
@@ -15517,10 +15740,69 @@ paths:
       tags:
         - Providers
       summary: "POST providers › <id> › refresh cursor"
+      description: >-
+        Manually nudges Cursor IDE/agent credential discovery and renews the stored Cursor
+        connection. This route is restricted to loopback/private-network callers because the
+        renewal flow may execute the local `cursor-agent` binary. Repeated attempts are throttled
+        for 30 seconds per connection; a throttled response includes `Retry-After`.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       x-loopback-only: true
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
-          description: OK
+          description: Cursor credentials were renewed or were already current.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCursorRefreshSuccessResponse"
+        "400":
+          description: The connection is not a Cursor connection.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management authorization failed or request did not satisfy the local-only policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Provider connection was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "429":
+          description: A refresh attempt was made within the per-connection 30-second cooldown.
+          headers:
+            Retry-After:
+              description: Seconds until another manual refresh attempt is accepted.
+              schema: { type: integer, minimum: 1 }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderCursorRefreshCooldownResponse"
+        "500":
+          description: Cursor renewal or local credential persistence failed unexpectedly.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "502":
+          description: The renewal flow did not discover a new usable Cursor token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/{id}/refresh-token:
     parameters:
       - name: id
@@ -15533,9 +15815,47 @@ paths:
       tags:
         - Providers
       summary: "POST providers › <id> › refresh token"
+      description: >-
+        Manually refreshes the Kimi Web access token for a provider connection. This legacy
+        endpoint accepts only the `kimi-web` and `kimi_web` provider slugs; other providers receive
+        a 400 response and should use the generic `/refresh` route when supported.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
-          description: OK
+          description: Kimi access token refreshed; token contents are not returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KimiProviderTokenRefreshSuccessResponse"
+        "400":
+          description: Refresh failed or the provider is not supported by this endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Provider connection was not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "500":
+          description: Unexpected connection lookup or Kimi token-refresh failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderActionErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/{id}/sync-models:
     parameters:
       - name: id
@@ -16845,17 +17165,132 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › free proxies"
+      description: >-
+        Deletes one free proxy by `id`, or clears all free proxies for `source`. If both are
+        supplied, `source` takes precedence. At least one is required.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [1proxy, proxifly, iplocate, webshare]
       responses:
         "200":
-          description: OK
+          description: Deleted one proxy or cleared the selected source.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/FreeProxyDeleteResponse"
+                  - $ref: "#/components/schemas/FreeProxySourceClearResponse"
+        "400":
+          description: Missing id/source or invalid source.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Free proxy not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Failed to delete free proxy records.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiSettingsFreeProxies
       tags:
         - Settings
       summary: "GET settings › free proxies"
+      description: >-
+        Lists and filters discovered free proxies. `sources` is a comma-separated list; `onlyNotInPool`
+        is true only for the query strings `1` or `true`. Default page size is 50.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: sources
+          in: query
+          required: false
+          description: Comma-separated source IDs.
+          schema: { type: string }
+        - name: protocol
+          in: query
+          required: false
+          schema: { type: string, enum: [http, https, socks4, socks5] }
+        - name: country
+          in: query
+          required: false
+          schema: { type: string, maxLength: 2 }
+        - name: minQuality
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, maximum: 100 }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 128 }
+        - name: sortBy
+          in: query
+          required: false
+          schema: { type: string, enum: [quality, latency, recent] }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: onlyNotInPool
+          in: query
+          required: false
+          schema: { type: string, enum: ["1", "true", "0", "false"] }
       responses:
         "200":
-          description: OK
+          description: Filtered proxy page, total count, stats, and provider sync errors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreeProxyListResponse"
+        "400":
+          description: Invalid filter, pagination, or source query.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to list free proxies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/free-proxies/{id}/add-to-pool:
     parameters:
       - name: id
@@ -16868,36 +17303,168 @@ paths:
       tags:
         - Settings
       summary: "POST settings › free proxies › <id> › add to pool"
+      description: >-
+        Tests connectivity before promoting a free proxy to the registry. If it is already in
+        the pool, the route reports that without running the probe. An unusable proxy returns 422.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Proxy already in the pool or was successfully promoted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreeProxyAddToPoolResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Free proxy not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "422":
+          description: Connectivity test failed; proxy was not added.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreeProxyProbeFailureResponse"
+        "500":
+          description: Failed to test or promote the proxy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/free-proxies/bulk-add-to-pool:
     post:
       operationId: postApiSettingsFreeProxiesBulkAddToPool
       tags:
         - Settings
       summary: "POST settings › free proxies › bulk add to pool"
+      description: >-
+        Tests and promotes up to 100 selected free proxies independently; failures are returned
+        per ID in the 200 response.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FreeProxyBulkAddRequest"
       responses:
         "200":
-          description: OK
+          description: Per-proxy promotion outcomes and aggregate counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreeProxyBulkAddResponse"
+        "400":
+          description: Invalid JSON or invalid ID list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Bulk add failed unexpectedly.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/free-proxies/stats:
     get:
       operationId: getApiSettingsFreeProxiesStats
       tags:
         - Settings
       summary: "GET settings › free proxies › stats"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Stored free-proxy statistics, source status, and auto-sync settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreeProxyStatsResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to read free-proxy statistics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/free-proxies/sync:
     post:
       operationId: postApiSettingsFreeProxiesSync
       tags:
         - Settings
       summary: "POST settings › free proxies › sync"
+      description: >-
+        Runs a sync cycle for enabled sources, or the selected `sources`. Individual provider
+        failures are returned inside `results`; successful outer execution still returns 200.
+        Empty or absent bodies select all enabled providers.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FreeProxySyncRequest"
       responses:
         "200":
-          description: OK
+          description: Per-source sync results and last sync timestamp.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FreeProxySyncResponse"
+        "400":
+          description: Invalid JSON or source list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied sync with application proxy enabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to sync free proxies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/import-json:
     post:
       operationId: postApiSettingsImportJson
@@ -17135,33 +17702,222 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › proxies"
+      description: >-
+        Deletes a registry proxy by `id`. Assigned proxies return 409 unless `force=1`; forced
+        deletion removes its assignments. Management auth is required when enabled locally.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: force
+          in: query
+          required: false
+          description: Only the exact value `1` enables forced deletion.
+          schema: { type: string, enum: ["1"] }
       responses:
         "200":
-          description: OK
+          description: Registry proxy deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+        "400":
+          description: Missing id query parameter.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credentials or runtime policy denied deletion.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Proxy not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "409":
+          description: Proxy is still assigned and force was not enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Failed to delete registry proxy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiSettingsProxies
       tags:
         - Settings
       summary: "GET settings › proxies"
+      description: >-
+        Lists registry proxies with username/password and relay auth redacted. With `id`, the
+        handler instead returns one proxy record; that lookup currently returns stored username,
+        password, and relay fields without calling the list redactor. `whereUsed=1` returns
+        assignment rows for that ID. These are management-only data and should be handled as
+        sensitive. Management auth is required when enabled locally.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: whereUsed
+          in: query
+          required: false
+          description: With id, `1` returns assignments instead of the proxy record.
+          schema: { type: string, enum: ["1"] }
       responses:
         "200":
-          description: OK
+          description: Proxy list, a single proxy lookup, or assignment-use data when id/whereUsed is supplied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyRegistryGetResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Proxy not found for id lookup.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Failed to load registry proxies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiSettingsProxies
       tags:
         - Settings
       summary: "PATCH settings › proxies"
+      description: >-
+        Updates one registry proxy selected by body `id`. Unknown body fields are rejected. The
+        returned record currently includes stored username/password fields; treat it as sensitive.
+        Management auth is required when enabled locally.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyRegistryUpdateRequest"
       responses:
         "200":
-          description: OK
+          description: Updated proxy record, optionally including its assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyRegistryMutationResponse"
+        "400":
+          description: Invalid JSON, proxy fields, id, or assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credentials or runtime policy denied the mutation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Proxy or compatible provider node not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Failed to update registry proxy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsProxies
       tags:
         - Settings
       summary: "POST settings › proxies"
+      description: >-
+        Creates a registry proxy. The result currently contains the saved username/password fields;
+        treat it as sensitive. Inline assignments are applied when requested.
+        Management auth is required when enabled locally.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyRegistryCreateRequest"
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Created proxy record, optionally including its assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyRegistryMutationResponse"
+        "400":
+          description: Invalid JSON, proxy fields, or inline assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credentials or runtime policy denied the mutation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to create registry proxy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/{id}/repair-relay:
     parameters:
       - name: id
@@ -17174,139 +17930,761 @@ paths:
       tags:
         - Settings
       summary: "POST settings › proxies › <id> › repair relay"
+      description: >-
+        Repairs recoverable relay authentication in place. Returns `noop` when plaintext auth is
+        already present, `recovered` when encrypted auth can be restored, and 409 `redeploy` when
+        the credential cannot be recovered. Management auth is required when enabled locally.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Relay repair decision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyRelayRepairResponse"
+        "400":
+          description: ID invalid or proxy is not a relay type.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credentials or runtime policy denied the repair.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Proxy not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "409":
+          description: Relay authentication is not recoverable; redeploy the relay.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Failed to repair relay authentication.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/assignments:
     get:
       operationId: getApiSettingsProxiesAssignments
       tags:
         - Settings
       summary: "GET settings › proxies › assignments"
+      description: >-
+        Lists assignments filtered by proxy/scope, or resolves a connection when
+        `resolveConnectionId` is supplied. Resolution can include proxy credentials.
+        Management auth is required when enabled locally.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: proxyId
+          in: query
+          required: false
+          schema: { type: string }
+        - name: scope
+          in: query
+          required: false
+          schema: { type: string, enum: [global, provider, account, combo, key] }
+        - name: scopeId
+          in: query
+          required: false
+          schema: { type: string }
+        - name: resolveConnectionId
+          in: query
+          required: false
+          description: When set, returns the resolved proxy selection instead of assignment rows.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Assignment list or a connection proxy-resolution result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyAssignmentsGetResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied proxy resolution.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to load proxy assignments or resolve a connection proxy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsProxiesAssignments
       tags:
         - Settings
       summary: "PUT settings › proxies › assignments"
+      description: >-
+        Assigns or clears one proxy at a scope. A non-global scope requires `scopeId`; `key` is
+        accepted as an alias for the account scope. Management auth is required when enabled.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyAssignmentRequest"
       responses:
         "200":
-          description: OK
+          description: Assignment applied; assignment is null when the proxy is cleared.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyAssignmentMutationResponse"
+        "400":
+          description: Malformed JSON or invalid scope/assignment fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied the assignment.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Selected proxy not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          description: Failed to update proxy assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/auto-test:
     post:
       operationId: postApiSettingsProxiesAutoTest
       tags:
         - Settings
       summary: "POST settings › proxies › auto test"
+      description: >-
+        Probes all proxies or only `ids`. Malformed or absent JSON is treated as an empty object.
+        `autoRemove` deletes failed proxies after probing. Runtime policy can deny the probe when
+        an application proxy is configured.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyAutoTestRequest"
       responses:
         "200":
-          description: OK
+          description: Empty result or counts and per-proxy reachability results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyAutoTestResponse"
+        "400":
+          description: Invalid auto-test fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied probing.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to test proxies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/batch-activate:
     post:
       operationId: postApiSettingsProxiesBatchActivate
       tags:
         - Settings
       summary: "POST settings › proxies › batch activate"
+      description: >-
+        Sets the status for 1–500 registry proxy IDs. Results are per ID; missing IDs or row-level
+        errors are reported as failed entries without aborting the whole batch.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyBatchActivateRequest"
       responses:
         "200":
-          description: OK
+          description: Aggregate activation status and per-ID outcomes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyBatchActivateResponse"
+        "400":
+          description: Invalid JSON or activation request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to batch update proxy status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/batch-delete:
     post:
       operationId: postApiSettingsProxiesBatchDelete
       tags:
         - Settings
       summary: "POST settings › proxies › batch delete"
+      description: >-
+        Deletes 1–100 registry proxy IDs. `force` defaults to false; row-level failures are
+        reported per ID. Forced deletion can also remove assignments.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyBatchDeleteRequest"
       responses:
         "200":
-          description: OK
+          description: Aggregate delete status and per-ID outcomes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyBatchDeleteResponse"
+        "400":
+          description: Invalid JSON or delete request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to batch delete proxies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/bulk-assign:
     put:
       operationId: putApiSettingsProxiesBulkAssign
       tags:
         - Settings
       summary: "PUT settings › proxies › bulk assign"
+      description: >-
+        Applies or clears an assignment for multiple IDs in one scope. `key` is accepted as an
+        input alias for `account`; non-global scopes require a non-empty `scopeIds` list.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyBulkAssignmentRequest"
       responses:
         "200":
-          description: OK
+          description: Scope, request count, updated count, and failed count.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyBulkAssignmentResponse"
+        "400":
+          description: Invalid JSON or assignment scope/IDs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied the assignment.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to run bulk assignment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/bulk-import:
     post:
       operationId: postApiSettingsProxiesBulkImport
       tags:
         - Settings
       summary: "POST settings › proxies › bulk import"
+      description: >-
+        Creates or updates up to 100 proxy records; each item is processed independently and
+        failures appear in `results`. Invalid top-level input returns 400; per-item failures remain
+        in the 200 result body.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyBulkImportRequest"
       responses:
         "200":
-          description: OK
+          description: Created/updated/failed counts and one result per input item.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyBulkImportResponse"
+        "400":
+          description: Invalid JSON or item array.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to bulk import proxy records.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/egress:
     get:
       operationId: getApiSettingsProxiesEgress
       tags:
         - Settings
       summary: "GET settings › proxies › egress"
+      description: >-
+        Diagnoses inbound account and outbound proxy egress IPs, plus sharing warnings. Egress IPs
+        and account labels can be sensitive. Runtime policy denies the call when an application
+        proxy is configured.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Connection egress diagnostics, sharing groups, summary, and sharing warnings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyEgressDiagnosticsResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied probing.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to diagnose egress IPs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsProxiesEgress
       tags:
         - Settings
       summary: "POST settings › proxies › egress"
+      description: >-
+        Probes the proxy pool, persists active/error status, and returns one egress report per
+        proxy. Runtime policy denies the call when an application proxy is configured.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Counts and one probe/status result per proxy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyEgressValidationResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied probing.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to validate the proxy pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/health:
     get:
       operationId: getApiSettingsProxiesHealth
       tags:
         - Settings
       summary: "GET settings › proxies › health"
+      description: >-
+        Reads proxy health over the requested period. The query value is converted with Number;
+        database aggregation clamps the period to 1–720 hours, while `windowHours` echoes the
+        parsed query value (or 24 when omitted).
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: hours
+          in: query
+          required: false
+          schema: { type: number, default: 24, minimum: 1, maximum: 720 }
       responses:
         "200":
-          description: OK
+          description: Per-proxy request counts, success rate, latency, and last-seen time.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyHealthStatsResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Failed to load proxy health statistics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/migrate:
     post:
       operationId: postApiSettingsProxiesMigrate
       tags:
         - Settings
       summary: "POST settings › proxies › migrate"
+      description: >-
+        Migrates legacy global/provider/combo/account proxy settings. When the registry is non-empty
+        and force is not true, migration is skipped without writes.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyMigrationRequest"
       responses:
         "200":
-          description: OK
+          description: Number migrated, or skipped because the registry already has proxies.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyMigrationResponse"
+        "400":
+          description: Invalid JSON or migration options.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credentials or runtime policy denied migration.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to migrate legacy proxy configuration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxies/pool:
     delete:
       operationId: deleteApiSettingsProxiesPool
       tags:
         - Settings
       summary: "DELETE settings › proxies › pool"
+      description: Removes one proxy from a scope rotation pool.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyPoolMemberRequest"
       responses:
         "200":
-          description: OK
+          description: Whether the proxy was removed from the pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyPoolRemoveResponse"
+        "400":
+          description: Invalid JSON or scope/member fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied pool mutation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to remove proxy from pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiSettingsProxiesPool
       tags:
         - Settings
       summary: "GET settings › proxies › pool"
+      description: >-
+        Lists pool membership and its rotation strategy. `scope` is required; non-global scopes
+        require `scopeId`. `key` is accepted as an alias for `account`.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: scope
+          in: query
+          required: true
+          schema: { type: string, enum: [global, provider, account, combo, key] }
+        - name: scopeId
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Pool member assignments and rotation strategy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyPoolResponse"
+        "400":
+          description: scope is missing or a non-global scopeId is missing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied pool read.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to load proxy pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiSettingsProxiesPool
       tags:
         - Settings
       summary: "PATCH settings › proxies › pool"
+      description: Sets the rotation strategy for a scope pool; stickyWindowMinutes applies to sticky mode.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyPoolStrategyRequest"
       responses:
         "200":
-          description: OK
+          description: Applied rotation strategy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyPoolStrategyResponse"
+        "400":
+          description: Invalid JSON or strategy/scope fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied pool mutation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to set rotation strategy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsProxiesPool
       tags:
         - Settings
       summary: "PUT settings › proxies › pool"
+      description: Adds one proxy to a scope pool; `key` is accepted as an alias for `account`.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProxyPoolMemberRequest"
       responses:
         "200":
-          description: OK
+          description: Added pool member.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyPoolAddResponse"
+        "400":
+          description: Invalid JSON or scope/member fields.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied pool mutation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Failed to add proxy to pool.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/proxy/cloudflare-deploy:
     post:
       operationId: postApiSettingsProxyCloudflareDeploy
@@ -20071,14 +21449,34 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL. When the request has no explicit
+          `Authorization` or `x-api-key` header, the handler copies this value into both.
+          URL credentials can appear in access logs, proxies, and browser history.
     get:
       operationId: getApiV1VscodeByToken
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › <token>"
+      tags: [V1 Vscode]
+      summary: List grouped VS Code models at the token root
+      description: >-
+        Alias for `GET /api/v1/vscode/{token}/models`. The path token is used as an
+        API key only when explicit credential headers are absent. Model-catalog
+        authentication follows the configured catalog access policy.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Grouped model catalog with VS Code import metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeModelListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/{token}/api/chat:
     parameters:
       - name: token
@@ -20086,14 +21484,64 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeByTokenApiChat
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › <token> › api › chat"
+      tags: [V1 Vscode]
+      summary: Create an Ollama-compatible chat response
+      description: >-
+        Delegates to the Ollama-compatible chat route after adding the path token as a
+        fallback API key and sanitizing VS Code-only request fields. Streaming JSON
+        records are returned as newline-delimited `application/x-ndjson`; successful
+        non-streaming replies may use the Ollama or OpenAI chat JSON shape.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VscodeOllamaChatRequest"
       responses:
         "200":
-          description: OK
+          description: Chat result, or newline-delimited Ollama records when streaming.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/OllamaChatResponse"
+                  - $ref: "#/components/schemas/ChatCompletionResponse"
+            application/x-ndjson:
+              schema:
+                $ref: "#/components/schemas/OllamaChatResponse"
+        "400":
+          description: Invalid JSON or invalid chat request shape.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          description: Request body exceeds the configured size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          description: Request admission or provider rate limit rejected the request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/{token}/api/show:
     parameters:
       - name: token
@@ -20101,14 +21549,51 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeByTokenApiShow
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › <token> › api › show"
+      tags: [V1 Vscode]
+      summary: Show Ollama-compatible model metadata
+      description: >-
+        Looks up a visible chat model in the authenticated catalog and returns Ollama
+        model details. The request may identify a model through either `name` or `model`.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VscodeOllamaShowRequest"
       responses:
         "200":
-          description: OK
+          description: Ollama-compatible model metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeOllamaShowResponse"
+        "400":
+          description: The request body does not contain a non-empty `name` or `model`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The requested model is not present in the visible catalog.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/{token}/api/tags:
     parameters:
       - name: token
@@ -20116,14 +21601,34 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     get:
       operationId: getApiV1VscodeByTokenApiTags
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › <token> › api › tags"
+      tags: [V1 Vscode]
+      summary: List models in Ollama tags format
+      description: >-
+        Returns the usable chat catalog as Ollama `/api/tags` records. When every
+        active provider is Codex, the route prefers Codex models; reasoning and
+        service-tier variants are included where supported.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Ollama model tag records.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeOllamaTagsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/{token}/api/version:
     parameters:
       - name: token
@@ -20131,14 +21636,19 @@ paths:
         required: true
         schema:
           type: string
+        description: Path segment required by the route; this static version handler does not read it or authenticate it.
     get:
       operationId: getApiV1VscodeByTokenApiVersion
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › <token> › api › version"
+      tags: [V1 Vscode]
+      summary: Return the Ollama compatibility version
+      description: Returns the static Ollama-compatible version and does not use the path token for authentication.
       responses:
         "200":
-          description: OK
+          description: Ollama compatibility version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeOllamaVersionResponse"
   /api/v1/vscode/{token}/chat/completions:
     parameters:
       - name: token
@@ -20146,14 +21656,67 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeByTokenChatCompletions
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › <token> › chat › completions"
+      tags: [V1 Vscode]
+      summary: Create an OpenAI-compatible chat completion
+      description: >-
+        Delegates to `POST /api/v1/chat/completions` after applying VS Code request
+        sanitization and translating supported service-tier model variants.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
       responses:
         "200":
-          description: OK
+          description: Chat completion JSON or server-sent events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+            text/event-stream:
+              schema: { type: string }
+        "400":
+          description: Invalid request body or unsupported request parameters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          description: Request body exceeds the configured size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "415":
+          description: The request Content-Type must be application/json.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          description: Request admission or provider rate limit rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "502":
+          description: All eligible upstream providers failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/{token}/combos:
     parameters:
       - name: token
@@ -20161,14 +21724,26 @@ paths:
         required: true
         schema:
           type: string
+        description: Path segment required by the route; this combo-list handler does not use it for authentication.
     get:
       operationId: getApiV1VscodeByTokenCombos
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › <token> › combos"
+      tags: [V1 Vscode]
+      summary: List combos for VS Code import
+      description: >-
+        Returns the projected combo list in both `data` and the compatibility `combos`
+        property. This handler reads the combo store directly and does not use the path token.
       responses:
         "200":
-          description: OK
+          description: Combo list with resolved public capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeCliComboListResponse"
+        "500":
+          description: Combo catalog could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/v1/vscode/{token}/models:
     parameters:
       - name: token
@@ -20176,14 +21751,34 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     get:
       operationId: getApiV1VscodeByTokenModels
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › <token> › models"
+      tags: [V1 Vscode]
+      summary: List grouped VS Code models
+      description: >-
+        Returns the unified chat catalog with grouped/family-first model identifiers and
+        VS Code import metadata such as provider URL, token limits, capabilities, and
+        supported reasoning efforts. Catalog access follows the configured model-catalog policy.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Grouped model catalog with VS Code import metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeModelListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/{token}/responses:
     parameters:
       - name: token
@@ -20191,14 +21786,57 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeByTokenResponses
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › <token> › responses"
+      tags: [V1 Vscode]
+      summary: Create an OpenAI Responses API response
+      description: >-
+        Delegates to `POST /api/v1/responses` after VS Code request sanitization and
+        service-tier variant translation. The response may be JSON or server-sent events.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResponsesRequest"
       responses:
         "200":
-          description: OK
+          description: Responses API JSON object or server-sent events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponsesResponse"
+            text/event-stream:
+              schema: { type: string }
+        "400":
+          description: Invalid JSON or Responses API request shape.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          description: Request body exceeds the configured size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          description: Request admission or provider rate limit rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/{token}/v1/chat/completions:
     parameters:
       - name: token
@@ -20206,14 +21844,67 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeByTokenV1ChatCompletions
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › <token> › v1 › chat › completions"
+      tags: [V1 Vscode]
+      summary: Create an OpenAI-compatible chat completion
+      description: >-
+        Versioned-path alias that delegates to `POST /api/v1/chat/completions` after
+        VS Code request sanitization and service-tier variant translation.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
       responses:
         "200":
-          description: OK
+          description: Chat completion JSON or server-sent events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+            text/event-stream:
+              schema: { type: string }
+        "400":
+          description: Invalid request body or unsupported request parameters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          description: Request body exceeds the configured size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "415":
+          description: The request Content-Type must be application/json.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          description: Request admission or provider rate limit rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "502":
+          description: All eligible upstream providers failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/{token}/v1/models:
     parameters:
       - name: token
@@ -20221,14 +21912,31 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     get:
       operationId: getApiV1VscodeByTokenV1Models
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › <token> › v1 › models"
+      tags: [V1 Vscode]
+      summary: List grouped VS Code models
+      description: Versioned-path alias for `GET /api/v1/vscode/{token}/models`.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Grouped model catalog with VS Code import metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeModelListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/combos/{token}:
     parameters:
       - name: token
@@ -20349,14 +22057,31 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL. When explicit credential headers
+          are absent, the handler uses this value as the API key. URL credentials may
+          be exposed in access logs, proxies, and browser history.
     get:
       operationId: getApiV1VscodeRawByToken
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › raw › <token>"
+      tags: [V1 Vscode]
+      summary: List provider-native model IDs at the raw token root
+      description: Alias for `GET /api/v1/vscode/raw/{token}/models`; it preserves provider-native IDs.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Raw model catalog with provider-native IDs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeRawModelListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/raw/{token}/api/chat:
     parameters:
       - name: token
@@ -20364,14 +22089,60 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeRawByTokenApiChat
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › raw › <token> › api › chat"
+      tags: [V1 Vscode]
+      summary: Create an Ollama-compatible chat response
+      description: >-
+        Raw-ID alias of the Ollama-compatible chat endpoint. It delegates to the same
+        chat handler; model IDs are passed through without the grouped catalog rewriting.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VscodeOllamaChatRequest"
       responses:
         "200":
-          description: OK
+          description: Chat result, or newline-delimited Ollama records when streaming.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/OllamaChatResponse"
+                  - $ref: "#/components/schemas/ChatCompletionResponse"
+            application/x-ndjson:
+              schema:
+                $ref: "#/components/schemas/OllamaChatResponse"
+        "400":
+          description: Invalid JSON or invalid chat request shape.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          description: Request body exceeds the configured size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          description: Request admission or provider rate limit rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/raw/{token}/api/show:
     parameters:
       - name: token
@@ -20379,14 +22150,49 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeRawByTokenApiShow
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › raw › <token> › api › show"
+      tags: [V1 Vscode]
+      summary: Show Ollama-compatible model metadata with raw IDs
+      description: >-
+        Resolves `name` or `model` against the raw catalog and returns provider-native
+        model IDs without grouped/family-first renaming.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VscodeOllamaShowRequest"
       responses:
         "200":
-          description: OK
+          description: Ollama-compatible model metadata using the resolved raw ID.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeOllamaShowResponse"
+        "400":
+          description: The request body does not contain a non-empty `name` or `model`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: The requested model is not present in the visible catalog.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/raw/{token}/api/tags:
     parameters:
       - name: token
@@ -20394,14 +22200,33 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     get:
       operationId: getApiV1VscodeRawByTokenApiTags
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › raw › <token> › api › tags"
+      tags: [V1 Vscode]
+      summary: List raw model IDs in Ollama tags format
+      description: >-
+        Returns every usable chat model in Ollama `/api/tags` format, preserving
+        provider-native model IDs and adding supported reasoning/service-tier variants.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Ollama model tag records with raw model IDs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeOllamaTagsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/raw/{token}/api/version:
     parameters:
       - name: token
@@ -20409,14 +22234,19 @@ paths:
         required: true
         schema:
           type: string
+        description: Path segment required by the route; this static version handler does not read it or authenticate it.
     get:
       operationId: getApiV1VscodeRawByTokenApiVersion
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › raw › <token> › api › version"
+      tags: [V1 Vscode]
+      summary: Return the Ollama compatibility version
+      description: Returns the static Ollama-compatible version and does not use the path token for authentication.
       responses:
         "200":
-          description: OK
+          description: Ollama compatibility version.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeOllamaVersionResponse"
   /api/v1/vscode/raw/{token}/chat/completions:
     parameters:
       - name: token
@@ -20424,14 +22254,66 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeRawByTokenChatCompletions
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › raw › <token> › chat › completions"
+      tags: [V1 Vscode]
+      summary: Create an OpenAI-compatible chat completion
+      description: >-
+        Raw-ID alias of `POST /api/v1/chat/completions`; VS Code-specific sanitization
+        and service-tier variant translation are still applied.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
       responses:
         "200":
-          description: OK
+          description: Chat completion JSON or server-sent events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatCompletionResponse" }
+            text/event-stream:
+              schema: { type: string }
+        "400":
+          description: Invalid request body or unsupported request parameters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          description: Request body exceeds the configured size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "415":
+          description: The request Content-Type must be application/json.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          description: Request admission or provider rate limit rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "502":
+          description: All eligible upstream providers failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/raw/{token}/combos:
     parameters:
       - name: token
@@ -20439,14 +22321,26 @@ paths:
         required: true
         schema:
           type: string
+        description: Path segment required by the route; this combo-list handler does not use it for authentication.
     get:
       operationId: getApiV1VscodeRawByTokenCombos
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › raw › <token> › combos"
+      tags: [V1 Vscode]
+      summary: List combos for raw VS Code import
+      description: >-
+        Returns projected combo metadata in both `data` and `combos`. The route reads
+        the combo store directly and does not use the path token.
       responses:
         "200":
-          description: OK
+          description: Combo list with resolved public capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeCliComboListResponse"
+        "500":
+          description: Combo catalog could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/v1/vscode/raw/{token}/models:
     parameters:
       - name: token
@@ -20454,14 +22348,34 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     get:
       operationId: getApiV1VscodeRawByTokenModels
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › raw › <token> › models"
+      tags: [V1 Vscode]
+      summary: List provider-native model IDs for VS Code import
+      description: >-
+        Returns the unified catalog with raw provider-native IDs and ungrouped model
+        variants. Unlike the grouped route, it does not replace native IDs with
+        family-first display IDs.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Raw model catalog with VS Code import metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeRawModelListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/a2a/tasks/history:
     get:
       operationId: getApiA2aTasksHistory
@@ -21041,14 +22955,56 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeRawByTokenResponses
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › raw › <token> › responses"
+      tags: [V1 Vscode]
+      summary: Create an OpenAI Responses API response
+      description: >-
+        Raw-ID alias of `POST /api/v1/responses`; VS Code-specific sanitization and
+        service-tier variant translation are applied before forwarding.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResponsesRequest"
       responses:
         "200":
-          description: OK
+          description: Responses API JSON object or server-sent events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResponsesResponse" }
+            text/event-stream:
+              schema: { type: string }
+        "400":
+          description: Invalid JSON or Responses API request shape.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          description: Request body exceeds the configured size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          description: Request admission or provider rate limit rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/raw/{token}/v1/chat/completions:
     parameters:
       - name: token
@@ -21056,14 +23012,66 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     post:
       operationId: postApiV1VscodeRawByTokenV1ChatCompletions
-      tags:
-        - V1 Vscode
-      summary: "POST vscode › raw › <token> › v1 › chat › completions"
+      tags: [V1 Vscode]
+      summary: Create an OpenAI-compatible chat completion
+      description: >-
+        Versioned-path raw-ID alias that delegates to `POST /api/v1/chat/completions`
+        after VS Code request sanitization and service-tier variant translation.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
       responses:
         "200":
-          description: OK
+          description: Chat completion JSON or server-sent events.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatCompletionResponse" }
+            text/event-stream:
+              schema: { type: string }
+        "400":
+          description: Invalid request body or unsupported request parameters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "413":
+          description: Request body exceeds the configured size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "415":
+          description: The request Content-Type must be application/json.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          description: Request admission or provider rate limit rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "502":
+          description: All eligible upstream providers failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/vscode/raw/{token}/v1/models:
     parameters:
       - name: token
@@ -21071,14 +23079,31 @@ paths:
         required: true
         schema:
           type: string
+        description: >-
+          VS Code client API token carried in the URL and used as a fallback API key
+          when explicit credential headers are absent. Avoid exposing URL credentials
+          in logs or browser history.
     get:
       operationId: getApiV1VscodeRawByTokenV1Models
-      tags:
-        - V1 Vscode
-      summary: "GET vscode › raw › <token> › v1 › models"
+      tags: [V1 Vscode]
+      summary: List provider-native model IDs for VS Code import
+      description: Versioned-path alias for `GET /api/v1/vscode/raw/{token}/models`.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Raw model catalog with VS Code import metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VscodeRawModelListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/web/fetch:
     post:
       operationId: postApiV1WebFetch
@@ -21421,6 +23446,197 @@ components:
             $ref: "#/components/schemas/ApiErrorResponse"
 
   schemas:
+    FreeProxyRecord:
+      type: object
+      required: [id, source, host, port, type, countryCode, qualityScore, latencyMs, anonymity, lastValidated, inPool, poolProxyId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        source: { type: string, enum: [1proxy, proxifly, iplocate, webshare] }
+        host: { type: string }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        type: { type: string, enum: [http, https, socks4, socks5] }
+        countryCode: { type: [string, "null"] }
+        qualityScore: { type: [number, "null"], minimum: 0, maximum: 100 }
+        latencyMs: { type: [number, "null"], minimum: 0 }
+        anonymity: { type: [string, "null"] }
+        lastValidated: { type: [string, "null"], format: date-time }
+        inPool: { type: boolean }
+        poolProxyId: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      additionalProperties: false
+    FreeProxyStats:
+      type: object
+      required: [total, inPool, avgQuality, bySource, lastSyncAt]
+      properties:
+        total: { type: integer, minimum: 0 }
+        inPool: { type: integer, minimum: 0 }
+        avgQuality: { type: [number, "null"], minimum: 0, maximum: 100 }
+        bySource:
+          type: array
+          items:
+            type: object
+            required: [source, count]
+            properties:
+              source: { type: string, enum: [1proxy, proxifly, iplocate, webshare] }
+              count: { type: integer, minimum: 0 }
+            additionalProperties: false
+        lastSyncAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+    FreeProxyDeleteResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+      additionalProperties: false
+    FreeProxySourceClearResponse:
+      type: object
+      required: [success, deleted]
+      properties:
+        success: { type: boolean, const: true }
+        deleted: { type: integer, minimum: 0 }
+      additionalProperties: false
+    FreeProxyListResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          required: [proxies, total, hasMore, stats, syncErrors]
+          properties:
+            proxies:
+              type: array
+              items: { $ref: "#/components/schemas/FreeProxyRecord" }
+            total: { type: integer, minimum: 0 }
+            hasMore: { type: boolean }
+            stats: { $ref: "#/components/schemas/FreeProxyStats" }
+            syncErrors:
+              type: object
+              description: Per-source error messages from the latest synchronization attempt.
+              additionalProperties:
+                type: array
+                items: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+    FreeProxyAddToPoolResponse:
+      oneOf:
+        - type: object
+          required: [success, alreadyInPool, poolProxyId]
+          properties:
+            success: { type: boolean, const: true }
+            alreadyInPool: { type: boolean, const: true }
+            poolProxyId: { type: [string, "null"] }
+          additionalProperties: false
+        - type: object
+          required: [success, poolProxyId, latencyMs]
+          properties:
+            success: { type: boolean, const: true }
+            poolProxyId: { type: string }
+            latencyMs: { type: number, minimum: 0 }
+          additionalProperties: false
+    FreeProxyProbeFailureResponse:
+      type: object
+      required: [success, error, latencyMs]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string, const: "Proxy test failed" }
+        latencyMs: { type: number, minimum: 0 }
+      additionalProperties: false
+    FreeProxyBulkAddRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, format: uuid }
+      additionalProperties: true
+    FreeProxyBulkAddResponse:
+      type: object
+      required: [succeeded, failed, results]
+      properties:
+        succeeded: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        results:
+          type: array
+          items:
+            type: object
+            required: [id, success]
+            properties:
+              id: { type: string, format: uuid }
+              success: { type: boolean }
+              poolProxyId: { type: string }
+              error: { type: string }
+            additionalProperties: false
+      additionalProperties: false
+    FreeProxyStatsResponse:
+      type: object
+      required: [stats, providers, autoSync]
+      properties:
+        stats: { $ref: "#/components/schemas/FreeProxyStats" }
+        providers:
+          type: array
+          items:
+            type: object
+            required: [id, name, enabled]
+            properties:
+              id: { type: string, enum: [1proxy, proxifly, iplocate, webshare] }
+              name: { type: string }
+              enabled: { type: boolean }
+            additionalProperties: false
+        autoSync:
+          type: object
+          required: [enabled, intervalMs]
+          properties:
+            enabled: { type: boolean }
+            intervalMs: { type: integer, minimum: 300000, description: Scheduler interval in milliseconds; values are clamped to at least 5 minutes. }
+          additionalProperties: false
+      additionalProperties: false
+    FreeProxySyncRequest:
+      type: object
+      properties:
+        sources:
+          type: array
+          items: { type: string, enum: [1proxy, proxifly, iplocate, webshare] }
+      additionalProperties: true
+    FreeProxySyncResult:
+      type: object
+      required: [fetched, added, updated, errors]
+      properties:
+        fetched: { type: integer, minimum: 0 }
+        added: { type: integer, minimum: 0 }
+        updated: { type: integer, minimum: 0 }
+        errors:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+    FreeProxySyncResponse:
+      type: object
+      required: [success, results, lastSyncAt]
+      properties:
+        success: { type: boolean, const: true }
+        results:
+          type: object
+          description: Per-source synchronization outcomes, keyed by source ID.
+          additionalProperties: { $ref: "#/components/schemas/FreeProxySyncResult" }
+        lastSyncAt: { type: string, format: date-time }
+      additionalProperties: false
+    ProxyRelayRepairResponse:
+      oneOf:
+        - type: object
+          required: [repaired, mode]
+          properties:
+            repaired: { type: boolean, const: false }
+            mode: { type: string, const: noop }
+          additionalProperties: false
+        - type: object
+          required: [repaired, mode]
+          properties:
+            repaired: { type: boolean, const: true }
+            mode: { type: string, const: recovered }
+          additionalProperties: false
     CanaryReadiness:
       type: object
       required: [schema, generation, ready, databaseReady, coordination, conversationState, lifecycle]
@@ -25341,6 +27557,294 @@ components:
             $ref: "#/components/schemas/Model"
       additionalProperties: true
 
+    VscodeCliComboListResponse:
+      type: object
+      description: Combo projection returned by the token-scoped VS Code compatibility route.
+      required: [object, data, combos]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Model"
+        combos:
+          type: array
+          description: Compatibility alias containing the same projected combo records as `data`.
+          items:
+            $ref: "#/components/schemas/Model"
+      additionalProperties: true
+
+    VscodeImportModel:
+      allOf:
+        - $ref: "#/components/schemas/Model"
+        - type: object
+          description: Model row enriched for VS Code import and display.
+          properties:
+            url:
+              type: string
+              format: uri-reference
+              description: Token-scoped chat or Responses endpoint URL with an import fragment.
+            toolCalling: { type: boolean }
+            vision: { type: boolean }
+            maxInputTokens: { type: number, minimum: 1 }
+            maxOutputTokens: { type: number, minimum: 1 }
+            family: { type: string }
+            supportsReasoningEffort:
+              type: array
+              items: { type: string }
+            supportedReasoningEfforts:
+              type: array
+              items: { type: string }
+            defaultReasoningEffort: { type: string }
+            configurationSchema: { $ref: "#/components/schemas/VscodeReasoningConfigSchema" }
+            configSchema: { $ref: "#/components/schemas/VscodeReasoningConfigSchema" }
+          additionalProperties: true
+
+    VscodeModelListResponse:
+      type: object
+      required: [object, data]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/VscodeImportModel"
+        has_more: { type: boolean }
+      additionalProperties: true
+
+    VscodeRawCatalogModel:
+      allOf:
+        - $ref: "#/components/schemas/Model"
+        - type: object
+          description: Provider-native catalog row expanded for raw VS Code import.
+          properties:
+            name:
+              type: string
+              description: VS Code display name; the `id` remains provider-native.
+          additionalProperties: true
+
+    VscodeRawModelListResponse:
+      type: object
+      required: [object, data]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/VscodeRawCatalogModel"
+        has_more: { type: boolean }
+      additionalProperties: true
+
+    VscodeOllamaChatRequest:
+      type: object
+      description: >-
+        Ollama-compatible chat request forwarded through OmniRoute's chat handler.
+        Provider-specific and Ollama extension fields are accepted and passed through.
+      properties:
+        model: { type: string }
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role: { type: string }
+              content:
+                oneOf:
+                  - { type: string }
+                  - { type: array, items: { type: object, additionalProperties: true } }
+                  - { type: "null" }
+              images:
+                type: array
+                items: { type: string }
+              tool_calls:
+                type: array
+                items: { type: object, additionalProperties: true }
+            additionalProperties: true
+        stream: { type: boolean, default: true }
+        format:
+          oneOf:
+            - { type: string }
+            - { type: object, additionalProperties: true }
+        options: { type: object, additionalProperties: true }
+        tools:
+          type: array
+          items: { type: object, additionalProperties: true }
+        keep_alive:
+          oneOf:
+            - { type: string }
+            - { type: number }
+        think:
+          oneOf:
+            - { type: boolean }
+            - { type: string }
+        context:
+          type: array
+          items: { type: object, additionalProperties: true }
+      additionalProperties: true
+
+    VscodeOllamaShowRequest:
+      type: object
+      anyOf:
+        - required: [name]
+        - required: [model]
+      properties:
+        name: { type: string, minLength: 1 }
+        model: { type: string, minLength: 1 }
+      additionalProperties: true
+
+    VscodeReasoningConfigSchema:
+      type: object
+      required: [type, properties]
+      properties:
+        type: { type: string, const: object }
+        properties:
+          type: object
+          required: [reasoningEffort]
+          properties:
+            reasoningEffort:
+              type: object
+              required: [type, title, description, default, enum, enumLabels, enumDescriptions]
+              properties:
+                type: { type: string, const: string }
+                title: { type: string, const: Reasoning effort }
+                description: { type: string, const: Controls how much reasoning effort the model uses. }
+                default: { type: string }
+                enum:
+                  type: array
+                  items: { type: string }
+                enumLabels:
+                  type: array
+                  items: { type: string }
+                enumDescriptions:
+                  type: array
+                  items: { type: string }
+              additionalProperties: false
+          additionalProperties: false
+      additionalProperties: false
+
+    VscodeOllamaShowResponse:
+      type: object
+      required: [model, remote_model, license, modelfile, parameters, template, details, model_info, capabilities]
+      properties:
+        model: { type: string }
+        remote_model: { type: string }
+        supports_reasoning_effort:
+          type: array
+          items: { type: string }
+        supportsReasoningEffort:
+          type: array
+          items: { type: string }
+        supportedReasoningEfforts:
+          type: array
+          items: { type: string }
+        defaultReasoningEffort: { type: string }
+        selected_reasoning_effort: { type: string }
+        selectedReasoningEffort: { type: string }
+        configurationSchema: { $ref: "#/components/schemas/VscodeReasoningConfigSchema" }
+        configSchema: { $ref: "#/components/schemas/VscodeReasoningConfigSchema" }
+        license: { type: string, const: proprietary }
+        modelfile: { type: string }
+        parameters: { type: string, const: "" }
+        template: { type: string, const: "" }
+        details:
+          type: object
+          required: [parent_model, format, family, families, parameter_size, quantization_level]
+          properties:
+            parent_model: { type: string }
+            format: { type: string, const: openai }
+            family: { type: string }
+            families:
+              type: array
+              items: { type: string }
+            parameter_size: { type: string, const: unknown }
+            quantization_level: { type: string, const: dynamic }
+          additionalProperties: true
+        model_info:
+          type: object
+          required: [general.architecture, general.basename]
+          properties:
+            general.architecture: { type: string }
+            general.basename: { type: string }
+            context_length: { type: number, minimum: 1 }
+            max_output_tokens: { type: number, minimum: 1 }
+            input_modalities:
+              type: array
+              items: { type: string }
+            output_modalities:
+              type: array
+              items: { type: string }
+            supported_endpoints:
+              type: array
+              items: { type: string }
+            capabilities: { type: object, additionalProperties: true }
+          additionalProperties: true
+        capabilities:
+          type: array
+          items:
+            type: string
+            enum: [completion, vision, tools, thinking]
+      additionalProperties: true
+
+    VscodeOllamaTagModel:
+      type: object
+      required: [name, model, modified_at, size, digest, details]
+      properties:
+        name: { type: string }
+        model: { type: string }
+        modified_at: { type: string, const: "2026-01-01T00:00:00Z" }
+        size: { type: integer, const: 0 }
+        digest:
+          type: string
+          pattern: "^omniroute:"
+        supports_reasoning_effort:
+          type: array
+          items: { type: string }
+        supportsReasoningEffort:
+          type: array
+          items: { type: string }
+        supportedReasoningEfforts:
+          type: array
+          items: { type: string }
+        defaultReasoningEffort: { type: string }
+        selected_reasoning_effort: { type: string }
+        selectedReasoningEffort: { type: string }
+        configurationSchema: { $ref: "#/components/schemas/VscodeReasoningConfigSchema" }
+        configSchema: { $ref: "#/components/schemas/VscodeReasoningConfigSchema" }
+        details:
+          type: object
+          required: [format, family, parameter_size, quantization_level]
+          properties:
+            format: { type: string, const: openai }
+            family: { type: string }
+            parameter_size: { type: string }
+            quantization_level: { type: string, const: dynamic }
+            supports_reasoning_effort:
+              type: array
+              items: { type: string }
+            supportsReasoningEffort:
+              type: array
+              items: { type: string }
+            supportedReasoningEfforts:
+              type: array
+              items: { type: string }
+            defaultReasoningEffort: { type: string }
+            selected_reasoning_effort: { type: string }
+            selectedReasoningEffort: { type: string }
+            configurationSchema: { $ref: "#/components/schemas/VscodeReasoningConfigSchema" }
+            configSchema: { $ref: "#/components/schemas/VscodeReasoningConfigSchema" }
+          additionalProperties: true
+      additionalProperties: true
+
+    VscodeOllamaTagsResponse:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/VscodeOllamaTagModel"
+      additionalProperties: false
+
     VscodeOllamaVersionResponse:
       type: object
       required: [version]
@@ -27645,7 +30149,13 @@ components:
       properties:
         type: { type: string, enum: [http, https, socks5] }
         host: { type: string, minLength: 1 }
-        port: { type: integer, minimum: 1, maximum: 65535 }
+        port:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 65535
+            - type: string
+              pattern: "^[0-9]+$"
         username: { type: string }
         password: { type: string }
       additionalProperties: false
@@ -27806,6 +30316,201 @@ components:
       required: [success]
       properties:
         success: { type: boolean, const: true }
+      additionalProperties: false
+
+    ClaudeAuthFilePayload:
+      type: object
+      description: >-
+        Sensitive Claude CLI credentials.json payload. Contains raw OAuth access and refresh
+        tokens; protect and store it as a secret.
+      required: [claudeAiOauth]
+      properties:
+        claudeAiOauth:
+          type: object
+          required: [accessToken, refreshToken, expiresAt, scopes]
+          properties:
+            accessToken: { type: string }
+            refreshToken: { type: string }
+            expiresAt:
+              type: [integer, "null"]
+              description: >-
+                Expiry time in milliseconds since the Unix epoch; serializes as null if the
+                stored expiration value is invalid.
+            scopes:
+              type: array
+              items: { type: string }
+            subscriptionType: { type: string }
+            rateLimitTier: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+
+    ClaudeAuthApplyLocalResponse:
+      type: object
+      required:
+        [success, connectionId, connectionLabel, authPath, savedBakPath, centralizedBackupPath, mcpOAuthPreserved, writtenAt]
+      properties:
+        success: { type: boolean, const: true }
+        connectionId: { type: string }
+        connectionLabel: { type: string }
+        authPath: { type: string }
+        savedBakPath: { type: [string, "null"] }
+        centralizedBackupPath: { type: [string, "null"] }
+        mcpOAuthPreserved: { type: boolean }
+        writtenAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ClaudeAuthFileErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code: { type: string }
+      additionalProperties: false
+
+    ProviderLoginRequest:
+      type: object
+      description: >-
+        Shared request shape for provider-specific sign-in. Browser flows use `timeout` and
+        optionally `freshSession`; MaxAI uses `step`, `email`, and `code`. `step` defaults to
+        `request`, which requires `email`; `verify` requires a six-digit `code` and accepts an
+        optional email that must match the pending sign-in identity. Provider-specific fields may
+        be accepted by individual login flows.
+      properties:
+        timeout:
+          type: number
+          description: >-
+            Browser login timeout in milliseconds. Values are truncated and clamped to the
+            inclusive 15000–600000 range; omitted or non-finite values use 300000.
+        freshSession:
+          type: boolean
+          default: true
+          description: Whether Adobe Firefly login should start a fresh browser session.
+        step:
+          type: string
+          enum: [request, verify]
+          default: request
+        email:
+          type: string
+          format: email
+          description: Required for MaxAI `request`; optional on `verify` if matching the pending email.
+        code:
+          type: string
+          pattern: "^[0-9]{6}$"
+          description: Required for MaxAI `verify`.
+      additionalProperties: true
+
+    ProviderLoginSuccessResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+        credentials:
+          type: object
+          description: Provider-specific extracted or credential metadata; token values are provider-dependent.
+          additionalProperties: { type: string }
+        credential:
+          type: string
+          description: Adobe Firefly credential bundle when returned by that provider flow.
+        accessToken: { type: string }
+        cookie: { type: string }
+        arpSessionId: { type: string }
+        persisted: { type: boolean }
+        account: { type: string }
+        email: { type: string, format: email }
+        step: { type: string, enum: [request, verify] }
+        message: { type: string }
+        via: { type: string, const: pure-cdp }
+      additionalProperties: true
+
+    ProviderLoginErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: true
+
+    ProviderActionErrorResponse:
+      oneOf:
+        - type: object
+          required: [error]
+          properties:
+            error: { type: string }
+            details: {}
+            requiresReauth: { type: boolean }
+            deprecated: { type: boolean }
+            migrateTo: { type: string }
+          additionalProperties: true
+        - type: object
+          required: [error]
+          properties:
+            error:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string }
+                type: { type: string }
+                code: { type: string }
+                reason: { type: string }
+              additionalProperties: true
+            upstream_details:
+              type: [object, "null"]
+              additionalProperties: true
+          additionalProperties: true
+
+    ProviderTokenRefreshSuccessResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+        skipped:
+          type: boolean
+          description: True when a rotating-token provider defers refresh until an inference request.
+        connectionId: { type: string }
+        provider: { type: string }
+        expiresAt: { type: [string, "null"], format: date-time }
+        refreshedAt: { type: string, format: date-time }
+        message: { type: string }
+      additionalProperties: true
+
+    ProviderCursorRefreshSuccessResponse:
+      type: object
+      required: [success, connectionId, provider, expiresAt, refreshedAt]
+      properties:
+        success: { type: boolean, const: true }
+        unchanged:
+          type: boolean
+          description: True when the current Cursor token was already current on this host.
+        connectionId: { type: string }
+        provider: { type: string, const: cursor }
+        expiresAt: { type: [string, "null"], format: date-time }
+        refreshedAt: { type: string, format: date-time }
+        message: { type: string }
+      additionalProperties: true
+
+    ProviderCursorRefreshCooldownResponse:
+      type: object
+      required: [error, retryAfterMs]
+      properties:
+        error: { type: string }
+        retryAfterMs: { type: integer, minimum: 1, maximum: 30000 }
+      additionalProperties: false
+
+    KimiProviderTokenRefreshSuccessResponse:
+      type: object
+      required: [success, message, expiresAt, user]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Token refreshed successfully }
+        expiresAt: { type: [string, "null"], format: date-time }
+        user:
+          type: object
+          required: [userId, region, spaceId]
+          properties:
+            userId: { type: [string, "null"] }
+            region: { type: [string, "null"] }
+            spaceId: { type: [string, "null"] }
+          additionalProperties: false
       additionalProperties: false
 
     ProviderParamFilterModel:
@@ -29910,4 +32615,555 @@ components:
         source: { type: string }
         warning: { type: string }
         upstreamStatus: { type: integer, minimum: 100, maximum: 599 }
+      additionalProperties: false
+
+    ProxyRegistryRecord:
+      type: object
+      description: >-
+        Registry proxy record. Management lookups and create/update responses can include raw
+        username, password, and relay auth in notes; the unfiltered list masks credential fields.
+      required: [id, name, type, host, port, username, password, region, notes, status, source, family, subscriptionId, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        type: { type: string }
+        host: { type: string }
+        port: { type: integer }
+        username: { type: string, description: May contain the stored proxy username or the list-mask value `***`. }
+        password: { type: string, description: May contain the stored proxy password or the list-mask value `***`. }
+        region: { type: [string, "null"] }
+        notes: { type: [string, "null"], description: May contain relay authentication on single-record lookups and mutations. }
+        status: { type: string }
+        source: { type: string }
+        family: { type: string }
+        subscriptionId: { type: [string, "null"] }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        relayInfo:
+          type: object
+          required: [isRelay, authMissing, repairMode]
+          properties:
+            isRelay: { type: boolean }
+            authMissing: { type: boolean }
+            repairMode: { type: [string, "null"], enum: [noop, recovered, redeploy, null] }
+          additionalProperties: false
+        assignment:
+          $ref: "#/components/schemas/ProxyAssignmentRecord"
+      additionalProperties: false
+
+    ProxyAssignmentRecord:
+      type: object
+      required: [id, proxyId, scope, scopeId, position, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        proxyId: { type: string }
+        scope: { type: string, enum: [global, provider, account, combo] }
+        scopeId: { type: [string, "null"] }
+        position: { type: integer }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      additionalProperties: false
+
+    ProxyRegistryCreateRequest:
+      type: object
+      required: [name, host, port]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        type: { type: string, enum: [http, https, socks5, vercel, deno, cloudflare], default: http }
+        host: { type: string, minLength: 1, maxLength: 255 }
+        port:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 65535
+            - type: string
+              pattern: "^[0-9]+$"
+        username: { type: string, writeOnly: true }
+        password: { type: string, writeOnly: true }
+        region: { type: [string, "null"], maxLength: 64 }
+        notes: { type: [string, "null"], maxLength: 1000 }
+        status: { type: string, enum: [active, inactive, dead], default: active }
+        source: { type: string, enum: [manual, oneproxy, dashboard-custom, vercel-relay, deno-relay, cloudflare-relay] }
+        family: { type: string, enum: [auto, ipv4, ipv6], default: auto }
+        assignment:
+          $ref: "#/components/schemas/ProxyInlineAssignmentRequest"
+      additionalProperties: false
+
+    ProxyRegistryUpdateRequest:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        type: { type: string, enum: [http, https, socks5, vercel, deno, cloudflare] }
+        host: { type: string, minLength: 1, maxLength: 255 }
+        port:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 65535
+            - type: string
+              pattern: "^[0-9]+$"
+        username: { type: string, writeOnly: true }
+        password: { type: string, writeOnly: true }
+        region: { type: [string, "null"], maxLength: 64 }
+        notes: { type: [string, "null"], maxLength: 1000 }
+        status: { type: string, enum: [active, inactive, dead] }
+        source: { type: string, enum: [manual, oneproxy, dashboard-custom, vercel-relay, deno-relay, cloudflare-relay] }
+        family: { type: string, enum: [auto, ipv4, ipv6] }
+        assignment:
+          $ref: "#/components/schemas/ProxyInlineAssignmentRequest"
+      additionalProperties: false
+
+    ProxyInlineAssignmentRequest:
+      type: object
+      required: [scope]
+      properties:
+        scope: { type: string, enum: [global, provider, account, combo, key] }
+        scopeId: { type: [string, "null"] }
+      additionalProperties: false
+
+    ProxyRegistryListResponse:
+      type: object
+      required: [items, total, relayProbeStats, socks5Enabled]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ProxyRegistryRecord" }
+        total: { type: integer, minimum: 0 }
+        relayProbeStats:
+          type: object
+          required: [tested, alive]
+          properties:
+            tested: { type: integer, minimum: 0 }
+            alive: { type: integer, minimum: 0 }
+          additionalProperties: false
+        socks5Enabled: { type: boolean }
+      additionalProperties: false
+
+    ProxyRegistryWhereUsedResponse:
+      type: object
+      required: [count, assignments]
+      properties:
+        count: { type: integer, minimum: 0 }
+        assignments:
+          type: array
+          items: { $ref: "#/components/schemas/ProxyAssignmentRecord" }
+      additionalProperties: false
+
+    ProxyRegistryGetResponse:
+      oneOf:
+        - $ref: "#/components/schemas/ProxyRegistryListResponse"
+        - $ref: "#/components/schemas/ProxyRegistryRecord"
+        - $ref: "#/components/schemas/ProxyRegistryWhereUsedResponse"
+
+    ProxyRegistryMutationResponse:
+      oneOf:
+        - $ref: "#/components/schemas/ProxyRegistryRecord"
+        - type: object
+          description: Proxy record with an inline assignment result.
+          required: [id, name, type, host, port, assignment]
+          properties:
+            id: { type: string }
+            name: { type: string }
+            type: { type: string }
+            host: { type: string }
+            port: { type: integer }
+            username: { type: string }
+            password: { type: string }
+            region: { type: [string, "null"] }
+            notes: { type: [string, "null"] }
+            status: { type: string }
+            source: { type: string }
+            family: { type: string }
+            subscriptionId: { type: [string, "null"] }
+            createdAt: { type: string }
+            updatedAt: { type: string }
+            assignment: { $ref: "#/components/schemas/ProxyAssignmentRecord" }
+          additionalProperties: false
+
+    ProxyAssignmentRequest:
+      type: object
+      required: [scope]
+      properties:
+        scope: { type: string, enum: [global, provider, account, combo, key] }
+        scopeId: { type: [string, "null"] }
+        proxyId: { type: [string, "null"] }
+      additionalProperties: false
+
+    ProxyAssignmentsListResponse:
+      type: object
+      required: [items, total]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ProxyAssignmentRecord" }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ProxyAssignmentsGetResponse:
+      oneOf:
+        - $ref: "#/components/schemas/ProxyAssignmentsListResponse"
+        - $ref: "#/components/schemas/ProxyResolutionResult"
+
+    ProxyAssignmentMutationResponse:
+      type: object
+      required: [success, assignment]
+      properties:
+        success: { type: boolean, const: true }
+        assignment:
+          oneOf:
+            - $ref: "#/components/schemas/ProxyAssignmentRecord"
+            - type: "null"
+      additionalProperties: false
+
+    ProxyAutoTestRequest:
+      type: object
+      properties:
+        ids:
+          type: array
+          items: { type: string }
+        autoRemove: { type: boolean, default: false }
+      additionalProperties: false
+
+    ProxyAutoTestResult:
+      type: object
+      required: [proxyId, host, port, alive]
+      properties:
+        proxyId: { type: string }
+        host: { type: string }
+        port: { type: integer }
+        alive: { type: boolean }
+        blockedByTarget: { type: boolean }
+        latencyMs: { type: [number, "null"] }
+        error: { type: string }
+      additionalProperties: false
+
+    ProxyAutoTestResponse:
+      type: object
+      properties:
+        tested: { type: integer, minimum: 0 }
+        alive: { type: integer, minimum: 0 }
+        dead: { type: integer, minimum: 0 }
+        removed:
+          oneOf:
+            - type: integer
+              minimum: 0
+            - type: array
+              items: { type: string }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/ProxyAutoTestResult" }
+      additionalProperties: false
+
+    ProxyBatchActivateRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids: { type: array, minItems: 1, maxItems: 500, items: { type: string } }
+        status: { type: string, enum: [active, inactive], default: active }
+      additionalProperties: false
+
+    ProxyBatchDeleteRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids: { type: array, minItems: 1, maxItems: 100, items: { type: string } }
+        force: { type: boolean, default: false }
+      additionalProperties: false
+
+    ProxyBatchItemResult:
+      type: object
+      required: [id, success]
+      properties:
+        id: { type: string }
+        success: { type: boolean }
+        error: { type: string }
+      additionalProperties: false
+
+    ProxyBatchActivateResponse:
+      type: object
+      required: [success, status, updated, failed, results]
+      properties:
+        success: { type: boolean }
+        status: { type: string, enum: [active, inactive] }
+        updated: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        results: { type: array, items: { $ref: "#/components/schemas/ProxyBatchItemResult" } }
+      additionalProperties: false
+
+    ProxyBatchDeleteResponse:
+      type: object
+      required: [success, deleted, failed, results]
+      properties:
+        success: { type: boolean }
+        deleted: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        results: { type: array, items: { $ref: "#/components/schemas/ProxyBatchItemResult" } }
+      additionalProperties: false
+
+    ProxyBulkAssignmentRequest:
+      type: object
+      required: [scope]
+      properties:
+        scope: { type: string, enum: [global, provider, account, combo, key] }
+        scopeIds: { type: array, items: { type: string, minLength: 1 }, default: [] }
+        proxyId: { type: [string, "null"] }
+      additionalProperties: false
+
+    ProxyBulkAssignmentResponse:
+      type: object
+      required: [success, scope, requested, updated, failed]
+      properties:
+        success: { type: boolean, const: true }
+        scope: { type: string, enum: [global, provider, account, combo] }
+        requested: { type: integer, minimum: 0 }
+        updated: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ProxyBulkImportRequest:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/ProxyRegistryFields"
+      additionalProperties: false
+
+    ProxyRegistryFields:
+      type: object
+      required: [name, host, port]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        type: { type: string, enum: [http, https, socks5, vercel, deno, cloudflare] }
+        host: { type: string, minLength: 1, maxLength: 255 }
+        port:
+          oneOf:
+            - type: integer
+              minimum: 1
+              maximum: 65535
+            - type: string
+              pattern: "^[0-9]+$"
+        username: { type: string, writeOnly: true }
+        password: { type: string, writeOnly: true }
+        region: { type: [string, "null"], maxLength: 64 }
+        notes: { type: [string, "null"], maxLength: 1000 }
+        status: { type: string, enum: [active, inactive, dead], default: active }
+        source: { type: string, enum: [manual, oneproxy, dashboard-custom, vercel-relay, deno-relay, cloudflare-relay] }
+        family: { type: string, enum: [auto, ipv4, ipv6], default: auto }
+      additionalProperties: false
+
+    ProxyBulkImportResult:
+      type: object
+      required: [name, success]
+      properties:
+        name: { type: string }
+        success: { type: boolean }
+        action: { type: string, enum: [created, updated] }
+        id: { type: string }
+        error: { type: string }
+      additionalProperties: false
+
+    ProxyBulkImportResponse:
+      type: object
+      required: [created, updated, failed, results]
+      properties:
+        created: { type: integer, minimum: 0 }
+        updated: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        results: { type: array, items: { $ref: "#/components/schemas/ProxyBulkImportResult" } }
+      additionalProperties: false
+
+    ProxyEgressConnection:
+      type: object
+      required: [connectionId, provider, account, proxyLevel, proxyHost, egressIp]
+      properties:
+        connectionId: { type: string }
+        provider: { type: string }
+        account: { type: [string, "null"] }
+        proxyLevel: { type: string }
+        proxyHost: { type: [string, "null"] }
+        egressIp: { type: [string, "null"] }
+        error: { type: string }
+      additionalProperties: false
+
+    ProxyEgressDiagnosticsResponse:
+      type: object
+      required: [connections, byEgressIp, sharedWithinRotationGroup, summary, warnings]
+      properties:
+        connections: { type: array, items: { $ref: "#/components/schemas/ProxyEgressConnection" } }
+        byEgressIp:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+        sharedWithinRotationGroup:
+          type: array
+          items:
+            type: object
+            required: [egressIp, rotationGroup, connections]
+            properties:
+              egressIp: { type: string }
+              rotationGroup: { type: string }
+              connections: { type: array, items: { type: string } }
+            additionalProperties: false
+        summary:
+          type: object
+          required: [windowStart, windowEnd, distinctEgressIps, sharingByRotationGroup, maxAccountsSharingOneIp]
+          properties:
+            windowStart: { type: string }
+            windowEnd: { type: string }
+            distinctEgressIps: { type: integer, minimum: 0 }
+            sharingByRotationGroup:
+              type: array
+              items:
+                type: object
+                required: [rotationGroup, sharedIps, maxAccountsSharingOneIp]
+                properties:
+                  rotationGroup: { type: string }
+                  sharedIps: { type: integer, minimum: 0 }
+                  maxAccountsSharingOneIp: { type: integer, minimum: 0 }
+                additionalProperties: false
+            maxAccountsSharingOneIp: { type: integer, minimum: 0 }
+          additionalProperties: false
+        warnings:
+          type: array
+          items:
+            type: object
+            required: [egressIp, rotationGroup, connections]
+            properties:
+              egressIp: { type: string }
+              rotationGroup: { type: string }
+              connections: { type: array, items: { type: string } }
+            additionalProperties: false
+      additionalProperties: false
+
+    ProxyEgressValidationResponse:
+      type: object
+      required: [validated, alive, dead, report]
+      properties:
+        validated: { type: integer, minimum: 0 }
+        alive: { type: integer, minimum: 0 }
+        dead: { type: integer, minimum: 0 }
+        report:
+          type: array
+          items:
+            type: object
+            required: [proxyId, host, port, alive, egressIp, latencyMs, previousStatus, newStatus]
+            properties:
+              proxyId: { type: string }
+              host: { type: string }
+              port: { oneOf: [{ type: integer }, { type: string }] }
+              alive: { type: boolean }
+              egressIp: { type: [string, "null"] }
+              latencyMs: { type: number }
+              previousStatus: { type: [string, "null"] }
+              newStatus: { type: string, enum: [active, error] }
+            additionalProperties: false
+      additionalProperties: false
+
+    ProxyHealthStatsResponse:
+      type: object
+      required: [items, total, windowHours]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [proxyId, name, type, host, port, status, totalRequests, successCount, errorCount, timeoutCount, successRate, avgLatencyMs, lastSeenAt]
+            properties:
+              proxyId: { type: string }
+              name: { type: string }
+              type: { type: string }
+              host: { type: string }
+              port: { type: integer }
+              status: { type: string }
+              totalRequests: { type: integer, minimum: 0 }
+              successCount: { type: integer, minimum: 0 }
+              errorCount: { type: integer, minimum: 0 }
+              timeoutCount: { type: integer, minimum: 0 }
+              successRate: { type: [number, "null"] }
+              avgLatencyMs: { type: [number, "null"] }
+              lastSeenAt: { type: [string, "null"] }
+            additionalProperties: false
+        total: { type: integer, minimum: 0 }
+        windowHours: { type: number }
+      additionalProperties: false
+
+    ProxyMigrationRequest:
+      type: object
+      properties:
+        force: { type: boolean, default: false }
+      additionalProperties: false
+
+    ProxyMigrationResponse:
+      oneOf:
+        - type: object
+          required: [migrated, skipped, reason]
+          properties:
+            migrated: { type: integer, minimum: 0 }
+            skipped: { type: boolean, const: true }
+            reason: { type: string, const: registry_not_empty }
+          additionalProperties: false
+        - type: object
+          required: [migrated, skipped]
+          properties:
+            migrated: { type: integer, minimum: 0 }
+            skipped: { type: boolean, const: false }
+          additionalProperties: false
+
+    ProxyPoolMemberRequest:
+      type: object
+      required: [scope, proxyId]
+      properties:
+        scope: { type: string, enum: [global, provider, account, combo, key] }
+        scopeId: { type: [string, "null"] }
+        proxyId: { type: string, minLength: 1 }
+      additionalProperties: false
+
+    ProxyPoolStrategyRequest:
+      type: object
+      required: [scope, strategy]
+      properties:
+        scope: { type: string, enum: [global, provider, account, combo, key] }
+        scopeId: { type: [string, "null"] }
+        strategy: { type: string, enum: [round-robin, random, sticky, latency] }
+        stickyWindowMinutes: { type: integer, minimum: 1, maximum: 1440 }
+      additionalProperties: false
+
+    ProxyPoolResponse:
+      type: object
+      required: [members, strategy, total]
+      properties:
+        members: { type: array, items: { $ref: "#/components/schemas/ProxyAssignmentRecord" } }
+        strategy: { type: string, enum: [round-robin, random, sticky, latency] }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ProxyPoolAddResponse:
+      type: object
+      required: [success, member]
+      properties:
+        success: { type: boolean, const: true }
+        member: { $ref: "#/components/schemas/ProxyAssignmentRecord" }
+      additionalProperties: false
+
+    ProxyPoolRemoveResponse:
+      type: object
+      required: [success, removed]
+      properties:
+        success: { type: boolean, const: true }
+        removed: { type: boolean }
+      additionalProperties: false
+
+    ProxyPoolStrategyResponse:
+      type: object
+      required: [success, strategy]
+      properties:
+        success: { type: boolean, const: true }
+        strategy: { type: string, enum: [round-robin, random, sticky, latency] }
       additionalProperties: false

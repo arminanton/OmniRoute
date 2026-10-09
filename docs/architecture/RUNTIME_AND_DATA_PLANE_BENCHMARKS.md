@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 427
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 502
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 304 operations have success
-response content schemas and 247 declare operation-level security. Of 1,004 operations with a
-non-`204` success status, 700 still lack an explicit success-body schema; 11 operations have no
+contract is still stronger on route coverage than schema completeness: 358 operations have success
+response content schemas and 297 declare operation-level security. Of 1,004 operations with a
+non-`204` success status, 646 still lack an explicit success-body schema; 11 operations have no
 declared `2xx` status, and 14 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -82,9 +82,13 @@ legacy-detail and export shapes; category-specific private-overflow errors; API-
 secret reveal/regeneration and device/usage-limit responses; key-group membership/permission CRUD;
 provider batch mutation results; model-capability overrides; model-combo mappings; single/batch
 model-test results; Codex auth import, ZIP extraction, export, and local-apply; Antigravity CLI auth
-import/paste/local detection; and provider model-sync contracts. Dynamic provider quota data remains
-open-ended because provider adapters return different fields. Together these passes bring the spec to
-427 component schemas. The generic `/api/oauth/{provider}/{action}` dispatcher still has divergent
+import/paste/local detection; provider model-sync; provider-ID login/refresh and Claude auth-file
+operations; the VS Code-compatible route family; proxy registry/pool settings; and free-proxy list,
+stats, sync, deletion, and pool-promotion contracts. The free-proxy work also repaired previously
+unresolved schema references and types the relay-auth repair result. Dynamic provider quota data
+remains open-ended because provider adapters return different fields. Together these passes bring
+the spec to 502 component schemas.
+The generic `/api/oauth/{provider}/{action}` dispatcher still has divergent
 provider/action callback, device-flow, retirement, and error shapes that need a separate source audit.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
@@ -588,6 +592,13 @@ fallback branches against fixtures; they do not establish Google quota availabil
 network/header timeouts. The reported production logs still show upstream 429 responses on several
 accounts and 30-second no-header timeouts, so a matched real-provider trace remains necessary to
 separate quota exhaustion from transport failure.
+
+Three additional `ProxyFetch` timeout/retry suites passed 7/7 tests on 2026-10-09. They verify that
+time spent waiting for transport admission does not consume the response-header deadline, a pooled
+dispatcher response-start timeout retries once with a fresh no-keep-alive dispatcher, a second stall
+surfaces instead of falling through to native fetch, and a transient socket failure uses the fresh
+dispatcher. The timers/upstreams are controlled local fixtures; these tests do not establish that a
+real Google or OpenAI upstream will answer before the configured timeout.
 
 Run the capture variant with:
 
@@ -1140,7 +1151,8 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 293 operations with success-response content; 711
-  of 1,004 non-`204` success operations still lack explicit success-body schemas. The
-  path/method inventory covers 705/705 routes and 236 operations now declare security alternatives;
-  remaining response schemas and conditional auth behavior have not all been source-verified.
+- Continue the OpenAPI handler audit beyond the 358 operations with success-response content; 646
+  of 1,004 non-`204` success operations still lack explicit success-body schemas. Eleven operations
+  have no declared `2xx` status and 14 have only an intentional `204`. The path/method inventory
+  covers 705/705 routes and 297 operations now declare security alternatives; remaining response
+  schemas and conditional auth behavior have not all been source-verified.
