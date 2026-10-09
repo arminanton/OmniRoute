@@ -4993,6 +4993,10 @@ paths:
       operationId: getApiUsageByConnectionId
       tags: [Usage]
       summary: Get usage for a specific connection
+      description: >-
+        Returns a provider-specific live quota object. Its keys vary by provider and are not
+        normalized to one quota schema. No route-local authentication check is performed;
+        deployment-wide authorization policy may still apply.
       parameters:
         - name: connectionId
           in: path
@@ -5002,6 +5006,16 @@ paths:
       responses:
         "200":
           description: Connection usage data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderQuotaUsageRecord"
+        "default":
+          description: Provider lookup or refresh error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/usage/history:
     get:
@@ -5021,34 +5035,124 @@ paths:
       operationId: getApiUsageLogs
       tags: [Usage]
       summary: Get usage logs
+      description: Returns the latest 200 call-log rows as display strings.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Usage log entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageTextLogListResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Usage logs could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/usage/proxy-logs:
     get:
       operationId: getApiUsageProxyLogs
       tags: [Usage]
       summary: Get proxy logs
+      description: >-
+        Reads the in-memory proxy-log ring (at most 200 entries). There is no route-local
+        management-auth check; deployment-wide authorization policy may still apply.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: "`ok` matches internal `success`; other values are compared directly."
+          schema: { type: string, enum: [ok, success, error, timeout] }
+        - name: type
+          in: query
+          required: false
+          schema: { type: string }
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string }
+        - name: level
+          in: query
+          required: false
+          description: Proxy-assignment level such as global, provider, combo, account/key, or direct.
+          schema: { type: string }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          description: Slice limit; defaults to 300 and the source ring contains at most 200 rows.
+          schema: { type: integer, default: 300 }
       responses:
         "200":
           description: Proxy log entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyLogListResponse"
+        "500":
+          description: Proxy logs could not be read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyLogServerErrorResponse"
     delete:
       operationId: deleteApiUsageProxyLogs
       tags: [Usage]
       summary: Clear proxy logs
+      description: Clears the current in-memory ring and persisted proxy-log rows.
       responses:
         "200":
           description: Proxy logs cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyLogsClearedResponse"
+        "500":
+          description: Proxy logs could not be cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProxyLogServerErrorResponse"
 
   /api/usage/request-logs:
     get:
       operationId: getApiUsageRequestLogs
       tags: [Usage]
       summary: Get request logs
+      description: Alias of `/api/usage/logs`; returns the latest 200 call-log rows as display strings.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Request log entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageTextLogListResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Request logs could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
 
   /api/usage/budget:
     get:
@@ -16284,26 +16388,135 @@ paths:
       tags:
         - Usage
       summary: "GET usage › budget › bulk"
+      description: Returns the budget and spend snapshot for every API key, keyed by API-key ID.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Per-key usage budgets and current spend
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageBudgetBulkResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Bulk budget status could not be fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/codex-reset-credit:
     get:
       operationId: getApiUsageCodexResetCredit
       tags:
         - Usage
       summary: "GET usage › codex reset credit"
+      description: >-
+        Lists available reset credits for a Codex or Grok OAuth connection. Codex credit IDs are
+        replaced with opaque selection tokens; the raw upstream identifiers are not returned.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: connectionId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
       responses:
         "200":
-          description: OK
+          description: Available reset credits and their count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditListResponse"
+        "400":
+          description: Invalid connection ID or unsupported provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Connection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditErrorResponse"
+        "409":
+          description: Connection is held by an exclusive session lease or no credit is available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditErrorResponse"
+        "500":
+          description: Provider reset-credit lookup failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditErrorResponse"
     post:
       operationId: postApiUsageCodexResetCredit
       tags:
         - Usage
       summary: "POST usage › codex reset credit"
+      description: >-
+        Redeems one Codex or Grok reset credit and refreshes the provider usage snapshot.
+        `idempotencyKey` is required by the shared route request schema; Grok does not send it to
+        its upstream service.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetCreditRedeemRequest"
       responses:
         "200":
-          description: OK
+          description: Reset credit redeemed or already redeemed, with refreshed usage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditRedeemResponse"
+        "400":
+          description: Invalid request, unsupported provider, or unavailable credit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Connection not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditErrorResponse"
+        "409":
+          description: Connection is held by an exclusive session lease or no credit is available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditErrorResponse"
+        "500":
+          description: Provider reset-credit redemption failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetCreditErrorResponse"
   /api/usage/combo-forecast:
     get:
       operationId: getApiUsageComboForecast
@@ -16630,18 +16843,99 @@ paths:
       tags:
         - Usage
       summary: "GET usage › combo trace › <id>"
+      description: >-
+        Returns a bounded in-memory decision trace containing routing metadata only; prompts,
+        request/response bodies, credentials, account IDs, and raw upstream errors are not included.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Ordered combo target decisions and terminal status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComboDecisionTrace"
+        "400":
+          description: Invocation ID must use the combo- prefix
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Trace not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/om-usage:
     get:
       operationId: getApiUsageOmUsage
       tags:
         - Usage
       summary: "GET usage › om usage"
+      description: >-
+        API-key-authenticated usage command. Defaults to text/plain; `format=json` returns a
+        structured response. JSON mode accepts Bearer auth or x-api-key (the latter is read only
+        when anthropic-version is present); trusted path-scoped credentials are also supported.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+      parameters:
+        - name: format
+          in: query
+          required: false
+          description: Set to json for the discriminated JSON representation; all other values return text.
+          schema: { type: string }
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string }
+        - name: connectionId
+          in: query
+          required: false
+          schema: { type: string }
+        - name: x-omniroute-connection
+          in: header
+          required: false
+          description: Preferred connection ID when `connectionId` is not provided.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Text output by default, or the structured usage snapshot when format=json
+          content:
+            text/plain:
+              schema: { type: string }
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageCommandJson"
+        "401":
+          description: API key is absent, invalid, or not recognized
+          content:
+            text/plain:
+              schema: { type: string }
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageCommandDeniedResponse"
+        "403":
+          description: API key has not enabled the usage command
+          content:
+            text/plain:
+              schema: { type: string }
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageCommandDeniedResponse"
+        "500":
+          description: Usage command failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
   /api/usage/provider-limits:
     get:
       operationId: getApiUsageProviderLimits
@@ -16827,9 +17121,33 @@ paths:
       tags:
         - Usage
       summary: "GET usage › route explain › <id>"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Route decision, related attempts, scoring factors, replay, and resilience evidence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RouteExplainabilityResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Call log or routing decision not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Route explanation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
   /api/usage/token-limits:
     delete:
       operationId: deleteApiUsageTokenLimits
@@ -25865,6 +26183,503 @@ components:
         nodeCount: { type: integer, minimum: 0 }
         comboCount: { type: integer, minimum: 0 }
         apiKeyCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ProviderQuotaUsageRecord:
+      type: object
+      description: Provider-specific quota keys vary by adapter and are intentionally not normalized here.
+      additionalProperties: true
+
+    UsageTextLogListResponse:
+      type: array
+      description: Latest call-log rows formatted for terminal/dashboard display.
+      maxItems: 200
+      items: { type: string }
+
+    ProxyLogInfo:
+      type: object
+      required: [type, host, port]
+      properties:
+        type: { type: string }
+        host: { type: string }
+        port:
+          oneOf:
+            - type: integer
+            - type: string
+      additionalProperties: false
+
+    ProxyLogEntry:
+      type: object
+      required:
+        - id
+        - timestamp
+        - status
+        - proxy
+        - level
+        - levelId
+        - provider
+        - targetUrl
+        - clientIp
+        - egressIp
+        - latencyMs
+        - error
+        - connectionId
+        - comboId
+        - account
+        - tlsFingerprint
+      properties:
+        id: { type: string }
+        timestamp: { type: string, format: date-time }
+        status: { type: string }
+        proxy:
+          oneOf:
+            - $ref: "#/components/schemas/ProxyLogInfo"
+            - type: "null"
+        level: { type: string }
+        levelId: { type: [string, "null"] }
+        provider: { type: [string, "null"] }
+        targetUrl: { type: [string, "null"] }
+        clientIp: { type: [string, "null"] }
+        egressIp: { type: [string, "null"] }
+        latencyMs: { type: number }
+        error: { type: [string, "null"] }
+        connectionId: { type: [string, "null"] }
+        comboId: { type: [string, "null"] }
+        account: { type: [string, "null"] }
+        tlsFingerprint: { type: boolean }
+      additionalProperties: false
+
+    ProxyLogListResponse:
+      type: array
+      maxItems: 200
+      items:
+        $ref: "#/components/schemas/ProxyLogEntry"
+
+    ProxyLogServerErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type: { type: string, const: server_error }
+          additionalProperties: false
+      additionalProperties: false
+
+    ProxyLogsClearedResponse:
+      type: object
+      required: [cleared]
+      properties:
+        cleared: { type: boolean, const: true }
+      additionalProperties: false
+
+    UsageBudgetBulkResponse:
+      type: object
+      required: [budgets]
+      properties:
+        budgets:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/UsageBudgetStatusResponse"
+      additionalProperties: false
+
+    CodexResetCreditSelection:
+      type: object
+      required: [selectionToken]
+      properties:
+        selectionToken: { type: string }
+        resetType: { type: string }
+        status: { type: string }
+        grantedAt: { type: string }
+        expiresAt: { type: [string, "null"] }
+        title: { type: string }
+        description: { type: string }
+      additionalProperties: false
+
+    GrokResetCreditSelection:
+      type: object
+      required: [selectionToken, expiresAt]
+      properties:
+        selectionToken: { type: string }
+        expiresAt: { type: [string, "null"] }
+      additionalProperties: false
+
+    ResetCreditListResponse:
+      type: object
+      required: [ok, credits, availableCount]
+      properties:
+        ok: { type: boolean, const: true }
+        credits:
+          type: array
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/CodexResetCreditSelection"
+              - $ref: "#/components/schemas/GrokResetCreditSelection"
+        availableCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ResetCreditRedeemRequest:
+      type: object
+      required: [connectionId, idempotencyKey]
+      properties:
+        connectionId: { type: string, minLength: 1, maxLength: 256 }
+        idempotencyKey: { type: string, minLength: 1, maxLength: 256 }
+        creditId: { type: string, minLength: 1, maxLength: 512 }
+      additionalProperties: true
+
+    ResetCreditRedeemResponse:
+      type: object
+      required: [ok, outcome, usage]
+      properties:
+        ok: { type: boolean, const: true }
+        outcome: { type: string, enum: [reset, alreadyRedeemed] }
+        usage:
+          type: object
+          additionalProperties: true
+      additionalProperties: false
+
+    ResetCreditErrorResponse:
+      type: object
+      required: [ok, code, error]
+      properties:
+        ok: { type: boolean, const: false }
+        code: { type: string }
+        error: { type: string }
+      additionalProperties: false
+
+    ComboDecisionTraceEntry:
+      type: object
+      required: [step, target, decision, ts]
+      properties:
+        step: { type: string }
+        target: { type: string }
+        decision:
+          type: string
+          enum: [dispatched, skipped_before_dispatch, not_reached]
+        reason:
+          type: string
+          enum:
+            - circuit_open
+            - provider_cooldown
+            - request_exhaustion
+            - model_lockout
+            - quota_cutoff
+            - availability
+            - credential_gate
+            - concurrency_cap
+            - admission_lane
+            - predictive_ttft
+        ts: { type: number, description: Unix epoch time in milliseconds. }
+      additionalProperties: false
+
+    ComboDecisionTrace:
+      type: object
+      required: [invocationId, createdAt, strategy, comboName, decisions, terminal]
+      properties:
+        invocationId: { type: string, pattern: '^combo-' }
+        createdAt: { type: number, description: Unix epoch time in milliseconds. }
+        strategy: { type: [string, "null"] }
+        comboName: { type: [string, "null"] }
+        decisions:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboDecisionTraceEntry"
+        terminal:
+          oneOf:
+            - type: object
+              required: [status, errorClass]
+              properties:
+                status: { type: [integer, "null"] }
+                errorClass: { type: [string, "null"] }
+              additionalProperties: false
+            - type: "null"
+      additionalProperties: false
+
+    UsageCommandSnapshot:
+      type: object
+      required: [connectionId, provider, plan, quotas]
+      properties:
+        connectionId: { type: string }
+        provider: { type: string }
+        plan: {}
+        quotas:
+          type: object
+          additionalProperties: true
+        quotaWindowThresholds:
+          type: [object, "null"]
+          additionalProperties: { type: number }
+      additionalProperties: false
+
+    UsageCommandDeniedResponse:
+      type: object
+      required: [allowed, error]
+      properties:
+        allowed: { type: boolean, const: false }
+        error:
+          type: object
+          required: [message]
+          properties:
+            message: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+
+    UsageCommandAllowedResponse:
+      type: object
+      required: [allowed, personal, provider, providers]
+      properties:
+        allowed: { type: boolean, const: true }
+        personal:
+          oneOf:
+            - type: object
+              additionalProperties: true
+            - type: "null"
+        provider:
+          oneOf:
+            - $ref: "#/components/schemas/UsageCommandSnapshot"
+            - type: "null"
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageCommandSnapshot"
+      additionalProperties: false
+
+    UsageCommandJson:
+      oneOf:
+        - $ref: "#/components/schemas/UsageCommandDeniedResponse"
+        - $ref: "#/components/schemas/UsageCommandAllowedResponse"
+
+    RouteExplainFactor:
+      type: object
+      required: [name, value, status, weight, contribution, details]
+      properties:
+        name: { type: string }
+        value: { type: string }
+        status: { type: string, enum: [positive, warning, negative, neutral] }
+        weight: { type: number }
+        contribution: { type: number }
+        details: { type: string }
+      additionalProperties: false
+
+    RouteExplainTarget:
+      type: object
+      required: [id, timestamp, status, provider, model, comboStepId, comboExecutionKey, durationMs, outcome, reason]
+      properties:
+        id: { type: string }
+        timestamp: { type: [string, "null"] }
+        status: { type: integer }
+        provider: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+        comboStepId: { type: [string, "null"] }
+        comboExecutionKey: { type: [string, "null"] }
+        durationMs: { type: number }
+        outcome: { type: string, enum: [selected, related] }
+        reason: { type: string }
+      additionalProperties: false
+
+    RouteExplainTargetStats:
+      type: object
+      required: [sampleSize, successRate, avgLatencyMs, lastStatus, lastUsedAt]
+      properties:
+        sampleSize: { type: integer, minimum: 0 }
+        successRate: { type: number, minimum: 0, maximum: 100 }
+        avgLatencyMs: { type: number, minimum: 0 }
+        lastStatus: { type: [string, "null"], enum: [ok, error, null] }
+        lastUsedAt: { type: [string, "null"] }
+      additionalProperties: false
+
+    RouteExplainDecisionReplayAlignment:
+      type: string
+      enum:
+        - matches_recomputed_top_target
+        - differs_from_recomputed_top_target
+        - runtime_target_missing_from_recompute
+        - not_combo_routed
+
+    RouteExplainDecisionReplayCandidate:
+      type: object
+      required: [executionKey, stepId, provider, model, connectionId, label, rank, score, isRuntimeSelected, wouldSelectNow, factors, signals]
+      properties:
+        executionKey: { type: string }
+        stepId: { type: [string, "null"] }
+        provider: { type: string }
+        model: { type: string }
+        connectionId: { type: [string, "null"] }
+        label: { type: [string, "null"] }
+        rank: { type: integer }
+        score: { type: number }
+        isRuntimeSelected: { type: boolean }
+        wouldSelectNow: { type: boolean }
+        factors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComboScoringInspectorFactor"
+        signals:
+          $ref: "#/components/schemas/ComboScoringInspectorTarget/properties/signals"
+      additionalProperties: false
+
+    RouteExplainDecisionReplayRuntime:
+      type: object
+      required: [source, exact, selectedCallLogId, comboName, comboStepId, comboExecutionKey, provider, model, connectionId, status, timestamp, durationMs]
+      properties:
+        source: { type: string, const: call_logs }
+        exact: { type: boolean, const: true }
+        selectedCallLogId: { type: string }
+        comboName: { type: [string, "null"] }
+        comboStepId: { type: [string, "null"] }
+        comboExecutionKey: { type: [string, "null"] }
+        provider: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+        connectionId: { type: [string, "null"] }
+        status: { type: integer }
+        timestamp: { type: [string, "null"] }
+        durationMs: { type: number }
+      additionalProperties: false
+
+    RouteExplainDecisionReplayRecompute:
+      type: object
+      required: [source, method, exactRuntimeReplay, asOf, timeRange, horizon, comboId, comboName, strategy, taskType, recomputedSelectedExecutionKey, runtimeSelectedRank, runtimeSelectedScore, alignment, candidates, warnings]
+      properties:
+        source: { type: string, const: comboScoringInspector }
+        method: { type: string, const: read_only_recompute }
+        exactRuntimeReplay: { type: boolean, const: false }
+        asOf: { type: string, format: date-time }
+        timeRange: { type: string, const: 24h }
+        horizon: { type: string, const: 7d }
+        comboId: { type: string }
+        comboName: { type: string }
+        strategy: { type: string }
+        taskType: { type: string, const: default }
+        recomputedSelectedExecutionKey: { type: [string, "null"] }
+        runtimeSelectedRank: { type: [integer, "null"] }
+        runtimeSelectedScore: { type: [number, "null"] }
+        alignment:
+          $ref: "#/components/schemas/RouteExplainDecisionReplayAlignment"
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteExplainDecisionReplayCandidate"
+        warnings:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    RouteExplainDecisionReplay:
+      type: object
+      required: [runtime, recompute, warnings]
+      properties:
+        runtime:
+          $ref: "#/components/schemas/RouteExplainDecisionReplayRuntime"
+        recompute:
+          oneOf:
+            - $ref: "#/components/schemas/RouteExplainDecisionReplayRecompute"
+            - type: "null"
+        warnings:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    RouteExplainabilityResponse:
+      type: object
+      required: [requestId, generatedAt, routeType, confidence, summary, comboUsed, providerSelected, modelUsed, score, costActual, latencyActual, decision, request, selectedTarget, targetStats, fallbacksTriggered, relatedTargets, evidence, recommendations, limitations, decisionReplay, resilience, reasoningRouting]
+      properties:
+        requestId: { type: string }
+        generatedAt: { type: string, format: date-time }
+        routeType: { type: string, enum: [combo, direct] }
+        confidence: { type: string, enum: [high, medium, low] }
+        summary: { type: string }
+        comboUsed: { type: [string, "null"] }
+        providerSelected: { type: [string, "null"] }
+        modelUsed: { type: [string, "null"] }
+        score: { type: number }
+        costActual: { type: number }
+        latencyActual: { type: number }
+        decision:
+          type: object
+          required: [comboUsed, providerSelected, modelUsed, status, score, factors, fallbacksTriggered, costActual, latencyActual]
+          properties:
+            comboUsed: { type: [string, "null"] }
+            providerSelected: { type: [string, "null"] }
+            modelUsed: { type: [string, "null"] }
+            status: { type: integer }
+            score: { type: number }
+            factors:
+              type: array
+              items:
+                $ref: "#/components/schemas/RouteExplainFactor"
+            fallbacksTriggered:
+              type: array
+              items:
+                $ref: "#/components/schemas/RouteExplainTarget"
+            costActual: { type: number }
+            latencyActual: { type: number }
+          additionalProperties: false
+        request:
+          type: object
+          required: [id, timestamp, method, path, requestedModel, requestType, sourceFormat, targetFormat, cacheSource, apiKeyName]
+          properties:
+            id: { type: string }
+            timestamp: { type: [string, "null"] }
+            method: { type: [string, "null"] }
+            path: { type: [string, "null"] }
+            requestedModel: { type: [string, "null"] }
+            requestType: { type: [string, "null"] }
+            sourceFormat: { type: [string, "null"] }
+            targetFormat: { type: [string, "null"] }
+            cacheSource: { type: [string, "null"] }
+            apiKeyName: { type: [string, "null"] }
+          additionalProperties: false
+        selectedTarget:
+          type: object
+          required: [provider, model, account, connectionId, comboStepId, comboExecutionKey, durationMs, status, tokensIn, tokensOut]
+          properties:
+            provider: { type: [string, "null"] }
+            model: { type: [string, "null"] }
+            account: { type: [string, "null"] }
+            connectionId: { type: [string, "null"] }
+            comboStepId: { type: [string, "null"] }
+            comboExecutionKey: { type: [string, "null"] }
+            durationMs: { type: number }
+            status: { type: integer }
+            tokensIn: { type: integer }
+            tokensOut: { type: integer }
+          additionalProperties: false
+        targetStats:
+          $ref: "#/components/schemas/RouteExplainTargetStats"
+        fallbacksTriggered:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteExplainTarget"
+        relatedTargets:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteExplainTarget"
+        evidence:
+          type: array
+          items:
+            type: object
+            required: [label, value, tone]
+            properties:
+              label: { type: string }
+              value: { type: string }
+              tone: { type: string, enum: [positive, warning, negative, neutral] }
+            additionalProperties: false
+        recommendations:
+          type: array
+          items: { type: string }
+        limitations:
+          type: array
+          items: { type: string }
+        decisionReplay:
+          $ref: "#/components/schemas/RouteExplainDecisionReplay"
+        resilience:
+          oneOf:
+            - $ref: "#/components/schemas/ResilienceExplanation"
+            - type: "null"
+        reasoningRouting:
+          type: [object, "null"]
+          additionalProperties: true
       additionalProperties: false
 
     GrokAutoTopUpStatus:
