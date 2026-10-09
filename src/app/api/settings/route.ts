@@ -70,6 +70,33 @@ function settingsResponseHeaders(settingsRevision: number): Record<string, strin
   };
 }
 
+/**
+ * Project the broad settings store onto the public API response shape.
+ * Credentials are accepted by PATCH/PUT but never echoed back, including after
+ * unrelated partial updates. The configured flags let clients render
+ * write-only credential controls without learning the stored value.
+ */
+function projectSettingsResponse(settings: Record<string, unknown>): Record<string, unknown> {
+  const response = { ...settings };
+  const oidcClientSecret = response.oidcClientSecret;
+  const skillsmpApiKey = response.skillsmpApiKey;
+  const cliproxyapiApiKey = response.cliproxyapi_api_key;
+
+  delete response.password;
+  delete response.oidcClientSecret;
+  delete response.skillsmpApiKey;
+  delete response.cliproxyapi_api_key;
+
+  const isConfigured = (value: unknown) => typeof value === "string" && value.trim().length > 0;
+  return {
+    ...response,
+    hasOidcClientSecret: isConfigured(oidcClientSecret),
+    hasSkillsmpApiKey: isConfigured(skillsmpApiKey),
+    hasCliproxyapiApiKey:
+      isConfigured(cliproxyapiApiKey) || isConfigured(process.env.CLIPROXYAPI_API_KEY),
+  };
+}
+
 const RadarAdminOwnerSubjectSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("dashboard_session"), id: z.literal("dashboard") }).strict(),
   z.object({ kind: z.literal("anonymous"), id: z.literal("anonymous") }).strict(),
@@ -235,7 +262,7 @@ export async function GET(request: Request) {
   try {
     const settings = await getSettings();
     const settingsRevision = await getSettingsRevision();
-    const { password, ...safeSettings } = settings;
+    const safeSettings = projectSettingsResponse(settings);
 
     const runtimePorts = getRuntimePorts();
     const cloudUrl = process.env.CLOUD_URL || process.env.NEXT_PUBLIC_CLOUD_URL || null;
@@ -559,7 +586,7 @@ export async function PATCH(request: Request) {
       // Audit failure must never break the write — swallow.
     }
 
-    const { password, ...safeSettings } = settings;
+    const safeSettings = projectSettingsResponse(settings);
     const settingsRevision = await getSettingsRevision();
     return NextResponse.json(
       {

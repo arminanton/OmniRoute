@@ -112,7 +112,7 @@ test("application settings responses describe source-backed fields, redaction, a
     "export async function GET(request: Request)",
     "export async function PATCH(request: Request)"
   );
-  assert.match(routeGet, /const \{ password, \.\.\.safeSettings \} = settings;/);
+  assert.match(routeGet, /const safeSettings = projectSettingsResponse\(settings\)/);
   assert.match(routeGet, /hasPassword: hasManagementPasswordConfigured\(settings\)/);
   for (const field of [
     "settingsRevision",
@@ -132,6 +132,27 @@ test("application settings responses describe source-backed fields, redaction, a
   assert.match(routeSource, /ETag: String\(settingsRevision\)/);
   assert.match(routeGet, /settingsResponseHeaders\(settingsRevision\)/);
 
+  const projection = section(
+    routeSource,
+    "function projectSettingsResponse(",
+    "const RadarAdminOwnerSubjectSchema"
+  );
+  for (const field of [
+    "delete response.password",
+    "delete response.oidcClientSecret",
+    "delete response.skillsmpApiKey",
+    "delete response.cliproxyapi_api_key",
+    "hasOidcClientSecret: isConfigured(oidcClientSecret)",
+    "hasSkillsmpApiKey: isConfigured(skillsmpApiKey)",
+  ]) {
+    assert.ok(projection.includes(field), `response projector is missing ${field}`);
+  }
+  assert.match(
+    projection,
+    /hasCliproxyapiApiKey:\s*isConfigured\(cliproxyapiApiKey\) \|\|\s*isConfigured\(process\.env\.CLIPROXYAPI_API_KEY\)/
+  );
+  assert.match(routeGet, /projectSettingsResponse\(settings\)/);
+
   const settingsLoader = section(
     settingsSource,
     "export async function getSettings(",
@@ -149,13 +170,29 @@ test("application settings responses describe source-backed fields, redaction, a
 
   const persisted = spec.components.schemas.ApplicationSettingsPersistedValues;
   assert.equal(persisted["x-sensitive"], true);
-  assert.deepEqual(persisted.required, ["oidcClientSecret"]);
+  assert.deepEqual(persisted.required, [
+    "hasOidcClientSecret",
+    "hasSkillsmpApiKey",
+    "hasCliproxyapiApiKey",
+  ]);
   assert.equal(persisted.properties.password, undefined);
-  assert.deepEqual(persisted.not.required, ["password"]);
+  assert.equal(persisted.properties.oidcClientSecret, undefined);
+  assert.equal(persisted.properties.skillsmpApiKey, undefined);
+  assert.equal(persisted.properties.cliproxyapi_api_key, undefined);
+  assert.deepEqual(
+    persisted.not.anyOf.map((constraint: Record<string, string[]>) => constraint.required[0]),
+    ["password", "oidcClientSecret", "skillsmpApiKey", "cliproxyapi_api_key"]
+  );
   assert.equal(persisted.additionalProperties, true);
-  for (const field of ["oidcClientSecret", "skillsmpApiKey", "cliproxyapi_api_key"]) {
-    assert.equal(persisted.properties[field].type, "string");
-    assert.equal(persisted.properties[field]["x-sensitive"], true);
+  for (const field of ["hasOidcClientSecret", "hasSkillsmpApiKey", "hasCliproxyapiApiKey"]) {
+    assert.equal(persisted.properties[field].type, "boolean");
+  }
+  for (const method of ["get", "patch", "put"]) {
+    assert.match(operation(method).description, /omits the management-password hash and raw OIDC/);
+    assert.match(
+      operation(method).description,
+      /hasOidcClientSecret.*hasSkillsmpApiKey.*hasCliproxyapiApiKey/s
+    );
   }
 });
 
@@ -181,9 +218,10 @@ test("PATCH and PUT share the source handler and sensitive revision response", (
     "export async function PATCH(request: Request)",
     "export async function PUT(request: Request)"
   );
-  assert.match(patchSource, /const \{ password, \.\.\.safeSettings \} = settings;/);
+  assert.match(patchSource, /const safeSettings = projectSettingsResponse\(settings\)/);
   assert.match(patchSource, /settingsRevision/);
   assert.match(patchSource, /settingsResponseHeaders\(settingsRevision\)/);
+  assert.match(patchSource, /projectSettingsResponse\(settings\)/);
   assert.match(
     routeSource,
     /export async function PUT\(request: Request\)\s*\{\s*return PATCH\(request\);\s*\}/

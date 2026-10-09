@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Card } from "@/shared/components";
 import { useTranslations } from "next-intl";
 import type { SkillsProvider } from "@/lib/skills/providerSettings";
+import { SkillsmpApiKeyControl } from "./SkillsmpApiKeyControl";
 
 interface MemoryConfig {
   enabled: boolean;
@@ -77,12 +78,14 @@ export default function MemorySkillsTab() {
   const [qdrantHelpOpen, setQdrantHelpOpen] = useState(false);
 
   const [skillsmpApiKey, setSkillsmpApiKey] = useState("");
+  const [hasSkillsmpApiKey, setHasSkillsmpApiKey] = useState(false);
   const [skillsmpSaving, setSkillsmpSaving] = useState(false);
   const [skillsmpStatus, setSkillsmpStatus] = useState("");
   const [skillsProvider, setSkillsProvider] = useState<SkillsProvider>("skillsmp");
   const [skillsProviderSaving, setSkillsProviderSaving] = useState(false);
   const [skillsProviderStatus, setSkillsProviderStatus] = useState("");
   const t = useTranslations("settings");
+  const tc = useTranslations("common");
 
   useEffect(() => {
     Promise.all([
@@ -93,9 +96,7 @@ export default function MemorySkillsTab() {
     ])
       .then(([memData, settingsData, qdrantData, embeddingData]) => {
         if (memData) setConfig(memData);
-        if (settingsData?.skillsmpApiKey) {
-          setSkillsmpApiKey(settingsData.skillsmpApiKey);
-        }
+        setHasSkillsmpApiKey(settingsData?.hasSkillsmpApiKey === true);
         if (qdrantData) {
           setQdrant(qdrantData);
           setQdrantApiKeyInput("");
@@ -223,16 +224,18 @@ export default function MemorySkillsTab() {
     }
   }, [t]);
 
-  const saveSkillsmpApiKey = useCallback(async () => {
+  const updateSkillsmpApiKey = useCallback(async (apiKey: string) => {
     setSkillsmpSaving(true);
     setSkillsmpStatus("");
     try {
       const res = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skillsmpApiKey }),
+        body: JSON.stringify({ skillsmpApiKey: apiKey }),
       });
       if (res.ok) {
+        setHasSkillsmpApiKey(apiKey.trim().length > 0);
+        setSkillsmpApiKey("");
         setSkillsmpStatus("saved");
         setTimeout(() => setSkillsmpStatus(""), 2000);
       } else {
@@ -243,7 +246,18 @@ export default function MemorySkillsTab() {
     } finally {
       setSkillsmpSaving(false);
     }
-  }, [skillsmpApiKey]);
+  }, []);
+
+  const saveSkillsmpApiKey = useCallback(
+    (apiKey: string) => {
+      if (apiKey.trim()) void updateSkillsmpApiKey(apiKey);
+    },
+    [updateSkillsmpApiKey]
+  );
+
+  const clearSkillsmpApiKey = useCallback(() => {
+    if (hasSkillsmpApiKey) void updateSkillsmpApiKey("");
+  }, [hasSkillsmpApiKey, updateSkillsmpApiKey]);
 
   const saveSkillsProvider = useCallback(async (provider: SkillsProvider) => {
     setSkillsProvider(provider);
@@ -799,29 +813,23 @@ export default function MemorySkillsTab() {
           )}
         </div>
 
-        <div className="p-4 rounded-lg bg-surface/30 border border-border/30">
-          <label className="text-sm font-medium block mb-2">{t("memorySkillsApiKey")}</label>
-          <div className="flex gap-2">
-            <input
-              type="password"
-              value={skillsmpApiKey}
-              onChange={(e) => setSkillsmpApiKey(e.target.value)}
-              placeholder="sk_live_..."
-              className="flex-1 px-3 py-2 rounded-lg bg-background border border-border text-sm font-mono focus:outline-none focus:ring-1 focus:ring-violet-500"
-            />
-            <button
-              onClick={saveSkillsmpApiKey}
-              disabled={skillsmpSaving}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50 transition-colors"
-            >
-              {skillsmpSaving ? t("saving") : t("save")}
-            </button>
-          </div>
-          <p className="text-xs text-text-muted mt-2">
-            {t("skillsmpApiKeyHintBefore")} <span className="text-violet-400">skillsmp.com</span>
-            {t("skillsmpApiKeyHintAfter", { limit: 500 })}
-          </p>
-        </div>
+        <SkillsmpApiKeyControl
+          value={skillsmpApiKey}
+          configured={hasSkillsmpApiKey}
+          saving={skillsmpSaving}
+          label={t("memorySkillsApiKey")}
+          configuredLabel={t("configured")}
+          saveLabel={skillsmpSaving ? t("saving") : t("save")}
+          clearLabel={tc("clear")}
+          placeholder={hasSkillsmpApiKey ? t("qdrantApiKeyPlaceholderKeep") : "sk_live_..."}
+          onChange={setSkillsmpApiKey}
+          onSave={saveSkillsmpApiKey}
+          onClear={clearSkillsmpApiKey}
+        />
+        <p className="text-xs text-text-muted mt-2">
+          {t("skillsmpApiKeyHintBefore")} <span className="text-violet-400">skillsmp.com</span>
+          {t("skillsmpApiKeyHintAfter", { limit: 500 })}
+        </p>
       </Card>
 
       {/* Active Skills Provider */}

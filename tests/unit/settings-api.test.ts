@@ -46,6 +46,28 @@ const harness = await createSettingsApiHarness();
 // --- Static import for helper (doesn't depend on DB) ---
 import { makeManagementSessionRequest } from "../helpers/managementSession.ts";
 
+const RESPONSE_SECRET_FIXTURES = {
+  oidcClientSecret: "oidc-settings-response-fixture",
+  skillsmpApiKey: "skillsmp-settings-response-fixture",
+  cliproxyapi_api_key: "cliproxy-settings-response-fixture",
+};
+
+async function seedResponseSecrets() {
+  await harness.updateSettings({
+    requireLogin: false,
+    password: null,
+    ...RESPONSE_SECRET_FIXTURES,
+  });
+}
+
+function assertSettingsResponseOmitsSecrets(body: Record<string, unknown>) {
+  assert.equal(body.password, undefined);
+  for (const [key, secret] of Object.entries(RESPONSE_SECRET_FIXTURES)) {
+    assert.equal(body[key], undefined, `${key} must not be returned`);
+    assert.equal(JSON.stringify(body).includes(secret), false, `${key} value must not be echoed`);
+  }
+}
+
 beforeEach(async () => {
   await harness.resetStorage();
 });
@@ -62,6 +84,93 @@ describe("Settings API - persisted preferences", () => {
   test("getSettings defaults Responses previous_response_id handling to auto", async () => {
     const settings = await harness.getSettings();
     assert.strictEqual(settings.responsesPreviousResponseIdMode, "auto");
+  });
+
+  describe("credential-free settings responses", () => {
+    test("GET omits persisted credentials and reports only configured flags", async () => {
+      await seedResponseSecrets();
+      const response = await harness.settingsRoute.GET(
+        await makeManagementSessionRequest("http://localhost/api/settings", {
+          method: "GET",
+        })
+      );
+      const body = (await response.json()) as Record<string, unknown>;
+
+      assert.equal(response.status, 200);
+      assertSettingsResponseOmitsSecrets(body);
+      assert.equal(body.hasOidcClientSecret, true);
+      assert.equal(body.hasSkillsmpApiKey, true);
+      assert.equal(body.hasCliproxyapiApiKey, true);
+    });
+
+    test("PATCH and PUT omit persisted credentials after successful updates", async () => {
+      for (const method of ["PATCH", "PUT"] as const) {
+        await harness.resetStorage();
+        await seedResponseSecrets();
+        const request = await makeManagementSessionRequest("http://localhost/api/settings", {
+          method,
+          body: { debugMode: method === "PATCH" },
+        });
+        const handler =
+          method === "PATCH" ? harness.settingsRoute.PATCH : harness.settingsRoute.PUT;
+        const response = await handler(request);
+        const body = (await response.json()) as Record<string, unknown>;
+
+        assert.equal(response.status, 200, `${method} should succeed`);
+        assertSettingsResponseOmitsSecrets(body);
+        assert.equal(body.hasOidcClientSecret, true);
+        assert.equal(body.hasSkillsmpApiKey, true);
+        assert.equal(body.hasCliproxyapiApiKey, true);
+      }
+    });
+
+    test("partial updates retain omitted credentials and explicit empty strings clear them", async () => {
+      const originalCliproxyEnv = process.env.CLIPROXYAPI_API_KEY;
+      delete process.env.CLIPROXYAPI_API_KEY;
+      try {
+        await seedResponseSecrets();
+        const partialResponse = await harness.settingsRoute.PATCH(
+          await makeManagementSessionRequest("http://localhost/api/settings", {
+            method: "PATCH",
+            body: { debugMode: true },
+          })
+        );
+        assert.equal(partialResponse.status, 200);
+        assertSettingsResponseOmitsSecrets(
+          (await partialResponse.json()) as Record<string, unknown>
+        );
+
+        let stored = await harness.getSettings();
+        assert.equal(stored.oidcClientSecret, RESPONSE_SECRET_FIXTURES.oidcClientSecret);
+        assert.equal(stored.skillsmpApiKey, RESPONSE_SECRET_FIXTURES.skillsmpApiKey);
+        assert.equal(stored.cliproxyapi_api_key, RESPONSE_SECRET_FIXTURES.cliproxyapi_api_key);
+
+        const clearResponse = await harness.settingsRoute.PATCH(
+          await makeManagementSessionRequest("http://localhost/api/settings", {
+            method: "PATCH",
+            body: {
+              oidcClientSecret: "",
+              skillsmpApiKey: "",
+              cliproxyapi_api_key: "",
+            },
+          })
+        );
+        const clearedBody = (await clearResponse.json()) as Record<string, unknown>;
+        assert.equal(clearResponse.status, 200);
+        assertSettingsResponseOmitsSecrets(clearedBody);
+        assert.equal(clearedBody.hasOidcClientSecret, false);
+        assert.equal(clearedBody.hasSkillsmpApiKey, false);
+        assert.equal(clearedBody.hasCliproxyapiApiKey, false);
+
+        stored = await harness.getSettings();
+        assert.equal(stored.oidcClientSecret, "");
+        assert.equal(stored.skillsmpApiKey, "");
+        assert.equal(stored.cliproxyapi_api_key, "");
+      } finally {
+        if (originalCliproxyEnv === undefined) delete process.env.CLIPROXYAPI_API_KEY;
+        else process.env.CLIPROXYAPI_API_KEY = originalCliproxyEnv;
+      }
+    });
   });
 
   describe("debugMode", () => {

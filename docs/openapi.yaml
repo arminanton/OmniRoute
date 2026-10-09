@@ -4696,17 +4696,17 @@ paths:
       tags: [Settings]
       summary: Get application settings
       description: >-
-        Returns the persisted settings snapshot plus runtime metadata. The current route removes the
-        `password` setting (which stores the management-password hash), but returns configured
-        `oidcClientSecret`, `skillsmpApiKey`, and `cliproxyapi_api_key` values; treat this response
-        as sensitive. Unknown persisted settings may also be present. Protected profiles accept a
-        dashboard session, a `manage`/`admin` API key via Bearer, Anthropic `x-api-key` (with the
-        `anthropic-version` header or a User-Agent matching `claude-code`, `claude-cli`, or
-        `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted loopback
-        internal-service token. An `oma_live_` Access Token requires
-        `read` scope. Unlocked standalone installs with `requireLogin=false` may permit anonymous
-        access, and a fresh install may allow loopback bootstrap requests; locked management still
-        requires authentication. URL credentials are not accepted.
+        Returns the projected settings snapshot plus runtime metadata. The projection omits the
+        management-password hash and raw OIDC, SkillsMP, and CLIProxyAPI credentials; the
+        `hasOidcClientSecret`, `hasSkillsmpApiKey`, and `hasCliproxyapiApiKey` fields report whether
+        those credentials are configured. Other persisted settings may also be present. Protected
+        profiles accept a dashboard session, a `manage`/`admin` API key via Bearer, Anthropic
+        `x-api-key` (with the `anthropic-version` header or a User-Agent matching `claude-code`,
+        `claude-cli`, or `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted
+        loopback internal-service token. An `oma_live_` Access Token requires `read` scope. Unlocked
+        standalone installs with `requireLogin=false` may permit anonymous access, and a fresh
+        install may allow loopback bootstrap requests; locked management still requires
+        authentication. URL credentials are not accepted.
       security:
         - BearerAuth: []
         - ManagementAnthropicApiKeyAuth: []
@@ -4717,7 +4717,9 @@ paths:
         - {}
       responses:
         "200":
-          description: Current settings and runtime metadata; secret settings may be returned.
+          description: >-
+            Projected settings and runtime metadata. Raw password and known credential values are
+            omitted; credential-presence flags are returned.
           x-sensitive: true
           headers:
             ETag:
@@ -4740,18 +4742,17 @@ paths:
       tags: [Settings]
       summary: Update settings
       description: >-
-        Updates settings and returns the updated persisted snapshot with its revision. The current
-        route removes the `password` setting (which stores the management-password hash), but
-        returns configured `oidcClientSecret`, `skillsmpApiKey`, and `cliproxyapi_api_key` values;
-        treat this response as sensitive. Unknown persisted settings may also be present. Protected
-        profiles accept a dashboard session, a `manage`/`admin` API key via Bearer, Anthropic
-        `x-api-key` (with the `anthropic-version` header or a User-Agent matching `claude-code`,
-        `claude-cli`, or `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted
-        loopback internal-service token. An
-        `oma_live_` Access Token requires `write` scope. Unlocked standalone installs with
-        `requireLogin=false` may permit anonymous access, and a fresh install may allow loopback
-        bootstrap requests; locked management still requires authentication. URL credentials are
-        not accepted.
+        Updates settings and returns the projected settings snapshot with its revision. The
+        projection omits the management-password hash and raw OIDC, SkillsMP, and CLIProxyAPI
+        credentials; the `hasOidcClientSecret`, `hasSkillsmpApiKey`, and `hasCliproxyapiApiKey`
+        fields report whether those credentials are configured. Other persisted settings may also
+        be present. Protected profiles accept a dashboard session, a `manage`/`admin` API key via
+        Bearer, Anthropic `x-api-key` (with the `anthropic-version` header or a User-Agent matching
+        `claude-code`, `claude-cli`, or `anthropic`), Google `x-goog-api-key`, a loopback CLI token,
+        or a trusted loopback internal-service token. An `oma_live_` Access Token requires `write`
+        scope. Unlocked standalone installs with `requireLogin=false` may permit anonymous access,
+        and a fresh install may allow loopback bootstrap requests; locked management still requires
+        authentication. URL credentials are not accepted.
       security:
         - BearerAuth: []
         - ManagementAnthropicApiKeyAuth: []
@@ -4770,7 +4771,9 @@ paths:
               type: object
       responses:
         "200":
-          description: Updated settings snapshot and revision; secret settings may be returned.
+          description: >-
+            Updated projected settings snapshot and revision. Raw password and known credential
+            values are omitted; credential-presence flags are returned.
           x-sensitive: true
           headers:
             ETag:
@@ -4794,17 +4797,17 @@ paths:
       summary: Update application settings (PUT compatibility alias)
       description: >-
         Compatibility alias that delegates to the PATCH handler and returns the same updated
-        settings snapshot, revision, and headers. The current route removes the `password` setting
-        (which stores the management-password hash), but returns configured `oidcClientSecret`,
-        `skillsmpApiKey`, and `cliproxyapi_api_key` values; treat this response as sensitive.
-        Unknown persisted settings may also be present. Protected profiles accept a dashboard
-        session, a `manage`/`admin` API key via Bearer, Anthropic `x-api-key` (with the
-        `anthropic-version` header or a User-Agent matching `claude-code`, `claude-cli`, or
-        `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted loopback
-        internal-service token. An `oma_live_` Access Token requires
-        `write` scope. Unlocked standalone installs with `requireLogin=false` may permit anonymous
-        access, and a fresh install may allow loopback bootstrap requests; locked management still
-        requires authentication. URL credentials are not accepted.
+        projected settings snapshot, revision, and headers. The projection omits the
+        management-password hash and raw OIDC, SkillsMP, and CLIProxyAPI credentials; the
+        `hasOidcClientSecret`, `hasSkillsmpApiKey`, and `hasCliproxyapiApiKey` fields report whether
+        those credentials are configured. Other persisted settings may also be present. Protected
+        profiles accept a dashboard session, a `manage`/`admin` API key via Bearer, Anthropic
+        `x-api-key` (with the `anthropic-version` header or a User-Agent matching `claude-code`,
+        `claude-cli`, or `anthropic`), Google `x-goog-api-key`, a loopback CLI token, or a trusted
+        loopback internal-service token. An `oma_live_` Access Token requires `write` scope. Unlocked
+        standalone installs with `requireLogin=false` may permit anonymous access, and a fresh
+        install may allow loopback bootstrap requests; locked management still requires
+        authentication. URL credentials are not accepted.
       security:
         - BearerAuth: []
         - ManagementAnthropicApiKeyAuth: []
@@ -4824,7 +4827,9 @@ paths:
               additionalProperties: true
       responses:
         "200":
-          description: Updated settings snapshot and revision; secret settings may be returned.
+          description: >-
+            Updated projected settings snapshot and revision. Raw password and known credential
+            values are omitted; credential-presence flags are returned.
           x-sensitive: true
           headers:
             ETag:
@@ -21040,18 +21045,32 @@ paths:
       tags:
         - Provider metrics
       summary: "GET provider metrics"
+      description: >-
+        Per-provider counts and latest request/error status from retained call logs. Providers with
+        no current connection are omitted; nullable latency, timestamp, and status fields are
+        returned as `null` when the source data is unavailable.
       responses:
         "200":
-          description: OK
+          description: Provider metrics and latest-provider topology.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderMetricsResponse" }
   /api/provider-stats:
     get:
       operationId: getApiProviderStats
       tags:
         - Provider stats
       summary: "GET provider stats"
+      description: >-
+        Provider/model call-log aggregates with in-memory combo metrics, five-minute request
+        telemetry, and per-provider tool latency. If an optional in-memory metrics helper cannot
+        load, its section is returned as an empty object.
       responses:
         "200":
-          description: OK
+          description: Provider and model statistics plus combo, telemetry, and tool-latency metrics.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderStatsResponse" }
   /api/providers/{id}/cc-alias:
     parameters:
       - name: id
@@ -34604,28 +34623,23 @@ components:
     ApplicationSettingsPersistedValues:
       type: object
       description: >-
-        Persisted settings spread into the `/api/settings` responses. The current route removes
-        only the `password` property, which stores the management-password hash. It returns
-        configured OIDC, SkillsMP, and CLIProxyAPI credential values; other non-underscore legacy
-        settings may also be present. Treat the full settings object as sensitive.
+        Projected settings spread into the `/api/settings` responses. The projector omits the
+        `password` property (which stores the management-password hash) and raw OIDC, SkillsMP, and
+        CLIProxyAPI credentials. The required boolean fields report whether each credential is
+        configured; other non-underscore persisted settings may also be present.
       x-sensitive: true
-      required: [oidcClientSecret]
+      required: [hasOidcClientSecret, hasSkillsmpApiKey, hasCliproxyapiApiKey]
       properties:
-        oidcClientSecret:
-          type: string
-          description: Decrypted OIDC client secret when configured.
-          x-sensitive: true
-        skillsmpApiKey:
-          type: string
-          description: SkillsMP API key when configured.
-          x-sensitive: true
-        cliproxyapi_api_key:
-          type: string
-          description: CLIProxyAPI API key when configured.
-          x-sensitive: true
+        hasOidcClientSecret: { type: boolean }
+        hasSkillsmpApiKey: { type: boolean }
+        hasCliproxyapiApiKey: { type: boolean }
       additionalProperties: true
       not:
-        required: [password]
+        anyOf:
+          - required: [password]
+          - required: [oidcClientSecret]
+          - required: [skillsmpApiKey]
+          - required: [cliproxyapi_api_key]
     ApplicationSettingsRuntimePorts:
       type: object
       required: [port, apiPort, dashboardPort, apiPortExplicit, dashboardPortExplicit]
@@ -34639,8 +34653,8 @@ components:
     ApplicationSettingsReadResponse:
       type: object
       description: >-
-        Sensitive settings snapshot plus runtime metadata. `password` is omitted; configured secret
-        settings are returned as described by `ApplicationSettingsPersistedValues`.
+        Projected settings snapshot plus runtime metadata. Password hashes and raw known credentials
+        are omitted; configured-credential flags are returned by `ApplicationSettingsPersistedValues`.
       x-sensitive: true
       allOf:
         - $ref: "#/components/schemas/ApplicationSettingsPersistedValues"
@@ -34674,8 +34688,8 @@ components:
     ApplicationSettingsUpdateResponse:
       type: object
       description: >-
-        Sensitive updated settings snapshot. `password` is omitted; configured secret settings
-        are returned as described by `ApplicationSettingsPersistedValues`.
+        Updated projected settings snapshot. Password hashes and raw known credentials are omitted;
+        configured-credential flags are returned by `ApplicationSettingsPersistedValues`.
       x-sensitive: true
       allOf:
         - $ref: "#/components/schemas/ApplicationSettingsPersistedValues"
@@ -52067,6 +52081,281 @@ components:
           type: array
           items: { $ref: "#/components/schemas/ComboRecord" }
         total: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ProviderMetricsProviderSummary:
+      type: object
+      required:
+        [
+          totalRequests,
+          totalSuccesses,
+          successRate,
+          avgLatencyMs,
+          lastRequestAt,
+          lastErrorAt,
+          lastStatus,
+          lastErrorStatus,
+        ]
+      properties:
+        totalRequests: { type: integer, minimum: 0 }
+        totalSuccesses: { type: integer, minimum: 0 }
+        successRate: { type: integer, minimum: 0, maximum: 100 }
+        avgLatencyMs: { type: [number, "null"] }
+        lastRequestAt: { type: [string, "null"] }
+        lastErrorAt: { type: [string, "null"] }
+        lastStatus: { type: [integer, "null"] }
+        lastErrorStatus: { type: [integer, "null"] }
+      additionalProperties: false
+    ProviderMetricsTopology:
+      type: object
+      required: [providers, lastProvider, errorProvider]
+      properties:
+        providers:
+          type: array
+          items: { type: string }
+        lastProvider: { type: string }
+        errorProvider: { type: string }
+      additionalProperties: false
+    ProviderMetricsResponse:
+      type: object
+      required: [metrics, topology]
+      properties:
+        metrics:
+          type: object
+          description: Metrics keyed by provider id.
+          additionalProperties: { $ref: "#/components/schemas/ProviderMetricsProviderSummary" }
+        topology: { $ref: "#/components/schemas/ProviderMetricsTopology" }
+      additionalProperties: false
+    ProviderStatsProviderRow:
+      type: object
+      required:
+        [
+          provider,
+          nodeName,
+          totalRequests,
+          successfulRequests,
+          avgLatencyMs,
+          totalTokensIn,
+          totalTokensOut,
+        ]
+      properties:
+        provider: { type: string, description: Resolved display name for the provider. }
+        nodeName: { type: [string, "null"] }
+        totalRequests: { type: integer, minimum: 0 }
+        successfulRequests: { type: integer, minimum: 0 }
+        avgLatencyMs: { type: [number, "null"] }
+        totalTokensIn: { type: [number, "null"] }
+        totalTokensOut: { type: [number, "null"] }
+      additionalProperties: false
+    ProviderStatsModelRow:
+      type: object
+      required: [provider, nodeName, model, requests, avgLatencyMs, successfulRequests]
+      properties:
+        provider: { type: string, description: Resolved display name for the provider. }
+        nodeName: { type: [string, "null"] }
+        model: { type: string }
+        requests: { type: integer, minimum: 0 }
+        avgLatencyMs: { type: [number, "null"] }
+        successfulRequests: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ProviderStatsComboModelMetrics:
+      type: object
+      required:
+        [
+          requests,
+          successes,
+          failures,
+          totalLatencyMs,
+          lastStatus,
+          lastUsedAt,
+          avgLatencyMs,
+          successRate,
+        ]
+      properties:
+        requests: { type: integer, minimum: 0 }
+        successes: { type: integer, minimum: 0 }
+        failures: { type: integer, minimum: 0 }
+        totalLatencyMs: { type: number, minimum: 0 }
+        lastStatus: { type: [string, "null"], enum: [ok, error, null] }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        avgLatencyMs: { type: integer, minimum: 0 }
+        successRate: { type: integer, minimum: 0, maximum: 100 }
+      additionalProperties: false
+    ProviderStatsComboTargetMetrics:
+      type: object
+      required:
+        [
+          executionKey,
+          stepId,
+          model,
+          provider,
+          providerId,
+          connectionId,
+          label,
+          requests,
+          successes,
+          failures,
+          totalLatencyMs,
+          lastStatus,
+          lastUsedAt,
+          avgLatencyMs,
+          successRate,
+        ]
+      properties:
+        executionKey: { type: string }
+        stepId: { type: [string, "null"] }
+        model: { type: string }
+        provider: { type: [string, "null"] }
+        providerId: { type: [string, "null"] }
+        connectionId: { type: [string, "null"] }
+        label: { type: [string, "null"] }
+        requests: { type: integer, minimum: 0 }
+        successes: { type: integer, minimum: 0 }
+        failures: { type: integer, minimum: 0 }
+        totalLatencyMs: { type: number, minimum: 0 }
+        lastStatus: { type: [string, "null"], enum: [ok, error, null] }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        avgLatencyMs: { type: integer, minimum: 0 }
+        successRate: { type: integer, minimum: 0, maximum: 100 }
+      additionalProperties: false
+    ProviderStatsComboShadowMetrics:
+      type: object
+      required:
+        [
+          totalRequests,
+          totalSuccesses,
+          totalFailures,
+          totalLatencyMs,
+          lastUsedAt,
+          byModel,
+          byTarget,
+          avgLatencyMs,
+          successRate,
+        ]
+      properties:
+        totalRequests: { type: integer, minimum: 0 }
+        totalSuccesses: { type: integer, minimum: 0 }
+        totalFailures: { type: integer, minimum: 0 }
+        totalLatencyMs: { type: number, minimum: 0 }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        byModel:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ProviderStatsComboModelMetrics" }
+        byTarget:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ProviderStatsComboTargetMetrics" }
+        avgLatencyMs: { type: integer, minimum: 0 }
+        successRate: { type: integer, minimum: 0, maximum: 100 }
+      additionalProperties: false
+    ProviderStatsComboMetrics:
+      type: object
+      required:
+        [
+          totalRequests,
+          totalSuccesses,
+          totalFailures,
+          totalFallbacks,
+          totalLatencyMs,
+          strategy,
+          lastUsedAt,
+          intentCounts,
+          byModel,
+          byTarget,
+          productionTraffic,
+          avgLatencyMs,
+          successRate,
+          fallbackRate,
+          shadow,
+        ]
+      properties:
+        totalRequests: { type: integer, minimum: 0 }
+        totalSuccesses: { type: integer, minimum: 0 }
+        totalFailures: { type: integer, minimum: 0 }
+        totalFallbacks: { type: integer, minimum: 0 }
+        totalLatencyMs: { type: number, minimum: 0 }
+        strategy: { type: string }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        intentCounts:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        byModel:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ProviderStatsComboModelMetrics" }
+        byTarget:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ProviderStatsComboTargetMetrics" }
+        productionTraffic: { type: boolean }
+        avgLatencyMs: { type: integer, minimum: 0 }
+        successRate: { type: integer, minimum: 0, maximum: 100 }
+        fallbackRate: { type: integer, minimum: 0, maximum: 100 }
+        shadow: { $ref: "#/components/schemas/ProviderStatsComboShadowMetrics" }
+      additionalProperties: false
+    ProviderStatsTelemetryPhase:
+      type: object
+      required: [count, p50, p95, avg]
+      properties:
+        count: { type: integer, minimum: 0 }
+        p50: { type: integer, minimum: 0 }
+        p95: { type: integer, minimum: 0 }
+        avg: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ProviderStatsTelemetrySummary:
+      type: object
+      required: [count, avg, p50, p95, p99, phaseBreakdown]
+      properties:
+        count: { type: integer, minimum: 0 }
+        avg: { type: integer, minimum: 0 }
+        p50: { type: integer, minimum: 0 }
+        p95: { type: integer, minimum: 0 }
+        p99: { type: integer, minimum: 0 }
+        phaseBreakdown:
+          type: object
+          properties:
+            parse: { $ref: "#/components/schemas/ProviderStatsTelemetryPhase" }
+            validate: { $ref: "#/components/schemas/ProviderStatsTelemetryPhase" }
+            policy: { $ref: "#/components/schemas/ProviderStatsTelemetryPhase" }
+            resolve: { $ref: "#/components/schemas/ProviderStatsTelemetryPhase" }
+            provider_wait: { $ref: "#/components/schemas/ProviderStatsTelemetryPhase" }
+            stream: { $ref: "#/components/schemas/ProviderStatsTelemetryPhase" }
+            finalize: { $ref: "#/components/schemas/ProviderStatsTelemetryPhase" }
+          additionalProperties: false
+      additionalProperties: false
+    ProviderStatsTelemetryEmpty:
+      type: object
+      maxProperties: 0
+      additionalProperties: false
+    ProviderStatsToolLatency:
+      type: object
+      required: [avgTtftAfterToolMs, avgGapAfterToolMs, measurementCount]
+      properties:
+        avgTtftAfterToolMs: { type: integer, minimum: 0 }
+        avgGapAfterToolMs: { type: integer, minimum: 0 }
+        measurementCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ProviderStatsResponse:
+      type: object
+      required: [providers, models, comboMetrics, telemetry, toolLatency]
+      properties:
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderStatsProviderRow" }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderStatsModelRow" }
+        comboMetrics:
+          type: object
+          description: Map of combo name to current metrics; a returned value may be null.
+          additionalProperties:
+            oneOf:
+              - $ref: "#/components/schemas/ProviderStatsComboMetrics"
+              - type: "null"
+        telemetry:
+          oneOf:
+            - $ref: "#/components/schemas/ProviderStatsTelemetrySummary"
+            - $ref: "#/components/schemas/ProviderStatsTelemetryEmpty"
+        toolLatency:
+          type: object
+          description: Map of provider id to tool-latency aggregates.
+          additionalProperties: { $ref: "#/components/schemas/ProviderStatsToolLatency" }
       additionalProperties: false
     ComboMetricsModel:
       type: object
