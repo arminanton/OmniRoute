@@ -98,7 +98,11 @@ tags:
   - name: Pricing
     description: Model pricing configuration
   - name: Cloud
-    description: Cloud worker authentication and sync
+    description: >-
+      Cloud worker compatibility routes. The auth, model-resolve, and model-alias GET operations
+      are PUBLIC-classified by the gateway but still require a valid Bearer API key in their
+      handlers. Credential and alias writes use always-required management authentication, even
+      when `requireLogin=false`.
   - name: Fallback
     description: Fallback chain management
   - name: Telemetry
@@ -9177,70 +9181,199 @@ paths:
     post:
       operationId: postApiCloudAuth
       tags: [Cloud]
-      summary: Authenticate with cloud worker
-      description: Authenticates with the OmniRoute cloud worker for remote access.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
+      summary: Return cloud auth metadata
+      description: >-
+        Requires any valid OmniRoute API key in `Authorization: Bearer`. Although the gateway
+        classifies this exact route as PUBLIC, the handler rejects missing or invalid keys. Returns
+        active connection metadata and model aliases; provider API keys are masked and raw API,
+        access, and refresh tokens are not returned.
+      security:
+        - BearerAuth: []
       responses:
         "200":
-          description: Authentication result
+          description: Active provider metadata with masked credentials and the model-alias map.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudWorkerAuthResponse" }
+        "401":
+          description: Missing or invalid Bearer API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Authentication metadata could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/cloud/credentials/update:
     put:
       operationId: putApiCloudCredentialsUpdate
       tags: [Cloud]
       summary: Update cloud worker credentials
+      description: >-
+        Requires management authentication regardless of `requireLogin`. A dashboard session,
+        management-scoped API key, access token with `write` or `admin` scope, loopback CLI token,
+        or configured internal-service token from a trusted loopback request is accepted. The
+        request contains provider access/refresh tokens and must be treated as sensitive. An empty
+        credential string is accepted by validation but ignored by the update logic; at least one
+        credential field must be supplied.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
-            schema:
-              type: object
+            schema: { $ref: "#/components/schemas/CloudWorkerCredentialUpdateRequest" }
       responses:
         "200":
-          description: Credentials updated
+          description: Credentials were updated for the active provider connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudWorkerCredentialUpdateResponse" }
+        "400":
+          description: Malformed JSON or invalid credential update body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: No active provider connection was found for the requested provider.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: The connection could not be updated or had no valid connection ID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/cloud/model/resolve:
     post:
       operationId: postApiCloudModelResolve
       tags: [Cloud]
       summary: Resolve model via cloud
-      description: Resolves a model request through the cloud worker.
+      description: >-
+        Requires any valid OmniRoute API key in `Authorization: Bearer`; the gateway's PUBLIC
+        classification does not make this handler anonymous. Resolves a trimmed model alias only
+        when the stored target is a string containing a provider/model separator.
+      security:
+        - BearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
+            schema: { $ref: "#/components/schemas/CloudWorkerResolveAliasRequest" }
       responses:
         "200":
-          description: Resolved model info
+          description: Alias and its provider/model split.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudWorkerResolveAliasResponse" }
+        "400":
+          description: Malformed JSON or invalid alias input.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Missing or invalid Bearer API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "404":
+          description: Alias is absent or does not resolve to a provider/model string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Alias resolution failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/cloud/models/alias:
     get:
       operationId: getApiCloudModelsAlias
       tags: [Cloud]
       summary: Get cloud model aliases
+      description: >-
+        Requires any valid OmniRoute API key in `Authorization`; the handler accepts either a
+        Bearer-prefixed key or the raw key without a prefix. The gateway's PUBLIC classification
+        does not make this handler anonymous. Returns the alias map as stored; legacy values may be
+        arbitrary JSON, while model resolution uses only string values.
+      security:
+        - BearerAuth: []
+        - CloudAuthorizationApiKeyAuth: []
       responses:
         "200":
-          description: Cloud model alias list
+          description: The current model-alias map.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudWorkerModelAliasesResponse" }
+        "401":
+          description: Missing or invalid Bearer API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Model aliases could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     put:
       operationId: putApiCloudModelsAlias
       tags: [Cloud]
       summary: Update cloud model alias
+      description: >-
+        Requires management authentication regardless of `requireLogin`. A dashboard session,
+        management-scoped API key, access token with `write` or `admin` scope, loopback CLI token,
+        or configured internal-service token from a trusted loopback request is accepted. The
+        local alias is updated first; cloud synchronization is attempted when enabled, but its
+        failure is logged and does not change the successful local response.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
+            schema: { $ref: "#/components/schemas/CloudWorkerModelAliasUpdateRequest" }
       responses:
         "200":
-          description: Alias updated
+          description: Alias was written to the local model-alias store.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudWorkerModelAliasUpdateResponse" }
+        "400":
+          description: Malformed JSON, invalid model/alias, or alias already belongs to another model.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Local alias update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   # ─── Fallback ──────────────────────────────────────────────────
 
@@ -30512,6 +30645,20 @@ components:
       description: >-
         Process-local shared token used only by the AgentBridge server to post sanitized captured
         entries to `/api/tools/traffic-inspector/internal/ingest`. This is not an OmniRoute API key.
+    InternalServiceTokenAuth:
+      type: apiKey
+      in: header
+      name: x-omniroute-internal-service-token
+      description: >-
+        Per-install internal-service credential accepted only when the request is trusted as
+        loopback. This is for in-process service calls, not external API clients.
+    CloudAuthorizationApiKeyAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: >-
+        Raw OmniRoute API key in the Authorization header, without a `Bearer ` prefix. Accepted
+        only by GET `/api/cloud/models/alias`; other cloud read routes require the Bearer scheme.
     RelayTokenBearerAuth:
       type: http
       scheme: bearer
@@ -33210,6 +33357,128 @@ components:
         deleted: { type: boolean, const: true }
         deletedBatches: { type: integer, minimum: 0 }
         deletedFiles: { type: integer, minimum: 0 }
+      additionalProperties: false
+    CloudWorkerModelAliasMap:
+      type: object
+      description: >-
+        Values are stored model-alias JSON. New cloud alias writes use model strings, but legacy
+        entries can contain other JSON values; the resolver only resolves string values.
+      additionalProperties: true
+    CloudWorkerConnectionResponse:
+      type: object
+      description: >-
+        Active provider connection metadata. Raw provider API keys and OAuth access/refresh tokens
+        are never returned; `maskedApiKey` uses `****` for values up to eight characters and
+        otherwise retains only the first and last four characters around `****`.
+      required:
+        [provider, hasApiKey, hasAccessToken, hasRefreshToken, maskedApiKey, projectId, priority, isActive]
+      properties:
+        provider: { type: string }
+        authType: { type: string }
+        hasApiKey: { type: boolean }
+        hasAccessToken: { type: boolean }
+        hasRefreshToken: { type: boolean }
+        maskedApiKey:
+          type: [string, "null"]
+          description: Masked API key only; never the raw provider key.
+        projectId: { type: [string, "null"] }
+        expiresAt: { type: string }
+        priority: { type: integer }
+        globalPriority: { type: integer }
+        defaultModel: { type: string }
+        isActive: { type: boolean }
+      additionalProperties: false
+    CloudWorkerAuthResponse:
+      type: object
+      required: [connections, modelAliases]
+      properties:
+        connections:
+          type: array
+          items: { $ref: "#/components/schemas/CloudWorkerConnectionResponse" }
+        modelAliases: { $ref: "#/components/schemas/CloudWorkerModelAliasMap" }
+      additionalProperties: false
+    CloudWorkerResolveAliasRequest:
+      type: object
+      required: [alias]
+      properties:
+        alias:
+          type: string
+          minLength: 1
+          description: Trimmed alias key to resolve.
+      description: Unrecognized top-level fields are accepted but stripped.
+      additionalProperties: true
+    CloudWorkerResolveAliasResponse:
+      type: object
+      required: [alias, provider, model]
+      properties:
+        alias: { type: string }
+        provider: { type: string, minLength: 1 }
+        model: { type: string }
+      additionalProperties: false
+    CloudWorkerModelAliasesResponse:
+      type: object
+      required: [aliases]
+      properties:
+        aliases: { $ref: "#/components/schemas/CloudWorkerModelAliasMap" }
+      additionalProperties: false
+    CloudWorkerCredentialUpdateFields:
+      type: object
+      x-sensitive: true
+      properties:
+        accessToken:
+          type: string
+          writeOnly: true
+          x-sensitive: true
+        refreshToken:
+          type: string
+          writeOnly: true
+          x-sensitive: true
+        expiresIn:
+          type: [number, string]
+          exclusiveMinimum: 0
+          description: >-
+            Positive lifetime in seconds. The handler coerces numeric strings to numbers before
+            validation and rejects values that do not coerce to a positive number.
+      anyOf:
+        - required: [accessToken]
+        - required: [refreshToken]
+        - required: [expiresIn]
+      additionalProperties: false
+    CloudWorkerCredentialUpdateRequest:
+      type: object
+      x-sensitive: true
+      required: [provider, credentials]
+      properties:
+        provider:
+          type: string
+          minLength: 1
+          description: Trimmed provider ID with an active connection to update.
+        credentials: { $ref: "#/components/schemas/CloudWorkerCredentialUpdateFields" }
+      description: Unrecognized top-level fields are accepted but stripped.
+      additionalProperties: true
+    CloudWorkerCredentialUpdateResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+      additionalProperties: false
+    CloudWorkerModelAliasUpdateRequest:
+      type: object
+      required: [model, alias]
+      properties:
+        model: { type: string, minLength: 1, description: Trimmed model ID to store. }
+        alias: { type: string, minLength: 1, description: Trimmed alias key to set. }
+      description: Unrecognized top-level fields are accepted but stripped.
+      additionalProperties: true
+    CloudWorkerModelAliasUpdateResponse:
+      type: object
+      required: [success, model, alias, message]
+      properties:
+        success: { type: boolean, const: true }
+        model: { type: string }
+        alias: { type: string }
+        message: { type: string }
       additionalProperties: false
     CloudAgentCredential:
       type: object
