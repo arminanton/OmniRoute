@@ -5077,16 +5077,72 @@ paths:
       operationId: getApiSettingsRequireLogin
       tags: [Settings]
       summary: Read management login and setup status
+      description: >-
+        Intentionally public read used by the login/setup UI. Returns the effective login requirement,
+        browser-session state, password/OIDC setup flags, and supported Node/Bun runtime information.
       responses:
         "200":
           description: Login requirement, setup, password, OIDC, and session state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RequireLoginStatusResponse" }
+        "403":
+          description: Runtime policy prevented reading the login/setup state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiSettingsRequireLogin
       tags: [Settings]
       summary: Toggle login requirement
+      description: >-
+        Updates the login requirement and/or sets the management password. Unauthenticated writes are
+        allowed only in the local standalone bootstrap window before a password or OIDC provider has
+        been configured. Locked-management deployments always require management auth; runtime policy
+        rejects disabling login there.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RequireLoginUpdateRequest" }
       responses:
         "200":
           description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RequireLoginUpdateResponse" }
+        "400":
+          description: Invalid JSON or no valid update fields.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Authentication required outside the bootstrap window.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          description: Runtime policy prevented the requested login-policy change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Login settings update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/settings/ip-filter:
     get:
@@ -37486,6 +37542,54 @@ components:
       required: [initialized]
       properties:
         initialized: { type: boolean }
+      additionalProperties: false
+
+    RequireLoginStatusResponse:
+      type: object
+      required:
+        [
+          authenticated,
+          requireLogin,
+          hasPassword,
+          setupComplete,
+          oidcEnabled,
+          oidcDisablePasswordLogin,
+          nodeVersion,
+          nodeCompatible,
+        ]
+      properties:
+        authenticated:
+          {
+            type: boolean,
+            description: Whether the current dashboard session cookie verified successfully.,
+          }
+        requireLogin:
+          {
+            type: boolean,
+            description: Effective policy; forced true in locked-management deployments.,
+          }
+        hasPassword: { type: boolean }
+        setupComplete: { type: boolean }
+        oidcEnabled: { type: boolean }
+        oidcDisablePasswordLogin: { type: boolean }
+        nodeVersion: { type: string }
+        nodeCompatible: { type: boolean }
+      additionalProperties: false
+
+    RequireLoginUpdateRequest:
+      type: object
+      minProperties: 1
+      description: At least `requireLogin` or a password of four or more characters must be supplied; locked-management policy may reject attempts to disable login.
+      properties:
+        requireLogin: { type: boolean }
+        password: { type: string, minLength: 4, writeOnly: true }
+      additionalProperties: true
+
+    RequireLoginUpdateResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
       additionalProperties: false
 
     RestartResponse:

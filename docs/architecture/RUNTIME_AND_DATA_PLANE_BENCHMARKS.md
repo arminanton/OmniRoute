@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 721
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 724
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 472 operations have success
-response content schemas and 390 declare operation-level security. Of 1,001 operations with a
-non-`204` success status, 529 still lack an explicit success-body schema; 13 operations have no
+contract is still stronger on route coverage than schema completeness: 474 operations have success
+response content schemas and 391 declare operation-level security. Of 1,001 operations with a
+non-`204` success status, 527 still lack an explicit success-body schema; 13 operations have no
 declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -116,18 +116,21 @@ and protocol enums, custom-header bounds, compatibility-only PUT responses, visi
 and all DELETE variants; it corrects `all`/`resetOverride` query values to the literal string the
 handler checks. That audit found and fixed another ignored-field mismatch: POST accepted
 `contextWindowOverride` through its shared validator but did not persist it. Creation now stores or
-clears the manual override and reports the effective value, matching PUT semantics. These slices
-bring the spec to 705 component schemas, with 466 operations declaring success-body schemas and 384
-operation-level security declarations; 535 non-`204` success operations still need explicit bodies.
+clears the manual override and reports the effective value, matching PUT semantics.
 The system lifecycle pass adds response bodies and conditional auth to the cloud/model-sync scheduler
 status and initialization actions, plus restart confirmation. Shutdown is marked always protected and
 documents its success body and auth failures; lifecycle action routes are not invoked by contract
 tests because doing so would start schedulers or signal the test process. The cloud-sync pass types
 the disabled/enabled connection-state union, action body, sync/enable/disable results, failure paths,
 and configuration-dependent management auth. It identifies that first-time enablement can return a
-new raw API key and marks that field as sensitive in the response schema. The current spec inventory
-is 721 schemas, 472 success-body operations, 390 security declarations, and 529 untyped non-`204`
-success operations.
+new raw API key and marks that field as sensitive in the response schema. That brought the inventory
+to 721 schemas, 472 success-body operations, 390 security declarations, and 529 untyped non-`204`
+success operations. The require-login pass distinguishes the public status GET from the conditional
+bootstrap/password POST. It documents all eight live GET fields (including only the two Node/Bun
+compatibility fields the handler actually returns), write-only password input, bootstrap
+authentication alternatives, and runtime-policy denials. The current spec inventory is 724 schemas,
+474 success-body operations, and 391 security declarations; 527 non-`204` successes still lack body
+schemas.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -1319,8 +1322,8 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 472 operations with success-response content; 529
+- Continue the OpenAPI handler audit beyond the 474 operations with success-response content; 527
   of 1,001 non-`204` success operations still lack explicit success-body schemas. Thirteen operations
   have no declared `2xx` status and 15 have only an intentional `204`. The path/method inventory
-  covers 705/705 routes and 390 operations now declare security alternatives; remaining response
+  covers 705/705 routes and 391 operations now declare security alternatives; remaining response
   schemas and conditional auth behavior have not all been source-verified.
