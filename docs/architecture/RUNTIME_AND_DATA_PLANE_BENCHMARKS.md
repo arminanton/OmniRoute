@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 668
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 692
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 445 operations have success
-response content schemas and 370 declare operation-level security. Of 1,001 operations with a
-non-`204` success status, 556 still lack an explicit success-body schema; 13 operations have no
+contract is still stronger on route coverage than schema completeness: 462 operations have success
+response content schemas and 379 declare operation-level security. Of 1,001 operations with a
+non-`204` success status, 539 still lack an explicit success-body schema; 13 operations have no
 declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -107,9 +107,13 @@ pass types semantic and provider-cache statistics, trends, idempotency and LRU c
 invalidation scopes, and the compression-memo hit/miss windows. The compression-settings pass
 types the strict global settings update and normalized read response, including all current mode
 values; partial MCP output-trimming config and clamped result; compression preview inputs, diffs,
-validation and stats; and language-pack/rule catalogs. These slices bring the spec to 668 component
-schemas, with 445 operations declaring success-body schemas and 370 operation-level security
-declarations.
+validation and stats; and language-pack/rule catalogs. The system/log-export pass types storage
+health, active-session and exclusive-lease projections, local job summaries and run history, and
+plugin-driven log-export type/destination/test/run/status responses. It records conditional
+management authentication and that destination config defaults to an empty object while returned
+secret values are redacted. These slices bring the spec to 692 component schemas, with 462
+operations declaring success-body schemas and 379 operation-level security declarations; 539
+non-`204` success operations still need explicit bodies.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -1301,8 +1305,8 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 445 operations with success-response content; 556
+- Continue the OpenAPI handler audit beyond the 462 operations with success-response content; 539
   of 1,001 non-`204` success operations still lack explicit success-body schemas. Thirteen operations
   have no declared `2xx` status and 15 have only an intentional `204`. The path/method inventory
-  covers 705/705 routes and 370 operations now declare security alternatives; remaining response
+  covers 705/705 routes and 379 operations now declare security alternatives; remaining response
   schemas and conditional auth behavior have not all been source-verified.

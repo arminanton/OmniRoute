@@ -8753,6 +8753,9 @@ paths:
       responses:
         "200":
           description: Init status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiInitResponse" }
 
   /api/restart:
     post:
@@ -8979,6 +8982,14 @@ paths:
       responses:
         "200":
           description: Storage health status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StorageHealthResponse" }
+        "500":
+          description: Storage health lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/sync/cloud:
     get:
@@ -9026,8 +9037,14 @@ paths:
       responses:
         "200":
           description: Registered jobs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobsListResponse" }
         "500":
           description: Failed to list jobs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/jobs/{id}/enable:
     post:
@@ -9046,10 +9063,19 @@ paths:
       responses:
         "200":
           description: Job enabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobEnabledResponse" }
         "404":
           description: Job not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           description: Failed to enable job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/jobs/{id}/disable:
     post:
@@ -9068,10 +9094,19 @@ paths:
       responses:
         "200":
           description: Job disabled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobEnabledResponse" }
         "404":
           description: Job not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           description: Failed to disable job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/jobs/{id}/run-now:
     post:
@@ -9092,10 +9127,19 @@ paths:
       responses:
         "200":
           description: Job trigger accepted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobTriggerResponse" }
         "404":
           description: Job not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           description: Failed to trigger job
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/jobs/{id}/runs:
     get:
@@ -9114,10 +9158,19 @@ paths:
       responses:
         "200":
           description: Job run history
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JobRunHistoryResponse" }
         "404":
           description: Job not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           description: Failed to load job runs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   # ─── Log export ─────────────────────────────────────────────────
 
@@ -9129,11 +9182,27 @@ paths:
       description: >-
         Returns every registered destination type with the config field descriptors the
         dashboard renders its form from. Adding a destination type needs no UI change.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Destination types and their config fields
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogExportDestinationTypesResponse" }
         "500":
           description: Failed to list destination types
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/log-export/destinations:
     get:
@@ -9141,11 +9210,27 @@ paths:
       tags: [System]
       summary: List log-export destinations
       description: Secrets are redacted; a stored secret is returned as the literal `__stored__`.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Configured destinations with cursor, backlog, and last-run state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogExportDestinationListResponse" }
         "500":
           description: Failed to list destinations
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiLogExportDestinations
       tags: [System]
@@ -9153,18 +9238,26 @@ paths:
       description: >-
         The config object is validated against the destination type's own schema. Secret
         keys declared by the type are encrypted at rest and never echoed back.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [name, type, config]
+              required: [name, type]
               properties:
                 name:
                   type: string
+                  minLength: 1
+                  maxLength: 200
                 type:
                   type: string
+                  minLength: 1
+                  maxLength: 64
                 enabled:
                   type: boolean
                 config:
@@ -9172,21 +9265,57 @@ paths:
                   additionalProperties: true
                 batchSize:
                   type: integer
+                  minimum: 1
+                  maximum: 10000
+                  default: 500
+                includeBodies:
+                  type: boolean
+                  default: false
+                maxBodyBytes:
+                  type: integer
+                  minimum: 1024
+                  maximum: 5000000
+                  default: 262144
                 maxRowsPerRun:
                   type: integer
+                  minimum: 1
+                  maximum: 1000000
+                  default: 10000
       responses:
         "201":
           description: Destination created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogExportDestinationCreateResponse" }
         "400":
           description: Unknown destination type or invalid configuration
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
         "500":
           description: Failed to create destination
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/log-export/destinations/{id}:
     get:
       operationId: getApiLogExportDestinationsById
       tags: [System]
       summary: Read one log-export destination
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -9196,10 +9325,25 @@ paths:
       responses:
         "200":
           description: Destination with secrets redacted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogExportDestinationResponse" }
         "404":
           description: Destination not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "500":
           description: Failed to read destination
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiLogExportDestinationsById
       tags: [System]
@@ -9207,6 +9351,10 @@ paths:
       description: >-
         Sending `__stored__` for a secret keeps the stored credential. The destination type
         is immutable after creation.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -9229,22 +9377,57 @@ paths:
                   additionalProperties: true
                 batchSize:
                   type: integer
+                  minimum: 1
+                  maximum: 10000
+                includeBodies:
+                  type: boolean
+                maxBodyBytes:
+                  type: integer
+                  minimum: 1024
+                  maximum: 5000000
                 maxRowsPerRun:
                   type: integer
+                  minimum: 1
+                  maximum: 1000000
       responses:
         "200":
           description: Destination updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogExportDestinationResponse" }
         "400":
           description: Invalid configuration
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
         "404":
           description: Destination not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "500":
           description: Failed to update destination
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiLogExportDestinationsById
       tags: [System]
       summary: Delete a log-export destination
       description: Removes the destination and its export cursor.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -9254,10 +9437,25 @@ paths:
       responses:
         "200":
           description: Destination deleted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogExportDestinationDeleteResponse" }
         "404":
           description: Destination not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "500":
           description: Failed to delete destination
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/log-export/destinations/{id}/test:
     post:
@@ -9267,6 +9465,10 @@ paths:
       description: >-
         Probes credentials and reachability without writing rows. A failed probe is reported
         as 200 with `ok: false` and an operator-facing reason.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -9276,8 +9478,20 @@ paths:
       responses:
         "200":
           description: Probe result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogExportTestResponse" }
         "404":
           description: Destination not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/log-export/destinations/{id}/run:
     post:
@@ -9287,6 +9501,10 @@ paths:
       description: >-
         Drains pending call logs into this destination using the same cursor semantics as the
         hourly job.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -9296,10 +9514,25 @@ paths:
       responses:
         "200":
           description: Run result with exported count, batches, and remaining backlog
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogExportRunResponse" }
         "404":
           description: Destination not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "500":
           description: Failed to run the export
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/log-export/status:
     get:
@@ -9307,11 +9540,27 @@ paths:
       tags: [System]
       summary: Log-export scheduler status
       description: Cron expression, recent job runs, and the per-destination backlog.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Scheduler state and destination backlog
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogExportStatusResponse" }
         "500":
           description: Failed to read status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   # ─── Resilience & Monitoring ────────────────────────────────────
 
@@ -9661,6 +9910,14 @@ paths:
       responses:
         "200":
           description: Active session list
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DashboardSessionsResponse" }
+        "500":
+          description: Active session snapshot failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/cache:
     get:
@@ -36763,6 +37020,388 @@ components:
         success: { type: boolean, const: true }
         enabled: { type: boolean }
         message: { type: string }
+      additionalProperties: false
+
+    ApiInitResponse:
+      type: object
+      required: [initialized]
+      properties:
+        initialized: { type: boolean }
+      additionalProperties: false
+
+    StorageHealthResponse:
+      type: object
+      required:
+        - driver
+        - dbPath
+        - sizeBytes
+        - lastBackupAt
+        - backupCount
+        - retentionDays
+        - tableMaxRows
+        - backupRetention
+        - dataDir
+      properties:
+        driver: { type: string, const: sqlite }
+        dbPath:
+          {
+            type: string,
+            description: Data-directory path with the home prefix abbreviated as `~` when possible.,
+          }
+        sizeBytes: { type: integer, minimum: 0 }
+        lastBackupAt: { type: [string, "null"], format: date-time }
+        backupCount: { type: integer, minimum: 0 }
+        retentionDays:
+          type: object
+          required: [app, call]
+          properties:
+            app: { type: integer, minimum: 0 }
+            call: { type: integer, minimum: 0 }
+          additionalProperties: false
+        tableMaxRows:
+          type: object
+          required: [callLogs, proxyLogs]
+          properties:
+            callLogs: { type: integer, minimum: 0 }
+            proxyLogs: { type: integer, minimum: 0 }
+          additionalProperties: false
+        backupRetention:
+          type: object
+          required: [maxFiles, days]
+          properties:
+            maxFiles: { type: integer, minimum: 0 }
+            days: { type: integer, minimum: 0 }
+          additionalProperties: false
+        dataDir:
+          {
+            type: string,
+            description: Data-directory path with the home prefix abbreviated as `~` when possible.,
+          }
+      additionalProperties: false
+
+    DashboardRecentSession:
+      type: object
+      required: [sessionId, createdAt, lastActive, requestCount, connectionId, ageMs]
+      properties:
+        sessionId: { type: string }
+        createdAt: { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+        lastActive: { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+        requestCount: { type: integer, minimum: 0 }
+        connectionId: { type: [string, "null"] }
+        lastToolFinishAt:
+          { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+        ageMs:
+          { type: integer, minimum: 0, description: Age since session creation in milliseconds. }
+      additionalProperties: false
+
+    DashboardExclusiveSession:
+      type: object
+      required: [sessionId, ageMs, requestCount, connectionId, connectionName, leaseBacked, active]
+      properties:
+        sessionId:
+          { type: string, description: Synthetic `lease:<connectionId>` dashboard identifier. }
+        ageMs: { type: "null" }
+        requestCount: { type: integer, minimum: 0 }
+        connectionId: { type: string }
+        connectionName: { type: [string, "null"] }
+        leaseBacked: { type: boolean, const: true }
+        active:
+          { type: boolean, description: Whether a request is currently pending for the connection. }
+      additionalProperties: false
+
+    DashboardSessionsResponse:
+      type: object
+      required: [count, sessions, byApiKey, exclusiveSessions]
+      properties:
+        count: { type: integer, minimum: 0 }
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/DashboardRecentSession" }
+        byApiKey:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        exclusiveSessions:
+          type: array
+          items: { $ref: "#/components/schemas/DashboardExclusiveSession" }
+      additionalProperties: false
+
+    JobRun:
+      type: object
+      required:
+        [id, jobId, startedAt, finishedAt, status, errorMessage, recordsAffected, durationMs]
+      properties:
+        id: { type: integer, minimum: 1 }
+        jobId: { type: string }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: [string, "null"], format: date-time }
+        status: { type: string, enum: [running, success, failure] }
+        errorMessage: { type: [string, "null"] }
+        recordsAffected: { type: integer, minimum: 0 }
+        durationMs: { type: [integer, "null"], minimum: 0 }
+      additionalProperties: false
+
+    JobSummary:
+      type: object
+      required:
+        [id, type, cron, intervalMs, enabled, envFlag, config, createdAt, updatedAt, lastRun]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [interval, cron] }
+        cron: { type: [string, "null"] }
+        intervalMs: { type: [integer, "null"], minimum: 0 }
+        enabled: { type: boolean }
+        envFlag: { type: [string, "null"] }
+        config: { type: object, additionalProperties: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastRun:
+          oneOf:
+            - $ref: "#/components/schemas/JobRun"
+            - type: "null"
+      additionalProperties: false
+
+    JobsListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/JobSummary" }
+      additionalProperties: false
+
+    JobEnabledResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [id, enabled]
+          properties:
+            id: { type: string }
+            enabled: { type: boolean }
+          additionalProperties: false
+      additionalProperties: false
+
+    JobTriggerResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [started]
+          properties:
+            started: { type: boolean }
+            reason:
+              {
+                type: string,
+                enum: [not_found, disabled, no_handler, already_queued, env_disabled],
+              }
+          additionalProperties: false
+      additionalProperties: false
+
+    JobRunHistoryResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/JobRun" }
+      additionalProperties: false
+
+    LogExportConfigFieldDescriptor:
+      type: object
+      required: [key, labelFallback, type]
+      properties:
+        key: { type: string }
+        labelFallback: { type: string }
+        type: { type: string, enum: [text, password, textarea, number, boolean, select] }
+        required: { type: boolean }
+        secret: { type: boolean }
+        placeholder: { type: string }
+        helpFallback: { type: string }
+        options:
+          type: array
+          items:
+            type: object
+            required: [value, labelFallback]
+            properties:
+              value: { type: string }
+              labelFallback: { type: string }
+            additionalProperties: false
+      additionalProperties: false
+
+    LogExportDestinationTypeDescriptor:
+      type: object
+      required: [id, label, description, docsUrl, fields]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        description: { type: string }
+        docsUrl: { type: [string, "null"], format: uri }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/LogExportConfigFieldDescriptor" }
+      additionalProperties: false
+
+    LogExportDestinationTypesResponse:
+      type: object
+      required: [types]
+      properties:
+        types:
+          type: array
+          items: { $ref: "#/components/schemas/LogExportDestinationTypeDescriptor" }
+      additionalProperties: false
+
+    LogExportDestinationView:
+      type: object
+      required:
+        [
+          id,
+          name,
+          type,
+          typeLabel,
+          typeAvailable,
+          enabled,
+          config,
+          batchSize,
+          includeBodies,
+          maxBodyBytes,
+          maxRowsPerRun,
+          cursorRowId,
+          exportedTotal,
+          pending,
+          lastRunAt,
+          lastStatus,
+          lastError,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string }
+        typeLabel: { type: string }
+        typeAvailable: { type: boolean }
+        enabled: { type: boolean }
+        config:
+          {
+            type: object,
+            additionalProperties: true,
+            description: Secret configuration values are redacted as `__stored__`.,
+          }
+        batchSize: { type: integer, minimum: 1, maximum: 10000 }
+        includeBodies: { type: boolean }
+        maxBodyBytes: { type: integer, minimum: 1024, maximum: 5000000 }
+        maxRowsPerRun: { type: integer, minimum: 1, maximum: 1000000 }
+        cursorRowId: { type: integer, minimum: 0 }
+        exportedTotal: { type: integer, minimum: 0 }
+        pending: { type: integer, minimum: 0 }
+        lastRunAt: { type: [string, "null"], format: date-time }
+        lastStatus: { type: [string, "null"], enum: [success, failure, null] }
+        lastError: { type: [string, "null"] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    LogExportDestinationListResponse:
+      type: object
+      required: [destinations]
+      properties:
+        destinations:
+          type: array
+          items: { $ref: "#/components/schemas/LogExportDestinationView" }
+      additionalProperties: false
+
+    LogExportDestinationResponse:
+      type: object
+      required: [destination]
+      properties:
+        destination: { $ref: "#/components/schemas/LogExportDestinationView" }
+      additionalProperties: false
+
+    LogExportDestinationCreateResponse:
+      $ref: "#/components/schemas/LogExportDestinationResponse"
+
+    LogExportDestinationDeleteResponse:
+      type: object
+      required: [deleted]
+      properties:
+        deleted: { type: boolean, const: true }
+      additionalProperties: false
+
+    LogExportTestResponse:
+      type: object
+      required: [ok, detail]
+      properties:
+        ok: { type: boolean }
+        detail:
+          {
+            type: string,
+            description: Sanitized operator-facing probe result; never contains credentials.,
+          }
+      additionalProperties: false
+
+    LogExportDestinationRunResult:
+      type: object
+      required:
+        [
+          destinationId,
+          destinationName,
+          type,
+          exported,
+          batches,
+          cursorRowId,
+          pendingAfterRun,
+          success,
+          error,
+          skipped,
+        ]
+      properties:
+        destinationId: { type: string, format: uuid }
+        destinationName: { type: string }
+        type: { type: string }
+        exported: { type: integer, minimum: 0 }
+        batches: { type: integer, minimum: 0 }
+        cursorRowId: { type: integer, minimum: 0 }
+        pendingAfterRun: { type: integer, minimum: 0 }
+        success: { type: boolean }
+        error: { type: [string, "null"] }
+        skipped:
+          { type: boolean, description: True when the same destination was already being drained. }
+      additionalProperties: false
+
+    LogExportRunResponse:
+      type: object
+      required: [result]
+      properties:
+        result: { $ref: "#/components/schemas/LogExportDestinationRunResult" }
+      additionalProperties: false
+
+    LogExportStatusJob:
+      type: object
+      required: [id, enabled, cron, timezone]
+      properties:
+        id: { type: string }
+        enabled: { type: boolean }
+        cron: { type: [string, "null"] }
+        timezone: { type: string }
+      additionalProperties: false
+
+    LogExportStatusResponse:
+      type: object
+      required: [job, runs, maxCallLogRowId, destinations]
+      properties:
+        job:
+          oneOf:
+            - $ref: "#/components/schemas/LogExportStatusJob"
+            - type: "null"
+        runs:
+          type: array
+          items: { $ref: "#/components/schemas/JobRun" }
+        maxCallLogRowId: { type: integer, minimum: 0 }
+        destinations:
+          type: array
+          items: { $ref: "#/components/schemas/LogExportDestinationView" }
       additionalProperties: false
 
     LogExportRow:
