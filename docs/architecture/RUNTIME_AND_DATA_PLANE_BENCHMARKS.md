@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 803
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 809
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 512 operations have success
-response content schemas and 427 declare operation-level security. Of 1,001 operations with a
-non-`204` success status, 489 still lack an explicit success-body schema; 13 operations have no
+contract is still stronger on route coverage than schema completeness: 516 operations have success
+response content schemas and 431 declare operation-level security. Of 1,001 operations with a
+non-`204` success status, 485 still lack an explicit success-body schema; 13 operations have no
 declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -152,8 +152,10 @@ tier used to clear an override. Quota-state handlers are typed for aggregates, r
 their reset/clear actions; its implemented CORS `OPTIONS` preflight remains excluded as transport
 boilerplate by repository policy and is exercised by a route test. Reasoning-routing rules now define
 the scoped CRUD schema, partial updates, cross-field validation, nullable simulator decisions, and
-the actual `201` create response. The current spec inventory is 803 schemas, 512 success-body
-operations, and 427 security declarations; 489 non-`204` successes still lack bodies.
+the actual `201` create response. Model-alias settings now describe built-in/custom/merged maps,
+replace/add/remove bodies, persistence, and the self-healing GET behavior. The current spec inventory
+is 809 schemas, 516 success-body operations, and 431 security declarations; 485 non-`204` successes
+still lack bodies.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -998,14 +1000,14 @@ complete serialized JSON becomes smaller, and the reader expands the table befor
 or UI consumer sees it. Stream chunks continue to use their own encoding, and no table is shared
 across API keys or requests. On 100 synthetic artifacts already compacted for duplicate stage
 bodies, the extra text table reduced serialized size from 13,063,780 bytes to 1,782,080 bytes
-(86.36%). A fresh 2026-10-09 rerun measured a transform median of 0.165 ms and p95 of 0.234 ms
+(86.36%). A repeated 2026-10-09 run measured a transform median of 0.170 ms and p95 of 0.247 ms
 per artifact on this host. A separate 100-artifact check with five unique 256 KiB context strings
-per artifact made no representation changes; its median scan was 0.019 ms and p95 was 0.052 ms.
+per artifact made no representation changes; its median scan was 0.020 ms and p95 was 0.055 ms.
 Re-run with `npm run bench:call-log-text-dedup`. These are sequential synthetic microbenchmarks.
 They measure disk representation and the dedup scan, not request heap reduction or real-prompt
 compression. A separate complete `writeCallArtifact()` sweep of 100 synthetic artifacts stored
-1,847,880 bytes instead of 50,537,450 bytes (96.34%); the fresh run measured median write time of
-0.491 ms and p95 of 1.274 ms. That comparison includes the existing request/response stage
+1,847,880 bytes instead of 50,537,450 bytes (96.34%); the repeated run measured median write time of
+0.542 ms and p95 of 1.422 ms. That comparison includes the existing request/response stage
 references as well as the new text table, so it must not be attributed to the new table alone. The
 dictionaries are local to each artifact: cross-request blob sharing remains unimplemented,
 avoiding shared ownership, retention-reference, and cross-key deduplication concerns.

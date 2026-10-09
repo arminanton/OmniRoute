@@ -19969,33 +19969,157 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › model aliases"
+      description: Removes one custom alias. Built-in aliases cannot be deleted through this endpoint.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModelAliasRemoveRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated custom aliases.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingsModelAliasMutationResponse" }
+        "400":
+          description: Invalid JSON or alias name.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "404":
+          description: No custom alias exists for the supplied source name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Alias could not be removed or persisted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiSettingsModelAliases
       tags:
         - Settings
       summary: "GET settings › model aliases"
+      description: Returns built-in, custom, and combined aliases; an empty local store may hydrate from saved settings.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Alias maps split by source and merged with custom aliases taking precedence.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelAliasesGetResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Alias maps could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsModelAliases
       tags:
         - Settings
       summary: "POST settings › model aliases"
+      description: Adds or replaces one custom alias and persists the custom map.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModelAliasAddRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated custom aliases.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingsModelAliasMutationResponse" }
+        "400":
+          description: Invalid JSON or alias source/target.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Alias could not be added or persisted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsModelAliases
       tags:
         - Settings
       summary: "PUT settings › model aliases"
+      description: Replaces the entire custom alias map; built-in aliases remain unchanged.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModelAliasesUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Replaced custom aliases.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingsModelAliasMutationResponse" }
+        "400":
+          description: Invalid JSON or alias map.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Alias map could not be replaced or persisted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/models-dev:
     get:
       operationId: getApiSettingsModelsDev
@@ -39598,6 +39722,49 @@ components:
           type: array
           items: { type: string }
       additionalProperties: false
+
+    ModelAliasMap:
+      type: object
+      additionalProperties: { type: string }
+
+    ModelAliasesGetResponse:
+      type: object
+      required: [builtIn, custom, all]
+      properties:
+        builtIn: { $ref: "#/components/schemas/ModelAliasMap" }
+        custom: { $ref: "#/components/schemas/ModelAliasMap" }
+        all: { $ref: "#/components/schemas/ModelAliasMap" }
+      additionalProperties: false
+
+    SettingsModelAliasMutationResponse:
+      type: object
+      required: [success, custom]
+      properties:
+        success: { type: boolean, const: true }
+        custom: { $ref: "#/components/schemas/ModelAliasMap" }
+      additionalProperties: false
+
+    ModelAliasAddRequest:
+      type: object
+      required: [from, to]
+      properties:
+        from: { type: string, minLength: 1, pattern: "\\S" }
+        to: { type: string, minLength: 1, pattern: "\\S" }
+
+    ModelAliasRemoveRequest:
+      type: object
+      required: [from]
+      properties:
+        from: { type: string, minLength: 1, pattern: "\\S" }
+
+    ModelAliasesUpdateRequest:
+      type: object
+      required: [aliases]
+      properties:
+        aliases:
+          type: object
+          propertyNames: { minLength: 1, pattern: "\\S" }
+          additionalProperties: { type: string, minLength: 1, pattern: "\\S" }
 
     RestartResponse:
       type: object
