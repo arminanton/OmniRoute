@@ -164,7 +164,14 @@ tags:
   - name: Db
     description: Db endpoints (generated route coverage)
   - name: Db backups
-    description: Db backups endpoints (generated route coverage)
+    description: >-
+      Backup and restore operations are ALWAYS_PROTECTED. With management login required or in
+      locked mode, the legacy handlers accept a dashboard session or a Bearer API key with `manage`
+      or `admin` scope; they do not validate `oma_live_` access tokens in that mode. With ordinary
+      `requireLogin=false` in an unlocked profile, the handler-level `isAuthenticated()` check
+      short-circuits, but the central ALWAYS_PROTECTED policy still requires an identity; a scoped
+      access token or loopback CLI token may then pass the central gate. The local CLI token is not
+      accepted by these handlers when management auth is required.
   - name: Discovery
     description: Discovery endpoints (generated route coverage)
   - name: Docs
@@ -9471,19 +9478,26 @@ paths:
   /api/db-backups:
     put:
       operationId: putApiDbBackups
-      tags: [System]
+      tags: [System, Db backups]
       summary: Create a manual database backup
       description: >-
-        Trigger an explicit manual snapshot. If the backup helper returns no result, this route
-        reports a fixed throttling message even when the underlying reason is another unavailable
-        or skipped condition.
+        Creates and awaits the native SQLite snapshot before returning `created: true`. The `size`
+        field is the source database main-file size measured before the copy, not the completed
+        snapshot's length. If the backup helper skips the operation, this route reports a fixed
+        no-result message even when the underlying reason is another unavailable or skipped
+        condition. These legacy handlers accept a dashboard session or a manage/admin API key when
+        authentication is required. In an unlocked `requireLogin=false` configuration, the central
+        always-protected route gate still requires a valid identity and can also admit a scoped
+        access token or loopback CLI token; those identities are not independently checked by this
+        handler after the disabled-login bypass.
       x-always-protected: true
       security:
-        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
       responses:
         "200":
-          description: Snapshot created, or the route's no-result message returned
+          description: Snapshot copy completed, or the route's no-result message was returned.
           content:
             application/json:
               schema:
@@ -9506,12 +9520,16 @@ paths:
                 $ref: "#/components/schemas/StringErrorResponse"
     get:
       operationId: getApiDbBackups
-      tags: [System]
+      tags: [System, Db backups]
       summary: List database backups
+      description: >-
+        Lists snapshots newest-first. Authentication uses the legacy `isAuthenticated()` handler
+        check described by the Db backups tag.
       x-always-protected: true
       security:
-        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
       responses:
         "200":
           description: Backups newest first
@@ -9537,13 +9555,17 @@ paths:
                 $ref: "#/components/schemas/StringErrorResponse"
     post:
       operationId: postApiDbBackups
-      tags: [System]
+      tags: [System, Db backups]
       summary: Restore a database backup
-      description: Restores the selected local database snapshot and reports imported row counts.
+      description: >-
+        Restores the selected local database snapshot and reports imported row counts. Malformed IDs
+        return 400; a syntactically valid ID with no matching backup returns 404. Authentication
+        uses the legacy `isAuthenticated()` handler check described by the Db backups tag.
       x-always-protected: true
       security:
-        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
       requestBody:
         required: true
         content:
@@ -9558,11 +9580,18 @@ paths:
               schema:
                 $ref: "#/components/schemas/DbBackupRestoreResponse"
         "400":
-          description: Invalid JSON or backup identifier
+          description: Invalid JSON/body schema or malformed backup ID.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ValidationErrorResponse"
+                anyOf:
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Backup with the valid identifier was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
           description: Authentication required
           content:
@@ -9581,12 +9610,14 @@ paths:
                 $ref: "#/components/schemas/StringErrorResponse"
     patch:
       operationId: patchApiDbBackups
-      tags: [System]
+      tags: [System, Db backups]
       summary: Save database backup retention settings
+      description: Authentication uses the legacy `isAuthenticated()` handler check described by the Db backups tag.
       x-always-protected: true
       security:
-        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
       requestBody:
         required: false
         content:
@@ -9624,12 +9655,14 @@ paths:
                 $ref: "#/components/schemas/StringErrorResponse"
     delete:
       operationId: deleteApiDbBackups
-      tags: [System]
+      tags: [System, Db backups]
       summary: Clean up database backups and save retention settings
+      description: Authentication uses the legacy `isAuthenticated()` handler check described by the Db backups tag.
       x-always-protected: true
       security:
-        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
       requestBody:
         required: false
         content:
@@ -15694,13 +15727,19 @@ paths:
       tags:
         - Db backups
       summary: Download a consistent SQLite snapshot
+      description: >-
+        Downloads a complete SQLite snapshot that can contain stored provider credentials and API
+        keys. Treat the response as secret credential material. Authentication uses the legacy
+        `isAuthenticated()` handler check described by the Db backups tag.
       x-always-protected: true
       security:
-        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
       responses:
         "200":
           description: SQLite database snapshot download
+          x-sensitive: true
           headers:
             Content-Disposition:
               schema: { type: string }
@@ -15741,15 +15780,22 @@ paths:
       summary: Download a full tar.gz archive of database, settings, and call-log artifacts
       description: >-
         Despite legacy ZIP naming in the implementation, the response is a gzip-compressed tar
-        archive (`.tar.gz`). This local-only operation is rejected in cloud mode.
+        archive (`.tar.gz`). The archive includes the full `storage.sqlite` database, which may
+        contain provider credentials and raw API keys, as well as settings and call-log artifacts;
+        treat it as secret credential material. The separate `providers.json` and `api-keys.json`
+        summaries are redacted, but the raw database is not. This local-only operation is rejected
+        in cloud mode. Authentication uses the legacy `isAuthenticated()` handler check described
+        by the Db backups tag.
       x-loopback-only: true
       x-always-protected: true
       security:
-        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
       responses:
         "200":
           description: Full backup tar.gz download
+          x-sensitive: true
           headers:
             Content-Disposition:
               schema: { type: string }
@@ -15789,11 +15835,14 @@ paths:
       description: >-
         Accepts either a multipart file upload or a raw SQLite binary body. The default upload
         limit is 100 MiB, configurable with OMNIROUTE_DB_IMPORT_MAX_MB and clamped to 4 GiB; files
-        smaller than 4 KiB or without a `.sqlite` filename are rejected.
+        smaller than 4 KiB or without a `.sqlite` filename are rejected. A valid database can
+        contain provider credentials and raw API keys. Authentication uses the legacy
+        `isAuthenticated()` handler check described by the Db backups tag.
       x-always-protected: true
       security:
-        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
       parameters:
         - name: filename
           in: query
@@ -15802,6 +15851,7 @@ paths:
           schema: { type: string, default: import.sqlite }
       requestBody:
         required: true
+        x-sensitive: true
         content:
           multipart/form-data:
             schema:
@@ -30251,6 +30301,14 @@ components:
         includes `manage` or `admin` scope. See docs/guides/MANAGEMENT-AUTH.md.
         Bearer credentials are accepted on management routes that use this scheme;
         they are not rejected solely for being Bearer.
+    ManagementApiKeyBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: management API key
+      description: >-
+        Bearer API key whose metadata includes `manage` or `admin` scope. Legacy database-backup
+        handlers that call `isAuthenticated()` validate these API keys and dashboard sessions when
+        authentication is required; they do not validate `oma_live_` access tokens in that mode.
     InspectorInternalIngestBearerAuth:
       type: http
       scheme: bearer
@@ -39094,8 +39152,10 @@ components:
         key:
           type: [string, "null"]
           description: >-
-            Masked key preview in the `first8****last4` form. The single-key detail route may
-            return null when a key value is unavailable; the raw key is never returned here.
+            Masked key preview. Keys longer than 16 characters use `first8****last4`; shorter
+            credentials are fully masked as `****` to avoid revealing the complete value. The
+            single-key detail route may return null when a key value is unavailable; the raw key is
+            never returned here.
         machineId:
           type: [string, "null"]
         modelAccessMode:
@@ -42720,7 +42780,12 @@ components:
       properties:
         created: { type: boolean, const: true }
         filename: { type: string }
-        size: { type: integer, minimum: 0 }
+        size:
+          type: integer
+          minimum: 0
+          description: >-
+            Source database main-file size measured before the native backup copy starts; it is
+            not a stat of the completed snapshot file.
       additionalProperties: false
 
     DbBackupSkippedResponse:

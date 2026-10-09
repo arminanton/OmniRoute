@@ -261,27 +261,42 @@ export async function unlinkFileWithRetry(
 
 // ──────────────── Backup ────────────────
 
-export function backupDbFile(reason = "auto") {
+export interface DbBackupFileResult {
+  filename: string;
+  size: number;
+}
+
+export function backupDbFile(reason?: string): DbBackupFileResult | null;
+export function backupDbFile(
+  reason: string,
+  options: { waitForCompletion: true }
+): Promise<DbBackupFileResult | null>;
+export function backupDbFile(
+  reason = "auto",
+  options?: { waitForCompletion?: boolean }
+): DbBackupFileResult | null | Promise<DbBackupFileResult | null> {
+  const skipped = () => (options?.waitForCompletion ? Promise.resolve(null) : null);
+
   try {
-    if (isBuildPhase || isCloud) return null;
-    if (!SQLITE_FILE || !fs.existsSync(SQLITE_FILE)) return null;
-    if (reason !== "manual" && isSqliteAutoBackupDisabled()) return null;
+    if (isBuildPhase || isCloud) return skipped();
+    if (!SQLITE_FILE || !fs.existsSync(SQLITE_FILE)) return skipped();
+    if (reason !== "manual" && isSqliteAutoBackupDisabled()) return skipped();
     // #5871: honor the persisted `backup.autoBackupEnabled` dashboard toggle. Only
     // manual and pre-restore backups bypass this gate; automatic + pre-write safety
     // snapshots must stop firing once the operator disables auto-backup in the UI.
     if (reason !== "manual" && reason !== "pre-restore" && isAutoBackupDisabledBySetting())
-      return null;
+      return skipped();
 
     const stat = fs.statSync(SQLITE_FILE);
     if (stat.size < 4096) {
       console.warn(`[DB] Backup SKIPPED — DB too small (${stat.size}B)`);
-      return null;
+      return skipped();
     }
 
     // Throttle
     const now = Date.now();
     if (reason !== "manual" && reason !== "pre-restore" && now - _lastBackupAt < BACKUP_THROTTLE_MS)
-      return null;
+      return skipped();
     _lastBackupAt = now;
 
     const backupDir = getBackupDir();
@@ -306,7 +321,7 @@ export function backupDbFile(reason = "auto") {
             console.warn(
               `[DB] Backup SKIPPED — DB shrank from ${latestStat.size}B to ${stat.size}B`
             );
-            return null;
+            return skipped();
           }
         } catch (error: unknown) {
           if ((error as NodeJS.ErrnoException | null)?.code !== "ENOENT") throw error;
@@ -319,7 +334,9 @@ export function backupDbFile(reason = "auto") {
 
     // Use native SQLite backup API for consistency
     const db = getDbInstance();
-    db.backup(backupFile)
+    const result = { filename: path.basename(backupFile), size: stat.size };
+    const completion = db
+      .backup(backupFile)
       .then(() => {
         console.log(`[DB] Backup created: ${backupFile} (${stat.size} bytes)`);
         cleanupDbBackups();
@@ -327,12 +344,21 @@ export function backupDbFile(reason = "auto") {
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
         console.error("[DB] Backup failed:", message);
+        throw err;
       });
 
-    return { filename: path.basename(backupFile), size: stat.size };
+    if (options?.waitForCompletion) {
+      return completion.then(() => result);
+    }
+
+    // Existing automatic/pre-write callers intentionally remain fire-and-forget.
+    // Attach a rejection handler while preserving the historical synchronous result.
+    void completion.catch(() => undefined);
+    return result;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[DB] Backup failed:", message);
+    if (options?.waitForCompletion) return Promise.reject(err);
     return null;
   }
 }

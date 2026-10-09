@@ -90,3 +90,29 @@ test("GET /api/db-backups/exportAll includes call_logs artifacts in the archive"
   assert.match(listing, /metadata\.json/);
   assert.match(listing, /storage\.sqlite/);
 });
+
+test("GET /api/db-backups/exportAll removes the actual tar.gz artifact after a late failure", async () => {
+  const originalReadFileSync = fs.readFileSync;
+  let tarPath;
+  fs.readFileSync = function (filePath, ...args) {
+    if (typeof filePath === "string" && /omniroute-full-backup-.*\.tar\.gz$/.test(filePath)) {
+      tarPath = filePath;
+      throw new Error("injected archive read failure");
+    }
+    return originalReadFileSync.call(this, filePath, ...args);
+  };
+
+  try {
+    const response = await exportAllRoute.GET(
+      new Request("http://localhost/api/db-backups/exportAll")
+    );
+    const body = await response.json();
+    assert.equal(response.status, 500);
+    assert.match(body.details, /injected archive read failure/);
+    assert.ok(tarPath, "the test must fail after tar created the actual .tar.gz file");
+    assert.equal(fs.existsSync(tarPath), false, "the generated .tar.gz must be removed on error");
+  } finally {
+    fs.readFileSync = originalReadFileSync;
+    if (tarPath && fs.existsSync(tarPath)) fs.unlinkSync(tarPath);
+  }
+});

@@ -137,6 +137,10 @@ test("CLI tools key listing marks rawKey sensitive and always protected", () => 
     responseSchema("/api/cli-tools/keys", "get")?.$ref,
     "#/components/schemas/CliToolsKeysResponse"
   );
+  assert.match(
+    spec.components.schemas.ApiKey.properties?.key?.description ?? "",
+    /shorter.*fully masked as `\*\*\*\*`/i
+  );
   const rawKey = spec.components.schemas.CliToolsApiKey.allOf?.find(
     (schema) => schema.properties?.rawKey
   )?.properties?.rawKey;

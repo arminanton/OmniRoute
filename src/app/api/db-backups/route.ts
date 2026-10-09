@@ -47,7 +47,7 @@ export async function PUT(request: NextRequest) {
   }
 
   try {
-    const result = backupDbFile("manual");
+    const result = await backupDbFile("manual", { waitForCompletion: true });
     if (!result) {
       return NextResponse.json({ message: "No changes since last backup (throttled)" });
     }
@@ -111,8 +111,18 @@ export async function POST(request: NextRequest) {
     const result = await restoreDbBackup(backupId);
     return NextResponse.json(result);
   } catch (error) {
+    const message = sanitizeErrorMessage(error instanceof Error ? error.message : String(error));
+    if (message.startsWith("Invalid backup ID")) {
+      return NextResponse.json(
+        { error: { message, type: "invalid_request_error" } },
+        { status: 400 }
+      );
+    }
+    if (message.startsWith("Backup not found:")) {
+      return NextResponse.json({ error: { message, type: "not_found_error" } }, { status: 404 });
+    }
     console.error("[API] Error restoring DB backup:", error);
-    return NextResponse.json({ error: sanitizeErrorMessage(error) }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 

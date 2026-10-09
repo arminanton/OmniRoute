@@ -43,27 +43,6 @@ function seedConnections(count = 8) {
   }
 }
 
-// backupDbFile() kicks off db.backup() fire-and-forget — better-sqlite3 creates
-// the destination file when the page copy STARTS, not when it finishes. Waiting
-// on file existence alone races the copy: under load listDbBackups() can open a
-// partially-written backup and read connectionCount as 0 (flake repro: under CPU
-// contention the backup file existed but the seeded rows were not yet copied →
-// connectionCount 0 ≠ 12). Wait for the real completion condition instead — the
-// backup actually contains the seeded connections. The 30s ceiling only bounds
-// the failure case; the green path returns as soon as the data lands (sub-second
-// in practice — the wide ceiling absorbs heavy CI page-copy contention).
-async function waitForBackupEntry(filename, expectedConnectionCount, timeoutMs = 30000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const entry = (await backupDb.listDbBackups()).find((backup) => backup.id === filename);
-    if (entry && entry.connectionCount === expectedConnectionCount) return entry;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error(
-    `Timed out waiting for backup ${filename} to finish copying ${expectedConnectionCount} connections`
-  );
-}
-
 function makeDbBackupsJsonRequest(method: string, body: unknown): NextRequest {
   return new Request("http://localhost/api/db-backups", {
     method,
@@ -84,17 +63,123 @@ test.after(async () => {
 test("backupDbFile creates manual backups and listDbBackups returns metadata", async () => {
   seedConnections(12);
 
-  const result = backupDb.backupDbFile("manual");
+  const result = await backupDb.backupDbFile("manual", { waitForCompletion: true });
   assert.ok(result);
 
   const backupPath = path.join(core.DB_BACKUPS_DIR, result.filename);
-  // Wait for the async backup to finish copying the 12 seeded connections, not
-  // merely for the destination file to appear (see waitForBackupEntry).
-  const entry = await waitForBackupEntry(result.filename, 12);
+  const entry = (await backupDb.listDbBackups()).find((backup) => backup.id === result.filename);
 
+  assert.ok(entry);
   assert.equal(entry.reason, "manual");
   assert.equal(entry.connectionCount, 12);
   assert.equal(fs.existsSync(backupPath), true);
+});
+
+test("PUT /api/db-backups waits for the native backup Promise before returning created", async () => {
+  seedConnections(12);
+  const db = core.getDbInstance() as any;
+  const originalBackup = db.backup.bind(db);
+  let startedResolve!: () => void;
+  let releaseBackup!: () => void;
+  let startTimeout: ReturnType<typeof setTimeout> | undefined;
+  const started = new Promise<void>((resolve) => {
+    startedResolve = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    releaseBackup = resolve;
+  });
+  const backupDescriptor = Object.getOwnPropertyDescriptor(db, "backup");
+
+  Object.defineProperty(db, "backup", {
+    configurable: true,
+    enumerable: backupDescriptor?.enumerable ?? true,
+    writable: true,
+    value: async (destination: string) => {
+      startedResolve();
+      await gate;
+      return originalBackup(destination);
+    },
+  });
+
+  let routeSettled = false;
+  const responsePromise = dbBackupsRoute
+    .PUT(new Request("http://localhost/api/db-backups", { method: "PUT" }) as NextRequest)
+    .then((response) => {
+      routeSettled = true;
+      return response;
+    });
+
+  try {
+    await Promise.race([
+      started,
+      new Promise<never>((_, reject) => {
+        startTimeout = setTimeout(
+          () => reject(new Error("Manual route did not start a backup within 5 seconds")),
+          5000
+        );
+      }),
+    ]);
+    if (startTimeout) clearTimeout(startTimeout);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(routeSettled, false, "manual route must wait while SQLite backup is pending");
+
+    releaseBackup();
+    const response = await responsePromise;
+    const body = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(body.created, true);
+    const entry = (await backupDb.listDbBackups()).find((backup) => backup.id === body.filename);
+    assert.equal(entry?.connectionCount, 12);
+  } finally {
+    if (startTimeout) clearTimeout(startTimeout);
+    releaseBackup();
+    if (backupDescriptor) Object.defineProperty(db, "backup", backupDescriptor);
+    else delete db.backup;
+  }
+});
+
+test("PUT /api/db-backups reports a rejected native backup Promise as failure", async () => {
+  seedConnections(2);
+  const db = core.getDbInstance() as any;
+  const backupDescriptor = Object.getOwnPropertyDescriptor(db, "backup");
+  Object.defineProperty(db, "backup", {
+    configurable: true,
+    enumerable: backupDescriptor?.enumerable ?? true,
+    writable: true,
+    value: async () => {
+      throw new Error("simulated SQLite copy failure");
+    },
+  });
+
+  try {
+    const response = await dbBackupsRoute.PUT(
+      new Request("http://localhost/api/db-backups", { method: "PUT" }) as NextRequest
+    );
+    const body = await response.json();
+    assert.equal(response.status, 500);
+    assert.match(body.error, /simulated SQLite copy failure/);
+  } finally {
+    if (backupDescriptor) Object.defineProperty(db, "backup", backupDescriptor);
+    else delete db.backup;
+  }
+});
+
+test("POST /api/db-backups returns 400 for malformed IDs and 404 for missing backups", async () => {
+  const malformed = await dbBackupsRoute.POST(
+    makeDbBackupsJsonRequest("POST", { backupId: "not-a-backup.sqlite" })
+  );
+  const malformedBody = await malformed.json();
+  assert.equal(malformed.status, 400);
+  assert.equal(malformedBody.error.type, "invalid_request_error");
+
+  const missing = await dbBackupsRoute.POST(
+    makeDbBackupsJsonRequest("POST", {
+      backupId: "db_2099-01-01T00-00-00-000Z_manual.sqlite",
+    })
+  );
+  const missingBody = await missing.json();
+  assert.equal(missing.status, 404);
+  assert.equal(missingBody.error.type, "not_found_error");
 });
 
 test("listDbBackups orders mixed timestamp and content-addressed names by mtime", async () => {
