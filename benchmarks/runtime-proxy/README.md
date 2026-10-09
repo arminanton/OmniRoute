@@ -171,6 +171,21 @@ atomic lease operations. This first Rust slice accepts only static gates; it rej
 requirements rather than silently applying a different cap. Use a dedicated local POSIX volume for
 coordination, never NFS or the application data DB.
 
+### SQLite quota bucket storage probe
+
+Run the raw bucket-storage interoperability test with:
+
+```bash
+cargo test --manifest-path benchmarks/runtime-proxy/Cargo.toml --test quota_bucket_sqlite_interop -- --nocapture
+```
+
+The test asks TypeScript to migrate a temporary `DATA_DIR`, then alternates actual
+`quotaConsumption.ts` writes/reads with Rust writes/reads on that same temporary SQLite file. The
+Rust adapter refuses to create the table and checks the migration-defined columns and composite key
+before using the documented UPSERT. It covers only `(api_key_id, dimension_key, bucket_index)` row
+storage and current/previous bucket reads. It does not select SQLite versus Redis, read key/account
+policy, resolve pools/plans, calculate fair-share, or enforce quota decisions.
+
 ```bash
 python3 benchmarks/runtime-proxy/run_bench.py \
   --runtime rust-chat-gateway --api-path chat-completions --model cx/gpt-5.6 \
