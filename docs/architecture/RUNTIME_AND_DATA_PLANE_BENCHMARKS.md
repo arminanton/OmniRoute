@@ -32,10 +32,11 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 595 operations have success
-response content schemas and 547 declare operation-level security. Of 987 operations with a
-non-`204` success status, 392 have no explicit response content; two are intentional bodyless `HEAD`
-probes, leaving 390 non-`HEAD` operations whose successful response shape remains undocumented.
+contract is still stronger on route coverage than schema completeness: 597 operations have success
+response content schemas and 549 have an operation-level `security` field; 542 list nonempty
+alternatives and 7 explicitly set an empty list. Of 987 operations with a
+non-`204` success status, 390 have no explicit response content; two are intentional bodyless `HEAD`
+probes, leaving 388 non-`HEAD` operations whose successful response shape remains undocumented.
 Twenty-eight operations have no declared `2xx` status, and 14 return only an intentional `204`. This
 pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
@@ -160,7 +161,8 @@ the actual `201` create response. Model-alias settings now describe built-in/cus
 replace/add/remove bodies, persistence, and the self-healing GET behavior. The history-cleanup pass
 documents destructive scope, period choices, row/artifact counts, and each endpoint's distinct error
 behavior; its handlers are tested only against isolated temporary databases. The current spec
-inventory is 948 schemas, 595 success-body operations, and 547 security declarations; 392 non-`204`
+inventory is 951 schemas, 597 success-body operations, and 549 security-field declarations (542
+nonempty); 390 non-`204`
 success operations have no explicit response content, including two intentional bodyless `HEAD`
 probes. The
 versioned read-contract pass now describes the public combo projection, auto-combo candidate state,
@@ -1680,9 +1682,9 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 595 operations with success-response content; 392
+- Continue the OpenAPI handler audit beyond the 597 operations with success-response content; 390
   of 987 non-`204` success operations still lack explicit success-body schemas, including the two
-  intentional bodyless `HEAD` probes (390 non-HEAD shapes remain). Twenty-eight operations have no
+  intentional bodyless `HEAD` probes (388 non-HEAD shapes remain). Twenty-eight operations have no
   declared `2xx` status and 14 have only an intentional `204`. The path/method inventory covers
-  705/705 routes and 547 operations declare security alternatives; remaining response schemas and
-  conditional auth behavior have not all been source-verified.
+  705/705 routes and 549 operations have security metadata (542 nonempty alternative lists); remaining
+  response schemas and conditional auth behavior have not all been source-verified.
