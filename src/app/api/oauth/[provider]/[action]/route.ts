@@ -54,6 +54,7 @@ import {
   oauthPollSchema,
 } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { isAuthRequired, isAuthenticated, isDashboardSessionAuthenticated } from "@/shared/utils/apiAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 import { GITLAB_DUO_OAUTH_SETUP_MESSAGE } from "@/shared/constants/gitlabDuoSetupMessage";
@@ -612,7 +613,11 @@ export async function POST(
     /* fall through to normal handling */
   }
 
-  const authResponse = await requireOAuthRouteAuth(request);
+  // POST actions exchange, poll, or import credentials and may persist a
+  // provider connection, so they use the same management gate as other admin
+  // routes. The configured no-login mode remains available; the public
+  // single-use Codex ticket completion is handled by `/api/codex/connect/{token}`.
+  const authResponse = await requireManagementAuth(request);
   if (authResponse) return authResponse;
 
   try {

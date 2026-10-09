@@ -13,9 +13,11 @@ import path from "node:path";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-oauth-grok-cli-7013-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
+process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "oauth-grok-cli-7013-api-key-secret";
 
 const core = await import("../../src/lib/db/core.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const route = await import("../../src/app/api/oauth/[provider]/[action]/route.ts");
 const { generateAuthData } = await import("../../src/lib/oauth/providers.ts");
 const { grokCli } = await import("../../src/lib/oauth/providers/grok-cli.ts");
@@ -23,9 +25,13 @@ const { GROK_BUILD_OAUTH_CONFIG, XAI_OAUTH_CONFIG } =
   await import("../../src/lib/oauth/constants/oauth.ts");
 
 const originalFetch = globalThis.fetch;
+let managementKey: string;
 
 test.before(async () => {
   await settingsDb.updateSettings({ requireLogin: false });
+  await apiKeysDb.resetApiKeyState();
+  managementKey = (await apiKeysDb.createApiKey("test-management", "machine-grok-cli", ["manage"]))
+    .key;
 });
 
 test.after(async () => {
@@ -46,7 +52,10 @@ function getRoute(provider: string, action: string, search = "") {
 function postRoute(provider: string, action: string, body: unknown) {
   const request = new Request(`http://localhost:20128/api/oauth/${provider}/${action}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${managementKey}`,
+    },
     body: JSON.stringify(body),
   });
   return route.POST(request, { params: Promise.resolve({ provider, action }) });

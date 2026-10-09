@@ -15,6 +15,7 @@ const db = await import("../../src/lib/db/providers.ts");
 const readCache = await import("../../src/lib/db/readCache.ts");
 const encryption = await import("../../src/lib/db/encryption.ts");
 const settings = await import("../../src/lib/db/settings.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const route = await import("../../src/app/api/oauth/[provider]/[action]/route.ts");
 const oauth = await import("../../src/lib/oauth/providers/nous-oauth.ts");
 const refresh = await import("../../open-sse/services/tokenRefresh.ts");
@@ -23,8 +24,15 @@ const { NOUS_OAUTH_INFERENCE_PSD_KEY } = await import("../../open-sse/config/nou
 const paid = "https://inference-api.nousresearch.com/v1";
 const guest = "https://welcome-api.nousresearch.com/v1";
 const realFetch = globalThis.fetch;
+let managementKey: string;
 
-test.before(async () => { await settings.updateSettings({ requireLogin: false }); });
+test.before(async () => {
+  await settings.updateSettings({ requireLogin: false });
+  await apiKeysDb.resetApiKeyState();
+  managementKey = (
+    await apiKeysDb.createApiKey("test-management", "machine-nous-oauth", ["manage"])
+  ).key;
+});
 test.afterEach(() => { globalThis.fetch = realFetch; });
 test.after(() => {
   core.resetDbInstance();
@@ -42,7 +50,8 @@ function deviceResponse(): Record<string, unknown> {
 function request(action: string, body?: Record<string, unknown>, cookie?: string): Request {
   return new Request(`http://localhost/api/oauth/nous-oauth/${action}`, body ? {
     method: "POST", headers: {
-      "Content-Type": "application/json", ...(cookie ? { Cookie: cookie } : {}),
+      "Content-Type": "application/json", Authorization: `Bearer ${managementKey}`,
+      ...(cookie ? { Cookie: cookie } : {}),
     }, body: JSON.stringify(body),
   } : { headers: cookie ? { Cookie: cookie } : {} });
 }

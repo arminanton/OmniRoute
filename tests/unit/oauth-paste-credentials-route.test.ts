@@ -7,9 +7,10 @@
 // (allowlist + provider match + blob validation) is unit-tested in
 // oauth-paste-credentials.test.ts and re-asserted through the HTTP boundary here.
 //
-// Auth is disabled via settings (requireLogin:false) so we reach the action
-// dispatch rather than a 401. DB handles are released in test.after (CLAUDE.md
-// learning: unreleased SQLite handles hang node:test).
+// The general login switch is disabled to verify that this credential-import
+// route still requires an explicit management credential. DB handles are
+// released in test.after (CLAUDE.md learning: unreleased SQLite handles hang
+// node:test).
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -19,16 +20,23 @@ import path from "node:path";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-paste-creds-route-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
+process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "paste-creds-route-api-key-secret";
 
 const core = await import("../../src/lib/db/core.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const route = await import("../../src/app/api/oauth/[provider]/paste-credentials/route.ts");
 const { encodeCredentialBlob } = await import("../../src/lib/oauth/credentialBlob.ts");
+let managementKey: string;
 
 const tokens = { access_token: "ya29.x", refresh_token: "1//r", expires_in: 3599 };
 
 test.before(async () => {
   await settingsDb.updateSettings({ requireLogin: false });
+  await apiKeysDb.resetApiKeyState();
+  managementKey = (
+    await apiKeysDb.createApiKey("paste-creds-management", "machine-paste", ["manage"])
+  ).key;
 });
 
 test.after(async () => {
@@ -39,7 +47,10 @@ test.after(async () => {
 async function postPaste(provider: string, body: unknown) {
   const request = new Request(`http://localhost:20128/api/oauth/${provider}/paste-credentials`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${managementKey}`,
+    },
     body: JSON.stringify(body),
   });
   const response = await route.POST(request, {

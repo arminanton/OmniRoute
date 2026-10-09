@@ -10,16 +10,10 @@ import { syncToCloud } from "@/lib/cloudSync";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { kiroApiKeyImportSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { buildKiroImportError } from "../import/route";
 import { buildKiroApiKeyConnectionName, isKiroApiKeyImportClientError } from "./helpers";
 import { findKiroConnectionByIdentity } from "@/lib/oauth/kiroConnectionIdentity";
-
-async function requireKiroApiKeyImportAuth(request: Request) {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
 
 /**
  * POST /api/oauth/kiro/api-key
@@ -29,7 +23,7 @@ async function requireKiroApiKeyImportAuth(request: Request) {
  * ListAvailableProfiles for some API keys while still accepting generation calls.
  */
 export async function POST(request: Request) {
-  const authResponse = await requireKiroApiKeyImportAuth(request);
+  const authResponse = await requireManagementAuth(request);
   if (authResponse) return authResponse;
 
   let rawBody;

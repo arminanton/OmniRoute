@@ -19,14 +19,21 @@ import path from "node:path";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-codex-import-refresh-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
+process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "codex-import-refresh-api-key-secret";
 
 const core = await import("../../src/lib/db/core.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const route = await import("../../src/app/api/oauth/codex/import/route.ts");
+let managementKey: string;
 
 test.before(async () => {
   await settingsDb.updateSettings({ requireLogin: false });
+  await apiKeysDb.resetApiKeyState();
+  managementKey = (
+    await apiKeysDb.createApiKey("test-management", "machine-codex-import", ["manage"])
+  ).key;
 });
 
 test.after(async () => {
@@ -54,7 +61,10 @@ async function withMockedFetch<T>(impl: typeof fetch, fn: () => Promise<T>): Pro
 async function postImport(body: unknown) {
   const request = new Request("http://localhost:20128/api/oauth/codex/import", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${managementKey}`,
+    },
     body: JSON.stringify(body),
   });
   const response = await route.POST(request);

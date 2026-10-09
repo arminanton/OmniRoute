@@ -6,15 +6,22 @@ import path from "node:path";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-grok-device-route-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
+process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "grok-device-route-api-key-secret";
 
 const core = await import("../../src/lib/db/core.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const route = await import("../../src/app/api/oauth/[provider]/[action]/route.ts");
 
 const originalFetch = globalThis.fetch;
+let managementKey: string;
 
 test.before(async () => {
   await settingsDb.updateSettings({ requireLogin: false });
+  await apiKeysDb.resetApiKeyState();
+  managementKey = (
+    await apiKeysDb.createApiKey("test-management", "machine-grok-device", ["manage"])
+  ).key;
 });
 
 test.afterEach(() => {
@@ -41,7 +48,10 @@ test("grok-cli poll does not require a PKCE code verifier", async () => {
 
   const request = new Request("http://localhost:20128/api/oauth/grok-cli/poll", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${managementKey}`,
+    },
     body: JSON.stringify({ deviceCode: "opaque-device-code" }),
   });
   const response = await route.POST(request, {

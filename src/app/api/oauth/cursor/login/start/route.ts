@@ -1,24 +1,18 @@
 import { NextResponse } from "next/server";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import {
   createCursorLoginSession,
   generateCursorAuthParams,
 } from "@/lib/oauth/services/cursorLogin";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error.ts";
 
-async function requireOAuthAuth(request: Request) {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
-
 /**
  * POST /api/oauth/cursor/login/start
  * Begin deep-control PKCE login. Verifier stays server-side.
  */
 export async function POST(request: Request) {
-  const authResponse = await requireOAuthAuth(request);
-  if (authResponse) return authResponse;
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
 
   try {
     const params = await generateCursorAuthParams();

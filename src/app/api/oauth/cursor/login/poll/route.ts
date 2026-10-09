@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import {
   credentialsFromCursorTokens,
@@ -18,12 +18,6 @@ const pollSchema = z.object({
   sessionId: z.string().trim().min(1, "sessionId is required"),
 });
 
-async function requireOAuthAuth(request: Request) {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-}
-
 async function syncToCloudIfEnabled() {
   try {
     if (await isCloudEnabled()) {
@@ -39,8 +33,8 @@ async function syncToCloudIfEnabled() {
  * One poll against Cursor auth/poll. UI repeats until ok/error/timeout.
  */
 export async function POST(request: Request) {
-  const authResponse = await requireOAuthAuth(request);
-  if (authResponse) return authResponse;
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
 
   let rawBody: unknown;
   try {

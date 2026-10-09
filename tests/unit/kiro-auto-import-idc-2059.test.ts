@@ -44,6 +44,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || "test-jwt-secret-idc-2059";
 process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "test-api-key-secret-idc-2059";
 
 const core = await import("../../src/lib/db/core.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 
 // Import route module once (DB is initialized on first import).
 const { GET } = await import("../../src/app/api/oauth/kiro/auto-import/route.ts");
@@ -53,14 +54,18 @@ const ORIGINAL_APPDATA = process.env.APPDATA;
 const ORIGINAL_FETCH = globalThis.fetch;
 
 let tmpHome: string;
+let managementKey: string;
 
-test.beforeEach(() => {
+test.beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-kiro-idc-2059-"));
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
   process.env.HOME = tmpHome;
   delete process.env.APPDATA;
+  await apiKeysDb.resetApiKeyState();
+  managementKey = (await apiKeysDb.createApiKey("test-management", "machine-kiro-idc", ["manage"]))
+    .key;
   // Reset fetch so tests with mocks don't bleed into each other.
   globalThis.fetch = ORIGINAL_FETCH;
 });
@@ -150,7 +155,9 @@ function stubFetchForRefresh() {
 }
 
 async function callGet(): Promise<{ status: number; body: Record<string, unknown> }> {
-  const request = new Request("http://localhost/api/oauth/kiro/auto-import");
+  const request = new Request("http://localhost/api/oauth/kiro/auto-import", {
+    headers: { Authorization: `Bearer ${managementKey}` },
+  });
   const response = await GET(request);
   const body = (await response.json()) as Record<string, unknown>;
   return { status: response.status, body };

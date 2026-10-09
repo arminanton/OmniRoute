@@ -95,8 +95,7 @@ async function parseRequestBody(
 
 async function requireAuth(request: Request): Promise<Response | null> {
   // GHSA-mg76: importing a provider connection is a state-mutating admin action.
-  // Require management scope (or a dashboard session) rather than accepting any
-  // valid client key, which the PUBLIC /api/oauth/ classification otherwise allows.
+  // Require management scope (or a dashboard session), not any valid client key.
   return requireManagementAuth(request, { invalidApiKeyStatus: 401 });
 }
 

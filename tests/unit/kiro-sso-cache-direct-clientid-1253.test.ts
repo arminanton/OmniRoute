@@ -40,6 +40,7 @@ process.env.JWT_SECRET = process.env.JWT_SECRET || "test-jwt-secret-1253";
 process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "test-api-key-secret-1253";
 
 const core = await import("../../src/lib/db/core.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 
 const { GET } = await import("../../src/app/api/oauth/kiro/auto-import/route.ts");
 const { KiroService } = await import("../../src/lib/oauth/services/kiro.ts");
@@ -49,14 +50,18 @@ const ORIGINAL_APPDATA = process.env.APPDATA;
 const ORIGINAL_FETCH = globalThis.fetch;
 
 let tmpHome: string;
+let managementKey: string;
 
-test.beforeEach(() => {
+test.beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-kiro-1253-"));
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
   process.env.HOME = tmpHome;
   delete process.env.APPDATA;
+  await apiKeysDb.resetApiKeyState();
+  managementKey = (await apiKeysDb.createApiKey("test-management", "machine-kiro-sso", ["manage"]))
+    .key;
   globalThis.fetch = ORIGINAL_FETCH;
 });
 
@@ -86,7 +91,9 @@ function writeJson(dir: string, file: string, data: Record<string, unknown>) {
 }
 
 async function callGet(): Promise<{ status: number; body: Record<string, unknown> }> {
-  const request = new Request("http://localhost/api/oauth/kiro/auto-import");
+  const request = new Request("http://localhost/api/oauth/kiro/auto-import", {
+    headers: { Authorization: `Bearer ${managementKey}` },
+  });
   const response = await GET(request);
   const body = (await response.json()) as Record<string, unknown>;
   return { status: response.status, body };

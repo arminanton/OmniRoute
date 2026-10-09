@@ -26,8 +26,10 @@ import Database from "better-sqlite3";
 // a fresh, empty settings DB (no password → requireLogin defaults to false).
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-kiro-3363-data-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
+process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "test-api-key-secret-3363";
 
 const core = await import("../../src/lib/db/core.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 
 // Import the GET handler at the module level so the DB is initialised once
 // before any test runs.
@@ -39,8 +41,9 @@ const ORIGINAL_APPDATA = process.env.APPDATA;
 const ORIGINAL_FETCH = globalThis.fetch;
 
 let tmpHome: string;
+let managementKey: string;
 
-test.beforeEach(() => {
+test.beforeEach(async () => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-kiro-3363-"));
   // Reset DB instance so each test gets a clean settings DB (no requireLogin).
   core.resetDbInstance();
@@ -54,6 +57,10 @@ test.beforeEach(() => {
   process.env.USERPROFILE = tmpHome;
   // Ensure APPDATA is unset by default; individual tests that need it set it.
   delete process.env.APPDATA;
+  await apiKeysDb.resetApiKeyState();
+  managementKey = (
+    await apiKeysDb.createApiKey("test-management", "machine-kiro-windows", ["manage"])
+  ).key;
 });
 
 test.afterEach(() => {
@@ -79,7 +86,9 @@ test.after(() => {
 
 // Helper to call the GET handler and parse the JSON body.
 async function callGet(): Promise<{ status: number; body: Record<string, unknown> }> {
-  const request = new Request("http://localhost/api/oauth/kiro/auto-import");
+  const request = new Request("http://localhost/api/oauth/kiro/auto-import", {
+    headers: { Authorization: `Bearer ${managementKey}` },
+  });
   const response = await GET(request);
   const body = (await response.json()) as Record<string, unknown>;
   return { status: response.status, body };

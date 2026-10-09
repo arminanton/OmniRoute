@@ -13,11 +13,14 @@ import path from "node:path";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-codex-import-token-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
+process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "codex-import-token-api-key-secret";
 
 const core = await import("../../src/lib/db/core.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
+const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const route = await import("../../src/app/api/oauth/codex/import-token/route.ts");
+let managementKey: string;
 
 function b64url(obj: unknown): string {
   return Buffer.from(JSON.stringify(obj))
@@ -35,6 +38,10 @@ function makeJwt(payload: Record<string, unknown>): string {
 
 test.before(async () => {
   await settingsDb.updateSettings({ requireLogin: false });
+  await apiKeysDb.resetApiKeyState();
+  managementKey = (
+    await apiKeysDb.createApiKey("test-management", "machine-codex-import", ["manage"])
+  ).key;
 });
 
 test.after(async () => {
@@ -45,7 +52,10 @@ test.after(async () => {
 async function postImportToken(body: unknown) {
   const request = new Request("http://localhost:20128/api/oauth/codex/import-token", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${managementKey}`,
+    },
     body: JSON.stringify(body),
   });
   const response = await route.POST(request);
@@ -124,7 +134,10 @@ test("import-token: undecodable token IS accepted when an explicit name is suppl
 test("import-token: malformed JSON body is rejected with 400", async () => {
   const request = new Request("http://localhost:20128/api/oauth/codex/import-token", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${managementKey}`,
+    },
     body: "{not json",
   });
   const response = await route.POST(request);
