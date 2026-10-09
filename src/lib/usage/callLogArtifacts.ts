@@ -474,6 +474,10 @@ const MAX_DEDUP_TEXT_CODE_UNITS = 64 * 1024;
 const MAX_DEDUP_TEXT_VALUES = 4096;
 const MAX_DEDUP_TRAVERSED_VALUES = 100_000;
 const MAX_DEDUP_DEPTH = 64;
+const MAX_DEDUP_CANDIDATE_CODE_UNITS = 8 * 1024 * 1024;
+const MAX_DEDUP_DICTIONARY_JSON_BYTES = 4 * 1024 * 1024;
+const MAX_DEDUP_ARRAY_LENGTH = MAX_DEDUP_TRAVERSED_VALUES;
+const MAX_DEDUP_EXPANDED_CODE_UNITS = 16 * 1024 * 1024;
 
 function jsonArrayByteLength(itemBytes: readonly number[]): number {
   return (
@@ -591,51 +595,87 @@ export function compactCallLogStreamChunkText(artifact: CallLogArtifact): CallLo
  * smaller; pathological object graphs fail open and use the existing storage path.
  */
 export function compactCallLogRepeatedText(artifact: CallLogArtifact): CallLogArtifact {
-  if (
-    artifact.textDedupTable ||
-    (!artifact.requestBody && !artifact.responseBody && !artifact.pipeline)
-  ) {
-    return artifact;
-  }
+  try {
+    if (!artifact || typeof artifact !== "object") return artifact;
+    const artifactPrototype = Object.getPrototypeOf(artifact);
+    if (artifactPrototype !== Object.prototype && artifactPrototype !== null) return artifact;
 
-  const counts = new Map<string, { count: number; jsonBytes?: number }>();
-  const ancestors = new WeakSet<object>();
-  let visited = 0;
-  let unsupported = false;
-
-  const collect = (value: unknown, depth: number): void => {
-    if (unsupported || ++visited > MAX_DEDUP_TRAVERSED_VALUES || depth > MAX_DEDUP_DEPTH) {
-      unsupported = true;
-      return;
+    const artifactDescriptors = Object.getOwnPropertyDescriptors(artifact);
+    if (
+      Object.values(artifactDescriptors).some(
+        (descriptor) => descriptor.enumerable && !Object.hasOwn(descriptor, "value")
+      )
+    ) {
+      return artifact;
     }
-    if (typeof value === "string") {
-      // UTF-8 byte length is never smaller than JS UTF-16 code-unit length. This
-      // bounded candidate window avoids hashing megabyte unique prompts; exact
-      // escaped JSON bytes are computed only after a duplicate is found.
-      if (value.length < MIN_DEDUP_TEXT_CODE_UNITS || value.length > MAX_DEDUP_TEXT_CODE_UNITS)
+    const data = (key: string): unknown => {
+      const descriptor = artifactDescriptors[key];
+      if (descriptor && !Object.hasOwn(descriptor, "value")) throw new Error("artifact_accessor");
+      return descriptor?.value;
+    };
+    if (data("textDedupTable")) return artifact;
+    const requestBody = data("requestBody");
+    const responseBody = data("responseBody");
+    const pipeline = data("pipeline");
+    if (requestBody === undefined && responseBody === undefined && pipeline === undefined)
+      return artifact;
+
+    const counts = new Map<string, { count: number; jsonBytes?: number }>();
+    const ancestors = new WeakSet<object>();
+    let visited = 0;
+    let candidateCodeUnits = 0;
+    let expandedCodeUnits = 0;
+    let unsupported = false;
+
+    const collect = (value: unknown, depth: number, skipKey?: string): void => {
+      if (unsupported || ++visited > MAX_DEDUP_TRAVERSED_VALUES || depth > MAX_DEDUP_DEPTH) {
+        unsupported = true;
         return;
-      const prior = counts.get(value);
-      if (prior) {
-        prior.count++;
-        prior.jsonBytes ??= jsonStringByteLength(value);
-      } else {
-        if (counts.size >= MAX_DEDUP_TEXT_VALUES) {
+      }
+      if (typeof value === "string") {
+        expandedCodeUnits += value.length;
+        if (expandedCodeUnits > MAX_DEDUP_EXPANDED_CODE_UNITS) {
           unsupported = true;
           return;
         }
-        counts.set(value, { count: 1 });
+        // Exclude long unique context before hashing it. Count every candidate occurrence too,
+        // so repeated 64 KiB strings cannot turn the bounded node walk into gigabytes of hashing.
+        if (value.length < MIN_DEDUP_TEXT_CODE_UNITS || value.length > MAX_DEDUP_TEXT_CODE_UNITS)
+          return;
+        candidateCodeUnits += value.length;
+        if (candidateCodeUnits > MAX_DEDUP_CANDIDATE_CODE_UNITS) {
+          unsupported = true;
+          return;
+        }
+        const prior = counts.get(value);
+        if (prior) {
+          prior.count++;
+          prior.jsonBytes ??= jsonStringByteLength(value);
+        } else {
+          if (counts.size >= MAX_DEDUP_TEXT_VALUES) {
+            unsupported = true;
+            return;
+          }
+          counts.set(value, { count: 1 });
+        }
+        return;
       }
-      return;
-    }
-    if (!value || typeof value !== "object") return;
-    if (ancestors.has(value)) {
-      unsupported = true;
-      return;
-    }
-    let prototype: object | null;
-    try {
-      prototype = Object.getPrototypeOf(value);
-      if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return;
+      if (!value || typeof value !== "object") return;
+      if (ancestors.has(value)) {
+        unsupported = true;
+        return;
+      }
+
+      const isArray = Array.isArray(value);
+      const prototype = Object.getPrototypeOf(value);
+      if (!isArray && prototype !== Object.prototype && prototype !== null) {
+        unsupported = true;
+        return;
+      }
+      if (isArray && prototype !== Array.prototype) {
+        unsupported = true;
+        return;
+      }
       const ownToJson = Object.getOwnPropertyDescriptor(value, "toJSON");
       const inheritedToJson = prototype
         ? Object.getOwnPropertyDescriptor(prototype, "toJSON")
@@ -647,110 +687,173 @@ export function compactCallLogRepeatedText(artifact: CallLogArtifact): CallLogAr
         unsupported = true;
         return;
       }
-    } catch {
-      unsupported = true;
-      return;
-    }
 
-    ancestors.add(value);
-    if (Array.isArray(value)) {
-      for (let index = 0; index < value.length; index++) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-        if (!descriptor) continue;
-        if (!("value" in descriptor)) {
+      let arrayLength: number | undefined;
+      if (isArray) {
+        // Check the non-configurable array length before materializing descriptors for a dense
+        // array; descriptor enumeration itself would otherwise allocate O(length) objects.
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+        if (
+          !lengthDescriptor ||
+          !Object.hasOwn(lengthDescriptor, "value") ||
+          typeof lengthDescriptor.value !== "number" ||
+          lengthDescriptor.value > MAX_DEDUP_ARRAY_LENGTH
+        ) {
           unsupported = true;
-          break;
+          return;
         }
-        collect(descriptor.value, depth + 1);
+        arrayLength = lengthDescriptor.value;
       }
-    } else {
-      const descriptors = Object.getOwnPropertyDescriptors(value);
-      for (const descriptor of Object.values(descriptors)) {
-        if (!descriptor.enumerable) continue;
-        if (!Object.hasOwn(descriptor, "value")) {
-          unsupported = true;
-          break;
+      ancestors.add(value);
+      if (isArray) {
+        const descriptors = Object.getOwnPropertyDescriptors(value);
+        for (let index = 0; index < arrayLength!; index++) {
+          const descriptor = descriptors[String(index)];
+          // JSON.stringify writes array holes as null. Count that value so the reader's expanded
+          // traversal budget matches the parsed artifact shape.
+          if (!descriptor) {
+            collect(null, depth + 1);
+            if (unsupported) break;
+            continue;
+          }
+          if (!Object.hasOwn(descriptor, "value")) {
+            unsupported = true;
+            break;
+          }
+          collect(descriptor.value, depth + 1);
+          if (unsupported) break;
         }
-        collect(descriptor.value, depth + 1);
+      } else {
+        for (const key in value) {
+          if (!Object.hasOwn(value, key)) continue;
+          const descriptor = Object.getOwnPropertyDescriptor(value, key);
+          if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) {
+            unsupported = true;
+            break;
+          }
+          if (key === skipKey) continue;
+          expandedCodeUnits += key.length;
+          if (expandedCodeUnits > MAX_DEDUP_EXPANDED_CODE_UNITS) {
+            unsupported = true;
+            break;
+          }
+          collect(descriptor.value, depth + 1);
+          if (unsupported) break;
+        }
       }
-    }
-    ancestors.delete(value);
-  };
+      ancestors.delete(value);
+    };
 
-  // Summary strings are high-cardinality identifiers/metadata and are not user text.
-  collect(artifact.requestBody, 0);
-  collect(artifact.responseBody, 0);
-  if (artifact.pipeline) {
-    const pipelineWithoutChunks = Object.fromEntries(
-      Object.entries(artifact.pipeline).filter(([key]) => key !== "streamChunks")
+    // Summary strings are high-cardinality identifiers/metadata and are not user text.
+    collect(requestBody, 0);
+    collect(responseBody, 0);
+    if (pipeline !== undefined) collect(pipeline, 0, "streamChunks");
+    if (unsupported) return artifact;
+
+    const repeated = [...counts.entries()].filter(([, entry]) => entry.count > 1);
+    if (repeated.length === 0) return artifact;
+    const dictionaryJsonBytes = repeated.reduce((total, [, entry]) => total + entry.jsonBytes!, 0);
+    if (dictionaryJsonBytes > MAX_DEDUP_DICTIONARY_JSON_BYTES) return artifact;
+
+    const token = randomUUID();
+    const dictionary = repeated.map(([value]) => value);
+    const indexes = new Map(dictionary.map((value, index) => [value, index]));
+    const referenceBytes = (index: number) =>
+      Buffer.byteLength(JSON.stringify({ [EXACT_TEXT_REF_KEY]: { token, index } }), "utf8");
+    const tableBytes = Buffer.byteLength(
+      JSON.stringify({ encoding: EXACT_TEXT_TABLE_ENCODING, token, dictionary }),
+      "utf8"
     );
-    collect(pipelineWithoutChunks, 0);
-  }
-  if (unsupported) return artifact;
+    const tablePropertyBytes = jsonStringByteLength("textDedupTable") + 2 + tableBytes;
+    const originalTextBytes = repeated.reduce(
+      (total, [, entry]) => total + entry.count * entry.jsonBytes!,
+      0
+    );
+    const referenceTextBytes = repeated.reduce(
+      (total, [value]) => total + counts.get(value)!.count * referenceBytes(indexes.get(value)!),
+      0
+    );
+    if (originalTextBytes <= tablePropertyBytes + referenceTextBytes) return artifact;
 
-  const repeated = [...counts.entries()].filter(([, entry]) => entry.count > 1);
-  if (repeated.length === 0) return artifact;
-
-  const token = randomUUID();
-  const dictionary = repeated.map(([value]) => value);
-  const indexes = new Map(dictionary.map((value, index) => [value, index]));
-  const referenceBytes = (index: number) =>
-    Buffer.byteLength(JSON.stringify({ [EXACT_TEXT_REF_KEY]: { token, index } }), "utf8");
-  const tableBytes = Buffer.byteLength(
-    JSON.stringify({ encoding: EXACT_TEXT_TABLE_ENCODING, token, dictionary }),
-    "utf8"
-  );
-  const tablePropertyBytes = jsonStringByteLength("textDedupTable") + 2 + tableBytes;
-  const originalTextBytes = repeated.reduce(
-    (total, [, entry]) => total + entry.count * entry.jsonBytes!,
-    0
-  );
-  const referenceTextBytes = repeated.reduce(
-    (total, [value]) => total + counts.get(value)!.count * referenceBytes(indexes.get(value)!),
-    0
-  );
-  if (originalTextBytes <= tablePropertyBytes + referenceTextBytes) return artifact;
-
-  const transform = (value: unknown, depth: number): unknown => {
-    if (typeof value === "string") {
-      const index = indexes.get(value);
-      return index === undefined ? value : { [EXACT_TEXT_REF_KEY]: { token, index } };
-    }
-    if (!value || typeof value !== "object") return value;
-    if (!Array.isArray(value)) {
+    let transformVisited = 0;
+    let transformCandidateCodeUnits = 0;
+    let transformExpandedCodeUnits = 0;
+    const transform = (value: unknown, depth: number, skipKey?: string): unknown => {
+      if (++transformVisited > MAX_DEDUP_TRAVERSED_VALUES || depth > MAX_DEDUP_DEPTH) {
+        throw new Error("call_log_dedup_transform_budget");
+      }
+      if (typeof value === "string") {
+        transformExpandedCodeUnits += value.length;
+        if (transformExpandedCodeUnits > MAX_DEDUP_EXPANDED_CODE_UNITS)
+          throw new Error("call_log_dedup_transform_budget");
+        if (value.length < MIN_DEDUP_TEXT_CODE_UNITS || value.length > MAX_DEDUP_TEXT_CODE_UNITS)
+          return value;
+        transformCandidateCodeUnits += value.length;
+        if (transformCandidateCodeUnits > MAX_DEDUP_CANDIDATE_CODE_UNITS)
+          throw new Error("call_log_dedup_transform_budget");
+        const index = indexes.get(value);
+        return index === undefined ? value : { [EXACT_TEXT_REF_KEY]: { token, index } };
+      }
+      if (!value || typeof value !== "object") return value;
+      const isArray = Array.isArray(value);
       const prototype = Object.getPrototypeOf(value);
-      if (prototype !== Object.prototype && prototype !== null) return value;
-    }
-    if (depth > MAX_DEDUP_DEPTH) return value;
-    if (Array.isArray(value)) return value.map((item) => transform(item, depth + 1));
-    return Object.fromEntries(
-      Object.entries(Object.getOwnPropertyDescriptors(value))
-        .filter(([, descriptor]) => descriptor.enumerable && Object.hasOwn(descriptor, "value"))
-        .map(([key, descriptor]) => [key, transform(descriptor.value, depth + 1)])
-    );
-  };
+      if (!isArray && prototype !== Object.prototype && prototype !== null)
+        throw new Error("call_log_dedup_custom_prototype");
+      if (isArray && prototype !== Array.prototype)
+        throw new Error("call_log_dedup_array_prototype");
 
-  return {
-    ...artifact,
-    schemaVersion: 9,
-    requestBody: transform(artifact.requestBody, 0),
-    responseBody: transform(artifact.responseBody, 0),
-    ...(artifact.pipeline
-      ? {
-          pipeline: Object.fromEntries(
-            Object.entries(artifact.pipeline).map(([key, value]) => [
-              key,
-              key === "streamChunks" ? value : transform(value, 0),
-            ])
-          ) as RequestPipelinePayloads,
+      if (isArray) {
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+        const length = lengthDescriptor?.value;
+        if (typeof length !== "number" || length < 0 || length > MAX_DEDUP_ARRAY_LENGTH)
+          throw new Error("call_log_dedup_array_length");
+        const descriptors = Object.getOwnPropertyDescriptors(value);
+        const result = new Array(length);
+        for (let index = 0; index < length; index++) {
+          const descriptor = descriptors[String(index)];
+          if (!descriptor) continue;
+          if (!Object.hasOwn(descriptor, "value")) throw new Error("call_log_dedup_accessor");
+          result[index] = transform(descriptor.value, depth + 1);
         }
-      : {}),
-    textDedupTable: {
-      encoding: EXACT_TEXT_TABLE_ENCODING,
-      token,
-      dictionary,
-    },
-  };
+        return result;
+      }
+      const entries: Array<[string, unknown]> = [];
+      for (const key in value) {
+        if (!Object.hasOwn(value, key)) continue;
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value"))
+          throw new Error("call_log_dedup_accessor");
+        if (key === skipKey) {
+          entries.push([key, descriptor.value]);
+          continue;
+        }
+        transformExpandedCodeUnits += key.length;
+        if (transformExpandedCodeUnits > MAX_DEDUP_EXPANDED_CODE_UNITS)
+          throw new Error("call_log_dedup_transform_budget");
+        entries.push([key, transform(descriptor.value, depth + 1)]);
+      }
+      return Object.fromEntries(entries);
+    };
+
+    return {
+      ...artifact,
+      schemaVersion: 9,
+      requestBody: transform(requestBody, 0),
+      responseBody: transform(responseBody, 0),
+      ...(pipeline
+        ? { pipeline: transform(pipeline, 0, "streamChunks") as RequestPipelinePayloads }
+        : {}),
+      textDedupTable: {
+        encoding: EXACT_TEXT_TABLE_ENCODING,
+        token,
+        dictionary,
+      },
+    };
+  } catch {
+    // Dedup is an optional storage optimization. Any unsupported graph or inspection failure
+    // must preserve the original artifact and let the normal size-limit path handle it.
+    return artifact;
+  }
 }
 
 function expandCallLogRepeatedText(artifact: CallLogArtifact): CallLogArtifact {
@@ -761,21 +864,46 @@ function expandCallLogRepeatedText(artifact: CallLogArtifact): CallLogArtifact {
     typeof table.token !== "string" ||
     !Array.isArray(table.dictionary) ||
     table.dictionary.some((value) => typeof value !== "string") ||
-    table.dictionary.length > MAX_DEDUP_TEXT_VALUES
+    table.dictionary.length > MAX_DEDUP_TEXT_VALUES ||
+    table.dictionary.some((value) => value.length > MAX_DEDUP_TEXT_CODE_UNITS)
   ) {
     throw new Error("Invalid call-log exact-text dictionary");
   }
 
-  const expand = (value: unknown, depth: number): unknown => {
+  let expandedValues = 0;
+  let expandedCodeUnits = 0;
+  const accountString = (value: string) => {
+    expandedCodeUnits += value.length;
+    if (expandedCodeUnits > MAX_DEDUP_EXPANDED_CODE_UNITS) {
+      throw new Error("Call-log exact-text expansion exceeds its limit");
+    }
+  };
+  const expand = (value: unknown, depth: number, skipKey?: string): unknown => {
+    if (++expandedValues > MAX_DEDUP_TRAVERSED_VALUES) {
+      throw new Error("Call-log exact-text expansion exceeds its value limit");
+    }
+    if (typeof value === "string") {
+      accountString(value);
+      return value;
+    }
     if (!value || typeof value !== "object") return value;
     if (Array.isArray(value)) {
-      if (depth > MAX_DEDUP_DEPTH) throw new Error("Call-log exact-text nesting is too deep");
+      if (depth > MAX_DEDUP_DEPTH || value.length > MAX_DEDUP_ARRAY_LENGTH)
+        throw new Error("Call-log exact-text nesting or array length exceeds its limit");
       return value.map((item) => expand(item, depth + 1));
     }
     const record = value as Record<string, unknown>;
-    const reference = record[EXACT_TEXT_REF_KEY];
+    let hasOnlyReference = Object.hasOwn(record, EXACT_TEXT_REF_KEY);
+    if (hasOnlyReference) {
+      for (const key in record) {
+        if (Object.hasOwn(record, key) && key !== EXACT_TEXT_REF_KEY) {
+          hasOnlyReference = false;
+          break;
+        }
+      }
+    }
+    const reference = hasOnlyReference ? record[EXACT_TEXT_REF_KEY] : undefined;
     if (
-      Object.keys(record).length === 1 &&
       reference &&
       typeof reference === "object" &&
       !Array.isArray(reference) &&
@@ -789,12 +917,23 @@ function expandCallLogRepeatedText(artifact: CallLogArtifact): CallLogArtifact {
       ) {
         throw new Error("Invalid call-log exact-text reference");
       }
-      return table.dictionary[Number(index)];
+      const expanded = table.dictionary[Number(index)];
+      accountString(expanded);
+      return expanded;
     }
     if (depth > MAX_DEDUP_DEPTH) throw new Error("Call-log exact-text nesting is too deep");
-    return Object.fromEntries(
-      Object.entries(record).map(([key, item]) => [key, expand(item, depth + 1)])
-    );
+    const entries: Array<[string, unknown]> = [];
+    for (const key in record) {
+      if (!Object.hasOwn(record, key)) continue;
+      const item = record[key];
+      if (key === skipKey) {
+        entries.push([key, item]);
+        continue;
+      }
+      accountString(key);
+      entries.push([key, expand(item, depth + 1)]);
+    }
+    return Object.fromEntries(entries);
   };
 
   const expanded: CallLogArtifact = {
@@ -802,7 +941,7 @@ function expandCallLogRepeatedText(artifact: CallLogArtifact): CallLogArtifact {
     requestBody: expand(artifact.requestBody, 0),
     responseBody: expand(artifact.responseBody, 0),
     ...(artifact.pipeline
-      ? { pipeline: expand(artifact.pipeline, 0) as RequestPipelinePayloads }
+      ? { pipeline: expand(artifact.pipeline, 0, "streamChunks") as RequestPipelinePayloads }
       : {}),
   };
   delete expanded.textDedupTable;

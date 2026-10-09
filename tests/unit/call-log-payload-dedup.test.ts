@@ -243,6 +243,146 @@ test("exact-text compaction leaves very large strings out of its hash table", ()
   assert.equal(Object.hasOwn(input, "textDedupTable"), false);
 });
 
+test("exact-text compaction fails open on a huge sparse array before scanning its length", () => {
+  const sparse = new Array(100_000_000);
+  const input = artifact(sparse, { output: "ordinary response" });
+  input.pipeline = undefined;
+
+  const started = process.hrtime.bigint();
+  assert.equal(compactCallLogRepeatedText(input as never), input);
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  assert.ok(elapsedMs < 1_000, `sparse-array guard should return promptly, took ${elapsedMs}ms`);
+});
+
+test("exact-text compaction rejects a dense oversized array before materializing its descriptors", () => {
+  const dense = new Array(100_001).fill(null);
+  const input = artifact(dense, { output: "ordinary response" });
+  input.pipeline = undefined;
+
+  assert.ok(compactCallLogRepeatedText(input as never) === input);
+});
+
+test("exact-text compaction preserves non-enumerable array indices JSON would serialize", () => {
+  const repeatedText = `non-enumerable array entry ${"same exact text ".repeat(30)}`;
+  const requestBody: unknown[] = [];
+  Object.defineProperty(requestBody, "0", {
+    value: repeatedText,
+    enumerable: false,
+    configurable: true,
+    writable: true,
+  });
+  requestBody.length = 1;
+  const input = artifact(requestBody, { output: repeatedText });
+  input.pipeline = undefined;
+
+  const { artifact: roundTripped } = writeAndRead(input);
+  assert.ok(roundTripped.requestBody);
+  assert.equal(JSON.stringify(roundTripped.requestBody), JSON.stringify(requestBody));
+});
+
+test("exact-text compaction stops hashing when cumulative candidate text exceeds its budget", () => {
+  const repeated = "x".repeat(64 * 1024);
+  const input = artifact(
+    Array.from({ length: 129 }, () => repeated),
+    { output: "response" }
+  );
+  input.pipeline = undefined;
+
+  assert.equal(compactCallLogRepeatedText(input as never), input);
+  assert.equal(Object.hasOwn(input, "textDedupTable"), false);
+});
+
+test("exact-text compaction fails open on custom-prototype values the reader would project to JSON", () => {
+  const repeated = `repeated prompt value ${"word ".repeat(300)}`;
+  const custom = Object.assign(Object.create({ inherited: "not serialized" }), {
+    payload: "x".repeat(64 * 1024),
+  });
+  const input = artifact({ custom, prompt: repeated }, { output: repeated });
+  input.pipeline = undefined;
+
+  assert.ok(compactCallLogRepeatedText(input as never) === input);
+  assert.equal(Object.hasOwn(input, "textDedupTable"), false);
+});
+
+test("exact-text compaction stops a wide plain-object walk at the visited-value budget", () => {
+  const wide = Object.create(null) as Record<string, string>;
+  for (let index = 0; index < 100_001; index++) wide[`key-${index}`] = "value";
+  const input = artifact({ wide, prompt: "repeated content ".repeat(100) }, { output: "response" });
+  input.pipeline = undefined;
+
+  assert.ok(compactCallLogRepeatedText(input as never) === input);
+  assert.equal(Object.hasOwn(input, "textDedupTable"), false);
+});
+
+test("exact-text compaction refuses a candidate that could exceed the reader expansion budget", () => {
+  const repeatedCandidate = "x".repeat(64 * 1024);
+  const repeatedShortText = "s".repeat(255);
+  const input = artifact(
+    [
+      ...Array.from({ length: 100 }, () => repeatedCandidate),
+      ...Array.from({ length: 42_000 }, () => repeatedShortText),
+    ],
+    { output: "response" }
+  );
+  input.pipeline = undefined;
+
+  assert.ok(compactCallLogRepeatedText(input as never) === input);
+  assert.equal(Object.hasOwn(input, "textDedupTable"), false);
+});
+
+test("exact-text compaction leaves pathological JSON-escaped dictionaries inline", () => {
+  const strings = Array.from({ length: 15 }, (_, index) =>
+    String.fromCharCode(index + 1).repeat(64 * 1024)
+  );
+  const input = artifact(
+    strings,
+    strings.map((value) => value)
+  );
+  input.pipeline = undefined;
+
+  assert.ok(compactCallLogRepeatedText(input as never) === input);
+  assert.equal(Object.hasOwn(input, "textDedupTable"), false);
+});
+
+test("exact-text compaction does not evaluate pipeline accessors or retain a broken partial table", () => {
+  let getterCalls = 0;
+  const pipeline = Object.defineProperty({}, "clientRawRequest", {
+    enumerable: true,
+    get() {
+      getterCalls++;
+      throw new Error("must not run during optional compaction");
+    },
+  });
+  const input = artifact({ content: "repeated value ".repeat(100) }, { output: "response" });
+  input.pipeline = pipeline as never;
+
+  assert.equal(compactCallLogRepeatedText(input as never), input);
+  assert.equal(getterCalls, 0);
+  assert.equal(Object.hasOwn(input, "textDedupTable"), false);
+});
+
+test("reader rejects a text table whose expanded payload exceeds the fixed safety budget", () => {
+  const repeated = "x".repeat(64 * 1024);
+  const reference = {
+    __omniroute_exact_text_ref_v1: { token: "oversized", index: 0 },
+  };
+  const input = artifact(
+    Array.from({ length: 300 }, () => reference),
+    { output: "response" }
+  );
+  Object.assign(input, {
+    textDedupTable: {
+      encoding: "omni-exact-text-table/v1",
+      token: "oversized",
+      dictionary: [repeated],
+    },
+  });
+
+  const relativePath = `payload-dedup/oversized-${input.summary.id}.json`;
+  assert.ok(writeCallArtifact(input as never, relativePath));
+  assert.equal(readCallArtifact(relativePath).state, "corrupt");
+});
+
 test("short repeated stream chunks stay inline when a dictionary would increase storage", () => {
   const input = artifact({ input: "request" }, { output: "response" });
   Object.assign(input.pipeline, {
