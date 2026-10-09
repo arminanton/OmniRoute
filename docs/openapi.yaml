@@ -15574,26 +15574,117 @@ paths:
       operationId: deleteApiChaosConfig
       tags:
         - Chaos
-      summary: "DELETE chaos › config"
+      summary: Reset Chaos Mode configuration
+      description: >-
+        Resets the persisted Chaos Mode settings to the built-in defaults. This management route
+        accepts a `write` Access Token, a `manage` or `admin` API key, a dashboard session, or
+        trusted loopback CLI/internal-service credentials when authentication is required. An
+        unlocked install with `requireLogin=false` may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Default Chaos Mode configuration and reset confirmation.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChaosConfigResetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: The persisted configuration could not be reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiChaosConfig
       tags:
         - Chaos
-      summary: "GET chaos › config"
+      summary: Get Chaos Mode configuration
+      description: >-
+        Returns persisted Chaos Mode settings or defaults if no valid configuration is stored.
+        This management route accepts a `read` Access Token, a `manage` or `admin` API key, a
+        dashboard session, or trusted loopback CLI/internal-service credentials when authentication
+        is required. An unlocked install with `requireLogin=false` may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current Chaos Mode configuration.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChaosConfigReadResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Unexpected route-level error; storage read failures normally fall back to defaults.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiChaosConfig
       tags:
         - Chaos
-      summary: "PUT chaos › config"
+      summary: Replace Chaos Mode configuration
+      description: >-
+        Validates and stores a configuration. This is replacement-style PUT, not a partial update:
+        omitted fields receive their schema defaults, so `{}` resets settings to defaults. Unknown
+        fields are stripped. `systemPrompt` may contain internal instructions and should be treated
+        as sensitive. The route accepts a `write` Access Token, a `manage` or `admin` API key, a
+        dashboard session, or trusted loopback CLI/internal-service credentials when authentication
+        is required. An unlocked install with `requireLogin=false` may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChaosConfigUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated configuration and confirmation message.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChaosConfigUpdateResponse" }
+        "400":
+          description: Chaos configuration failed Zod validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Invalid JSON or a storage/configuration write error; the route returns a sanitized error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/chaos/run:
     post:
       operationId: postApiChaosRun
@@ -35704,6 +35795,83 @@ components:
         note:
           type: string
           const: States flow back through the SSE→A2A mirror (GET /api/a2a/tasks, skill=conductor).
+      additionalProperties: false
+    ChaosProviderOverride:
+      type: object
+      required: [providerId, enabled]
+      properties:
+        providerId: { type: string, minLength: 1 }
+        modelId: { type: string }
+        enabled: { type: boolean, default: true }
+      additionalProperties: false
+    ChaosProviderOverrideInput:
+      type: object
+      required: [providerId]
+      properties:
+        providerId: { type: string, minLength: 1 }
+        modelId: { type: string }
+        enabled: { type: boolean, default: true }
+      description: Unknown provider-override fields are accepted by Zod and stripped.
+      additionalProperties: true
+    ChaosConfig:
+      type: object
+      x-sensitive: true
+      required: [enabled, defaultMode, providerOverrides, timeoutMs, maxTokens]
+      properties:
+        enabled: { type: boolean }
+        defaultMode: { type: string, enum: [parallel, collaborative] }
+        providerOverrides:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/ChaosProviderOverride" }
+        systemPrompt:
+          type: string
+          maxLength: 10000
+          x-sensitive: true
+        timeoutMs: { type: integer, minimum: 5000, maximum: 600000 }
+        maxTokens: { type: integer, minimum: 256, maximum: 128000 }
+      additionalProperties: false
+    ChaosConfigReadResponse:
+      type: object
+      x-sensitive: true
+      required: [config]
+      properties:
+        config: { $ref: "#/components/schemas/ChaosConfig" }
+      additionalProperties: false
+    ChaosConfigUpdateRequest:
+      type: object
+      x-sensitive: true
+      properties:
+        enabled: { type: boolean, default: false }
+        defaultMode: { type: string, enum: [parallel, collaborative], default: parallel }
+        providerOverrides:
+          type: array
+          maxItems: 200
+          default: []
+          items: { $ref: "#/components/schemas/ChaosProviderOverrideInput" }
+        systemPrompt:
+          type: string
+          maxLength: 10000
+          x-sensitive: true
+        timeoutMs: { type: integer, minimum: 5000, maximum: 600000, default: 120000 }
+        maxTokens: { type: integer, minimum: 256, maximum: 128000, default: 4096 }
+      description: Unknown fields are accepted by Zod and stripped; omitted fields use defaults.
+      additionalProperties: true
+    ChaosConfigUpdateResponse:
+      type: object
+      x-sensitive: true
+      required: [config, message]
+      properties:
+        config: { $ref: "#/components/schemas/ChaosConfig" }
+        message: { type: string, const: Chaos config updated }
+      additionalProperties: false
+    ChaosConfigResetResponse:
+      type: object
+      x-sensitive: true
+      required: [config, message]
+      properties:
+        config: { $ref: "#/components/schemas/ChaosConfig" }
+        message: { type: string, const: Chaos config reset to defaults }
       additionalProperties: false
     V1AccountKeyLimits:
       type: object
