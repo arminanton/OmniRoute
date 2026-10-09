@@ -119,23 +119,26 @@ not use real secrets for this harness. It binds to loopback and is not a deploya
 Run the isolated scheduler exercise with:
 
 ```bash
-cargo run --manifest-path benchmarks/runtime-proxy/Cargo.toml --bin omniroute-account-scheduler-bench
+cargo run --offline --manifest-path benchmarks/runtime-proxy/Cargo.toml --bin omniroute-account-scheduler-bench -- 70
+cargo run --offline --manifest-path benchmarks/runtime-proxy/Cargo.toml --bin omniroute-account-scheduler-bench -- 100
 ```
 
-It runs 70- and 100-agent groups for four sequential turns per agent against six eligible synthetic
-accounts (eight concurrent requests per account), plus disabled, cooling-down, and quota-exhausted
-decoys. It reports completed turns, elapsed time, session-affinity reuse, selection distribution,
-and observed peak per-account load. Each phase prints requested/completed/rejected counts; a wait
-timeout fails the run, while successful phases assert zero rejected turns.
+For the selected 70- or 100-session group, it runs four sequential turns per session against six
+eligible synthetic accounts (eight concurrent requests per account), plus disabled, cooling-down,
+and quota-exhausted decoys. Each group compares least-loaded available-capacity scheduling with
+priority-ordered fill-first selection, with session affinity disabled so the routing strategy is
+visible. It reports completed sessions/turns, throughput, acquire p50/p95, capacity-wait requests,
+timeouts, per-account distribution/skew, and peak per-account load. A separate four-task cancel
+probe aborts requests while they hold leases and checks that every slot is released and reusable.
 
 The TypeScript source compares connection eligibility from cached DB snapshots, `isActive`/API-key
 allowlists, exclusions, terminal/cooldown/model locks, and quota state before selecting an account.
 Session affinity reuses an eligible pin or chooses an LRU candidate for a new session. Later
 `acquireMany` takes global/provider/account gates atomically and releases them idempotently; it
 supports FIFO waiters, timeouts/abort cleanup, blocked-until gates, and optional shared admission.
-The synthetic model applies only enabled/cooldown/quota eligibility, least-loaded account choice,
-optional session pins, and a per-account in-flight cap. It reassigns a full affinity pin to an
-eligible account with capacity, and its waiter wake-up is not FIFO. It does not reproduce
+The synthetic model applies only enabled/cooldown/quota eligibility, one of the two listed account
+selection modes, optional session pins, and a per-account in-flight cap. It reassigns a full affinity
+pin to an eligible account with capacity, and its waiter wake-up is not FIFO. It does not reproduce
 database-backed account selection, model/API-key filters, provider/global caps, distributed leases,
 provider quotas, or adaptive/shared admission.
 
@@ -143,11 +146,16 @@ One exact routing-choice difference is covered by `account_scheduler::tests`: Ty
 `providerStrategies[provider].fallbackStrategy || fallbackStrategy || "fill-first"`; after its
 filters and affinity/lease handling, that default branch chooses `orderedConnections[0]`, whose
 order is priority-based. The Rust scheduler's normal constructor instead chooses the least-loaded
-in-flight/capacity ratio. A benchmark-only `PriorityOrderedFillFirst` mode now reproduces the
-TypeScript final choice when given the already-filtered, priority-ordered candidate vector; the
-test shows the two choices diverge while both accounts have headroom. It does not port TypeScript's
-candidate filtering, quota score, round-robin/weighted/P2C variants, or persistence semantics.
-Run this focused comparison with the cached build tree:
+in-flight/capacity ratio. A benchmark-only `PriorityOrderedFillFirst` mode models TypeScript's
+first-candidate choice over this harness's capacity-available candidates when given the already-
+filtered, priority-ordered vector; the test shows the two choices diverge while both accounts have
+headroom. It is not a port of TypeScript's `maxConcurrent` or exclusive-lease behavior. It also does
+not port TypeScript's candidate filtering, quota score, round-robin/weighted/P2C variants, or
+persistence semantics. In this local probe `getProviderConnections()` returns one provider's rows ordered by
+`priority ASC, updated_at DESC`; the request path filters that list and applies an OAuth-session
+tie preference before selecting `orderedConnections[0]`. Alias-provider concatenation, affinity,
+forced-connection, and exclusive-lease cases are outside this ordering assumption. Run the focused
+selector tests with the cached build tree:
 
 ```bash
 . "$HOME/.cargo/env"

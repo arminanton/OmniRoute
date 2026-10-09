@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering as AtomicOrdering},
+        atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
     },
     time::{Duration, Instant},
 };
@@ -51,6 +51,7 @@ struct SchedulerInner {
     routing_strategy: SyntheticRoutingStrategy,
     affinity: Mutex<HashMap<String, AffinityPin>>,
     changed: Arc<Notify>,
+    capacity_wait_requests: AtomicU64,
     affinity_ttl: Option<Duration>,
 }
 
@@ -122,6 +123,7 @@ impl AccountScheduler {
                 routing_strategy,
                 affinity: Mutex::new(HashMap::new()),
                 changed: Arc::new(Notify::new()),
+                capacity_wait_requests: AtomicU64::new(0),
                 affinity_ttl: affinity_ttl.filter(|ttl| !ttl.is_zero()),
             }),
         })
@@ -129,8 +131,8 @@ impl AccountScheduler {
 
     /// Select a healthy candidate with a free slot; queue by waiting for a lease release.
     /// Existing session affinity is reused while eligible and below its cap. If the pinned
-    /// account is full but another eligible account has room, least-loaded selection moves the
-    /// pin to the account that can accept work now.
+    /// account is full but another eligible account has room, the configured selection strategy
+    /// chooses an available account and moves the pin there.
     pub async fn acquire(
         &self,
         session_key: Option<&str>,
@@ -145,6 +147,7 @@ impl AccountScheduler {
         &self,
         session_key: Option<&str>,
     ) -> Result<AccountLease, SchedulerError> {
+        let mut counted_capacity_wait = false;
         loop {
             let notified = self.inner.changed.notified();
             tokio::pin!(notified);
@@ -228,11 +231,16 @@ impl AccountScheduler {
             }
 
             drop(affinity);
+            if !counted_capacity_wait {
+                self.inner
+                    .capacity_wait_requests
+                    .fetch_add(1, AtomicOrdering::Relaxed);
+                counted_capacity_wait = true;
+            }
             notified.await;
         }
     }
 
-    #[cfg(test)]
     pub fn in_flight_by_account(&self) -> HashMap<String, usize> {
         self.inner
             .accounts
@@ -244,6 +252,14 @@ impl AccountScheduler {
                 )
             })
             .collect()
+    }
+
+    /// Number of distinct acquisitions that had to wait at least once because every eligible
+    /// account was at its in-flight cap. Each scheduler is benchmark-local and starts at zero.
+    pub fn capacity_wait_requests(&self) -> u64 {
+        self.inner
+            .capacity_wait_requests
+            .load(AtomicOrdering::Relaxed)
     }
 }
 
@@ -366,6 +382,7 @@ mod tests {
                 .err(),
             Some(SchedulerError::WaitTimeout)
         );
+        assert_eq!(scheduler.capacity_wait_requests(), 1);
         drop(first);
         drop(second);
     }
