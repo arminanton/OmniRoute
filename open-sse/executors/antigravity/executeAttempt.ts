@@ -201,6 +201,25 @@ function cloneAntigravityRequestBody(body: unknown): unknown {
   return clone;
 }
 
+/** Stringify the original non-CLI request, omitting only a root tool-name map. */
+function stringifyAntigravityRequestBody(body: unknown): string {
+  let root: unknown;
+  let rootSeen = false;
+  const bodyString = JSON.stringify(body, function (key, value) {
+    // JSON.stringify calls the replacer for the root first, after applying any
+    // toJSON method. Tracking that value preserves the old clone's behavior of
+    // removing only a top-level `_toolNameMap`, including when it is enumerable.
+    if (!rootSeen) {
+      rootSeen = true;
+      root = value;
+      return value;
+    }
+    if (this === root && key === "_toolNameMap") return undefined;
+    return value;
+  });
+  return bodyString as string;
+}
+
 function getToolNameMap(body: Record<string, unknown>): Map<string, string> | null {
   return body._toolNameMap instanceof Map ? body._toolNameMap : null;
 }
@@ -220,17 +239,15 @@ function attachToolNameMap(
   return body;
 }
 
-function serializeAntigravityRequest(
+export function serializeAntigravityRequest(
   provider: string,
   headers: Record<string, string>,
   body: unknown
 ): { headers: Record<string, string>; bodyString: string } {
-  const serializedBody = cloneAntigravityRequestBody(body);
-
   if (!isCliCompatEnabled(provider)) {
-    return { headers, bodyString: JSON.stringify(serializedBody) };
+    return { headers, bodyString: stringifyAntigravityRequestBody(body) };
   }
-  return applyFingerprint(provider, { ...headers }, serializedBody);
+  return applyFingerprint(provider, { ...headers }, cloneAntigravityRequestBody(body));
 }
 
 function getRequestTargetModel(body: Record<string, unknown>): string {
