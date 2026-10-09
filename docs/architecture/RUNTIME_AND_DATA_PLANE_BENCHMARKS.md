@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 740
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 760
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,9 +32,9 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 490 operations have success
-response content schemas and 405 declare operation-level security. Of 1,001 operations with a
-non-`204` success status, 511 still lack an explicit success-body schema; 13 operations have no
+contract is still stronger on route coverage than schema completeness: 496 operations have success
+response content schemas and 411 declare operation-level security. Of 1,001 operations with a
+non-`204` success status, 505 still lack an explicit success-body schema; 13 operations have no
 declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -140,8 +140,11 @@ derived cache metrics snapshot. It documents that the legacy DELETE metrics rout
 is not deleted), while distinguishing its 200 result from cache config updates. The compression
 observability pass types Claude Code discovery-alias counters, the Caveman rules alias and persisted
 compression-run summaries, including the status-200 zero summary on telemetry-storage failure. The
-current spec inventory is 740 schemas, 490 success-body operations, and 405 security declarations;
-511 non-`204` successes still lack body schemas.
+database-maintenance pass documents editable settings sections, read-only location/health details,
+database statistics table/index rows, and the vacuum scheduler/manual-run status and error variants.
+The manual VACUUM contract test uses a temporary SQLite database and executes the maintenance
+operation there. The current spec inventory is 760 schemas, 496 success-body operations, and 411
+security declarations; 505 non-`204` successes still lack bodies.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -1333,8 +1336,8 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 490 operations with success-response content; 511
+- Continue the OpenAPI handler audit beyond the 496 operations with success-response content; 505
   of 1,001 non-`204` success operations still lack explicit success-body schemas. Thirteen operations
   have no declared `2xx` status and 15 have only an intentional `204`. The path/method inventory
-  covers 705/705 routes and 405 operations now declare security alternatives; remaining response
+  covers 705/705 routes and 411 operations now declare security alternatives; remaining response
   schemas and conditional auth behavior have not all been source-verified.

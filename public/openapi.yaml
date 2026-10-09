@@ -19244,53 +19244,213 @@ paths:
         - Settings
       summary: "GET settings › database"
       x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       responses:
         "200":
-          description: OK
+          description: Canonical database settings plus read-only database location and health stats.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DatabaseSettingsResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Database settings could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiSettingsDatabase
       tags:
         - Settings
       summary: "PATCH settings › database"
       x-always-protected: true
+      description: >-
+        Partially updates top-level settings sections. Any supplied section is validated as a full
+        section object; location and stats are read-only and cannot be changed. PUT is a compatibility
+        alias for this operation.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DatabaseSettingsUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated canonical database settings and current read-only location/stats.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DatabaseSettingsResponse" }
+        "400":
+          description: Database settings fields failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Database settings could not be updated or the request body could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsDatabase
       tags:
         - Settings
       summary: "PUT settings › database"
+      description: Delegates to PATCH for backwards compatibility; its body is still a partial section update.
       x-always-protected: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DatabaseSettingsUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated canonical database settings and current read-only location/stats.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DatabaseSettingsResponse" }
+        "400":
+          description: Database settings fields failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Database settings could not be updated or the request body could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/database/refresh-stats:
     post:
       operationId: postApiSettingsDatabaseRefreshStats
       tags:
         - Settings
       summary: "POST settings › database › refresh stats"
+      description: Computes current page/table/index statistics without changing stored settings.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Updated database statistics snapshot.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DatabaseStatsRefreshResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Database statistics could not be computed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/database/vacuum:
     get:
       operationId: getApiSettingsDatabaseVacuum
       tags:
         - Settings
       summary: "GET settings › database › vacuum"
+      description: Returns the vacuum scheduler state, including epoch-millisecond run times.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current scheduler state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VacuumSchedulerStateResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsDatabaseVacuum
       tags:
         - Settings
       summary: "POST settings › database › vacuum"
+      description: Manually runs VACUUM through the scheduler and records the run state.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: VACUUM completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VacuumRunSuccessResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "409":
+          description: A VACUUM run is already in progress.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VacuumAlreadyRunningResponse" }
+        "500":
+          description: VACUUM failed or the scheduler operation raised an exception.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VacuumRunFailureResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/export-json:
     get:
       operationId: getApiSettingsExportJson
@@ -30853,6 +31013,282 @@ components:
                 retryAfterSeconds: { type: integer, minimum: 0 }
               additionalProperties: false
       additionalProperties: false
+
+    DatabaseSettingsLogs:
+      type: object
+      required: [detailedLogsEnabled, callLogPipelineEnabled, maxDetailSizeKb, ringBufferSize]
+      properties:
+        detailedLogsEnabled: { type: boolean }
+        callLogPipelineEnabled: { type: boolean }
+        maxDetailSizeKb: { type: integer, minimum: 0 }
+        ringBufferSize: { type: integer, minimum: 100, maximum: 10000 }
+      additionalProperties: true
+
+    DatabaseSettingsBackup:
+      type: object
+      required: [autoBackupEnabled, autoBackupFrequency, keepLastNBackups]
+      properties:
+        autoBackupEnabled: { type: boolean }
+        autoBackupFrequency: { type: string, enum: [never, daily, weekly, monthly] }
+        keepLastNBackups: { type: integer, minimum: 1, maximum: 100 }
+      additionalProperties: true
+
+    DatabaseSettingsCache:
+      type: object
+      required:
+        [
+          semanticCacheEnabled,
+          semanticCacheMaxSize,
+          semanticCacheTTL,
+          promptCacheEnabled,
+          promptCacheStrategy,
+          alwaysPreserveClientCache,
+          modelCatalogCacheTtlMs,
+        ]
+      properties:
+        semanticCacheEnabled: { type: boolean }
+        semanticCacheMaxSize: { type: integer, minimum: 10, maximum: 1000 }
+        semanticCacheTTL: { type: integer, minimum: 60000 }
+        promptCacheEnabled: { type: boolean }
+        promptCacheStrategy: { type: string, enum: [auto, system-only, manual] }
+        alwaysPreserveClientCache: { type: string, enum: [auto, always, never] }
+        modelCatalogCacheTtlMs: { type: integer, minimum: 500, maximum: 60000 }
+      additionalProperties: true
+
+    DatabaseSettingsRetentionResponse:
+      type: object
+      required:
+        [
+          quotaSnapshots,
+          compressionAnalytics,
+          mcpAudit,
+          configAudit,
+          a2aEvents,
+          callLogs,
+          usageHistory,
+          memoryEntries,
+          domainCostHistory,
+          compressionCacheStats,
+          xpAuditLog,
+          compressionRunTelemetry,
+          autoCleanupEnabled,
+        ]
+      properties:
+        quotaSnapshots: { type: integer, minimum: 1, maximum: 3650 }
+        compressionAnalytics: { type: integer, minimum: 1, maximum: 365 }
+        mcpAudit: { type: integer, minimum: 1, maximum: 365 }
+        configAudit: { type: integer, minimum: 1, maximum: 365 }
+        a2aEvents: { type: integer, minimum: 1, maximum: 365 }
+        callLogs: { type: integer, minimum: 1, maximum: 3650 }
+        usageHistory: { type: integer, minimum: 1, maximum: 3650 }
+        memoryEntries: { type: integer, minimum: 1, maximum: 3650 }
+        domainCostHistory: { type: integer, minimum: 1, maximum: 3650 }
+        compressionCacheStats: { type: integer, minimum: 1, maximum: 365 }
+        xpAuditLog: { type: integer, minimum: 1, maximum: 365 }
+        compressionRunTelemetry: { type: integer, minimum: 1, maximum: 365 }
+        autoCleanupEnabled: { type: boolean }
+      additionalProperties: true
+
+    DatabaseSettingsRetentionUpdate:
+      type: object
+      required:
+        [
+          quotaSnapshots,
+          compressionAnalytics,
+          mcpAudit,
+          a2aEvents,
+          callLogs,
+          usageHistory,
+          memoryEntries,
+          xpAuditLog,
+          autoCleanupEnabled,
+        ]
+      properties:
+        quotaSnapshots: { type: integer, minimum: 1, maximum: 3650 }
+        compressionAnalytics: { type: integer, minimum: 1, maximum: 365 }
+        mcpAudit: { type: integer, minimum: 1, maximum: 365 }
+        a2aEvents: { type: integer, minimum: 1, maximum: 365 }
+        callLogs: { type: integer, minimum: 1, maximum: 3650 }
+        usageHistory: { type: integer, minimum: 1, maximum: 3650 }
+        memoryEntries: { type: integer, minimum: 1, maximum: 3650 }
+        xpAuditLog: { type: integer, minimum: 1, maximum: 365 }
+        autoCleanupEnabled: { type: boolean }
+      additionalProperties: true
+
+    DatabaseSettingsAggregation:
+      type: object
+      required: [enabled, rawDataRetentionDays, granularity]
+      properties:
+        enabled: { type: boolean }
+        rawDataRetentionDays: { type: integer, minimum: 1, maximum: 3650 }
+        granularity: { type: string, enum: [hourly, daily, weekly] }
+      additionalProperties: true
+
+    DatabaseSettingsOptimization:
+      type: object
+      required:
+        [autoVacuumMode, scheduledVacuum, vacuumHour, pageSize, cacheSize, optimizeOnStartup]
+      properties:
+        autoVacuumMode: { type: string, enum: [NONE, FULL, INCREMENTAL] }
+        scheduledVacuum: { type: string, enum: [never, daily, weekly, monthly] }
+        vacuumHour: { type: integer, minimum: 0, maximum: 23 }
+        pageSize: { type: integer, multipleOf: 512, minimum: 512, maximum: 65536 }
+        cacheSize: { type: integer, exclusiveMinimum: 0, maximum: 1000000 }
+        optimizeOnStartup: { type: boolean }
+      additionalProperties: true
+
+    DatabaseSettingsLocation:
+      type: object
+      required: [databasePath, dataDir, walSizeBytes, schemaVersion]
+      properties:
+        databasePath: { type: string }
+        dataDir: { type: string }
+        walSizeBytes: { type: integer, minimum: 0 }
+        schemaVersion: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    DatabaseSettingsStats:
+      type: object
+      required:
+        [
+          databaseSizeBytes,
+          pageCount,
+          freelistCount,
+          lastVacuumAt,
+          lastOptimizationAt,
+          integrityCheck,
+        ]
+      properties:
+        databaseSizeBytes: { type: integer, minimum: 0 }
+        pageCount: { type: integer, minimum: 0 }
+        freelistCount: { type: integer, minimum: 0 }
+        lastVacuumAt: { type: [string, "null"], format: date-time }
+        lastOptimizationAt: { type: [string, "null"], format: date-time }
+        integrityCheck: { type: [string, "null"], enum: [ok, error, null] }
+      additionalProperties: false
+
+    DatabaseSettingsResponse:
+      type: object
+      required: [location, logs, backup, cache, retention, aggregation, optimization, stats]
+      properties:
+        location: { $ref: "#/components/schemas/DatabaseSettingsLocation" }
+        logs: { $ref: "#/components/schemas/DatabaseSettingsLogs" }
+        backup: { $ref: "#/components/schemas/DatabaseSettingsBackup" }
+        cache: { $ref: "#/components/schemas/DatabaseSettingsCache" }
+        retention: { $ref: "#/components/schemas/DatabaseSettingsRetentionResponse" }
+        aggregation: { $ref: "#/components/schemas/DatabaseSettingsAggregation" }
+        optimization: { $ref: "#/components/schemas/DatabaseSettingsOptimization" }
+        stats: { $ref: "#/components/schemas/DatabaseSettingsStats" }
+      additionalProperties: false
+
+    DatabaseSettingsUpdateRequest:
+      type: object
+      description: Partial top-level update; a supplied settings section must include that section's required fields.
+      properties:
+        logs: { $ref: "#/components/schemas/DatabaseSettingsLogs" }
+        backup: { $ref: "#/components/schemas/DatabaseSettingsBackup" }
+        cache: { $ref: "#/components/schemas/DatabaseSettingsCache" }
+        retention: { $ref: "#/components/schemas/DatabaseSettingsRetentionUpdate" }
+        aggregation: { $ref: "#/components/schemas/DatabaseSettingsAggregation" }
+        optimization: { $ref: "#/components/schemas/DatabaseSettingsOptimization" }
+      additionalProperties: false
+
+    DatabaseStatsTable:
+      type: object
+      required: [name, rowCount, size]
+      properties:
+        name: { type: string }
+        rowCount: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    DatabaseStatsIndex:
+      type: object
+      required: [name, tableName]
+      properties:
+        name: { type: string }
+        tableName: { type: string }
+      additionalProperties: false
+
+    DatabaseStats:
+      type: object
+      required: [totalSize, pageSize, pageCount, tables, indexes, cacheSize]
+      properties:
+        totalSize: { type: integer, minimum: 0 }
+        pageSize: { type: integer, minimum: 0 }
+        pageCount: { type: integer, minimum: 0 }
+        tables:
+          type: array
+          items: { $ref: "#/components/schemas/DatabaseStatsTable" }
+        indexes:
+          type: array
+          items: { $ref: "#/components/schemas/DatabaseStatsIndex" }
+        walSize: { type: integer, minimum: 0 }
+        cacheSize: { type: integer }
+      additionalProperties: false
+
+    DatabaseStatsRefreshResponse:
+      type: object
+      required: [success, stats]
+      properties:
+        success: { type: boolean, const: true }
+        stats: { $ref: "#/components/schemas/DatabaseStats" }
+      additionalProperties: false
+
+    VacuumSchedulerState:
+      type: object
+      required: [enabled, intervalMs, lastRunAt, lastError, lastDurationMs, isRunning, nextRunAt]
+      properties:
+        enabled: { type: boolean }
+        intervalMs: { type: integer, minimum: 0 }
+        lastRunAt:
+          { type: [integer, "null"], minimum: 0, description: Unix timestamp in milliseconds. }
+        lastError: { type: [string, "null"] }
+        lastDurationMs: { type: [integer, "null"], minimum: 0 }
+        isRunning: { type: boolean }
+        nextRunAt:
+          { type: [integer, "null"], minimum: 0, description: Unix timestamp in milliseconds. }
+      additionalProperties: false
+
+    VacuumSchedulerStateResponse:
+      type: object
+      required: [state]
+      properties:
+        state: { $ref: "#/components/schemas/VacuumSchedulerState" }
+      additionalProperties: false
+
+    VacuumRunSuccessResponse:
+      type: object
+      required: [success, message, duration]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        duration: { type: number, minimum: 0, description: VACUUM duration in milliseconds. }
+      additionalProperties: false
+
+    VacuumAlreadyRunningResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string, const: A vacuum is already in progress }
+      additionalProperties: false
+
+    VacuumRunFailureResponse:
+      oneOf:
+        - type: object
+          required: [success, error, duration]
+          properties:
+            success: { type: boolean, const: false }
+            error: { type: string }
+            duration: { type: number, minimum: 0 }
+          additionalProperties: false
+        - type: object
+          required: [error, details]
+          properties:
+            error: { type: string, const: Failed to run VACUUM }
+            details: { type: string }
+          additionalProperties: false
 
     QuotaStoreSettings:
       type: object
