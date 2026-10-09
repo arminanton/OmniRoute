@@ -7,6 +7,7 @@ import http from "node:http";
 import { Readable } from "node:stream";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import { gunzipSync } from "node:zlib";
 import { fetch as clientFetch } from "undici";
 import {
@@ -30,10 +31,16 @@ const captureCallLogs = process.env.RUN_ANTIGRAVITY_CAPTURE_BENCH === "1";
 const capturePrivateOverflow =
   captureCallLogs && process.env.ANTIGRAVITY_CAPTURE_OVERFLOW_BENCH === "1";
 const captureContextBytes = Math.max(0, Number(process.env.ANTIGRAVITY_CAPTURE_CONTEXT_BYTES || 0));
+const requestedSessionCounts = (process.env.ANTIGRAVITY_CAPTURE_SESSION_COUNTS || "")
+  .split(",")
+  .map(Number)
+  .filter((count) => Number.isInteger(count) && count > 0);
 const sessionCounts =
-  captureCallLogs && process.env.ANTIGRAVITY_CAPTURE_SINGLE_SESSION === "1"
-    ? [1]
-    : [1, 30, 70, 100];
+  requestedSessionCounts.length > 0
+    ? requestedSessionCounts
+    : captureCallLogs && process.env.ANTIGRAVITY_CAPTURE_SINGLE_SESSION === "1"
+      ? [1]
+      : [1, 30, 70, 100];
 const expectedRequests = sessionCounts.reduce((total, count) => total + count * 2, 0);
 if (captureCallLogs) {
   process.env.ENABLE_REQUEST_LOGS = "true";
@@ -185,23 +192,108 @@ test(
     let maxClientRequestBytes = 0;
     const errors: string[] = [];
     const routeReadyLatenciesMs: number[] = [];
+    const clientToGatewayDelaysMs: number[] = [];
     let routeHeadersPendingAt25s = 0;
+    const routeHeadersPendingSessions = new Set<string>();
+    const gatewayCounts = {
+      accepted: 0,
+      bodyComplete: 0,
+      routeResolved: 0,
+      headersWritten: 0,
+      errors: 0,
+      active: 0,
+      maxActive: 0,
+      clientDisconnects: 0,
+      firstBodyChunks: 0,
+      responseCompleted: 0,
+      responseBytes: 0,
+      backpressureWaits: 0,
+    };
+    const gatewaySessions = new Map<
+      string,
+      {
+        accepted: number;
+        bodyComplete: number;
+        routeResolved: number;
+        headersWritten: number;
+        active: number;
+        firstBodyChunk: boolean;
+        responseCompleted: number;
+        responseBytes: number;
+        headersFlushedAtMs: number | null;
+        firstBodyChunkAtMs: number | null;
+        responseCompletedAtMs: number | null;
+        clientToGatewayDelayMs: number | null;
+        startedAtEpochMs: number[];
+        bodyCompleteMs: number[];
+        routeReadyMs: number[];
+      }
+    >();
     let upstreamFixture: Awaited<ReturnType<typeof startMockUpstream>> | null = null;
     let clientFixture: ReturnType<typeof spawnFixture> | null = null;
     const captureMemoryBench = process.env.ANTIGRAVITY_CAPTURE_MEMORY_BENCH === "1";
     const memorySampler = captureMemoryBench ? createProcessMemorySampler(1_000) : null;
+    const eventLoopDelay = captureMemoryBench ? monitorEventLoopDelay({ resolution: 20 }) : null;
+    eventLoopDelay?.enable();
     let clientMemorySnapshot: Record<string, unknown> | null = null;
     let upstreamMemorySnapshot: Record<string, unknown> | null = null;
+    let upstreamStatsForDiagnostics: Record<string, unknown> | null = null;
     const gateway = http.createServer(async (incoming, outgoing) => {
       const routeStartedAt = performance.now();
       const sessionId =
         typeof incoming.headers["x-omniroute-session-id"] === "string"
           ? incoming.headers["x-omniroute-session-id"]
           : "unknown";
+      const clientStartedAt = Number(incoming.headers["x-omniroute-fixture-started-at"]);
+      const clientToGatewayDelayMs = Number.isFinite(clientStartedAt)
+        ? Math.max(0, Date.now() - clientStartedAt)
+        : null;
+      if (clientToGatewayDelayMs !== null) clientToGatewayDelaysMs.push(clientToGatewayDelayMs);
+      const sessionCounts = gatewaySessions.get(sessionId) ?? {
+        accepted: 0,
+        bodyComplete: 0,
+        routeResolved: 0,
+        headersWritten: 0,
+        active: 0,
+        firstBodyChunk: false,
+        responseCompleted: 0,
+        responseBytes: 0,
+        headersFlushedAtMs: null,
+        firstBodyChunkAtMs: null,
+        responseCompletedAtMs: null,
+        clientToGatewayDelayMs: null,
+        startedAtEpochMs: [],
+        bodyCompleteMs: [],
+        routeReadyMs: [],
+      };
+      sessionCounts.clientToGatewayDelayMs ??= clientToGatewayDelayMs;
+      sessionCounts.startedAtEpochMs.push(Date.now());
+      sessionCounts.accepted++;
+      sessionCounts.active++;
+      gatewaySessions.set(sessionId, sessionCounts);
+      gatewayCounts.accepted++;
+      gatewayCounts.active++;
+      gatewayCounts.maxActive = Math.max(gatewayCounts.maxActive, gatewayCounts.active);
+      const routeAbort = new AbortController();
+      let clientDisconnectRecorded = false;
+      const abortForClientDisconnect = () => {
+        if (!clientDisconnectRecorded) {
+          clientDisconnectRecorded = true;
+          gatewayCounts.clientDisconnects++;
+        }
+        if (!routeAbort.signal.aborted)
+          routeAbort.abort(new Error("synthetic_client_disconnected"));
+      };
+      const onClientResponseClosed = () => {
+        if (!outgoing.writableEnded) abortForClientDisconnect();
+      };
+      incoming.once("aborted", abortForClientDisconnect);
+      outgoing.once("close", onClientResponseClosed);
       const routePendingTimer = setTimeout(() => {
         routeHeadersPendingAt25s++;
-        console.warn(
-          `ANTIGRAVITY_ROUTE_HEADERS_PENDING session=${sessionId} activeAt25s=${routeHeadersPendingAt25s}`
+        routeHeadersPendingSessions.add(sessionId);
+        process.stderr.write(
+          `ANTIGRAVITY_ROUTE_HEADERS_PENDING session=${sessionId} activeAt25s=${routeHeadersPendingAt25s}\n`
         );
       }, 25_000);
       routePendingTimer.unref?.();
@@ -216,12 +308,16 @@ test(
             },
             flush() {
               maxClientRequestBytes = Math.max(maxClientRequestBytes, requestBytes);
+              sessionCounts.bodyComplete++;
+              gatewayCounts.bodyComplete++;
+              sessionCounts.bodyCompleteMs.push(performance.now() - routeStartedAt);
             },
           })
         );
         const headers = new Headers();
         for (const [name, value] of Object.entries(incoming.headers))
-          if (typeof value === "string") headers.set(name, value);
+          if (typeof value === "string" && name !== "x-omniroute-fixture-started-at")
+            headers.set(name, value);
         const response = await route.POST(
           new Request(
             `http://127.0.0.1:${(gateway.address() as { port: number }).port}/v1/chat/completions`,
@@ -229,6 +325,7 @@ test(
               method: incoming.method,
               headers,
               body: countedBody,
+              signal: routeAbort.signal,
               duplex: "half",
             } as RequestInit & {
               duplex: "half";
@@ -237,25 +334,62 @@ test(
         );
         clearTimeout(routePendingTimer);
         routeReadyLatenciesMs.push(performance.now() - routeStartedAt);
+        sessionCounts.routeReadyMs.push(performance.now() - routeStartedAt);
+        sessionCounts.routeResolved++;
+        gatewayCounts.routeResolved++;
+        if (outgoing.destroyed) return;
         outgoing.writeHead(response.status, Object.fromEntries(response.headers.entries()));
+        outgoing.flushHeaders();
+        sessionCounts.headersFlushedAtMs = Math.round(performance.now() - routeStartedAt);
+        sessionCounts.headersWritten++;
+        gatewayCounts.headersWritten++;
         if (response.body) {
           const reader = response.body.getReader();
           try {
             while (true) {
               const next = await reader.read();
               if (next.done) break;
-              if (!outgoing.write(next.value)) await once(outgoing, "drain");
+              if (next.value.byteLength > 0) {
+                if (!sessionCounts.firstBodyChunk) {
+                  sessionCounts.firstBodyChunk = true;
+                  gatewayCounts.firstBodyChunks++;
+                  sessionCounts.firstBodyChunkAtMs = Math.round(performance.now() - routeStartedAt);
+                }
+                sessionCounts.responseBytes += next.value.byteLength;
+                gatewayCounts.responseBytes += next.value.byteLength;
+              }
+              if (!outgoing.write(next.value)) {
+                gatewayCounts.backpressureWaits++;
+                await once(outgoing, "drain");
+              }
             }
           } finally {
             reader.releaseLock();
           }
         }
         outgoing.end();
+        sessionCounts.responseCompleted++;
+        sessionCounts.responseCompletedAtMs = Math.round(performance.now() - routeStartedAt);
+        gatewayCounts.responseCompleted++;
       } catch (error) {
         clearTimeout(routePendingTimer);
+        sessionCounts.routeResolved++;
+        gatewayCounts.routeResolved++;
+        gatewayCounts.errors++;
         errors.push(String(error));
-        outgoing.writeHead(500);
-        outgoing.end('{"error":{"message":"isolated gateway test failed"}}');
+        if (!outgoing.destroyed && !outgoing.headersSent) {
+          outgoing.writeHead(500);
+          sessionCounts.headersWritten++;
+          gatewayCounts.headersWritten++;
+          outgoing.end('{"error":{"message":"isolated gateway test failed"}}');
+        }
+      } finally {
+        if (sessionCounts.active > 0) {
+          sessionCounts.active--;
+          gatewayCounts.active--;
+        }
+        incoming.removeListener("aborted", abortForClientDisconnect);
+        outgoing.removeListener("close", onClientResponseClosed);
       }
     });
     let restoreUrl = () => {};
@@ -309,6 +443,7 @@ test(
         ANTIGRAVITY_CAPTURE_REQUEST_TIMEOUT_MS:
           process.env.ANTIGRAVITY_CAPTURE_REQUEST_TIMEOUT_MS || "30000",
         ANTIGRAVITY_CAPTURE_SINGLE_SESSION: process.env.ANTIGRAVITY_CAPTURE_SINGLE_SESSION || "0",
+        ANTIGRAVITY_CAPTURE_SESSION_COUNTS: process.env.ANTIGRAVITY_CAPTURE_SESSION_COUNTS || "",
       });
       const clientOutput = await runFixture(clientFixture);
       const clientResult = JSON.parse(clientOutput.trim().split("\n").at(-1) ?? "{}");
@@ -324,8 +459,11 @@ test(
         phases: Record<string, string[]>;
         profiles: string[];
         errors: string[];
+        receivedAtBySession: Record<string, number[]>;
+        completedAtBySession: Record<string, number[]>;
         processMemory?: Record<string, unknown>;
       };
+      upstreamStatsForDiagnostics = upstreamStats;
       upstreamMemorySnapshot = upstreamStats.processMemory ?? null;
       assert.equal(upstreamStats.received, expectedRequests);
       assert.deepEqual(upstreamStats.errors, []);
@@ -343,15 +481,6 @@ test(
       }
       assert.equal(Object.keys(upstreamStats.identities).length, expectedRequests / 2);
       assert.deepEqual(errors, []);
-
-      if (captureMemoryBench) {
-        const sorted = [...routeReadyLatenciesMs].sort((left, right) => left - right);
-        const percentile = (value: number) =>
-          Math.round(sorted[Math.max(0, Math.ceil(sorted.length * value) - 1)] ?? 0);
-        console.log(
-          `ANTIGRAVITY_ROUTE_READY count=${sorted.length} p50Ms=${percentile(0.5)} p95Ms=${percentile(0.95)} maxMs=${Math.round(sorted.at(-1) ?? 0)} pendingAt25s=${routeHeadersPendingAt25s} dispatcherConnections=${process.env.OMNIROUTE_DIRECT_DISPATCHER_CONNECTIONS}`
-        );
-      }
 
       if (captureCallLogs) {
         const { closeCallLogSaves } = await import("../../src/lib/usage/callLogs.ts");
@@ -487,18 +616,101 @@ test(
           const manifests = await Promise.all(
             [...traceIds].map((traceId) => finalPrivateManifest(traceId))
           );
-          assert.ok(manifests.every((manifest) => manifest?.state === "complete"));
+          const fileDiagnostic = (
+            file:
+              | { state?: string; complete?: boolean; reason?: string; rawBytes?: number }
+              | null
+              | undefined
+          ) =>
+            file
+              ? {
+                  state: file.state,
+                  complete: file.complete,
+                  reason: file.reason,
+                  rawBytes: file.rawBytes,
+                }
+              : null;
+          const traceDiagnostics = manifests
+            .filter(
+              (manifest) =>
+                manifest?.state !== "complete" ||
+                manifest.clientRequest?.complete !== true ||
+                manifest.attempts.length !== 1 ||
+                manifest.attempts[0]?.request.complete !== true ||
+                manifest.attempts[0]?.response.complete !== true
+            )
+            .map((manifest) => ({
+              state: manifest?.state,
+              reasons: manifest?.reasons,
+              clientRequest: fileDiagnostic(manifest?.clientRequest),
+              attempts: manifest?.attempts.map((attempt) => ({
+                attemptId: attempt.attemptId,
+                state: attempt.state,
+                reason: attempt.reason,
+                request: fileDiagnostic(attempt.request),
+                response: fileDiagnostic(attempt.response),
+              })),
+            }));
+          const manifestStateCounts = manifests.reduce<Record<string, number>>(
+            (counts, manifest) => {
+              const state = manifest?.state ?? "missing";
+              counts[state] = (counts[state] ?? 0) + 1;
+              return counts;
+            },
+            {}
+          );
+          console.log(
+            `ANTIGRAVITY_TRACE_DIAGNOSTICS ${JSON.stringify({
+              traceCount: manifests.length,
+              manifestStateCounts,
+              incompleteTraceCount: manifests.filter((manifest) => manifest?.state === "incomplete")
+                .length,
+              diagnosticTraceCount: traceDiagnostics.length,
+              additionalDiagnosticTraceCount: Math.max(0, traceDiagnostics.length - 20),
+              diagnosticTraces: traceDiagnostics.slice(0, 20),
+            })}`
+          );
           assert.ok(
             manifests.every(
               (manifest) =>
                 manifest?.clientRequest?.complete === true &&
-                manifest.attempts.length === 1 &&
-                manifest.attempts[0].request.complete === true &&
-                manifest.attempts[0].response.complete === true
+                manifest.attempts.length >= 1 &&
+                manifest.attempts.every(
+                  (attempt) =>
+                    attempt.request.complete === true &&
+                    (attempt.response.complete === true ||
+                      typeof attempt.response.reason === "string")
+                ) &&
+                manifest.attempts.at(-1)?.response.complete === true
             ),
-            "every private overflow trace should contain a complete client/provider request and response"
+            "each trace must retain the full client/provider request and a complete final provider response"
           );
-          const sample = manifests[0];
+          assert.ok(
+            manifests.every(
+              (manifest) =>
+                manifest?.state === "complete" ||
+                (manifest?.state === "incomplete" &&
+                  manifest.reasons.length > 0 &&
+                  manifest.reasons.every((reason) => reason === "upstream_error") &&
+                  manifest.attempts.some(
+                    (attempt) =>
+                      attempt.response.complete === false &&
+                      attempt.response.reason === "upstream_error"
+                  ))
+            ),
+            "only provider attempts that failed upstream may leave a trace explicitly incomplete"
+          );
+          const completeTraceCount = manifests.filter(
+            (manifest) => manifest?.state === "complete"
+          ).length;
+          const retryTraceCount = manifests.filter(
+            (manifest) => (manifest?.attempts.length ?? 0) > 1
+          ).length;
+          const sample =
+            manifests.find((manifest) => manifest?.state === "complete") ??
+            manifests.find((manifest) =>
+              manifest?.attempts.some((attempt) => attempt.response.complete)
+            );
           assert.ok(sample);
           const privateByteTotals = manifests.reduce(
             (total, manifest) => {
@@ -521,20 +733,214 @@ test(
             sample!.traceId,
             "client-request"
           );
+          const successfulAttempt = sample!.attempts.findLast(
+            (attempt) => attempt.response.complete === true
+          );
+          assert.ok(successfulAttempt);
           const providerBody = await readPrivateCapture(
             sample!.traceId,
-            sample!.attempts[0].attemptId,
+            successfulAttempt!.attemptId,
             "response"
           );
           assert.ok(clientBody.byteLength >= captureContextBytes * 5);
           assert.match(providerBody.toString("utf8"), /data: /);
           console.log(
-            `ANTIGRAVITY_PRIVATE_OVERFLOW traces=${traceIds.size} complete=${manifests.length} rawBytes=${privateByteTotals.rawBytes} compressedBytes=${privateByteTotals.compressedBytes} sampleClientBytes=${clientBody.byteLength} sampleProviderBytes=${providerBody.byteLength}`
+            `ANTIGRAVITY_PRIVATE_OVERFLOW traces=${traceIds.size} complete=${completeTraceCount} retried=${retryTraceCount} incomplete=${manifests.length - completeTraceCount} rawBytes=${privateByteTotals.rawBytes} compressedBytes=${privateByteTotals.compressedBytes} sampleClientBytes=${clientBody.byteLength} sampleProviderBytes=${providerBody.byteLength}`
           );
         }
       }
     } finally {
       restoreUrl();
+      if (captureMemoryBench) {
+        eventLoopDelay?.disable();
+        if (!upstreamStatsForDiagnostics && upstreamFixture) {
+          try {
+            upstreamStatsForDiagnostics = (await clientFetch(`${upstreamFixture.url}/__stats`).then(
+              (response) => response.json()
+            )) as Record<string, unknown>;
+          } catch {
+            upstreamStatsForDiagnostics = null;
+          }
+        }
+        const sorted = [...routeReadyLatenciesMs].sort((left, right) => left - right);
+        const percentile = (value: number) =>
+          Math.round(sorted[Math.max(0, Math.ceil(sorted.length * value) - 1)] ?? 0);
+        const unresolvedSessions = [...gatewaySessions.entries()]
+          .filter(([, counts]) => counts.active > 0 || counts.routeResolved < counts.accepted)
+          .map(([sessionId, counts]) => ({
+            sessionId,
+            accepted: counts.accepted,
+            bodyComplete: counts.bodyComplete,
+            routeResolved: counts.routeResolved,
+            headersWritten: counts.headersWritten,
+            firstBodyChunk: counts.firstBodyChunk,
+            responseCompleted: counts.responseCompleted,
+            responseBytes: counts.responseBytes,
+            headersFlushedAtMs: counts.headersFlushedAtMs,
+            firstBodyChunkAtMs: counts.firstBodyChunkAtMs,
+            responseCompletedAtMs: counts.responseCompletedAtMs,
+            clientToGatewayDelayMs: counts.clientToGatewayDelayMs,
+            active: counts.active,
+          }))
+          .slice(0, 12);
+        const eventLoopMs = (value: number | undefined) =>
+          typeof value === "number" && Number.isFinite(value) ? Math.round(value / 1_000_000) : 0;
+        const sortedIngressDelays = [...clientToGatewayDelaysMs].sort((a, b) => a - b);
+        const ingressPercentile = (value: number) =>
+          Math.round(
+            sortedIngressDelays[Math.max(0, Math.ceil(sortedIngressDelays.length * value) - 1)] ?? 0
+          );
+        const clientFailures = [
+          ...(clientFixture?.stderr.matchAll(
+            /conversation=([^\s]+) turn=(\d+) stage=([a-z_]+) elapsedMs=(\d+)/g
+          ) ?? []),
+        ];
+        const clientDiagnosticsJson = clientFixture?.stderr.match(
+          /ANTIGRAVITY_CLIENT_DIAGNOSTICS (\{[^\n]+\})/
+        )?.[1];
+        let clientDiagnostics: Record<string, unknown> | null = null;
+        if (clientDiagnosticsJson) {
+          try {
+            clientDiagnostics = JSON.parse(clientDiagnosticsJson) as Record<string, unknown>;
+          } catch {
+            clientDiagnostics = null;
+          }
+        }
+        const clientFailure =
+          clientFailures.find((failure) => Number(failure[4]) >= 30_000) ?? clientFailures.at(-1);
+        const timedOutSession = clientFailure?.[1];
+        const timedOutSessionCounts = timedOutSession
+          ? gatewaySessions.get(timedOutSession)
+          : undefined;
+        const upstreamTelemetry = upstreamStatsForDiagnostics as {
+          received?: number;
+          errors?: string[];
+          receivedAtBySession?: Record<string, number[]>;
+        } | null;
+        const upstreamReceiptsBySession = upstreamTelemetry?.receivedAtBySession ?? {};
+        const gatewayToProviderDelaysMs: number[] = [];
+        const bodyCompleteDelaysMs: number[] = [];
+        const providerDelayAfterBodyMs: number[] = [];
+        for (const [sessionId, receipts] of Object.entries(upstreamReceiptsBySession)) {
+          const sessionMetrics = gatewaySessions.get(sessionId);
+          const starts = sessionMetrics?.startedAtEpochMs ?? [];
+          for (let index = 0; index < Math.min(starts.length, receipts.length); index++)
+            gatewayToProviderDelaysMs.push(receipts[index] - starts[index]);
+          for (const elapsedMs of sessionMetrics?.bodyCompleteMs ?? [])
+            bodyCompleteDelaysMs.push(elapsedMs);
+          const pairCount = Math.min(
+            starts.length,
+            receipts.length,
+            sessionMetrics?.bodyCompleteMs.length ?? 0
+          );
+          for (let index = 0; index < pairCount; index++)
+            providerDelayAfterBodyMs.push(
+              receipts[index] - starts[index] - sessionMetrics!.bodyCompleteMs[index]
+            );
+        }
+        const sortedGatewayToProviderDelays = gatewayToProviderDelaysMs.sort((a, b) => a - b);
+        const sortedBodyCompleteDelays = bodyCompleteDelaysMs.sort((a, b) => a - b);
+        const sortedProviderDelayAfterBody = providerDelayAfterBodyMs.sort((a, b) => a - b);
+        const gatewayToProviderPercentile = (value: number) =>
+          Math.round(
+            sortedGatewayToProviderDelays[
+              Math.max(0, Math.ceil(sortedGatewayToProviderDelays.length * value) - 1)
+            ] ?? 0
+          );
+        const timedOutProviderReceipts = timedOutSession
+          ? (upstreamReceiptsBySession[timedOutSession] ?? [])
+          : [];
+        const timedOutGatewayStarts = timedOutSessionCounts?.startedAtEpochMs ?? [];
+        process.stderr.write(
+          `ANTIGRAVITY_GATEWAY_DIAGNOSTICS ${JSON.stringify({
+            accepted: gatewayCounts.accepted,
+            bodyComplete: gatewayCounts.bodyComplete,
+            routeResolved: gatewayCounts.routeResolved,
+            headersWritten: gatewayCounts.headersWritten,
+            errors: gatewayCounts.errors,
+            activeAtFailure: gatewayCounts.active,
+            maxActive: gatewayCounts.maxActive,
+            clientDisconnects: gatewayCounts.clientDisconnects,
+            firstBodyChunks: gatewayCounts.firstBodyChunks,
+            responseCompleted: gatewayCounts.responseCompleted,
+            responseBytes: gatewayCounts.responseBytes,
+            backpressureWaits: gatewayCounts.backpressureWaits,
+            pendingAt25s: routeHeadersPendingAt25s,
+            pendingSessionsAt25s: [...routeHeadersPendingSessions].slice(0, 12),
+            routeReadyCount: sorted.length,
+            routeReadyP50Ms: percentile(0.5),
+            routeReadyP95Ms: percentile(0.95),
+            routeReadyMaxMs: Math.round(sorted.at(-1) ?? 0),
+            clientToGatewayDelayCount: sortedIngressDelays.length,
+            clientToGatewayDelayP50Ms: ingressPercentile(0.5),
+            clientToGatewayDelayP95Ms: ingressPercentile(0.95),
+            clientToGatewayDelayMaxMs: Math.round(sortedIngressDelays.at(-1) ?? 0),
+            eventLoopDelayMaxMs: eventLoopMs(eventLoopDelay?.max),
+            eventLoopDelayP95Ms: eventLoopMs(eventLoopDelay?.percentile(95)),
+            clientDiagnostics,
+            upstream: {
+              received: upstreamTelemetry?.received ?? null,
+              errorCount: upstreamTelemetry?.errors?.length ?? null,
+              gatewayToProviderDelayCount: sortedGatewayToProviderDelays.length,
+              gatewayToProviderDelayP50Ms: gatewayToProviderPercentile(0.5),
+              gatewayToProviderDelayP95Ms: gatewayToProviderPercentile(0.95),
+              gatewayToProviderDelayMaxMs: Math.round(sortedGatewayToProviderDelays.at(-1) ?? 0),
+              bodyCompleteP50Ms: Math.round(
+                sortedBodyCompleteDelays[
+                  Math.max(0, Math.ceil(sortedBodyCompleteDelays.length * 0.5) - 1)
+                ] ?? 0
+              ),
+              bodyCompleteP95Ms: Math.round(
+                sortedBodyCompleteDelays[
+                  Math.max(0, Math.ceil(sortedBodyCompleteDelays.length * 0.95) - 1)
+                ] ?? 0
+              ),
+              providerDelayAfterBodyP50Ms: Math.round(
+                sortedProviderDelayAfterBody[
+                  Math.max(0, Math.ceil(sortedProviderDelayAfterBody.length * 0.5) - 1)
+                ] ?? 0
+              ),
+              providerDelayAfterBodyP95Ms: Math.round(
+                sortedProviderDelayAfterBody[
+                  Math.max(0, Math.ceil(sortedProviderDelayAfterBody.length * 0.95) - 1)
+                ] ?? 0
+              ),
+            },
+            unresolvedSessions,
+            clientFailure: clientFailure
+              ? {
+                  sessionId: clientFailure[1],
+                  turn: Number(clientFailure[2]),
+                  stage: clientFailure[3],
+                  elapsedMs: Number(clientFailure[4]),
+                  gateway: timedOutSessionCounts
+                    ? {
+                        accepted: timedOutSessionCounts.accepted,
+                        bodyComplete: timedOutSessionCounts.bodyComplete,
+                        bodyCompleteMs: timedOutSessionCounts.bodyCompleteMs,
+                        routeResolved: timedOutSessionCounts.routeResolved,
+                        headersWritten: timedOutSessionCounts.headersWritten,
+                        firstBodyChunk: timedOutSessionCounts.firstBodyChunk,
+                        responseCompleted: timedOutSessionCounts.responseCompleted,
+                        responseBytes: timedOutSessionCounts.responseBytes,
+                        headersFlushedAtMs: timedOutSessionCounts.headersFlushedAtMs,
+                        firstBodyChunkAtMs: timedOutSessionCounts.firstBodyChunkAtMs,
+                        responseCompletedAtMs: timedOutSessionCounts.responseCompletedAtMs,
+                        clientToGatewayDelayMs: timedOutSessionCounts.clientToGatewayDelayMs,
+                        routeReadyMs: timedOutSessionCounts.routeReadyMs,
+                        gatewayToProviderDelayMs: timedOutProviderReceipts.map(
+                          (receivedAt, index) =>
+                            receivedAt - (timedOutGatewayStarts[index] ?? receivedAt)
+                        ),
+                        active: timedOutSessionCounts.active,
+                      }
+                    : null,
+                }
+              : null,
+            dispatcherConnections: process.env.OMNIROUTE_DIRECT_DISPATCHER_CONNECTIONS,
+          })}\n`
+        );
+      }
       if (memorySampler) {
         console.log(
           `ANTIGRAVITY_MEMORY gateway=${JSON.stringify(snapshotProcessMemory())} testRunner=${JSON.stringify(snapshotProcessMemory(process.ppid))} client=${JSON.stringify(clientMemorySnapshot)} upstream=${JSON.stringify(upstreamMemorySnapshot)} cgroup=${JSON.stringify(snapshotCgroupMemory())} series=${JSON.stringify(memorySampler.finish())}`

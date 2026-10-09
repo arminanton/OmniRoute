@@ -3,6 +3,8 @@ import { snapshotProcessMemory } from "./process-memory-snapshot.mjs";
 
 const identities = new Map();
 const phases = new Map();
+const receivedAtBySession = new Map();
+const completedAtBySession = new Map();
 const profiles = new Set();
 const errors = [];
 let received = 0;
@@ -21,6 +23,8 @@ const server = http.createServer(async (incoming, outgoing) => {
         received,
         identities: Object.fromEntries(identities),
         phases: Object.fromEntries(phases),
+        receivedAtBySession: Object.fromEntries(receivedAtBySession),
+        completedAtBySession: Object.fromEntries(completedAtBySession),
         profiles: [...profiles].sort(),
         errors,
         processMemory:
@@ -57,6 +61,7 @@ const server = http.createServer(async (incoming, outgoing) => {
     const toolResponse = parts.find((part) => part.functionResponse);
     const phase = toolResponse ? "answer" : "tool";
     phases.set(session, [...(phases.get(session) ?? []), phase]);
+    receivedAtBySession.set(session, [...(receivedAtBySession.get(session) ?? []), Date.now()]);
     if (toolResponse) {
       const call = parts.find((part) => part.functionCall);
       if (call?.thoughtSignature !== `signature:${session}`) {
@@ -81,6 +86,10 @@ const server = http.createServer(async (incoming, outgoing) => {
       () => {
         outgoing.write(frame.slice(19));
         outgoing.end("data: [DONE]\n\n");
+        completedAtBySession.set(session, [
+          ...(completedAtBySession.get(session) ?? []),
+          Date.now(),
+        ]);
       },
       Number(process.env.ANTIGRAVITY_UPSTREAM_DELAY_MS) || 30
     );

@@ -904,13 +904,35 @@ budget completed all 402 requests and all 402 full traces. It wrote 1,054,961,31
 3.01 s, p95 8.27 s, and max 10.70 s, with no route still pending after 25 s. The cgroup peaked at
 2,687,414,272 bytes under a 4 GiB cap, without memory pressure or cgroup memory events.
 
-Two repeated runs with the same capture and concurrency settings but the normal 30 s client deadline
-passed the 1/30/70 phases, then timed out one 100-session request while waiting for response headers.
-The repeated run's cgroup peak was 2,897,698,816 bytes under the same cap, with zero memory PSI and
-OOM events. The longer-deadline run and strict-deadline runs therefore show a remaining variable
-response-header tail at 100 sessions, not a deterministic memory exhaustion; the 30 s failure still
-needs gateway-versus-client queue instrumentation. This is a synthetic local route and mock provider,
-not a real-provider or standalone-server reliability result.
+Two strict 30 s client-deadline reruns passed the 1/30/70-session phases, then timed out one
+100-session request. A later 100-only trace identified the full delay: that request reached the
+gateway 8.824 s after client fetch began, and its response headers and first body chunk were flushed
+21.535 s after gateway arrival; the response ended at 22.136 s. The combined path exceeded the
+client's 30 s deadline. That run's cgroup peak stayed under 2.4 GiB of the 4 GiB cap, with zero
+memory PSI and OOM events. This is a variable high-context ingress/route latency tail, not evidence
+of memory exhaustion.
+
+A same-host, same-Node, 100-session A/B repeated the two-turn high-context workload without request
+logging and with full private capture. Both variants completed all 200 client requests. Without
+capture, route readiness was p95 18.10 s; full capture was p95 18.48 s. Time from gateway arrival to
+the mock provider receiving a request was p95 15.95 s without capture and 16.67 s with capture; the
+client-to-gateway p95 was 2.05 s and 2.07 s respectively. Body completion p95 was 14.24 s without
+capture and 15.01 s with capture, while the post-body-to-provider interval was about 4.2 s in both
+runs. This points to concurrent large-body intake and pre-provider request work as the main measured
+latency, with private capture adding about 0.8 s to body completion in this single pair. It does not
+prove that capture has no effect on other workloads.
+
+The full-capture variant retained all 200 metadata artifacts and all 200 private trace references
+under the default 2 GiB aggregate budget. It wrote 527,483,104 raw bytes and 397,326,897 compressed
+bytes. Two traces were marked incomplete because the synthetic upstream produced an `EPIPE` on an
+initial attempt; each retained the complete client/provider request, an explicit `upstream_error`
+response marker with zero response bytes, and the complete successful retry response. The cgroup
+peaked at 2,472,632,320 bytes with no high/max/OOM events or memory PSI; the no-capture run peaked at
+1,884,471,296 bytes. Gateway high-water RSS was 1,697,984,512 B (1.58 GiB) with capture and
+1,327,312,896 B (1.24 GiB) without; user CPU was 55.8 s versus 35.5 s across 46.7 s versus 38.4 s
+wall time. These single, synthetic
+route-handler trials expose a sizable capture CPU/RSS cost and a modest latency change; they do not
+establish sustained throughput, standalone Next behavior, or real-provider quotas.
 
 ### Bun direct-route comparison at 100 sessions
 
