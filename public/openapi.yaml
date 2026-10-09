@@ -3286,39 +3286,205 @@ paths:
       operationId: postApiProvidersAgyAuthImport
       tags: [Providers]
       summary: Import an Antigravity CLI (agy) token file as an `agy` connection
+      description: >-
+        Imports one Antigravity CLI token JSON or pasted text record. Token fields in the
+        successful connection projection are removed and provider-specific secrets are sanitized.
+        Management auth follows the local login policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgyAuthImportRequest"
       responses:
         "200":
-          description: Created or updated provider connection
+          description: Imported connection metadata with token values removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgyAuthImportResponse"
+        "400":
+          description: Malformed JSON, invalid import fields, invalid auth JSON, or invalid token file.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/AgyAuthFlowErrorResponse"
+                  - $ref: "#/components/schemas/AgyAuthFileErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "409":
+          description: Duplicate account or unverified account identity requires overwriteExisting=true.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgyAuthFileErrorResponse"
+        "500":
+          description: Failed to import Antigravity CLI auth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/providers/agy-auth/import-bulk:
     post:
       operationId: postApiProvidersAgyAuthImportBulk
       tags: [Providers]
       summary: Bulk-import multiple Antigravity CLI (agy) token files (up to 50)
+      description: >-
+        Processes up to 50 token records independently and returns HTTP 200 with per-entry
+        success/error results, including when all entries fail. Imported connection records have
+        credential fields removed. Management auth follows the local login policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgyAuthBulkImportRequest"
       responses:
         "200":
-          description: Per-entry import results (success/failed counts)
+          description: Partial-failure result counts, sanitized created records, and per-entry errors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgyAuthBulkImportResponse"
+        "400":
+          description: Malformed JSON or invalid bulk request structure.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/providers/agy-auth/zip-extract:
     post:
       operationId: postApiProvidersAgyAuthZipExtract
       tags: [Providers]
       summary: Extract `.json` token files from an uploaded ZIP for agy bulk import
+      description: >-
+        Accepts a raw ZIP request body. The compressed request limit is 11 MiB; extraction accepts
+        up to 50 JSON files, at most 256 KiB per file and 10 MiB total uncompressed JSON data.
+        This only parses entries; it does not validate them as Antigravity auth files. Parsed JSON
+        is returned intact and may contain OAuth tokens. Management auth follows local policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema: { type: string, format: binary }
       responses:
         "200":
-          description: Extracted token-file entries
+          description: Extracted JSON entries, including raw token contents for the import flow.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgyAuthZipExtractResponse"
+        "400":
+          description: Body read, archive parsing, ZIP path, entry count, or extracted-size failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgyAuthFlowErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "413":
+          description: Compressed ZIP request exceeds the 11 MiB request-body limit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgyAuthFlowErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/providers/agy-auth/apply-local:
     post:
       operationId: postApiProvidersAgyAuthApplyLocal
       tags: [Providers]
       summary: Auto-detect and import the local Antigravity CLI (agy) login from disk
+      description: >-
+        Reads the configured/local Antigravity CLI token file, performs best-effort backend
+        enrichment, and creates or updates an `agy` connection. The body is optional and
+        overwriteExisting defaults to true. This route is always protected even when dashboard
+        login is disabled; the success response removes token values.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       x-always-protected: true
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgyAuthApplyLocalRequest"
       responses:
         "200":
-          description: Created or updated provider connection
+          description: Imported connection metadata with token values removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgyAuthImportResponse"
+        "400":
+          description: Invalid request JSON/schema or invalid local auth file.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/AgyAuthFileErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: No local agy login found
+          description: No local Antigravity CLI login file was found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgyAuthFlowErrorResponse"
+        "409":
+          description: Duplicate or unverifiable account requires overwriteExisting=true.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgyAuthFileErrorResponse"
+        "500":
+          description: Local token file read or backend-enriched account import failed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/AgyAuthFlowErrorResponse"
+                  - $ref: "#/components/schemas/AgyAuthFileErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/provider-nodes:
     get:
@@ -14509,14 +14675,55 @@ paths:
         required: true
         schema:
           type: string
+          enum: [antigravity, agy]
     post:
       operationId: postApiOauthByProviderPasteCredentials
       tags:
         - Oauth
       summary: "POST oauth › <provider> › paste credentials"
+      description: >-
+        Persists the credential blob produced by the local Antigravity remote-login helper. The
+        blob contains OAuth token data and is finalized server-side; the response includes only
+        connection id/provider/email/displayName. The route itself enforces auth when required by
+        local policy; standalone mode with login disabled may allow anonymous calls.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AntigravityPastedCredentialRequest"
       responses:
         "200":
-          description: OK
+          description: Connection identity metadata; token values are not returned.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AntigravityPastedCredentialResponse"
+        "400":
+          description: Malformed request, invalid blob, unsupported provider, or provider mismatch.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/AntigravityPastedCredentialErrorResponse"
+        "401":
+          description: Management authentication required when enabled by local policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: OAuth finalization or connection persistence failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AntigravityPastedCredentialErrorResponse"
   /api/oauth/cliproxy-import:
     get:
       operationId: getApiOauthCliproxyImport
@@ -14930,10 +15137,73 @@ paths:
       tags:
         - Providers
       summary: "POST providers › <id> › codex auth › apply local"
+      description: >-
+        Applies the selected Codex OAuth connection to the local Codex CLI config. This route is
+        always protected even when dashboard login is disabled. The body is optional; absent or
+        malformed JSON is tolerated and defaults `force` to false. By default a fresh existing
+        `~/.codex/auth.json` is kept; `force: true` allows overwriting it. The response contains
+        local path/backup metadata, not the token contents.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       x-always-protected: true
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodexAuthApplyLocalRequest"
       responses:
         "200":
-          description: OK
+          description: Local auth file was written or an existing fresh file was retained.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthApplyLocalResponse"
+        "400":
+          description: Codex credential data is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credentials or local CLI-config write policy denied the operation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "404":
+          description: Provider connection not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "409":
+          description: Codex credentials require reauthentication before they can be applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "500":
+          description: The local Codex auth path could not be resolved or the write failed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "502":
+          description: The Codex session could not be refreshed before writing the local auth file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/{id}/codex-auth/export:
     parameters:
       - name: id
@@ -14946,10 +15216,66 @@ paths:
       tags:
         - Providers
       summary: "POST providers › <id> › codex auth › export"
+      description: >-
+        Exports a raw Codex CLI `auth.json` attachment containing OAuth id/access/refresh tokens.
+        The operation always requires management authentication, even when dashboard login is
+        disabled. The response is sensitive credential material and is marked no-store.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
       x-always-protected: true
       responses:
         "200":
-          description: OK
+          description: Raw Codex auth.json attachment containing the complete OAuth token set.
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string, const: "no-store, max-age=0" }
+            X-Content-Type-Options:
+              schema: { type: string, const: nosniff }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFilePayload"
+        "400":
+          description: The connection is not an OAuth Codex connection or its auth data is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Provider connection not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "409":
+          description: The Codex session requires reauthentication.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "500":
+          description: The auth file could not be built or an unexpected export failure occurred.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "502":
+          description: The Codex session could not be refreshed before export.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/{id}/interception-rules:
     parameters:
       - name: id
@@ -15222,9 +15548,78 @@ paths:
       tags:
         - Providers
       summary: "POST providers › <id> › sync models"
+      description: >-
+        Discovers and persists models for the connection. For `antigravity` and `agy`, this calls
+        the provider model-discovery route and applies their managed-model filters/aliases. `mode`
+        value `import` selects merge mode; every other value selects sync mode. `quiet=1` only
+        suppresses routine log output. The authenticated model-sync scheduler may also call this
+        route with its process-local `x-model-sync-internal-auth` header.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - $ref: "#/components/parameters/ResourceId"
+        - name: mode
+          in: query
+          required: false
+          description: Use `import` for merge mode; omitted or any other value uses sync mode.
+          schema: { type: string, enum: [sync, import], default: sync }
+        - name: quiet
+          in: query
+          required: false
+          description: Only the exact value `1` enables quiet mode.
+          schema: { type: string, enum: ["1"] }
+        - name: x-model-sync-internal-auth
+          in: header
+          required: false
+          description: Process-local scheduler credential; for internal calls only.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Provider model sync result; response branch depends on provider capability.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderModelSyncResponse"
+        "401":
+          description: Management/API authentication failed or the provider discovery credential was rejected.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "403":
+          description: Runtime policy denied the model sync.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "404":
+          description: Provider connection not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Uncaught model-sync failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "502":
+          description: Discovery response was degraded, malformed, or unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderModelSyncErrorResponse"
+        default:
+          description: Provider model-discovery error using the upstream HTTP status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderModelSyncErrorResponse"
   /api/providers/bulk:
     post:
       operationId: postApiProvidersBulk
@@ -15276,27 +15671,143 @@ paths:
       tags:
         - Providers
       summary: "POST providers › codex auth › import"
+      description: >-
+        Imports one Codex CLI auth record from parsed JSON or pasted text. The request includes
+        sensitive token fields; successful responses strip apiKey/accessToken/refreshToken/idToken
+        and sanitize providerSpecificData. Management auth follows the local login policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodexAuthImportRequest"
       responses:
         "200":
-          description: OK
+          description: Imported connection metadata with token values removed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthImportResponse"
+        "400":
+          description: Malformed JSON, invalid import fields, invalid auth JSON, or invalid Codex auth file.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+                  - $ref: "#/components/schemas/CodexAuthFlowErrorResponse"
+                  - $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "409":
+          description: A connection for this Codex account already exists and overwrite was not enabled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFileErrorResponse"
+        "500":
+          description: Failed to import Codex auth.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/codex-auth/import-bulk:
     post:
       operationId: postApiProvidersCodexAuthImportBulk
       tags:
         - Providers
       summary: "POST providers › codex auth › import bulk"
+      description: >-
+        Imports up to 50 JSON auth records independently. The endpoint returns HTTP 200 with
+        per-entry created/error results even when every entry fails. Token values are removed
+        from created connection records. Management auth follows the local login policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CodexAuthBulkImportRequest"
       responses:
         "200":
-          description: OK
+          description: Partial-failure result counts, sanitized created records, and per-entry errors.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthBulkImportResponse"
+        "400":
+          description: Malformed JSON or invalid bulk request structure.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/codex-auth/zip-extract:
     post:
       operationId: postApiProvidersCodexAuthZipExtract
       tags:
         - Providers
       summary: "POST providers › codex auth › zip extract"
+      description: >-
+        Accepts a raw ZIP request body. The compressed request limit is 11 MiB; extraction accepts
+        up to 50 JSON files, at most 256 KiB per file and 10 MiB total uncompressed JSON data.
+        This only parses entries; it does not validate them as Codex auth files. Management auth
+        follows the local login policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/zip:
+            schema:
+              type: string
+              format: binary
       responses:
         "200":
-          description: OK
+          description: Extracted JSON entries; invalid JSON files are represented with json null and a parseError.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthZipExtractResponse"
+        "400":
+          description: Body read, archive parsing, ZIP path, entry count, or extracted-size failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFlowErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "413":
+          description: Compressed ZIP request exceeds the 11 MiB request-body limit.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodexAuthFlowErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/command-code/auth/apply:
     post:
       operationId: postApiProvidersCommandCodeAuthApply
@@ -28934,3 +29445,469 @@ components:
         provider: { type: string, minLength: 1 }
       description: modelPattern and provider are trimmed; provider is optional.
       additionalProperties: true
+
+    CodexAuthImportRequest:
+      type: object
+      required: [source]
+      properties:
+        source:
+          oneOf:
+            - type: object
+              required: [kind, json]
+              properties:
+                kind: { type: string, const: json }
+                json: {}
+              additionalProperties: true
+            - type: object
+              required: [kind, text]
+              properties:
+                kind: { type: string, const: text }
+                text:
+                  type: string
+                  maxLength: 262144
+                  description: Pasted auth-file text, limited to 256 KiB of characters.
+              additionalProperties: true
+          discriminator:
+            propertyName: kind
+        name: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email }
+        overwriteExisting: { type: boolean }
+      description: Includes OAuth token material; the success response strips secret fields.
+      additionalProperties: true
+
+    CodexAuthBulkImportRequest:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: object
+            required: [json]
+            properties:
+              json: {}
+              name: { type: string, minLength: 1, maxLength: 200 }
+              email: { type: string, format: email }
+            additionalProperties: true
+        overwriteExisting: { type: boolean }
+      description: Each entry may contain OAuth token material; created records are sanitized.
+      additionalProperties: true
+
+    CodexAuthImportResponse:
+      type: object
+      required: [connection, created]
+      properties:
+        connection:
+          $ref: "#/components/schemas/ProviderConnection"
+        created: { type: boolean }
+      description: >-
+        The connection projection omits apiKey, accessToken, refreshToken, and idToken and
+        sanitizes providerSpecificData.
+      additionalProperties: false
+
+    CodexAuthImportEntryError:
+      type: object
+      required: [index, name, message]
+      properties:
+        index: { type: integer, minimum: 0 }
+        name: { type: string }
+        message: { type: string }
+      additionalProperties: false
+
+    CodexAuthBulkImportResponse:
+      type: object
+      required: [success, failed, total, created, errors]
+      description: >-
+        `success` is the number of successfully imported entries (not a boolean). Every entry is
+        processed independently; the handler returns HTTP 200 even when all entries fail.
+      properties:
+        success: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 1, maximum: 50 }
+        created:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderConnection" }
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/CodexAuthImportEntryError" }
+      additionalProperties: false
+
+    CodexAuthFlowErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code: { type: string }
+      additionalProperties: false
+
+    CodexAuthFileErrorResponse:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string }
+      additionalProperties: false
+
+    CodexAuthZipEntry:
+      type: object
+      required: [name, json, parseError]
+      properties:
+        name: { type: string }
+        json:
+          description: >-
+            Parsed ZIP file JSON is returned intact for the import flow and may contain raw Codex
+            OAuth token values. Treat it as credential secret data.
+        parseError: { type: [string, "null"] }
+      description: Invalid JSON entries have json=null and parseError="Not valid JSON".
+      additionalProperties: false
+
+    CodexAuthZipExtractResponse:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/CodexAuthZipEntry" }
+      additionalProperties: false
+
+    CodexAuthFilePayload:
+      type: object
+      required: [auth_mode, OPENAI_API_KEY, tokens, last_refresh]
+      description: >-
+        Raw Codex CLI auth.json output. It contains credentials and must be handled as a secret;
+        the token fields are returned only on the always-protected export route.
+      properties:
+        auth_mode: { type: string, const: chatgpt }
+        OPENAI_API_KEY: { type: "null", const: null }
+        tokens:
+          type: object
+          required: [id_token, access_token, refresh_token, account_id]
+          properties:
+            id_token: { type: string, readOnly: true, description: OAuth ID token. }
+            access_token: { type: string, readOnly: true, description: OAuth access token. }
+            refresh_token: { type: string, readOnly: true, description: OAuth refresh token. }
+            account_id: { type: string, readOnly: true }
+          additionalProperties: false
+        last_refresh: { type: string, format: date-time }
+      additionalProperties: false
+
+    CodexAuthApplyLocalRequest:
+      type: object
+      properties:
+        force: { type: boolean, default: false }
+      description: >-
+        Optional. Absent, malformed, or non-boolean force values default to false; unknown keys
+        are tolerated. Set force=true to overwrite an existing fresh ~/.codex/auth.json.
+      additionalProperties: true
+
+    CodexAuthApplyLocalResponse:
+      type: object
+      required: [success, connectionId, decision, authPath, writtenAt]
+      properties:
+        success: { type: boolean, const: true }
+        connectionId: { type: string }
+        decision: { type: string, enum: [written, skipped_present_fresh] }
+        connectionLabel: { type: string }
+        authPath: { type: [string, "null"] }
+        savedBakPath: { type: [string, "null"] }
+        centralizedBackupPath: { type: string }
+        writtenAt: { type: string, format: date-time }
+      description: >-
+        Returns write/skip and backup path metadata only; token values are not returned in this
+        JSON response.
+      additionalProperties: false
+
+    AgyAuthImportRequest:
+      type: object
+      required: [source]
+      properties:
+        source:
+          oneOf:
+            - type: object
+              required: [kind, json]
+              properties:
+                kind: { type: string, const: json }
+                json: {}
+              additionalProperties: true
+            - type: object
+              required: [kind, text]
+              properties:
+                kind: { type: string, const: text }
+                text: { type: string, maxLength: 262144 }
+              additionalProperties: true
+          discriminator:
+            propertyName: kind
+        name: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email }
+        overwriteExisting: { type: boolean }
+      description: Antigravity CLI token material; successful connection records are sanitized.
+      additionalProperties: true
+
+    AgyAuthBulkImportRequest:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            type: object
+            required: [json]
+            properties:
+              json: {}
+              name: { type: string, minLength: 1, maxLength: 200 }
+              email: { type: string, format: email }
+            additionalProperties: true
+        overwriteExisting: { type: boolean }
+      additionalProperties: true
+
+    AgyAuthImportResponse:
+      type: object
+      required: [connection, created]
+      properties:
+        connection:
+          $ref: "#/components/schemas/ProviderConnection"
+        created: { type: boolean }
+      description: >-
+        Token values (apiKey, accessToken, refreshToken, idToken) are removed and
+        providerSpecificData is sanitized.
+      additionalProperties: false
+
+    AgyAuthImportEntryError:
+      type: object
+      required: [index, name, message]
+      properties:
+        index: { type: integer, minimum: 0 }
+        name: { type: string }
+        message: { type: string }
+      additionalProperties: false
+
+    AgyAuthBulkImportResponse:
+      type: object
+      required: [success, failed, total, created, errors]
+      description: >-
+        `success` and `failed` are counts, not a boolean; each entry is handled independently and
+        the route returns HTTP 200 even when all entries fail.
+      properties:
+        success: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 1, maximum: 50 }
+        created:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderConnection" }
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/AgyAuthImportEntryError" }
+      additionalProperties: false
+
+    AgyAuthFlowErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code: { type: string }
+      additionalProperties: false
+
+    AgyAuthFileErrorResponse:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string }
+      additionalProperties: false
+
+    AgyAuthZipEntry:
+      type: object
+      required: [name, json, parseError]
+      properties:
+        name: { type: string }
+        json:
+          description: Parsed JSON is returned intact and may include OAuth token values.
+        parseError: { type: [string, "null"] }
+      additionalProperties: false
+
+    AgyAuthZipExtractResponse:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          maxItems: 50
+          items: { $ref: "#/components/schemas/AgyAuthZipEntry" }
+      additionalProperties: false
+
+    AgyAuthApplyLocalRequest:
+      type: object
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        email: { type: string, format: email }
+        overwriteExisting: { type: boolean, default: true }
+      description: Optional body. `overwriteExisting` defaults to true for local-login detection.
+      additionalProperties: true
+
+    AntigravityPastedCredentialRequest:
+      type: object
+      required: [blob]
+      properties:
+        blob:
+          type: string
+          minLength: 1
+          description: >-
+            Secret credential blob emitted by the local Antigravity remote-login helper; keep it
+            private and do not log it.
+        connectionId: { type: string }
+      additionalProperties: true
+
+    AntigravityPastedCredentialResponse:
+      type: object
+      required: [success, connection]
+      properties:
+        success: { type: boolean, const: true }
+        connection:
+          type: object
+          required: [id, provider]
+          properties:
+            id: { type: string }
+            provider: { type: string, enum: [antigravity, agy] }
+            email: { type: [string, "null"] }
+            displayName: { type: [string, "null"] }
+          additionalProperties: false
+      additionalProperties: false
+
+    AntigravityPastedCredentialErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
+
+    ProviderModelSyncChangeCounts:
+      type: object
+      required: [added, removed, updated, total]
+      properties:
+        added: { type: integer, minimum: 0 }
+        removed: { type: integer, minimum: 0 }
+        updated: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ProviderModelSyncImportedChanges:
+      type: object
+      required: [added, updated, unchanged, total]
+      properties:
+        added: { type: integer, minimum: 0 }
+        updated: { type: integer, minimum: 0 }
+        unchanged: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ProviderModelSyncModel:
+      type: object
+      description: Provider-specific model record; additional metadata may vary by provider.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        source: { type: string }
+        apiFormat: { type: string }
+      additionalProperties: true
+
+    ProviderModelSyncStandardResponse:
+      type: object
+      required:
+        - ok
+        - provider
+        - mode
+        - importFreeOnly
+        - freeFilterEmpty
+        - syncedModels
+        - availableModelsCount
+        - syncedAliases
+        - modelChanges
+        - customModelChanges
+        - importedCount
+        - updatedCount
+        - importedChanges
+        - logged
+        - models
+        - importedModels
+      properties:
+        ok: { type: boolean, const: true }
+        provider: { type: string }
+        mode: { type: string, enum: [sync, merge] }
+        importFreeOnly: { type: boolean }
+        freeFilterEmpty: { type: boolean }
+        syncedModels: { type: integer, minimum: 0 }
+        availableModelsCount: { type: integer, minimum: 0 }
+        syncedAliases: { type: integer, minimum: 0 }
+        modelChanges: { $ref: "#/components/schemas/ProviderModelSyncChangeCounts" }
+        customModelChanges: { $ref: "#/components/schemas/ProviderModelSyncChangeCounts" }
+        importedCount: { type: integer, minimum: 0 }
+        updatedCount: { type: integer, minimum: 0 }
+        importedChanges: { $ref: "#/components/schemas/ProviderModelSyncImportedChanges" }
+        logged: { type: boolean }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderModelSyncModel" }
+        importedModels:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderModelSyncModel" }
+      additionalProperties: false
+
+    ProviderModelSyncCuratedResponse:
+      type: object
+      required: [provider, connectionId, source, skipped, syncedModels, availableModelsCount, models, cleanup]
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        source: { type: string, const: curated }
+        skipped: { type: string, const: curated-models-only }
+        syncedModels: { type: integer, const: 0 }
+        availableModelsCount: { type: integer, const: 0 }
+        models: { type: array, maxItems: 0 }
+        cleanup:
+          type: object
+          required: [removedSyncedLists, removedImportedModels]
+          properties:
+            removedSyncedLists: { type: integer, minimum: 0 }
+            removedImportedModels: { type: integer, minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
+
+    ProviderModelSyncVolcPlanResponse:
+      type: object
+      required: [ok, provider, connectionId, source, plan, mode, syncedModels, availableModelsCount, modelChanges, models]
+      properties:
+        ok: { type: boolean, const: true }
+        provider: { type: string }
+        connectionId: { type: string }
+        source: { type: string, const: volcengine-plan-console-discovery }
+        plan: { type: string }
+        mode: { type: string, enum: [sync, merge] }
+        syncedModels: { type: integer, minimum: 0 }
+        availableModelsCount: { type: integer, minimum: 0 }
+        modelChanges: { $ref: "#/components/schemas/ProviderModelSyncChangeCounts" }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderModelSyncModel" }
+      additionalProperties: false
+
+    ProviderModelSyncResponse:
+      oneOf:
+        - $ref: "#/components/schemas/ProviderModelSyncStandardResponse"
+        - $ref: "#/components/schemas/ProviderModelSyncCuratedResponse"
+        - $ref: "#/components/schemas/ProviderModelSyncVolcPlanResponse"
+
+    ProviderModelSyncErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        source: { type: string }
+        warning: { type: string }
+        upstreamStatus: { type: integer, minimum: 100, maximum: 599 }
+      additionalProperties: false
