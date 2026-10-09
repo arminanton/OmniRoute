@@ -24842,25 +24842,121 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › obsidian › webdav"
+      description: >-
+        Disables WebDAV sync, clears the configured vault path and stored credentials, and removes
+        the sync-managed `.stignore` file when it is present. This route uses only
+        `isAuthenticated()`; an unlocked profile may permit anonymous access when
+        `requireLogin=false` or the first-run loopback bootstrap applies, while locked management
+        overrides those bypasses. Therefore an unlocked no-login profile also permits anonymous
+        disable requests.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: WebDAV sync was disabled and credentials were cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObsidianWebdavDisableResponse" }
+        "401":
+          description: Authentication required when management login is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: WebDAV sync state could not be disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     get:
       operationId: getApiSettingsObsidianWebdav
       tags:
         - Settings
       summary: "GET settings › obsidian › webdav"
+      description: >-
+        Returns WebDAV status, local vault path, and a plaintext reusable password only when the
+        nested `requireManagementAuth(alwaysRequireAuth=true)` check accepts the caller; otherwise
+        `webdavPassword` is null while `webdavPasswordSet` still indicates whether a password
+        exists. The outer `isAuthenticated()` gate permits anonymous status reads in unlocked
+        profiles with `requireLogin=false` (or during the first-run loopback bootstrap). In that
+        open mode the nested reveal check accepts management sessions/keys, trusted loopback CLI or
+        internal-service credentials, and Access Tokens with the method-inferred `read` scope; the
+        latter can therefore reveal the plaintext password. With login required, the outer helper
+        accepts a management API key or session before the reveal check. Treat this response as
+        sensitive.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - BearerAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: >-
+            Sensitive WebDAV status; `webdavPassword` is plaintext only when the nested management
+            check accepts the caller, otherwise it is null.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObsidianWebdavStatusResponse" }
+        "401":
+          description: Authentication required when management login is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: WebDAV status could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiSettingsObsidianWebdav
       tags:
         - Settings
       summary: "POST settings › obsidian › webdav"
+      description: >-
+        Enables WebDAV sync for an existing local vault directory, stores a generated username and
+        password, and returns both credentials in plaintext with the resolved vault path. This
+        route uses only `isAuthenticated()`; an unlocked profile may permit anonymous access when
+        `requireLogin=false` or the first-run loopback bootstrap applies, while locked management
+        overrides those bypasses. Therefore an unlocked no-login profile also permits anonymous
+        credential creation. Treat the response and request path as sensitive.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        description: Local vault directory path; this can disclose filesystem layout.
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ObsidianWebdavEnableRequest" }
       responses:
         "200":
-          description: OK
+          description: Generated WebDAV username and password with the resolved vault path.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObsidianWebdavEnableResponse" }
+        "400":
+          description: Invalid JSON/body, missing or invalid vault path, or vault setup failure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: Authentication required when management login is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/settings/oneproxy:
     delete:
       operationId: deleteApiSettingsOneproxy
@@ -46865,6 +46961,71 @@ components:
         details:
           type: array
           items: { type: object, additionalProperties: true }
+      additionalProperties: false
+
+    ObsidianWebdavStatusResponse:
+      type: object
+      description: >-
+        Sensitive WebDAV status. When disabled, username/password are null. When enabled,
+        webdavPassword is plaintext only for a caller accepted by the nested management check;
+        other callers receive null and can inspect webdavPasswordSet instead.
+      x-sensitive: true
+      required:
+        [webdavEnabled, webdavUsername, webdavPassword, webdavPasswordSet, vaultPath]
+      properties:
+        webdavEnabled: { type: boolean }
+        webdavUsername:
+          type: [string, "null"]
+          x-sensitive: true
+        webdavPassword:
+          type: [string, "null"]
+          x-sensitive: true
+          description: >-
+            Reusable plaintext WebDAV credential. Returned only when the nested
+            `requireManagementAuth(alwaysRequireAuth=true)` check accepts the caller; otherwise null.
+        webdavPasswordSet: { type: boolean }
+        vaultPath:
+          type: [string, "null"]
+          x-sensitive: true
+      additionalProperties: false
+
+    ObsidianWebdavEnableRequest:
+      type: object
+      description: Sensitive local filesystem path used to configure the WebDAV vault.
+      x-sensitive: true
+      required: [vaultPath]
+      properties:
+        vaultPath:
+          type: string
+          minLength: 1
+          maxLength: 4096
+          x-sensitive: true
+      additionalProperties: false
+
+    ObsidianWebdavEnableResponse:
+      type: object
+      description: Generated WebDAV credentials returned once at enable time; handle as secrets.
+      x-sensitive: true
+      required: [username, password, vaultPath]
+      properties:
+        username:
+          type: string
+          minLength: 1
+          x-sensitive: true
+        password:
+          type: string
+          minLength: 1
+          x-sensitive: true
+        vaultPath:
+          type: string
+          x-sensitive: true
+      additionalProperties: false
+
+    ObsidianWebdavDisableResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
       additionalProperties: false
 
     StringErrorResponse:
