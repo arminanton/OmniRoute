@@ -4325,44 +4325,60 @@ paths:
       tags: [Compression]
       summary: Get global compression settings
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Current compression settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionSettingsResponse" }
+        "401":
+          description: Authentication is required when management auth is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Compression settings lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     put:
       operationId: putApiSettingsCompression
       tags: [Compression]
       summary: Update global compression settings
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                enabled:
-                  type: boolean
-                defaultMode:
-                  type: string
-                  enum: [off, lite, standard, aggressive, ultra, rtk, stacked]
-                autoTriggerMode:
-                  type: string
-                  enum: [off, lite, standard, aggressive, ultra, rtk, stacked]
-                autoTriggerTokens:
-                  type: integer
-                  minimum: 0
-                rtkConfig:
-                  type: object
-                  additionalProperties: true
-                stackedPipeline:
-                  type: array
-                  items:
-                    type: object
+              $ref: "#/components/schemas/CompressionSettingsUpdate"
       responses:
         "200":
           description: Updated compression settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionSettingsResponse" }
+        "400":
+          description: Invalid JSON body or rejected compression setting.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication is required when management auth is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Compression settings update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/settings/compression/mcp-accessibility:
     get:
@@ -4370,10 +4386,25 @@ paths:
       tags: [Compression]
       summary: Get the MCP tool-output accessibility (trimming) config
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Current mcpAccessibility config
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpAccessibilityConfig" }
+        "401":
+          description: Authentication is required when management auth is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: MCP accessibility config lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     put:
       operationId: putApiSettingsCompressionMcpAccessibility
       tags: [Compression]
@@ -4383,34 +4414,36 @@ paths:
         reserve) are folded back to the safe defaults server-side, so the response reflects the
         effective config.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                enabled:
-                  type: boolean
-                maxTextChars:
-                  type: integer
-                  minimum: 1
-                collapseThreshold:
-                  type: integer
-                  minimum: 1
-                collapseKeepHead:
-                  type: integer
-                  minimum: 0
-                collapseKeepTail:
-                  type: integer
-                  minimum: 0
-                minLengthToProcess:
-                  type: integer
-                  minimum: 1
+              $ref: "#/components/schemas/McpAccessibilityConfigUpdate"
       responses:
         "200":
           description: Updated mcpAccessibility config (numeric floors applied)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpAccessibilityConfig" }
+        "400":
+          description: Invalid JSON body or invalid MCP accessibility config.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication is required when management auth is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: MCP accessibility config update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/compression/preview:
     post:
@@ -4420,36 +4453,35 @@ paths:
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [messages, mode]
-              properties:
-                mode:
-                  type: string
-                  enum: [off, lite, standard, aggressive, ultra, rtk, stacked]
-                messages:
-                  type: array
-                  items:
-                    type: object
-                    required: [role, content]
-                    properties:
-                      role:
-                        type: string
-                      content:
-                        oneOf:
-                          - type: string
-                          - type: array
-                            items: {}
-                config:
-                  type: object
-                  additionalProperties: true
+              $ref: "#/components/schemas/CompressionPreviewRequest"
       responses:
         "200":
           description: Compression preview with diff, validation, and stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionPreviewResponse" }
+        "400":
+          description: Invalid JSON body or invalid compression preview request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionPreviewErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Compression preview failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionPreviewErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/compression/language-packs:
     get:
@@ -4459,9 +4491,19 @@ paths:
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Available languages and rule-pack metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionLanguagePacksResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/compression/rules:
     get:
@@ -4471,9 +4513,19 @@ paths:
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Caveman rule metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionRuleListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/context/rtk/config:
     get:
@@ -25837,6 +25889,517 @@ components:
         command: { type: string }
         sampleCount: { type: integer, minimum: 0 }
         filter: { $ref: "#/components/schemas/RtkSuggestedFilter" }
+      additionalProperties: false
+    CompressionMode:
+      type: string
+      enum: [off, lite, standard, aggressive, ultra, rtk, codex-responses, omniglyph, stacked]
+    CompressionEngineStep:
+      type: object
+      description: >-
+        Stacked engine step. `config` and `intensity` are validated for the selected engine by
+        stackedPipelineStepSchema; unknown step fields are rejected.
+      required: [engine]
+      properties:
+        engine:
+          type: string
+          enum:
+            [
+              lite,
+              caveman,
+              aggressive,
+              ultra,
+              rtk,
+              codex-responses,
+              session-dedup,
+              ccr,
+              headroom,
+              relevance,
+              llmlingua,
+              omniglyph,
+            ]
+        intensity:
+          type: string
+          description: Allowed values depend on engine; see the engine-specific validation rules.
+        config:
+          type: object
+          description: Engine-specific settings object; supported fields depend on engine.
+          additionalProperties: true
+      additionalProperties: false
+    CompressionSettingsUpdate:
+      type: object
+      description: >-
+        Partial update for global prompt-compression behavior. Unknown top-level properties are
+        rejected. Every property is optional and applied to its corresponding stored setting.
+      properties:
+        enabled: { type: boolean }
+        defaultMode: { $ref: "#/components/schemas/CompressionMode" }
+        autoTriggerMode: { $ref: "#/components/schemas/CompressionMode" }
+        autoTriggerTokens: { type: integer, minimum: 0 }
+        cacheMinutes: { type: integer, minimum: 1, maximum: 60 }
+        preserveSystemPrompt: { type: boolean }
+        preserveSystemPromptMode: { type: string, enum: [always, whenNoCache, never] }
+        mcpDescriptionCompressionEnabled: { type: boolean }
+        comboOverrides:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/CompressionMode" }
+        compressionComboId: { type: [string, "null"], minLength: 1 }
+        stackedPipeline:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionEngineStep" }
+        cavemanConfig:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            compressRoles:
+              type: array
+              items: { type: string, enum: [user, assistant, system] }
+            skipRules: { type: array, items: { type: string } }
+            minMessageLength: { type: integer, minimum: 0 }
+            preservePatterns: { type: array, items: { type: string } }
+            intensity: { type: string, enum: [lite, full, ultra] }
+          additionalProperties: false
+        cavemanOutputMode:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            intensity: { type: string, enum: [lite, full, ultra] }
+            autoClarity: { type: boolean }
+          additionalProperties: false
+        outputStyles:
+          type: array
+          items:
+            type: object
+            required: [id, level]
+            properties:
+              id: { type: string, minLength: 1 }
+              level: { type: string, enum: [lite, full, ultra] }
+            additionalProperties: false
+        rtkConfig: { $ref: "#/components/schemas/RtkConfigUpdate" }
+        codexResponsesConfig:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            minBytes: { type: integer, minimum: 0, maximum: 2000000 }
+            maxOutputBytes: { type: integer, minimum: 1, maximum: 10000000 }
+            maxCandidateBytes: { type: integer, minimum: 1, maximum: 2000000 }
+            maxLines: { type: integer, minimum: 1, maximum: 10000 }
+            minSearchMatches: { type: integer, minimum: 2, maximum: 10000 }
+            minLogLines: { type: integer, minimum: 2, maximum: 10000 }
+            preserveToolNames:
+              type: array
+              maxItems: 100
+              items: { type: string, minLength: 1, maxLength: 100 }
+          additionalProperties: false
+        languageConfig:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            defaultLanguage: { type: string, minLength: 1 }
+            autoDetect: { type: boolean }
+            enabledPacks: { type: array, items: { type: string, minLength: 1 } }
+          additionalProperties: false
+        aggressive:
+          type: object
+          properties:
+            thresholds:
+              type: object
+              properties:
+                fullSummary: { type: integer, minimum: 1, maximum: 100 }
+                moderate: { type: integer, minimum: 1, maximum: 100 }
+                light: { type: integer, minimum: 1, maximum: 100 }
+                verbatim: { type: integer, minimum: 1, maximum: 100 }
+              additionalProperties: false
+            toolStrategies:
+              type: object
+              properties:
+                fileContent: { type: boolean }
+                grepSearch: { type: boolean }
+                shellOutput: { type: boolean }
+                json: { type: boolean }
+                errorMessage: { type: boolean }
+              additionalProperties: false
+            summarizerEnabled: { type: boolean }
+            maxTokensPerMessage: { type: integer, minimum: 256, maximum: 32768 }
+            minSavingsThreshold: { type: number, minimum: 0, maximum: 1 }
+            preserveSystemPrompt: { type: boolean }
+          additionalProperties: false
+        ultra:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            compressionRate: { type: number, minimum: 0, maximum: 1 }
+            minScoreThreshold: { type: number, minimum: 0, maximum: 1 }
+            slmFallbackToAggressive: { type: boolean }
+            modelPath: { type: string, minLength: 1 }
+            maxTokensPerMessage: { type: integer, minimum: 0, maximum: 32768 }
+            preserveSystemPrompt: { type: boolean }
+          additionalProperties: false
+        lite:
+          type: object
+          properties:
+            compressToolResults: { type: boolean }
+          additionalProperties: false
+        headroom:
+          type: object
+          properties:
+            minRows: { type: integer, minimum: 2, maximum: 10000 }
+          additionalProperties: false
+        sessionDedup:
+          type: object
+          properties:
+            minBlockChars: { type: integer, minimum: 1, maximum: 100000 }
+            fuzzy: { type: boolean }
+          additionalProperties: false
+        ccr:
+          type: object
+          properties:
+            minChars: { type: integer, minimum: 100, maximum: 1000000 }
+            retrievalRampFactor: { type: number, minimum: 1, maximum: 100 }
+          additionalProperties: false
+        contextBudget:
+          type: object
+          properties:
+            mode: { type: string, enum: [floor, replace-autotrigger, off] }
+            policy: { type: string, enum: [reserve-output, percentage, absolute] }
+            outputReserve: { type: integer, minimum: 0 }
+            safetyMargin: { type: integer, minimum: 0 }
+            pct: { type: number, minimum: 0, maximum: 1 }
+            absoluteBudget: { type: integer, minimum: 0 }
+            ladderOverride:
+              type: array
+              items:
+                type: object
+                required: [engine]
+                properties:
+                  engine: { type: string, minLength: 1 }
+                  intensity: { type: string }
+                additionalProperties: false
+          additionalProperties: false
+        contextEditing:
+          type: object
+          description: Unknown keys are stripped by the source schema.
+          properties:
+            enabled: { type: boolean }
+          additionalProperties: true
+        omniglyph:
+          type: object
+          required: [profile]
+          properties:
+            profile: { type: string, enum: [coding-safe, balanced, aggressive, passthrough] }
+          additionalProperties: false
+        liveZone:
+          type: object
+          properties:
+            enabled: { type: boolean }
+          additionalProperties: false
+        engines:
+          type: object
+          additionalProperties:
+            type: object
+            required: [enabled]
+            properties:
+              enabled: { type: boolean }
+              level: { type: string }
+            additionalProperties: false
+        enginesExplicit:
+          type: boolean
+          description: Runtime marker returned by GET; accepted by the update validator for compatibility.
+        activeComboId: { type: [string, "null"] }
+        ultraEngine: { type: string, enum: [heuristic, slm] }
+        ultraSlmPrewarm: { type: boolean }
+        exclusions:
+          type: array
+          maxItems: 200
+          items: { type: string, maxLength: 200 }
+      additionalProperties: false
+    CompressionSettingsResponse:
+      allOf:
+        - $ref: "#/components/schemas/CompressionSettingsUpdate"
+        - type: object
+          description: Fully normalized settings returned by the read/update handler.
+          required:
+            [
+              enabled,
+              defaultMode,
+              autoTriggerMode,
+              autoTriggerTokens,
+              cacheMinutes,
+              preserveSystemPrompt,
+              preserveSystemPromptMode,
+              mcpDescriptionCompressionEnabled,
+              comboOverrides,
+              compressionComboId,
+              stackedPipeline,
+              cavemanConfig,
+              cavemanOutputMode,
+              outputStyles,
+              rtkConfig,
+              codexResponsesConfig,
+              languageConfig,
+              aggressive,
+              ultra,
+              lite,
+              headroom,
+              sessionDedup,
+              ccr,
+              contextBudget,
+              contextEditing,
+              omniglyph,
+              liveZone,
+              engines,
+              activeComboId,
+              enginesExplicit,
+              ultraEngine,
+              ultraSlmPrewarm,
+              exclusions,
+            ]
+    McpAccessibilityConfig:
+      type: object
+      description: Fully populated MCP tool-output trimming config after server-side floors are applied.
+      required:
+        [
+          enabled,
+          maxTextChars,
+          collapseThreshold,
+          collapseKeepHead,
+          collapseKeepTail,
+          minLengthToProcess,
+        ]
+      properties:
+        enabled: { type: boolean }
+        maxTextChars: { type: integer, minimum: 600 }
+        collapseThreshold: { type: integer, minimum: 1 }
+        collapseKeepHead: { type: integer, minimum: 0 }
+        collapseKeepTail: { type: integer, minimum: 0 }
+        minLengthToProcess: { type: integer, minimum: 1 }
+      additionalProperties: false
+    McpAccessibilityConfigUpdate:
+      type: object
+      description: Partial merge. Values below safe numeric floors are normalized to defaults.
+      properties:
+        enabled: { type: boolean }
+        maxTextChars: { type: integer, minimum: 1 }
+        collapseThreshold: { type: integer, minimum: 1 }
+        collapseKeepHead: { type: integer, minimum: 0 }
+        collapseKeepTail: { type: integer, minimum: 0 }
+        minLengthToProcess: { type: integer, minimum: 1 }
+      additionalProperties: false
+    CompressionPreviewRequest:
+      type: object
+      required: [messages]
+      properties:
+        messages:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role: { type: string }
+              content:
+                oneOf:
+                  - { type: string }
+                  - { type: array, items: {} }
+        mode:
+          type: string
+          enum: [off, lite, standard, aggressive, ultra, rtk, stacked, caveman]
+          default: stacked
+        engineId: { type: string }
+        pipeline:
+          type: array
+          minItems: 1
+          items: { type: string }
+        config: { $ref: "#/components/schemas/CompressionSettingsUpdate" }
+        fidelityGate:
+          type: object
+          properties: { enabled: { type: boolean } }
+        riskGate:
+          type: object
+          properties: { enabled: { type: boolean } }
+        fuzzyDedup:
+          type: object
+          properties: { enabled: { type: boolean } }
+        quantumLock:
+          type: object
+          properties: { enabled: { type: boolean } }
+        heatmap: { type: string, enum: [ultra, universal] }
+      additionalProperties: true
+    CompressionDiffSegment:
+      type: object
+      required: [type, text]
+      properties:
+        type: { type: string, enum: [same, removed, added] }
+        text: { type: string }
+      additionalProperties: false
+    CompressionEngineBreakdown:
+      type: object
+      required: [engine, originalTokens, compressedTokens, savingsPercent, techniquesUsed]
+      properties:
+        engine: { type: string }
+        originalTokens: { type: integer, minimum: 0 }
+        compressedTokens: { type: integer, minimum: 0 }
+        savingsPercent: { type: number }
+        techniquesUsed: { type: array, items: { type: string } }
+        rulesApplied: { type: array, items: { type: string } }
+        durationMs: { type: number, minimum: 0 }
+        rejected: { type: boolean }
+        rejectReason: { type: string }
+        omniglyph: { type: object, additionalProperties: true }
+      additionalProperties: false
+    CompressionPreviewResponse:
+      type: object
+      required:
+        [
+          encoderComparison,
+          original,
+          compressed,
+          originalTokens,
+          compressedTokens,
+          tokensSaved,
+          savingsPct,
+          techniquesUsed,
+          engineBreakdown,
+          riskGate,
+          quantumLock,
+          durationMs,
+          mode,
+          intensity,
+          outputMode,
+          skippedReasons,
+          diff,
+          preservedBlocks,
+          ruleRemovals,
+          rulesApplied,
+          validation,
+          validationWarnings,
+          validationErrors,
+          fallbackApplied,
+          fallbackReason,
+          fallbackReasons,
+        ]
+      properties:
+        encoderComparison:
+          type: [object, "null"]
+          description: Headroom encoder comparison, or null when that engine is not participating.
+          additionalProperties: true
+        original: { type: string }
+        compressed: { type: string }
+        originalTokens: { type: integer, minimum: 0 }
+        compressedTokens: { type: integer, minimum: 0 }
+        tokensSaved: { type: integer, minimum: 0 }
+        savingsPct: { type: integer, minimum: 0, maximum: 100 }
+        techniquesUsed: { type: array, items: { type: string } }
+        engineBreakdown:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionEngineBreakdown" }
+        riskGate: { type: [object, "null"], additionalProperties: true }
+        quantumLock: { type: [object, "null"], additionalProperties: true }
+        durationMs: { type: number, minimum: 0 }
+        mode: { $ref: "#/components/schemas/CompressionMode" }
+        intensity: { type: "null" }
+        outputMode: { type: "null" }
+        skippedReasons: { type: array, items: { type: string } }
+        diff:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionDiffSegment" }
+        preservedBlocks:
+          type: array
+          items:
+            type: object
+            required: [kind, preview]
+            properties:
+              kind: { type: string }
+              preview: { type: string, maxLength: 120 }
+            additionalProperties: false
+        ruleRemovals: { type: array, items: { type: string } }
+        rulesApplied: { type: array, items: { type: string } }
+        validation:
+          type: object
+          required: [valid, errors, warnings, fallbackApplied]
+          properties:
+            valid: { type: boolean }
+            errors: { type: array, items: { type: string } }
+            warnings: { type: array, items: { type: string } }
+            fallbackApplied: { type: boolean }
+            fallbackReason: { type: string }
+          additionalProperties: false
+        validationWarnings: { type: array, items: { type: string } }
+        validationErrors: { type: array, items: { type: string } }
+        fallbackApplied: { type: boolean }
+        fallbackReason: { type: [string, "null"] }
+        fallbackReasons: { type: array, items: { type: string } }
+        heatmap:
+          type: object
+          required: [mode, tokens]
+          properties:
+            mode: { type: string, enum: [ultra, universal] }
+            tokens:
+              type: array
+              items:
+                type: object
+                required: [text, score, kept]
+                properties:
+                  text: { type: string }
+                  score: { type: number, minimum: 0, maximum: 1 }
+                  kept: { type: boolean }
+                additionalProperties: false
+          additionalProperties: false
+      additionalProperties: false
+    CompressionPreviewErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        details:
+          oneOf:
+            - { type: string }
+            - type: array
+              items:
+                type: object
+                properties:
+                  code: { type: string }
+                  path:
+                    type: array
+                    items: { type: [string, number] }
+                  message: { type: string }
+                additionalProperties: true
+      additionalProperties: true
+    CompressionLanguagePacksResponse:
+      type: object
+      required: [languages, packs]
+      properties:
+        languages: { type: array, items: { type: string } }
+        packs:
+          type: array
+          items:
+            type: object
+            required: [language, categories, ruleCount]
+            properties:
+              language: { type: string }
+              categories: { type: array, items: { type: string } }
+              ruleCount: { type: integer, minimum: 0 }
+            additionalProperties: false
+      additionalProperties: false
+    CompressionRuleMetadata:
+      type: object
+      required: [name, context, category, minIntensity, intensities, description]
+      properties:
+        name: { type: string }
+        context: { type: string, enum: [all, user, system, assistant] }
+        category: { type: string, enum: [filler, context, structural, dedup, terse, ultra] }
+        minIntensity: { type: string, enum: [lite, full, ultra] }
+        intensities:
+          type: array
+          items: { type: string, enum: [lite, full, ultra] }
+        description: { type: string }
+      additionalProperties: false
+    CompressionRuleListResponse:
+      type: object
+      required: [rules]
+      properties:
+        rules:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionRuleMetadata" }
       additionalProperties: false
     FreeProxyRecord:
       type: object
