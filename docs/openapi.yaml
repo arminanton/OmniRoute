@@ -24731,25 +24731,111 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › obsidian"
+      description: >-
+        Disconnects the Obsidian REST integration by clearing its stored token; the configured
+        server URL and vault path are retained. In protected profiles, this `isAuthenticated()`
+        management route accepts a management-scoped API key or dashboard session. An unlocked
+        profile may permit anonymous access when `requireLogin=false` or the first-run loopback
+        bootstrap applies; locked management overrides those bypasses.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Integration disconnected; the configured server URL and vault path remain.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObsidianIntegrationDisconnectResponse" }
+        "401":
+          description: Authentication required when management login is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Integration token could not be cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     get:
       operationId: getApiSettingsObsidian
       tags:
         - Settings
       summary: "GET settings › obsidian"
+      description: >-
+        Returns redacted connection state and the configured local server URL and vault path; it
+        never returns the stored token. The URL and path can reveal private local configuration and
+        are marked sensitive. In protected profiles, this `isAuthenticated()` management route
+        accepts a management-scoped API key or dashboard session. An unlocked profile may permit
+        anonymous access when `requireLogin=false` or the first-run loopback bootstrap applies;
+        locked management overrides those bypasses.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Redacted token status plus sensitive local URL and vault-path settings.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObsidianIntegrationStatusResponse" }
+        "401":
+          description: Authentication required when management login is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Stored integration state could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiSettingsObsidian
       tags:
         - Settings
       summary: "POST settings › obsidian"
+      description: >-
+        Validates the supplied token against the Obsidian Local REST API before saving it. An
+        optional `baseUrl` is validated to reject cloud-metadata and link-local destinations before
+        dialing or persistence; loopback, LAN and Tailscale endpoints are allowed for local REST
+        deployments. When omitted, the saved base URL is used. In protected profiles, this
+        `isAuthenticated()` management route accepts a management-scoped API key or dashboard
+        session. An unlocked profile may permit anonymous access when `requireLogin=false` or the
+        first-run loopback bootstrap applies; locked management overrides those bypasses.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        description: Sensitive Obsidian integration credential and optional validated server URL.
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ObsidianIntegrationSetTokenRequest" }
       responses:
         "200":
-          description: OK
+          description: Token validated and saved; no token value is returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObsidianIntegrationConnectResponse" }
+        "400":
+          description: Invalid JSON, token or URL shape, blocked destination, or token validation failure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ObsidianIntegrationErrorResponse" }
+        "401":
+          description: Authentication required when management login is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/settings/obsidian/webdav:
     delete:
       operationId: deleteApiSettingsObsidianWebdav
@@ -46698,6 +46784,79 @@ components:
       additionalProperties: false
 
     NotionIntegrationErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        connected: { type: boolean }
+        details:
+          type: array
+          items: { type: object, additionalProperties: true }
+      additionalProperties: false
+
+    ObsidianIntegrationStatusResponse:
+      type: object
+      description: >-
+        Redacted token status. `baseUrl` and `vaultPath` are returned but can disclose private
+        local configuration; the token itself is never included.
+      x-sensitive: true
+      required: [connected, hasToken, baseUrl, vaultPath]
+      properties:
+        connected: { type: boolean }
+        hasToken: { type: boolean }
+        baseUrl:
+          type: string
+          format: uri
+          pattern: "^[hH][tT][tT][pP][sS]?://"
+          x-sensitive: true
+        vaultPath:
+          type: [string, "null"]
+          x-sensitive: true
+      additionalProperties: false
+
+    ObsidianIntegrationSetTokenRequest:
+      type: object
+      description: >-
+        Obsidian REST credential and optional absolute base URL. The URL is blocked if it targets
+        cloud metadata or link-local addresses before any outbound request or persistence.
+      x-sensitive: true
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 5000
+          format: password
+          writeOnly: true
+          x-sensitive: true
+        baseUrl:
+          type: string
+          format: uri
+          pattern: "^[hH][tT][tT][pP][sS]?://"
+          x-sensitive: true
+          description: >-
+            Optional HTTP(S) local Obsidian REST server without embedded credentials. Loopback, LAN,
+            and Tailscale endpoints are supported; cloud-metadata and link-local destinations are
+            rejected. If omitted, the currently configured server URL is used.
+      additionalProperties: false
+
+    ObsidianIntegrationConnectResponse:
+      type: object
+      required: [connected, message]
+      properties:
+        connected: { type: boolean, const: true }
+        message: { type: string, const: "Obsidian API token saved and validated" }
+      additionalProperties: false
+
+    ObsidianIntegrationDisconnectResponse:
+      type: object
+      required: [connected, message]
+      properties:
+        connected: { type: boolean, const: false }
+        message: { type: string, const: "Obsidian integration disconnected" }
+      additionalProperties: false
+
+    ObsidianIntegrationErrorResponse:
       type: object
       required: [error]
       properties:
