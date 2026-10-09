@@ -9568,11 +9568,24 @@ paths:
         (no DB, no provider reads) companion to `GET /api/monitoring/health` intended
         for frequent polling. Sent with `Cache-Control: no-store, no-cache,
         must-revalidate`. Counters reset on process restart.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Compression memo stats (`compression.memo` + `timestamp`)
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store, no-cache, must-revalidate" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionMemoMonitoringResponse" }
         "503":
           description: Compression stats unavailable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/rate-limits:
     get:
@@ -9654,16 +9667,83 @@ paths:
       operationId: getApiCache
       tags: [System]
       summary: Get cache statistics
+      description: >-
+        Reads semantic-response, provider prompt-cache, cache-history trend, idempotency, and
+        enabled-state statistics. `trendHours` is parsed as an integer, defaults to 24 when absent
+        or invalid, and is clamped to 1–720.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: trendHours
+          in: query
+          required: false
+          schema: { type: string, default: "24", example: "24" }
       responses:
         "200":
-          description: Semantic cache and idempotency stats
+          description: Semantic cache, provider cache, trend, idempotency, and config statistics.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CacheOverviewResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Cache statistics lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiCache
       tags: [System]
       summary: Clear all caches
+      description: >-
+        Invalidates all semantic-cache entries by default. Exactly one of `model`, `signature`, or
+        `staleMs` may be supplied to invalidate a narrower cache subset.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: model
+          in: query
+          required: false
+          schema: { type: string }
+        - name: signature
+          in: query
+          required: false
+          schema: { type: string }
+        - name: staleMs
+          in: query
+          required: false
+          description: Positive integer age in milliseconds; invalid or non-positive values return 400.
+          schema: { type: string }
       responses:
         "200":
-          description: Caches cleared
+          description: Invalidation summary; fields depend on the selected scope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CacheInvalidationResponse" }
+        "400":
+          description: Multiple invalidation modes were supplied or staleMs is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Cache invalidation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/modality-bridge/stats:
     get:
@@ -9912,16 +9992,52 @@ paths:
       tags: [System]
       summary: Get detailed cache statistics
       description: Returns detailed statistics for all cache layers.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Detailed cache stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryCacheStats" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Memory cache statistics lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiCacheStats
       tags: [System]
       summary: Clear cache statistics
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Cache stats cleared
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryCacheClearResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Memory cache clear failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   # ─── Telemetry & Token Health ───────────────────────────────────
 
@@ -26036,6 +26152,196 @@ components:
         command: { type: string }
         sampleCount: { type: integer, minimum: 0 }
         filter: { $ref: "#/components/schemas/RtkSuggestedFilter" }
+      additionalProperties: false
+    CacheSemanticStats:
+      type: object
+      required: [memoryEntries, dbEntries, hits, misses, hitRate, tokensSaved]
+      properties:
+        memoryEntries: { type: integer, minimum: 0 }
+        dbEntries: { type: integer, minimum: 0 }
+        hits: { type: integer, minimum: 0 }
+        misses: { type: integer, minimum: 0 }
+        hitRate: { type: string, pattern: "^\\d+(?:\\.\\d)?$" }
+        tokensSaved: { type: integer, minimum: 0 }
+      additionalProperties: false
+    CachePromptProviderStats:
+      type: object
+      required:
+        [requests, totalRequests, cachedRequests, inputTokens, cachedTokens, cacheCreationTokens]
+      properties:
+        requests: { type: integer, minimum: 0 }
+        totalRequests: { type: integer, minimum: 0 }
+        cachedRequests: { type: integer, minimum: 0 }
+        inputTokens: { type: integer, minimum: 0 }
+        cachedTokens: { type: integer, minimum: 0 }
+        cacheCreationTokens: { type: integer, minimum: 0 }
+      additionalProperties: false
+    CachePromptStrategyStats:
+      type: object
+      required: [requests, inputTokens, cachedTokens, cacheCreationTokens]
+      properties:
+        requests: { type: integer, minimum: 0 }
+        inputTokens: { type: integer, minimum: 0 }
+        cachedTokens: { type: integer, minimum: 0 }
+        cacheCreationTokens: { type: integer, minimum: 0 }
+      additionalProperties: false
+    CachePromptMetrics:
+      type: object
+      required:
+        [
+          totalRequests,
+          requestsWithCacheControl,
+          totalInputTokens,
+          totalCachedTokens,
+          totalCacheCreationTokens,
+          tokensSaved,
+          estimatedCostSaved,
+          byProvider,
+          byStrategy,
+          lastUpdated,
+        ]
+      properties:
+        totalRequests: { type: integer, minimum: 0 }
+        requestsWithCacheControl: { type: integer, minimum: 0 }
+        totalInputTokens: { type: integer, minimum: 0 }
+        totalCachedTokens: { type: integer, minimum: 0 }
+        totalCacheCreationTokens: { type: integer, minimum: 0 }
+        tokensSaved: { type: integer, minimum: 0 }
+        estimatedCostSaved: { type: number, minimum: 0 }
+        byProvider:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/CachePromptProviderStats" }
+        byStrategy:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/CachePromptStrategyStats" }
+        lastUpdated: { type: string, format: date-time }
+      additionalProperties: false
+    CacheTrendPoint:
+      type: object
+      required:
+        [timestamp, requests, cachedRequests, inputTokens, cachedTokens, cacheCreationTokens]
+      properties:
+        timestamp: { type: string, format: date-time }
+        requests: { type: integer, minimum: 0 }
+        cachedRequests: { type: integer, minimum: 0 }
+        inputTokens: { type: integer, minimum: 0 }
+        cachedTokens: { type: integer, minimum: 0 }
+        cacheCreationTokens: { type: integer, minimum: 0 }
+      additionalProperties: false
+    IdempotencyCacheStats:
+      type: object
+      required: [activeKeys, windowMs]
+      properties:
+        activeKeys: { type: integer, minimum: 0 }
+        windowMs: { type: integer, minimum: 1 }
+      additionalProperties: false
+    CacheOverviewResponse:
+      type: object
+      required: [semanticCache, promptCache, trend, idempotency, config]
+      properties:
+        semanticCache: { $ref: "#/components/schemas/CacheSemanticStats" }
+        promptCache: { $ref: "#/components/schemas/CachePromptMetrics" }
+        trend:
+          type: array
+          items: { $ref: "#/components/schemas/CacheTrendPoint" }
+        idempotency: { $ref: "#/components/schemas/IdempotencyCacheStats" }
+        config:
+          type: object
+          required: [semanticCacheEnabled]
+          properties:
+            semanticCacheEnabled: { type: boolean }
+          additionalProperties: false
+      additionalProperties: false
+    CacheInvalidationResponse:
+      oneOf:
+        - type: object
+          required: [ok, cleared, scope]
+          properties:
+            ok: { type: boolean, const: true }
+            cleared: { type: integer, minimum: 0 }
+            scope: { type: string, const: all }
+          additionalProperties: false
+        - type: object
+          required: [ok, invalidated, scope, model]
+          properties:
+            ok: { type: boolean, const: true }
+            invalidated: { type: integer, minimum: 0 }
+            scope: { type: string, const: model }
+            model: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [ok, invalidated, scope]
+          properties:
+            ok: { type: boolean, const: true }
+            invalidated: { type: integer, minimum: 0, maximum: 1 }
+            scope: { type: string, const: signature }
+          additionalProperties: false
+        - type: object
+          required: [ok, invalidated, scope, maxAgeMs]
+          properties:
+            ok: { type: boolean, const: true }
+            invalidated: { type: integer, minimum: 0 }
+            scope: { type: string, const: stale }
+            maxAgeMs: { type: integer, minimum: 1 }
+          additionalProperties: false
+    MemoryCacheStats:
+      type: object
+      required: [size, maxSize, bytes, maxBytes, hits, misses, evictions, hitRate]
+      properties:
+        size: { type: integer, minimum: 0 }
+        maxSize: { type: integer, minimum: 0 }
+        bytes: { type: integer, minimum: 0 }
+        maxBytes: { type: integer, minimum: 0 }
+        hits: { type: integer, minimum: 0 }
+        misses: { type: integer, minimum: 0 }
+        evictions: { type: integer, minimum: 0 }
+        hitRate: { type: number, minimum: 0, maximum: 100 }
+      additionalProperties: false
+    MemoryCacheClearResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: "Cache cleared" }
+      additionalProperties: false
+    CompressionMemoWindowStats:
+      type: object
+      required: [hits, misses, hitRate]
+      properties:
+        hits: { type: integer, minimum: 0 }
+        misses: { type: integer, minimum: 0 }
+        hitRate: { type: number, minimum: 0, maximum: 100 }
+      additionalProperties: false
+    CompressionMemoStats:
+      type: object
+      required: [size, capacity, hits, misses, hitRate, windows]
+      properties:
+        size: { type: integer, minimum: 0 }
+        capacity: { type: integer, minimum: 1 }
+        hits: { type: integer, minimum: 0 }
+        misses: { type: integer, minimum: 0 }
+        hitRate: { type: number, minimum: 0, maximum: 100 }
+        windows:
+          type: object
+          required: ["1m", "5m", "15m", "1h"]
+          properties:
+            "1m": { $ref: "#/components/schemas/CompressionMemoWindowStats" }
+            "5m": { $ref: "#/components/schemas/CompressionMemoWindowStats" }
+            "15m": { $ref: "#/components/schemas/CompressionMemoWindowStats" }
+            "1h": { $ref: "#/components/schemas/CompressionMemoWindowStats" }
+          additionalProperties: false
+      additionalProperties: false
+    CompressionMemoMonitoringResponse:
+      type: object
+      required: [compression, timestamp]
+      properties:
+        compression:
+          type: object
+          required: [memo]
+          properties:
+            memo: { $ref: "#/components/schemas/CompressionMemoStats" }
+          additionalProperties: false
+        timestamp: { type: string, format: date-time }
       additionalProperties: false
     ResilienceAuthCategory:
       type: string
