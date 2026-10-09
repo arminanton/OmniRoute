@@ -15880,28 +15880,135 @@ paths:
       operationId: postApiConductorAsk
       tags:
         - Conductor
-      summary: "POST conductor › ask"
+      summary: Ask the Conductor spokesperson
+      description: >-
+        Proxies a validated message to the server-configured Faro spokesperson and returns only its
+        whitelisted `text` and `pending` fields. A write-scoped access token is sufficient;
+        manage/admin API keys, dashboard sessions, loopback CLI tokens, and trusted loopback
+        internal-service credentials are also accepted. An unlocked standalone install with
+        `requireLogin=false` may permit anonymous access; locked management requires authentication.
       responses:
         "200":
-          description: OK
+          description: Faro response text and its optional confirmation-pending value.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConductorAskResponse" }
+        "400":
+          description: Malformed JSON, non-string message, or message outside 1–4,000 characters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Faro is offline/refused the request, or management auth is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConductorAskRequest" }
   /api/conductor/fleet:
     get:
       operationId: getApiConductorFleet
       tags:
         - Conductor
-      summary: "GET conductor › fleet"
+      summary: Get Conductor fleet snapshot
+      description: >-
+        Returns a whitelisted snapshot of runners and tasks. If the hub is unset, unavailable, or
+        returns an invalid payload, this endpoint degrades to `{offline:true,runners:[],tasks:[]}`
+        with status 200. Hub and runner credentials are never included. A read-scoped access token
+        is sufficient; manage/admin API keys, dashboard sessions, loopback CLI tokens, and trusted
+        loopback internal-service credentials are also accepted. An unlocked standalone install
+        with `requireLogin=false` may permit anonymous access; locked management requires
+        authentication.
       responses:
         "200":
-          description: OK
+          description: Whitelisted fleet and task snapshot, or a degraded offline snapshot.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConductorFleetSnapshot" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
   /api/conductor/tasks:
     post:
       operationId: postApiConductorTasks
       tags:
         - Conductor
-      summary: "POST conductor › tasks"
+      summary: Create Conductor task
+      description: >-
+        Creates a task on the configured hub; upstream response bodies are never forwarded. A
+        successful hub creation returns 201. Hub 4xx/5xx statuses are mirrored with a sanitized
+        error envelope; out-of-range upstream statuses are clamped to 502. A write-scoped access
+        token is sufficient; manage/admin API keys, dashboard sessions, loopback CLI tokens, and
+        trusted loopback internal-service credentials are also accepted. An unlocked standalone
+        install with `requireLogin=false` may permit anonymous access; locked management requires
+        authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConductorTaskCreateRequest" }
       responses:
         "201":
-          description: Created
+          description: Task was created on the hub.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConductorTaskCreatedResponse" }
+        "400":
+          description: Malformed JSON or request fields fail the route's Zod validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "502":
+          description: Hub returned an out-of-range status that the route clamps to Bad Gateway.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          description: Hub is offline/unconfigured or management auth is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        default:
+          description: Sanitized 4xx/5xx refusal from the Conductor hub.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/conductor/tasks/{id}:
     parameters:
       - name: id
@@ -15913,10 +16020,38 @@ paths:
       operationId: getApiConductorTasksById
       tags:
         - Conductor
-      summary: "GET conductor › tasks › <id>"
+      summary: Get Conductor task details
+      description: >-
+        Returns a whitelisted task detail including the original prompt, test result, and council
+        payload. Treat the response as sensitive. Missing, malformed, or offline hub task details
+        return a sanitized 404. A read-scoped access token is sufficient; manage/admin API keys,
+        dashboard sessions, loopback CLI tokens, and trusted loopback internal-service credentials
+        are also accepted. An unlocked standalone install with `requireLogin=false` may permit
+        anonymous access; locked management requires authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Whitelisted task detail; prompt and council fields are sensitive.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConductorTaskDetail" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Task is not known to the hub or the hub is offline.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/conductor/tasks/{id}/cancel:
     parameters:
       - name: id
@@ -15928,10 +16063,40 @@ paths:
       operationId: postApiConductorTasksByIdCancel
       tags:
         - Conductor
-      summary: "POST conductor › tasks › <id> › cancel"
+      summary: Cancel Conductor task
+      description: >-
+        Cancels a hub task; the route returns only `{ok:true}` on success and never forwards the
+        upstream response body. Hub refusal status is mirrored with a sanitized error envelope.
+        A write-scoped access token is sufficient; manage/admin API keys, dashboard sessions,
+        loopback CLI tokens, and trusted loopback internal-service credentials are also accepted.
+        An unlocked standalone install with `requireLogin=false` may permit anonymous access;
+        locked management requires authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Hub cancellation succeeded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConductorTaskCancelResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Hub is offline/unconfigured or management auth is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        default:
+          description: Sanitized hub refusal status and message; the upstream body is not forwarded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/context/analytics:
     get:
       operationId: getApiContextAnalytics
@@ -34277,6 +34442,115 @@ components:
       required: [success]
       properties:
         success: { type: boolean, const: true }
+      additionalProperties: false
+    ConductorAskRequest:
+      type: object
+      x-sensitive: true
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4000
+      description: Unknown fields are accepted by the route's Zod object and stripped.
+      additionalProperties: true
+    ConductorAskResponse:
+      type: object
+      x-sensitive: true
+      required: [text, pending]
+      properties:
+        text: { type: string }
+        pending: {}
+      additionalProperties: false
+    ConductorFleetRunner:
+      type: object
+      required: [id, name, clis, online, draining]
+      properties:
+        id: { type: string }
+        name: { type: string, description: The upstream capability name, or `?` when omitted. }
+        clis:
+          type: array
+          items: { type: string }
+        online: { type: boolean, description: Defaults to true when omitted upstream. }
+        draining: { type: boolean, description: Defaults to false when omitted upstream. }
+      additionalProperties: false
+    ConductorFleetTask:
+      type: object
+      required: [id, status, mode, repo, runner, summary, branch, error, updated_at]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        mode: { type: string, description: Defaults to `solo` when omitted upstream. }
+        repo: { type: [string, "null"] }
+        runner: { type: [string, "null"] }
+        summary: { type: [string, "null"] }
+        branch: { type: [string, "null"] }
+        error: { type: [string, "null"] }
+        updated_at: { type: [string, "null"] }
+      additionalProperties: false
+    ConductorFleetSnapshot:
+      type: object
+      description: >-
+        Whitelisted fleet state. Hub absence, network failure, or invalid upstream payload yields
+        the degraded `{offline:true,runners:[],tasks:[]}` snapshot with HTTP 200.
+      required: [offline, runners, tasks]
+      properties:
+        offline: { type: boolean }
+        runners:
+          type: array
+          items: { $ref: "#/components/schemas/ConductorFleetRunner" }
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/ConductorFleetTask" }
+      additionalProperties: false
+    ConductorTaskCreateRequest:
+      type: object
+      x-sensitive: true
+      required: [repoUrl, prompt]
+      properties:
+        repoUrl: { type: string, minLength: 1 }
+        prompt: { type: string, minLength: 1, x-sensitive: true }
+        baseRef: { type: string }
+        mode: { type: string }
+        cli: { type: string }
+        model: { type: string }
+      description: Unknown fields are accepted by the route's Zod object and stripped.
+      additionalProperties: true
+    ConductorTaskCreatedResponse:
+      type: object
+      required: [task_id]
+      properties:
+        task_id: { type: string }
+      additionalProperties: false
+    ConductorTaskDetail:
+      type: object
+      x-sensitive: true
+      description: Whitelisted task detail includes the original prompt and council/test payloads.
+      required:
+        [id, status, mode, repo, runner, summary, branch, error, updated_at, prompt, base_ref, tests, council, created_at]
+      properties:
+        id: { type: string }
+        status: { type: string }
+        mode: { type: string }
+        repo: { type: [string, "null"] }
+        runner: { type: [string, "null"] }
+        summary: { type: [string, "null"] }
+        branch: { type: [string, "null"] }
+        error: { type: [string, "null"] }
+        updated_at: { type: [string, "null"] }
+        prompt:
+          type: [string, "null"]
+          x-sensitive: true
+        base_ref: { type: [string, "null"] }
+        tests: {}
+        council: {}
+        created_at: { type: [string, "null"] }
+      additionalProperties: false
+    ConductorTaskCancelResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean, const: true }
       additionalProperties: false
     V1AccountKeyLimits:
       type: object
