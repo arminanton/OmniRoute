@@ -1,7 +1,7 @@
 ---
 title: "Runtime and Inference Data Plane Investigation"
 version: 3.8.51
-lastUpdated: 2026-10-08
+lastUpdated: 2026-10-09
 ---
 
 # Runtime and inference data-plane investigation
@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 339
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 427
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,19 +32,18 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 259 operations have success
-response content schemas and 188 declare operation-level security. Of 1,004 operations with a
-non-`204` success status, 745 still lack an explicit success-body schema; 11 operations have no
+contract is still stronger on route coverage than schema completeness: 304 operations have success
+response content schemas and 247 declare operation-level security. Of 1,004 operations with a
+non-`204` success status, 700 still lack an explicit success-body schema; 11 operations have no
 declared `2xx` status, and 14 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
 liveness versus authenticated system/pressure snapshot responses. The health snapshot includes the
 latest cached V8/process/cgroup/PSI sample with age and pressure state. The conversation response
 documents that turn text/tool display fields are recovered from call-log artifacts and can be empty
-after details are unavailable. The remaining operations use redirects,
-WebSocket `101`, or
-intentional `404`/`405` HEAD/catch-all behavior and are being reviewed separately from JSON success
-schemas. The OpenAI chat, Anthropic
+after details are unavailable. Some operations use redirects, WebSocket `101`, or intentional
+`404`/`405` HEAD/catch-all behavior; these are reviewed separately from JSON success schemas. The
+OpenAI chat, Anthropic
 Messages, OpenAI Responses, token-count, embedding, image-generation, audio, moderation, rerank,
 OCR, Jina classify/segment, legacy completions, and WebSocket-handshake paths now describe their
 principal request/response shapes and streaming media. The remaining contract pass must compare
@@ -78,9 +77,16 @@ alias overrides, and Antigravity MITM start/stop plus alias read/write variants.
 The auth and database-backup pass types session/CSRF responses, backup restore and retention bodies,
 binary database exports, the actual gzip tar export format, and both multipart and raw-binary imports.
 The usage pass adds request/proxy log shapes, bulk budgets, reset-credit responses, combo decision
-traces, route-explainability, and text/JSON `om-usage` modes. Dynamic provider quota data remains
-open-ended because provider adapters return different fields. Together these passes bring the spec
-to 339 component schemas. All 98 operations previously missing
+traces, route-explainability, and text/JSON `om-usage` modes. The latest passes add log-console,
+legacy-detail and export shapes; category-specific private-overflow errors; API-key masked metadata,
+secret reveal/regeneration and device/usage-limit responses; key-group membership/permission CRUD;
+provider batch mutation results; model-capability overrides; model-combo mappings; single/batch
+model-test results; Codex auth import, ZIP extraction, export, and local-apply; Antigravity CLI auth
+import/paste/local detection; and provider model-sync contracts. Dynamic provider quota data remains
+open-ended because provider adapters return different fields. Together these passes bring the spec to
+427 component schemas. The generic `/api/oauth/{provider}/{action}` dispatcher still has divergent
+provider/action callback, device-flow, retirement, and error shapes that need a separate source audit.
+All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
 
@@ -575,6 +581,14 @@ during this burst even though the weighted memory reservations had room; it is n
 the independent 128 MiB weighted reservation limit remains in force. The call-log shutdown drain
 default is 30 seconds to cover a cold worker start plus a write burst.
 
+On 2026-10-09, seven focused Antigravity error-path suites passed 40/40 tests: quota-versus-rate-limit
+classification and cooldowns, switch-auth retry behavior, sanitized attempt diagnostics, streaming
+error-body handling, and the system-instruction regression. These verify local classification and
+fallback branches against fixtures; they do not establish Google quota availability or eliminate
+network/header timeouts. The reported production logs still show upstream 429 responses on several
+accounts and 30-second no-header timeouts, so a matched real-provider trace remains necessary to
+separate quota exhaustion from transport failure.
+
 Run the capture variant with:
 
 ```bash
@@ -648,6 +662,16 @@ corpus uses high-entropy random context, five 256 KiB user messages per session,
 requests; its timing should not be compared directly with the earlier 22–24 second low-context
 runs. It validates the 100-session route/capture path, not sustained production throughput or a real
 provider.
+
+A fresh 2026-10-09 verification with the same capture flags also passed 402/402 requests, persisted
+402/402 metadata-only call-log artifacts, and finalized 402/402 private traces. The maximum request
+was 1,311,796 bytes and wall time was 82.998 seconds. `/usr/bin/time` measured 1,590,332 KiB
+maximum process RSS; the final gateway snapshot reported 1,476,325,376 bytes RSS, 783,805,368 bytes
+V8 heap used, 245,577,440 external bytes, 216,594,746 array-buffer bytes, and zero process swap.
+The snapshot's shared user-session cgroup had `memory.max=max`, 11,078,463,488 bytes current and
+zero max/OOM events; its aggregate memory and prior peak are not attributable to the gateway. PSI
+averages were zero. This one run is lower than the earlier process-RSS range, but without matched
+before/after runs it does not establish which source change caused the difference.
 
 `ANTIGRAVITY_CAPTURE_MEMORY_BENCH=1` emits a sanitized memory-diagnostics record with separate
 snapshots for the route/test process, parent test runner, client process, mock upstream, and their
