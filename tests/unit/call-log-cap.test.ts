@@ -647,12 +647,12 @@ test("size-limit fallback preserves bounded Antigravity attempt diagnostics thro
   const priorOverflowEnabled = process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED;
   const priorMinimumClientBytes = process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
   process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = "true";
-  process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = String(3 * 1024 * 1024);
+  process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = "3000000";
   const representativeRequest = {
-    messages: [{ role: "user", content: "x".repeat(Math.ceil(3.05 * 1024 * 1024)) }],
+    messages: [{ role: "user", content: "x".repeat(3_050_000) }],
   };
   const smallerRequest = {
-    messages: [{ role: "user", content: "x".repeat(Math.floor(2.95 * 1024 * 1024)) }],
+    messages: [{ role: "user", content: "x".repeat(2_950_000) }],
   };
   const representativeEnvelope = {};
   const smallerEnvelope = {};

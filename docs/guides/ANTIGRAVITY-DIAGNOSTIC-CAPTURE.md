@@ -11,7 +11,7 @@ This is a proposed temporary diagnostic profile, not authorization to change a r
 
 Three independent controls must agree: the database setting `call_log_pipeline_enabled` must be true, the selected inference API key must have `noLog=false`, and `CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS=true` must be present to retain stream excerpts. The authenticated dashboard action `POST /api/logs/detail` with `{"enabled":true}` sets the database flag. `GET /api/logs/detail?limit=1` reports the flag without changing it. `ENABLE_REQUEST_LOGS` affects the legacy detailed-log getter; it does not replace the chatCore database gate.
 
-The approved capture controls are global and must be applied through a reviewed deployment profile:
+These proposed capture controls are global and should be applied only through a reviewed deployment profile:
 
 ```dotenv
 CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS=true
@@ -20,13 +20,13 @@ CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB=512
 CHAT_DEBUG_FILE=false
 APP_LOG_LEVEL=info
 OMNI_DIAGNOSTIC_OVERFLOW_ENABLED=true
-OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES=3145728
+OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES=3000000
 OMNI_DIAGNOSTIC_OVERFLOW_FILE_BYTES=67108864
-OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES=2147483648
-OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS=604800000
+OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES=1610612736
+OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS=21600000
 ```
 
-Leave the existing text, array, depth and body preview settings at their defaults unless a separate memory-reviewed profile requires changing them. Preserve the existing database flag and restore it only when capture is no longer needed. The 10 MiB artifact limit is independent of the 512 KiB aggregate in-memory stream excerpt budget. Private Antigravity overflow is separately bounded to64 MiB per file,2 GiB total and seven-day retention. It records an explicit incomplete state when any bound is reached.
+Leave the existing text, array, depth and body preview settings at their defaults unless a separate memory-reviewed profile requires changing them. Preserve the existing database flag and restore it only when capture is no longer needed. The 10 MiB artifact limit is independent of the 512 KiB aggregate in-memory stream excerpt budget. Private Antigravity overflow code defaults are 64 MiB per file, 2 GiB total and seven-day retention; this temporary profile uses a 1.5 GiB total and six-hour retention. It records an explicit incomplete state when any bound is reached.
 
 The database logging flag and environment controls are global. There is no existing provider-, correlation-ID-, or errors-only capture filter. A diagnostic key does not exclude traffic from other keys that also have `noLog=false`; every eligible request is subject to these bounded captures.
 
@@ -57,19 +57,21 @@ The configurable pipeline logger has regression coverage for larger and smaller 
 
 ## Private Antigravity overflow
 
-An independent, default-off private capture can preserve approved payloads beyond the 10 MiB dashboard artifact. Its candidate-only profile is:
+An independent, default-off private capture can preserve eligible request payloads beyond the 10 MiB dashboard artifact. Its candidate-only profile is:
 
 ```dotenv
 OMNI_DIAGNOSTIC_OVERFLOW_ENABLED=true
-OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES=3145728
+OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES=3000000
 OMNI_DIAGNOSTIC_OVERFLOW_FILE_BYTES=67108864
-OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES=2147483648
-OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS=604800000
+OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES=1610612736
+OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS=21600000
 ```
 
 It requires enabled pipeline logging, an inference key without `noLog`, and no video-retention redaction. Original client data is **parsed JSON reserialized before translation**, not original HTTP framing or whitespace. Each Antigravity generation send, including regional, credits and project-header403 retries, receives a separate file for the exact serialized outgoing body and the bytes read from its transport response. OAuth enrollment/refresh exchanges are not captured, and secret authorization/cookie headers are discarded. Approved payload contents can still contain private data. Full private payloads never enter console logs or enumerable request properties.
 
-Files are private gzip records with byte counts and integrity hashes. The limit is 64 MiB raw per file and 2 GiB of coordinated storage, with seven-day retention. This budget is separate from primary artifacts. Actual retries can create several files and artifacts per logical request; both stores enforce their own bounds. The original client JSON snapshot and provider serialization briefly occupy memory only for requests above `OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES` (default 4 MiB; this profile sets 3 MiB), so the request admission budget and container memory limit remain authoritative. Below that estimate, bounded call-log artifacts remain the capture path and no private overflow files are written. Set the threshold to `0` only when every eligible request needs private overflow capture.
+Files are private gzip records with byte counts and integrity hashes. The limit is 64 MiB raw per file. This temporary profile allows 1.5 GiB of coordinated storage and six-hour retention; the code defaults remain 2 GiB and seven days. This budget is separate from primary artifacts. Actual retries can create several files and artifacts per logical request; both stores enforce their own bounds. The original client JSON snapshot and provider serialization briefly occupy memory only for requests above `OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES` (default 4 MiB; this profile sets 3,000,000 bytes), so the request admission budget and container memory limit remain authoritative. Below that estimate, bounded call-log artifacts remain the capture path and no private overflow files are written. Set the threshold to `0` only when every eligible request needs private overflow capture.
+
+For a 3.05 MiB incident-shaped request, 70–100 simultaneous client bodies represent about 214–305 MiB of input. A conservative in-flight estimate using four payload-sized stages (client, translated provider request, response and call-log detail) with the current 8× amplification assumption is about 6.7–9.5 GiB; this is a sizing envelope, not a measured 70/100-request load result. Private raw-byte budget is about 235–336 MiB for client-request files alone, or 671–959 MiB when provider request and response files are similarly sized. These are pre-gzip reservation estimates; compressed files can be smaller. Each physical retry adds another provider request/response pair. The code sets the 4 MiB default at `open-sse/utils/diagnosticCaptureContext.ts:20-27`, creates request/response writers per send at `open-sse/executors/antigravity/diagnosticAttempt.ts:166-180`, and records raw-byte reservations in `src/lib/usage/diagnosticOverflowCoordinator.ts:162-181,191-205`. The four payload stages follow the client/request/response logging path in `open-sse/handlers/chatCore.ts:1354-1356,5774-5780` and `open-sse/handlers/chatCore/attemptLogging.ts:479-529`.
 
 A file is complete only after actual read EOF and gzip flush/durability. Cancellation, timeout, remaining logical deadline, read/write failure, unsupported consumers and exhausted file/storage budgets seal an explicit incomplete prefix. The small primary artifact retains only a validated trace-ID reference, including after size-limit compaction; manager-authenticated inspection resolves the current private manifest. Capture completion means byte retention completed, not that an HTTP400/403/429 generation succeeded.
 
