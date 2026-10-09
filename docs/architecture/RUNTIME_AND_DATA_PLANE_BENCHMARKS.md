@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 852
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 948
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,11 +32,11 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 558 operations have success
-response content schemas and 493 declare operation-level security. Of 987 operations with a
-non-`204` success status, 429 have no explicit response content; two are intentional bodyless `HEAD`
-probes, leaving 427 non-`HEAD` operations whose successful response shape remains undocumented.
-Eighteen operations have no declared `2xx` status, and 15 return only an intentional `204`. This
+contract is still stronger on route coverage than schema completeness: 595 operations have success
+response content schemas and 547 declare operation-level security. Of 987 operations with a
+non-`204` success status, 392 have no explicit response content; two are intentional bodyless `HEAD`
+probes, leaving 390 non-`HEAD` operations whose successful response shape remains undocumented.
+Twenty-eight operations have no declared `2xx` status, and 14 return only an intentional `204`. This
 pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
@@ -160,7 +160,7 @@ the actual `201` create response. Model-alias settings now describe built-in/cus
 replace/add/remove bodies, persistence, and the self-healing GET behavior. The history-cleanup pass
 documents destructive scope, period choices, row/artifact counts, and each endpoint's distinct error
 behavior; its handlers are tested only against isolated temporary databases. The current spec
-inventory is 903 schemas, 558 success-body operations, and 493 security declarations; 429 non-`204`
+inventory is 948 schemas, 595 success-body operations, and 547 security declarations; 392 non-`204`
 success operations have no explicit response content, including two intentional bodyless `HEAD`
 probes. The
 versioned read-contract pass now describes the public combo projection, auto-combo candidate state,
@@ -1584,9 +1584,9 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 558 operations with success-response content; 429
+- Continue the OpenAPI handler audit beyond the 595 operations with success-response content; 392
   of 987 non-`204` success operations still lack explicit success-body schemas, including the two
-  intentional bodyless `HEAD` probes (427 non-HEAD shapes remain). Twenty-seven operations have no
-  declared `2xx` status and 15 have only an intentional `204`. The path/method inventory covers
-  705/705 routes and 493 operations declare security alternatives; remaining response schemas and
+  intentional bodyless `HEAD` probes (390 non-HEAD shapes remain). Twenty-eight operations have no
+  declared `2xx` status and 14 have only an intentional `204`. The path/method inventory covers
+  705/705 routes and 547 operations declare security alternatives; remaining response schemas and
   conditional auth behavior have not all been source-verified.
