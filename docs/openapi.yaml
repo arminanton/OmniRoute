@@ -18397,11 +18397,47 @@ paths:
       operationId: postApiProvidersVolcenginePlanConnect
       tags:
         - Providers
-      summary: "POST providers › volcengine plan › connect"
+      summary: Start Volcengine Plan console login or bind an existing console credential
       x-loopback-only: true
+      description: >-
+        Supplying a phone starts the headless SMS login session. Omitting the phone
+        runs the legacy local browser flow and binds the plans immediately. This
+        endpoint is restricted to loopback/local operator access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VolcenginePlanConnectRequest"
       responses:
         "200":
-          description: OK
+          description: Login session started or console credentials bound.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanConnectResponse"
+        "400":
+          description: Invalid request, login could not start, or console credentials were rejected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "500":
+          description: Browser login or account binding failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/volcengine-plan/connect/{sessionId}/cancel:
     parameters:
       - name: sessionId
@@ -18409,15 +18445,42 @@ paths:
         required: true
         schema:
           type: string
+          format: uuid
     post:
       operationId: postApiProvidersVolcenginePlanConnectBySessionIdCancel
       tags:
         - Providers
-      summary: "POST providers › volcengine plan › connect › <sessionId> › cancel"
+      summary: Cancel a Volcengine Plan login session
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Login session cancelled.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanSessionResponse"
+        "404":
+          description: Session is unknown or expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "500":
+          description: Session cancellation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/volcengine-plan/connect/{sessionId}/code:
     parameters:
       - name: sessionId
@@ -18425,15 +18488,54 @@ paths:
         required: true
         schema:
           type: string
+          format: uuid
     post:
       operationId: postApiProvidersVolcenginePlanConnectBySessionIdCode
       tags:
         - Providers
-      summary: "POST providers › volcengine plan › connect › <sessionId> › code"
+      summary: Submit the SMS code for a Volcengine Plan login session
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VolcenginePlanCodeRequest"
       responses:
         "200":
-          description: OK
+          description: Current login session state; binding is attached after successful login.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanSessionResponse"
+        "400":
+          description: Invalid SMS code, captcha, or timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "404":
+          description: Session is unknown or expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "500":
+          description: Code submission or plan binding failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/volcengine-plan/connect/{sessionId}/identity:
     parameters:
       - name: sessionId
@@ -18441,15 +18543,54 @@ paths:
         required: true
         schema:
           type: string
+          format: uuid
     post:
       operationId: postApiProvidersVolcenginePlanConnectBySessionIdIdentity
       tags:
         - Providers
-      summary: "POST providers › volcengine plan › connect › <sessionId> › identity"
+      summary: Select a Volcengine Plan login identity
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VolcenginePlanIdentityRequest"
       responses:
         "200":
-          description: OK
+          description: Current login session state; binding is attached after successful login.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanSessionResponse"
+        "400":
+          description: Invalid identity index or timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "404":
+          description: Session is unknown or expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "500":
+          description: Identity selection or plan binding failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/volcengine-plan/connect/{sessionId}/resend:
     parameters:
       - name: sessionId
@@ -18457,15 +18598,42 @@ paths:
         required: true
         schema:
           type: string
+          format: uuid
     post:
       operationId: postApiProvidersVolcenginePlanConnectBySessionIdResend
       tags:
         - Providers
-      summary: "POST providers › volcengine plan › connect › <sessionId> › resend"
+      summary: Resend the Volcengine Plan SMS login code
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Updated login session after the code was resent.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanSessionResponse"
+        "404":
+          description: Session is unknown or expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "500":
+          description: Code resend failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/volcengine-plan/connect/{sessionId}/status:
     parameters:
       - name: sessionId
@@ -18473,15 +18641,42 @@ paths:
         required: true
         schema:
           type: string
+          format: uuid
     get:
       operationId: getApiProvidersVolcenginePlanConnectBySessionIdStatus
       tags:
         - Providers
-      summary: "GET providers › volcengine plan › connect › <sessionId> › status"
+      summary: Poll Volcengine Plan login session status
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current login state, including any binding result after success.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanSessionResponse"
+        "404":
+          description: Session is unknown or expired.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "500":
+          description: Login status or plan binding failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VolcenginePlanErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/web-session-contract:
     get:
       operationId: getApiProvidersWebSessionContract
@@ -33359,6 +33554,140 @@ components:
         warning: { type: [string, "null"] }
         method: { type: [string, "null"] }
       additionalProperties: true
+
+    VolcenginePlanConnectRequest:
+      type: object
+      description: Omit `phone` to use the legacy local browser login and bind existing console credentials.
+      properties:
+        phone: { type: string, minLength: 1 }
+        timeout: { type: integer, minimum: 1, description: Total login timeout in milliseconds. }
+      additionalProperties: true
+
+    VolcenginePlanCodeRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, minLength: 1 }
+        captcha: { type: string, minLength: 1 }
+        timeout:
+          {
+            type: integer,
+            minimum: 1,
+            description: Extra wait after submitting the code,
+            in milliseconds.,
+          }
+      additionalProperties: true
+
+    VolcenginePlanIdentityRequest:
+      type: object
+      required: [index]
+      properties:
+        index: { type: integer, minimum: 0 }
+        timeout:
+          {
+            type: integer,
+            minimum: 1,
+            description: Total identity-selection timeout in milliseconds.,
+          }
+      additionalProperties: true
+
+    VolcenginePlanLoginSession:
+      type: object
+      required:
+        [
+          sessionId,
+          phase,
+          phoneMasked,
+          error,
+          captchaImage,
+          resendAvailableAt,
+          createdAt,
+          updatedAt,
+        ]
+      properties:
+        sessionId: { type: string, format: uuid }
+        phase:
+          type: string
+          enum:
+            [
+              starting,
+              sending_code,
+              waiting_code,
+              captcha_required,
+              submitting,
+              mfa_waiting,
+              identity_required,
+              success,
+              error,
+              timeout,
+              cancelled,
+              fallback_manual,
+            ]
+        phoneMasked: { type: string }
+        error: { type: [string, "null"] }
+        captchaImage:
+          { type: [string, "null"], description: Data-image screenshot when captcha is required. }
+        resendAvailableAt:
+          { type: integer, minimum: 0, description: Unix epoch time in milliseconds. }
+        createdAt: { type: integer, minimum: 0, description: Unix epoch time in milliseconds. }
+        updatedAt: { type: integer, minimum: 0, description: Unix epoch time in milliseconds. }
+        mfaRequired: { type: boolean }
+        identityOptions:
+          type: array
+          items:
+            type: object
+            required: [index, label]
+            properties:
+              index: { type: integer, minimum: 0 }
+              label: { type: string }
+            additionalProperties: false
+        credentials:
+          type: object
+          description: >-
+            Raw Volcengine console cookies. This sensitive credential material is returned only
+            after successful authentication to the loopback-only management flow.
+          x-sensitive: true
+          additionalProperties: { type: string }
+        binding:
+          type: object
+          description: Volcengine coding/agent plan connections created from the console credential.
+          additionalProperties: true
+      additionalProperties: false
+
+    VolcenginePlanSessionResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean }
+        session: { $ref: "#/components/schemas/VolcenginePlanLoginSession" }
+        error: { type: string }
+      additionalProperties: false
+
+    VolcenginePlanConnectResponse:
+      oneOf:
+        - type: object
+          required: [success, session]
+          properties:
+            success: { type: boolean, const: true }
+            session: { $ref: "#/components/schemas/VolcenginePlanLoginSession" }
+          additionalProperties: false
+        - type: object
+          required: [success, binding]
+          properties:
+            success: { type: boolean, const: true }
+            binding:
+              type: object
+              description: Volcengine coding/agent plan connections created from the console credential.
+              additionalProperties: true
+          additionalProperties: false
+
+    VolcenginePlanErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
 
     ApiErrorResponse:
       type: object
