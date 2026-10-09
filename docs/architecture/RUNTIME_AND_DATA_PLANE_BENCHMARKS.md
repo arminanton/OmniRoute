@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 556
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 570
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -32,10 +32,10 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 397 operations have success
-response content schemas and 336 declare operation-level security. Of 1,004 operations with a
-non-`204` success status, 607 still lack an explicit success-body schema; 11 operations have no
-declared `2xx` status, and 14 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
+contract is still stronger on route coverage than schema completeness: 407 operations have success
+response content schemas and 342 declare operation-level security. Of 1,003 operations with a
+non-`204` success status, 596 still lack an explicit success-body schema; 11 operations have no
+declared `2xx` status, and 15 return only an intentional `204`. This pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
 liveness versus authenticated system/pressure snapshot responses. The health snapshot includes the
@@ -89,11 +89,12 @@ action-dependent auth, input, response, retirement, and error variants. The free
 previously unresolved schema references and types the relay-auth repair result. OAuth device-code
 fields remain open-ended where provider adapters return different wire names. The latest contract
 pass adds source-backed file upload/list/download, asynchronous batch job/file, cloud-agent
-credential/health/task, V1 proxy-registry/assignment/health, and provider/account registered-key
-issuance-limit and registered-key create/list/revoke contracts; file bytes, batch errors/usage, and
-provider task results remain open-ended where the implementation stores arbitrary JSON. Dynamic
-provider quota data also remains open-ended because adapters return different fields. These slices
-bring the spec to 556 component schemas.
+credential/health/task, V1 proxy-registry/assignment/health, provider/account registered-key
+issuance limits and registered-key create/list/revoke, and quota pool/group/plan/usage/preview
+contracts. File bytes, batch errors/usage, quota usage extensions, and provider task results remain
+open-ended where the implementation stores arbitrary JSON. Dynamic provider quota data also remains
+open-ended because adapters return different fields. These slices bring the spec to 570 component
+schemas.
 All 98 operations previously missing
 `x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
@@ -1198,8 +1199,8 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 397 operations with success-response content; 607
-  of 1,004 non-`204` success operations still lack explicit success-body schemas. Eleven operations
-  have no declared `2xx` status and 14 have only an intentional `204`. The path/method inventory
-  covers 705/705 routes and 336 operations now declare security alternatives; remaining response
+- Continue the OpenAPI handler audit beyond the 407 operations with success-response content; 596
+  of 1,003 non-`204` success operations still lack explicit success-body schemas. Eleven operations
+  have no declared `2xx` status and 15 have only an intentional `204`. The path/method inventory
+  covers 705/705 routes and 342 operations now declare security alternatives; remaining response
   schemas and conditional auth behavior have not all been source-verified.

@@ -9567,25 +9567,50 @@ paths:
       summary: List quota pools
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: Array of QuotaPool objects
+          description: Pool page with an aggregate total.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/QuotaPool"
+                $ref: "#/components/schemas/QuotaPoolListResponse"
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Internal server error
+          description: Pool query failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: When positive, caps the number of returned pools; offset is used with limit.
+          schema: { type: integer, minimum: 1 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
     post:
       operationId: postApiQuotaPools
       tags: [Quota]
       summary: Create quota pool
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: ensure
+          in: query
+          required: false
+          description: Exact value `true` enables idempotent ensure/update behavior.
+          schema: { type: string, enum: ["true"] }
       requestBody:
         required: true
         content:
@@ -9593,18 +9618,33 @@ paths:
             schema:
               $ref: "#/components/schemas/PoolCreate"
       responses:
+        "200":
+          description: Existing matching pool returned or updated when ensure=true.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaPoolEnvelope" }
         "201":
-          description: Pool created
+          description: Pool created.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/QuotaPool"
+                $ref: "#/components/schemas/QuotaPoolEnvelope"
         "400":
-          description: Validation error (Zod)
+          description: Invalid pool input.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Internal server error
+          description: Pool creation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/quota/pools/{id}:
     get:
@@ -9613,6 +9653,8 @@ paths:
       summary: Get quota pool by ID
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -9621,23 +9663,35 @@ paths:
             type: string
       responses:
         "200":
-          description: QuotaPool object
+          description: Pool with member connections, group, and allocations.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/QuotaPool"
+                $ref: "#/components/schemas/QuotaPoolEnvelope"
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: Pool not found
+          description: Pool not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
-          description: Internal server error
+          description: Pool lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiQuotaPoolsById
       tags: [Quota]
       summary: Update quota pool (name or allocations)
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -9652,21 +9706,39 @@ paths:
               $ref: "#/components/schemas/PoolUpdate"
       responses:
         "200":
-          description: Updated pool
+          description: Updated pool.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaPoolEnvelope" }
         "400":
-          description: Validation error
+          description: Invalid pool update.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: Pool not found
+          description: Pool not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
-          description: Internal server error
+          description: Pool update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiQuotaPoolsById
       tags: [Quota]
       summary: Delete quota pool
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -9677,11 +9749,21 @@ paths:
         "204":
           description: Deleted
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: Pool not found
+          description: Pool not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
-          description: Internal server error
+          description: Pool deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/quota/pools/{id}/usage:
     get:
@@ -9690,6 +9772,8 @@ paths:
       summary: Get pool usage snapshot (per-key consumption + burn rate)
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -9698,17 +9782,27 @@ paths:
             type: string
       responses:
         "200":
-          description: PoolUsageSnapshot
+          description: Pool-wide usage and per-key allocation snapshot.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/PoolUsageSnapshot"
+                $ref: "#/components/schemas/QuotaPoolUsageResponse"
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "404":
-          description: Pool not found
+          description: Pool not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
-          description: Internal server error
+          description: Usage snapshot could not be calculated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/quota/plans:
     get:
@@ -9717,13 +9811,25 @@ paths:
       summary: List resolved provider plans (catalog + manual overrides)
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: Array of ProviderPlan
+          description: Merged catalog defaults and stored manual overrides.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderPlanListResponse" }
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Internal server error
+          description: Plan lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/quota/plans/{connectionId}:
     get:
@@ -9732,6 +9838,8 @@ paths:
       summary: Get resolved plan for a connection
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: connectionId
           in: path
@@ -9740,19 +9848,29 @@ paths:
             type: string
       responses:
         "200":
-          description: ProviderPlan (source = auto | manual)
+          description: Manual plan override or the resolved catalog/default plan.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderPlanEnvelope" }
         "401":
-          description: Unauthorized
-        "404":
-          description: Connection not found
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Internal server error
+          description: Plan resolution failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiQuotaPlansByConnectionId
       tags: [Quota]
       summary: Upsert manual plan override for a connection
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: connectionId
           in: path
@@ -9767,19 +9885,34 @@ paths:
               $ref: "#/components/schemas/PlanUpsert"
       responses:
         "200":
-          description: Updated plan
+          description: Stored manual plan override.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderPlanEnvelope" }
         "400":
-          description: Validation error (Zod)
+          description: Invalid plan dimensions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Internal server error
+          description: Plan upsert failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiQuotaPlansByConnectionId
       tags: [Quota]
       summary: Delete manual plan override (reverts to catalog/auto)
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: connectionId
           in: path
@@ -9788,13 +9921,18 @@ paths:
             type: string
       responses:
         "204":
-          description: Override deleted
+          description: Override deleted; future resolution falls back to catalog/automatic values.
         "401":
-          description: Unauthorized
-        "404":
-          description: Override not found
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Internal server error
+          description: Plan deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/quota/preview:
     get:
@@ -9803,38 +9941,63 @@ paths:
       summary: Dry-run quota enforcement check (preview only, no consumption recorded)
       security:
         - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: apiKeyId
           in: query
           required: true
           schema:
             type: string
+            minLength: 1
         - name: poolId
           in: query
           required: true
           schema:
             type: string
+            minLength: 1
         - name: estimatedTokens
           in: query
           schema:
             type: number
+            minimum: 0
         - name: estimatedUsd
           in: query
           schema:
             type: number
+            minimum: 0
         - name: estimatedRequests
           in: query
           schema:
             type: integer
+            minimum: 0
       responses:
         "200":
-          description: EnforceDecision (allow/block + reason)
+          description: Read-only allow/block decision; quota counters are not consumed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaPreviewResponse" }
         "400":
-          description: Validation error (Zod)
+          description: Missing or invalid estimate/pool query.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Pool not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
-          description: Internal server error
+          description: Preview could not be computed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/settings/quota-store:
     get:
@@ -16747,18 +16910,65 @@ paths:
       operationId: getApiQuotaGroups
       tags:
         - Quota
-      summary: "GET quota › groups"
+      summary: List quota groups
+      description: Returns quota groups ordered by creation time.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Quota groups.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaGroupListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Group lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiQuotaGroups
       tags:
         - Quota
-      summary: "POST quota › groups"
+      summary: Create a quota group
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QuotaGroupCreateRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Group created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaGroupEnvelope" }
+        "400":
+          description: Invalid group name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Group creation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/quota/groups/{id}:
     parameters:
       - name: id
@@ -16770,18 +16980,80 @@ paths:
       operationId: deleteApiQuotaGroupsById
       tags:
         - Quota
-      summary: "DELETE quota › groups › <id>"
+      summary: Delete a quota group
+      description: >-
+        The protected seed group `group-demo` cannot be deleted. Groups still referenced by pools
+        also return 409; reassign or remove those pools first.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
-        "200":
-          description: OK
+        "204":
+          description: Group deleted.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Group not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Protected group or group still referenced by one or more pools.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Group deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiQuotaGroupsById
       tags:
         - Quota
-      summary: "PATCH quota › groups › <id>"
+      summary: Rename a quota group
+      description: Renaming also attempts a best-effort sync of the group’s pool combos.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/QuotaGroupRenameRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated group.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaGroupEnvelope" }
+        "400":
+          description: Invalid group name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Group not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Group rename failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/quota/keys/{id}/models:
     parameters:
       - name: id
@@ -16793,10 +17065,41 @@ paths:
       operationId: getApiQuotaKeysByIdModels
       tags:
         - Quota
-      summary: "GET quota › keys › <id> › models"
+      summary: List virtual quota models visible to an API key
+      description: Returns `qtSd/` combo model ids filtered by the key’s allowed quota pools.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Filtered virtual model identifiers.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [models]
+                properties:
+                  models:
+                    type: array
+                    items: { type: string }
+                additionalProperties: false
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: API key not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Quota key-model resolution failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/quota/pools/{id}/log:
     parameters:
       - name: id
@@ -16808,10 +17111,34 @@ paths:
       operationId: getApiQuotaPoolsByIdLog
       tags:
         - Quota
-      summary: "GET quota › pools › <id> › log"
+      summary: List recent consumption events for a quota pool
+      description: The `limit` is parsed as an integer, defaults to 50 for invalid/nonpositive values, and is capped at 200.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
       responses:
         "200":
-          description: OK
+          description: Recent per-key consumption rows for this pool.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuotaPoolLogResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Pool consumption log lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/radar/catalog:
     get:
       operationId: getApiRadarCatalog
@@ -26698,13 +27025,22 @@ components:
           type: string
     QuotaPool:
       type: object
-      description: A quota sharing pool — binds a provider connection to allocation rules.
-      required: [id, connectionId, name, createdAt, allocations]
+      description: >-
+        A quota pool contains one or more provider connections, a quota group, and per-key allocation
+        rules. `connectionId` is retained as the primary/legacy connection reference; `connectionIds`
+        is the full member set.
+      required: [id, connectionId, connectionIds, groupId, name, createdAt, allocations]
       properties:
         id:
           type: string
         connectionId:
           type: string
+          description: Primary or legacy connection id; matches `connectionIds[0]` after membership backfill.
+        connectionIds:
+          type: array
+          minItems: 1
+          items: { type: string, minLength: 1 }
+        groupId: { type: string }
         name:
           type: string
         createdAt:
@@ -26728,12 +27064,11 @@ components:
           description: Share percentage (0–100)
         capValue:
           type: number
-          nullable: true
-          description: Absolute cap value (optional)
+          exclusiveMinimum: 0
+          description: Optional absolute cap value.
         capUnit:
           type: string
           enum: [percent, requests, tokens, usd]
-          nullable: true
         policy:
           type: string
           enum: [hard, soft, burst]
@@ -26741,28 +27076,47 @@ components:
     PoolCreate:
       type: object
       required: [connectionId, name]
+      description: >-
+        `connectionIds`, when supplied, must contain the primary `connectionId`; otherwise the pool
+        defaults to the single primary connection. `groupId` defaults to the seeded demo group.
       properties:
         connectionId:
           type: string
+          minLength: 1
+        connectionIds:
+          type: array
+          minItems: 1
+          items: { type: string, minLength: 1 }
         name:
           type: string
+          minLength: 1
           maxLength: 120
+        groupId: { type: string }
         allocations:
           type: array
           items:
             $ref: "#/components/schemas/PoolAllocation"
           default: []
+      additionalProperties: true
 
     PoolUpdate:
       type: object
       properties:
         name:
           type: string
+          minLength: 1
           maxLength: 120
+        groupId: { type: string }
+        connectionIds:
+          type: array
+          minItems: 1
+          items: { type: string, minLength: 1 }
         allocations:
           type: array
           items:
             $ref: "#/components/schemas/PoolAllocation"
+        exclusive: { type: boolean }
+      additionalProperties: true
 
     PoolUsageSnapshot:
       type: object
@@ -26777,6 +27131,7 @@ components:
           type: array
           items:
             type: object
+            required: [unit, window, limit, consumedTotal, perKey]
             properties:
               unit:
                 type: string
@@ -26792,6 +27147,7 @@ components:
                 type: array
                 items:
                   type: object
+                  required: [apiKeyId, consumed, fairShare, deficit, borrowing]
                   properties:
                     apiKeyId:
                       type: string
@@ -26806,13 +27162,12 @@ components:
                       type: boolean
         burnRate:
           type: object
-          nullable: true
+          required: [tokensPerSecond, timeToExhaustionMs]
           properties:
             tokensPerSecond:
               type: number
             timeToExhaustionMs:
-              type: number
-              nullable: true
+              type: [number, "null"]
 
     QuotaDimension:
       type: object
@@ -26826,7 +27181,7 @@ components:
           enum: ["5h", hourly, daily, weekly, monthly]
         limit:
           type: number
-          minimum: 0
+          exclusiveMinimum: 0
 
     PlanUpsert:
       type: object
@@ -26837,6 +27192,145 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/QuotaDimension"
+
+    QuotaGroup:
+      type: object
+      required: [id, name, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        createdAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ProviderPlan:
+      type: object
+      required: [connectionId, provider, dimensions, source]
+      properties:
+        connectionId: { type: [string, "null"] }
+        provider: { type: string }
+        dimensions:
+          type: array
+          description: May be empty for catalog auto-detection when no quota dimensions are known.
+          items: { $ref: "#/components/schemas/QuotaDimension" }
+        source: { type: string, enum: [auto, manual] }
+      additionalProperties: false
+
+    QuotaPoolEnvelope:
+      type: object
+      required: [pool]
+      properties:
+        pool: { $ref: "#/components/schemas/QuotaPool" }
+        created: { type: boolean }
+        updated: { type: boolean }
+      additionalProperties: false
+
+    QuotaGroupCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+      additionalProperties: true
+
+    QuotaGroupRenameRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+      additionalProperties: true
+
+
+    QuotaPoolListResponse:
+      type: object
+      required: [pools, total]
+      properties:
+        pools:
+          type: array
+          items: { $ref: "#/components/schemas/QuotaPool" }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    QuotaGroupListResponse:
+      type: object
+      required: [groups]
+      properties:
+        groups:
+          type: array
+          items: { $ref: "#/components/schemas/QuotaGroup" }
+      additionalProperties: false
+
+    QuotaGroupEnvelope:
+      type: object
+      required: [group]
+      properties:
+        group: { $ref: "#/components/schemas/QuotaGroup" }
+      additionalProperties: false
+
+    ProviderPlanListResponse:
+      type: object
+      required: [plans]
+      properties:
+        plans:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderPlan" }
+      additionalProperties: false
+
+    ProviderPlanEnvelope:
+      type: object
+      required: [plan]
+      properties:
+        plan: { $ref: "#/components/schemas/ProviderPlan" }
+      additionalProperties: false
+
+    QuotaPoolUsageResponse:
+      type: object
+      required: [usage]
+      properties:
+        usage: { $ref: "#/components/schemas/PoolUsageSnapshot" }
+      additionalProperties: false
+
+    QuotaConsumptionEvent:
+      type: object
+      required: [apiKeyId, dimensionKey, unit, window, bucketIndex, consumed, updatedAt]
+      properties:
+        apiKeyId: { type: string }
+        dimensionKey: { type: string, description: "<poolId>:<unit>:<window>" }
+        unit: { type: string, enum: [percent, requests, tokens, usd] }
+        window: { type: string, enum: ["5h", hourly, daily, weekly, monthly] }
+        bucketIndex: { type: integer }
+        consumed: { type: number, minimum: 0 }
+        updatedAt: { type: integer, minimum: 0, description: Unix epoch milliseconds. }
+      additionalProperties: false
+
+    QuotaPoolLogResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/QuotaConsumptionEvent" }
+      additionalProperties: false
+
+    QuotaPreviewResponse:
+      type: object
+      required: [decision]
+      properties:
+        decision:
+          oneOf:
+            - type: object
+              required: [kind]
+              properties:
+                kind: { type: string, const: allow }
+                deprioritize: { type: boolean }
+              additionalProperties: false
+            - type: object
+              required: [kind, reason, httpStatus]
+              properties:
+                kind: { type: string, const: block }
+                reason: { type: string }
+                httpStatus: { type: integer, const: 429 }
+                retryAfterSeconds: { type: integer, minimum: 0 }
+              additionalProperties: false
+      additionalProperties: false
 
     QuotaStoreSettings:
       type: object
