@@ -9249,56 +9249,123 @@ paths:
       operationId: getApiFallbackChains
       tags: [Fallback]
       summary: List fallback chains
-      description: Returns all registered fallback chains for model routing.
+      description: >-
+        Returns the current fallback-chain map keyed by model identifier, including disabled entries.
+        This is a management route: a scoped CLI access token needs the `read` scope; a management API key
+        with `manage` or `admin`, dashboard session, or loopback CLI token is also accepted. An
+        unlocked standalone install with `requireLogin=false` may permit anonymous access; locked
+        management still requires an authenticated identity. Inference-only API keys are not
+        accepted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Fallback chain list
+          description: Model identifiers map to their ordered fallback entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FallbackChainsResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Fallback chains could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiFallbackChains
       tags: [Fallback]
       summary: Create fallback chain
-      description: Registers a fallback routing chain for a model.
+      description: >-
+        Replaces a model's fallback chain. Entries are normalized and sorted by ascending priority;
+        omitted priority defaults to 0 and omitted enabled defaults to true. Persistence to SQLite
+        is best-effort: the handler reports success after its in-memory update even if the database
+        write fails. A scoped CLI access token needs the `write` scope (`admin` also passes); a
+        management API key with `manage` or `admin`, dashboard session, or loopback CLI token is
+        also accepted. An unlocked standalone install with `requireLogin=false` may permit anonymous
+        access; locked management still requires an authenticated identity. Inference-only API keys
+        are not accepted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [model, chain]
-              properties:
-                model:
-                  type: string
-                chain:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      provider:
-                        type: string
-                      priority:
-                        type: integer
-                      enabled:
-                        type: boolean
+            schema: { $ref: "#/components/schemas/FallbackChainRegistrationRequest" }
       responses:
         "200":
-          description: Fallback chain created
+          description: The in-memory fallback chain was replaced.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FallbackChainRegistrationResponse" }
+        "400":
+          description: JSON body is malformed or does not match the fallback registration schema.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Fallback chain could not be registered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiFallbackChains
       tags: [Fallback]
       summary: Delete fallback chain
+      description: >-
+        Removes the fallback chain for the requested model. A successful response has `removed=false`
+        when no chain existed; SQLite deletion is best-effort. A scoped CLI access token needs the
+        `write` scope (`admin` also passes); a management API key with `manage` or `admin`,
+        dashboard session, or loopback CLI token is also accepted. An unlocked standalone install
+        with `requireLogin=false` may permit anonymous access; locked management still requires an
+        authenticated identity. Inference-only API keys are not accepted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [model]
-              properties:
-                model:
-                  type: string
+            schema: { $ref: "#/components/schemas/FallbackChainRemovalRequest" }
       responses:
         "200":
-          description: Fallback chain deleted
+          description: The in-memory chain was removed if present.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FallbackChainRemovalResponse" }
+        "400":
+          description: JSON body is malformed or does not match the fallback removal schema.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Fallback chain could not be removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   # ─── System ────────────────────────────────────────────────────
 
@@ -30735,6 +30802,87 @@ components:
           description: Translated request body; it is not sent by the preview operation.
           additionalProperties: true
       additionalProperties: true
+    FallbackChainEntry:
+      type: object
+      description: Provider selected as a fallback, retained with its routing priority and enabled state.
+      required: [provider]
+      properties:
+        provider: { type: string }
+        priority:
+          type: integer
+          description: Lower values are attempted first; registrations default an omitted value to 0.
+        enabled:
+          type: boolean
+          description: Disabled entries remain listed but are skipped during fallback resolution.
+      additionalProperties: true
+    FallbackChainsResponse:
+      type: object
+      description: A direct map from each model identifier to its ordered fallback entries.
+      additionalProperties:
+        type: array
+        items: { $ref: "#/components/schemas/FallbackChainEntry" }
+    FallbackChainEntryInput:
+      type: object
+      required: [provider]
+      properties:
+        provider:
+          type: string
+          minLength: 1
+          description: Trimmed provider identifier; whitespace-only values are rejected.
+        priority:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Optional sort priority; lower values are attempted first.
+        enabled: { type: boolean }
+      description: >-
+        Unrecognized entry properties are accepted by validation but dropped when the chain is
+        normalized for routing.
+      additionalProperties: true
+    FallbackChainRegistrationRequest:
+      type: object
+      required: [model, chain]
+      properties:
+        model:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Trimmed model identifier used as the key for the fallback chain.
+        chain:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/FallbackChainEntryInput" }
+      description: >-
+        Unknown top-level properties are accepted but stripped. Registering the same model again
+        replaces its current chain.
+      additionalProperties: true
+    FallbackChainRegistrationResponse:
+      type: object
+      required: [success, model]
+      properties:
+        success: { type: boolean, const: true }
+        model: { type: string }
+      additionalProperties: false
+    FallbackChainRemovalRequest:
+      type: object
+      required: [model]
+      properties:
+        model:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Trimmed model identifier whose fallback chain should be removed.
+      description: Unknown top-level properties are accepted but stripped.
+      additionalProperties: true
+    FallbackChainRemovalResponse:
+      type: object
+      required: [success, removed]
+      properties:
+        success: { type: boolean, const: true }
+        removed:
+          type: boolean
+          description: False when no fallback chain for the model was present in memory.
+      additionalProperties: false
     SettingsJsonExportResponse:
       type: object
       description: >-

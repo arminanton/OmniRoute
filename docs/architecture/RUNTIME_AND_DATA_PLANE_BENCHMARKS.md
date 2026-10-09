@@ -32,17 +32,18 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 597 operations have success
-response content schemas and 549 have an operation-level `security` field; 542 list nonempty
+contract is still stronger on route coverage than schema completeness: 600 operations have success
+response content schemas and 552 have an operation-level `security` field; 545 list nonempty
 alternatives and 7 explicitly set an empty list. Of 987 operations with a
-non-`204` success status, 390 have no explicit response content; two are intentional bodyless `HEAD`
-probes, leaving 388 non-`HEAD` operations whose successful response shape remains undocumented.
+non-`204` success status, 387 have no explicit response content; two are intentional bodyless `HEAD`
+probes, leaving 385 non-`HEAD` operations whose successful response shape remains undocumented.
 Twenty-eight operations have no declared `2xx` status, and 14 return only an intentional `204`. This
 pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
-management log-detail route's in-flight/in-memory/persisted variants, and the health route's public
-liveness versus authenticated system/pressure snapshot responses. The health snapshot includes the
-latest cached V8/process/cgroup/PSI sample with age and pressure state. The conversation response
+management log-detail route's in-flight/in-memory/persisted variants, the health route's public
+liveness versus authenticated system/pressure and call-log-writer snapshots, and fallback-chain
+management request/response contracts. The health snapshot includes the latest cached
+V8/process/cgroup/PSI sample with age and pressure state. The conversation response
 documents that turn text/tool display fields are recovered from call-log artifacts and can be empty
 after details are unavailable. Some operations use redirects, WebSocket `101`, or intentional
 `404`/`405` HEAD/catch-all behavior; these are reviewed separately from JSON success schemas. The
@@ -161,10 +162,9 @@ the actual `201` create response. Model-alias settings now describe built-in/cus
 replace/add/remove bodies, persistence, and the self-healing GET behavior. The history-cleanup pass
 documents destructive scope, period choices, row/artifact counts, and each endpoint's distinct error
 behavior; its handlers are tested only against isolated temporary databases. The current spec
-inventory is 951 schemas, 597 success-body operations, and 549 security-field declarations (542
-nonempty); 390 non-`204`
-success operations have no explicit response content, including two intentional bodyless `HEAD`
-probes. The
+inventory is 959 schemas, 600 success-body operations, and 552 security-field declarations (545
+nonempty); 387 non-`204` success operations have no explicit response content, including two
+intentional bodyless `HEAD` probes. The
 versioned read-contract pass now describes the public combo projection, auto-combo candidate state,
 scoped API-key self-status with optional quota branches, and the Muse Code model catalog. It also
 documents the correlation ID shape emitted by the authorization middleware. The Antigravity IDE/MITM
@@ -896,6 +896,21 @@ zero memory events, swap, or memory PSI. Wall time was 27.3 seconds. The request
 603 bytes, so this validates the changed route under low-context tool-roundtrip concurrency only; it
 does not replace the high-context 1.31 MB capture run, standalone Next/middleware test, or real-
 provider quota/timeout investigation.
+
+After commit `901d40a2d5` changed known client-body reservations from a 4 MiB block to the exact
+available body size, a high-context private-capture run with the production-default 2 GiB aggregate
+budget completed all 402 requests and all 402 full traces. It wrote 1,054,961,319 raw and
+794,649,042 compressed bytes; the maximum request was 1,311,796 bytes. Header readiness was p50
+3.01 s, p95 8.27 s, and max 10.70 s, with no route still pending after 25 s. The cgroup peaked at
+2,687,414,272 bytes under a 4 GiB cap, without memory pressure or cgroup memory events.
+
+Two repeated runs with the same capture and concurrency settings but the normal 30 s client deadline
+passed the 1/30/70 phases, then timed out one 100-session request while waiting for response headers.
+The repeated run's cgroup peak was 2,897,698,816 bytes under the same cap, with zero memory PSI and
+OOM events. The longer-deadline run and strict-deadline runs therefore show a remaining variable
+response-header tail at 100 sessions, not a deterministic memory exhaustion; the 30 s failure still
+needs gateway-versus-client queue instrumentation. This is a synthetic local route and mock provider,
+not a real-provider or standalone-server reliability result.
 
 ### Bun direct-route comparison at 100 sessions
 
@@ -1682,9 +1697,9 @@ no-auth catalog filter with the optional model ID shape.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the OpenAPI handler audit beyond the 597 operations with success-response content; 390
+- Continue the OpenAPI handler audit beyond the 600 operations with success-response content; 387
   of 987 non-`204` success operations still lack explicit success-body schemas, including the two
-  intentional bodyless `HEAD` probes (388 non-HEAD shapes remain). Twenty-eight operations have no
+  intentional bodyless `HEAD` probes (385 non-HEAD shapes remain). Twenty-eight operations have no
   declared `2xx` status and 14 have only an intentional `204`. The path/method inventory covers
-  705/705 routes and 549 operations have security metadata (542 nonempty alternative lists); remaining
+  705/705 routes and 552 operations have security metadata (545 nonempty alternative lists); remaining
   response schemas and conditional auth behavior have not all been source-verified.
