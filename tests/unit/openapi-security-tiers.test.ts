@@ -11,6 +11,7 @@ const HTTP_METHODS = new Set(["get", "put", "post", "delete", "options", "head",
 const {
   LOCAL_ONLY_API_PREFIXES,
   LOCAL_ONLY_API_PATTERNS,
+  LOCAL_ONLY_API_GET_EXEMPTIONS,
   ALWAYS_PROTECTED_API_PATHS,
   ALWAYS_PROTECTED_API_PATTERNS,
 } = await import("../../src/server/authz/routeGuard.ts");
@@ -61,6 +62,17 @@ test("every routeGuard loopback-only operation is annotated in OpenAPI", () => {
     for (const [method, operation] of Object.entries(methods as Record<string, any>)) {
       if (!HTTP_METHODS.has(method)) continue;
       if (!operation || typeof operation !== "object") continue;
+      const safeReadExempt =
+        ["get", "head", "options"].includes(method) &&
+        LOCAL_ONLY_API_GET_EXEMPTIONS.has(concretePath);
+      if (safeReadExempt) {
+        assert.notEqual(
+          operation["x-loopback-only"],
+          true,
+          `${method.toUpperCase()} ${pathStr} is explicitly exempted from LOCAL_ONLY`
+        );
+        continue;
+      }
       assert.equal(
         operation["x-loopback-only"],
         true,

@@ -105,14 +105,28 @@ tags:
     description: >-
       MITM proxy manager for 9 IDE agents (Antigravity, Kiro, Copilot, Codex, Cursor, Zed,
       Claude Code, Open Code, Trae). Controls server lifecycle, DNS/model mappings, bypass list,
-      and cert management. All routes are LOCAL_ONLY + SPAWN_CAPABLE (hard rules #15, #17).
+      and cert management. These SPAWN_CAPABLE routes are restricted to direct loopback or trusted
+      private-network peers (including RFC1918, carrier-grade NAT, IPv6 ULA, and link-local ranges);
+      forwarded and unknown peers are treated as remote. Public remote manage-scope bypass is not
+      allowed. On an admitted peer, a dashboard session or management-scoped Bearer credential is
+      required when `requireLogin` or locked management policy is active; ordinary installs with
+      `requireLogin=false` may permit anonymous local access. The `x-loopback-only` extension marks
+      the route-guard tier; the accepted trusted-private-network ranges are broader than literal
+      loopback.
       See docs/frameworks/AGENTBRIDGE.md.
   - name: Traffic Inspector
     description: >-
       LLM-aware HTTPS traffic debugger with 4 capture modes (AgentBridge, Custom Hosts,
       HTTP_PROXY :8080, System-wide). Provides real-time WebSocket stream, session recording,
-      HAR export, SSE merge, and conversation normalization.
-      All routes are LOCAL_ONLY + SPAWN_CAPABLE (hard rules #15, #17).
+      HAR export, SSE merge, and conversation normalization. Captured request/response bodies and
+      HAR exports may contain sensitive application data. These SPAWN_CAPABLE routes are restricted
+      to direct loopback or trusted private-network peers (including RFC1918, carrier-grade NAT,
+      IPv6 ULA, and link-local ranges); forwarded and unknown peers are treated as remote. Public
+      remote manage-scope bypass is not allowed. On an admitted peer, a dashboard session or
+      management-scoped Bearer credential is required when `requireLogin` or locked management
+      policy is active; ordinary installs with `requireLogin=false` may permit anonymous local
+      access. The `x-loopback-only` extension marks the route-guard tier; accepted
+      trusted-private-network ranges are broader than literal loopback.
       See docs/frameworks/TRAFFIC_INSPECTOR.md.
 
   - name: A2a
@@ -11810,42 +11824,71 @@ paths:
     get:
       operationId: getApiToolsAgentBridgeAgents
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: List all 9 IDE agents with current state
       description: >-
-        Returns the state (dns_enabled, cert_trusted, setup_completed, last_started_at,
-        last_error) for all 9 configured IDE agents. LOCAL_ONLY.
+        Returns registered IDE targets, host patterns, viability, and local installation detection.
+        The payload is `{agents:[...]}`; persisted per-agent state is included by `/state`.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Array of agent state rows
+          description: Registered targets with current detection state.
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/AgentBridgeAgentState"
+              schema: { $ref: "#/components/schemas/AgentBridgeAgentListResponse" }
         "403":
-          description: Loopback-only — request came from a non-loopback address
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "500":
+          description: Agent target discovery failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/tools/agent-bridge/state:
     get:
       operationId: getApiToolsAgentBridgeState
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
-      summary: Get global AgentBridge server state
-      description: Returns running status, port, cert info, and intercepted request count.
+      summary: Get global AgentBridge state
+      description: Returns legacy and current server/agent state, bypass patterns, and mappings.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Server state
+          description: AgentBridge state and configuration snapshot.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AgentBridgeServerState"
+                $ref: "#/components/schemas/AgentBridgeStateResponse"
+        "500":
+          description: State lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/tools/agent-bridge/server:
     post:
       operationId: postApiToolsAgentBridgeServer
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Control AgentBridge MITM server
       description: Start, stop, restart, trust-cert, or regenerate-cert. SPAWN_CAPABLE.
@@ -11856,20 +11899,46 @@ paths:
             schema:
               $ref: "#/components/schemas/AgentBridgeServerAction"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Action executed
+          description: Action result. Startup failures are returned as 500, not a port-conflict 409.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeServerActionResponse" }
         "400":
-          description: Invalid action
+          description: Invalid action/body or required sudo password is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "409":
-          description: Port 443 conflict
+          description: User cancelled certificate trust authorization.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Server lifecycle or certificate operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/tools/agent-bridge/agents/{id}/dns:
     post:
       operationId: postApiToolsAgentBridgeAgentsByIdDns
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Enable or disable DNS for one agent
-      description: Adds or removes /etc/hosts entries for the agent's host list. SPAWN_CAPABLE.
+      description: >-
+        Adds or removes `/etc/hosts` entries for the agent's host list. Optional `sudoPassword` is
+        read from the raw JSON body when privileged DNS changes require it. SPAWN_CAPABLE.
       parameters:
         - name: id
           in: path
@@ -11883,15 +11952,41 @@ paths:
             schema:
               $ref: "#/components/schemas/AgentBridgeDnsAction"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: DNS updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeDnsActionResponse" }
         "400":
-          description: Validation error
+          description: Invalid JSON/body or required sudo password is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Unknown agent ID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: DNS operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/tools/agent-bridge/agents/{id}/mappings:
     get:
       operationId: getApiToolsAgentBridgeAgentsByIdMappings
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Get model mappings for one agent
       parameters:
@@ -11901,17 +11996,29 @@ paths:
           schema:
             $ref: "#/components/schemas/AgentId"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Array of source→target model mappings
+          description: Model mappings.
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/AgentBridgeMappingRow"
+              schema: { $ref: "#/components/schemas/AgentBridgeMappingsResponse" }
+        "500":
+          description: Mapping lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     put:
       operationId: putApiToolsAgentBridgeAgentsByIdMappings
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Update model mappings for one agent
       parameters:
@@ -11927,27 +12034,62 @@ paths:
             schema:
               $ref: "#/components/schemas/AgentBridgeMappingPut"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Mappings updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeMappingsUpdateResponse" }
+        "400":
+          description: Invalid JSON or mapping body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Mapping update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/tools/agent-bridge/bypass:
     get:
       operationId: getApiToolsAgentBridgeBypass
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: List bypass patterns (hosts never decrypted)
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Bypass patterns
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/AgentBridgeBypassRow"
+              schema: { $ref: "#/components/schemas/AgentBridgeBypassListResponse" }
+        "500":
+          description: Bypass-pattern lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiToolsAgentBridgeBypass
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Replace AgentBridge bypass patterns
       requestBody:
@@ -11957,11 +12099,34 @@ paths:
             schema:
               $ref: "#/components/schemas/AgentBridgeBypassUpsert"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Bypass patterns replaced
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeBypassUpdateResponse" }
+        "400":
+          description: Invalid JSON or bypass-pattern body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Bypass-pattern update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     delete:
       operationId: deleteApiToolsAgentBridgeBypass
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Remove one AgentBridge bypass pattern
       parameters:
@@ -11970,42 +12135,112 @@ paths:
           required: true
           schema: { type: string }
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Bypass pattern removed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeBypassUpdateResponse" }
         "400":
           description: Pattern query parameter is missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Bypass-pattern update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/tools/agent-bridge/cert:
     get:
       operationId: getApiToolsAgentBridgeCert
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Read AgentBridge CA certificate status
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Certificate existence, trust state, and local path
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeCertStatusResponse" }
+        "500":
+          description: Certificate status lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiToolsAgentBridgeCert
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
-      summary: Download or regenerate the AgentBridge CA certificate
+      summary: Trust the AgentBridge CA certificate
+      description: >-
+        Installs/trusts the generated CA certificate. PEM download and certificate regeneration use
+        the separate `/cert/download` and `/cert/regenerate` operations. The request body is optional;
+        on systems requiring elevation it may supply `sudoPassword`.
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
-            schema:
-              type: object
-              required: [action]
-              properties:
-                action:
-                  type: string
-                  enum: [download, regenerate]
+            schema: { $ref: "#/components/schemas/AgentBridgeCertTrustRequest" }
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: CA certificate PEM (download) or regeneration confirmation
+          description: Trust result, including a manual-install guide when automated trust is unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeCertTrustResponse" }
+        "400":
+          description: Required sudo password is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Certificate has not been generated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: User cancelled certificate trust authorization.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Certificate trust operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     delete:
       operationId: deleteApiToolsAgentBridgeCert
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Remove trust for the AgentBridge CA certificate
       requestBody:
@@ -12018,33 +12253,68 @@ paths:
                 sudoPassword: { type: string }
               additionalProperties: false
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Certificate trust removed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeCertDeleteResponse" }
         "400":
           description: Required sudo password is missing
-        "404":
-          description: Certificate does not exist
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Certificate trust removal failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/tools/agent-bridge/upstream-ca:
     get:
       operationId: getApiToolsAgentBridgeUpstreamCa
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Get configured upstream CA cert path
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Upstream CA configuration
           content:
             application/json:
               schema:
                 type: object
+                required: [path]
                 properties:
                   path:
-                    type: string
-                    nullable: true
+                    type: [string, "null"]
+                additionalProperties: false
+        "500":
+          description: Upstream CA configuration lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiToolsAgentBridgeUpstreamCa
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [AgentBridge]
       summary: Set upstream CA cert path for corporate TLS environments
       requestBody:
@@ -12054,10 +12324,33 @@ paths:
             schema:
               $ref: "#/components/schemas/AgentBridgeUpstreamCaPost"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Upstream CA configured
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, path]
+                properties:
+                  ok: { type: boolean, const: true }
+                  path: { type: string }
+                additionalProperties: false
         "400":
-          description: Path does not exist or is not readable
+          description: Invalid body/path, missing file, or CA activation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Upstream CA path could not be persisted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   # ─── Traffic Inspector ─────────────────────────────────────────
 
@@ -12065,6 +12358,10 @@ paths:
     get:
       operationId: getApiToolsTrafficInspectorRequests
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: List intercepted requests (filterable)
       parameters:
@@ -12096,20 +12393,38 @@ paths:
             type: string
             format: uuid
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Array of intercepted requests
+          description: Filtered intercepted requests and their count.
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/InterceptedRequest"
+              schema: { $ref: "#/components/schemas/InspectorRequestListResponse" }
+        "400":
+          description: Invalid query filter.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     delete:
       operationId: deleteApiToolsTrafficInspectorRequests
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Clear the in-memory traffic buffer
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "204":
           description: Buffer cleared
 
@@ -12117,6 +12432,10 @@ paths:
     get:
       operationId: getApiToolsTrafficInspectorRequestsById
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Get a single intercepted request by ID
       parameters:
@@ -12127,6 +12446,12 @@ paths:
             type: string
             format: uuid
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Intercepted request details
           content:
@@ -12135,14 +12460,26 @@ paths:
                 $ref: "#/components/schemas/InterceptedRequest"
         "404":
           description: Request not found in buffer
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/requests/{id}/replay:
     post:
       operationId: postApiToolsTrafficInspectorRequestsByIdReplay
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Replay a captured request through OmniRoute router
-      description: Re-executes the original request body against /v1/chat/completions. Consumes quota.
+      description: >-
+        Reissues the captured HTTP method, path, and stored request body against the local OmniRoute
+        base URL; it is not limited to `/v1/chat/completions`. This can run inference and consume
+        provider quota. If the captured Authorization value is not masked, replay forwards it.
+        Responses are buffered as text rather than streamed and preserve the upstream status and
+        content type.
       parameters:
         - name: id
           in: path
@@ -12151,15 +12488,39 @@ paths:
             type: string
             format: uuid
       responses:
-        "200":
-          description: Replay response (streaming or JSON)
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        default:
+          description: Buffered upstream response with the original status and content type.
+          headers:
+            Content-Type:
+              schema: { type: string }
+          content:
+            "*/*":
+              schema: { type: string }
         "404":
-          description: Request not found
+          description: Captured request not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "502":
+          description: Local OmniRoute replay request failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/requests/{id}/annotation:
     put:
       operationId: putApiToolsTrafficInspectorRequestsByIdAnnotation
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Save or update annotation on a request
       parameters:
@@ -12176,29 +12537,85 @@ paths:
             schema:
               $ref: "#/components/schemas/InspectorAnnotationPut"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Annotation saved
+          description: Updated intercepted request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InterceptedRequest" }
+        "400":
+          description: Invalid JSON or annotation body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Captured request not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Annotation update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/ws:
     get:
       operationId: getApiToolsTrafficInspectorWs
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Live WebSocket stream of intercepted requests
       description: >-
         Upgrade to WebSocket. On connect, server sends `{type:"snapshot", data:[...]}`.
         Subsequent events: `{type:"new", data:{...}}`, `{type:"update", data:{...}}`,
-        `{type:"clear"}`. LOCAL_ONLY.
+        `{type:"clear"}`. Access is guarded by the source-peer local-only policy; this handler does
+        not validate the WebSocket `Origin` header. Do not interpret the peer guard as an origin
+        check.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "101":
           description: WebSocket upgrade successful
         "403":
-          description: Non-loopback origin rejected
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "400":
+          description: Missing Sec-WebSocket-Key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "426":
+          description: Request did not ask to upgrade to WebSocket.
+          headers:
+            Upgrade:
+              schema: { type: string, const: websocket }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Raw WebSocket socket unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/export.har:
     get:
       operationId: getApiToolsTrafficInspectorExportHar
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Export current filtered request list as HAR 1.2
       parameters:
@@ -12212,7 +12629,25 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: host
+          in: query
+          schema: { type: string }
+        - name: agent
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string, enum: ["2xx", "3xx", "4xx", "5xx", error] }
+        - name: source
+          in: query
+          schema: { $ref: "#/components/schemas/CaptureSource" }
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: HAR file (JSON)
           content:
@@ -12220,25 +12655,56 @@ paths:
               schema:
                 type: object
                 description: HAR 1.2 format
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string, const: no-store }
+        "400":
+          description: Invalid query filter.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: HAR export failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/hosts:
     get:
       operationId: getApiToolsTrafficInspectorHosts
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: List custom capture hosts
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Custom hosts list
+          description: Custom-host records.
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/InspectorCustomHost"
+              schema: { $ref: "#/components/schemas/InspectorHostListResponse" }
+        "500":
+          description: Host-list lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     post:
       operationId: postApiToolsTrafficInspectorHosts
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Add a custom capture host (edits /etc/hosts)
       requestBody:
@@ -12248,15 +12714,36 @@ paths:
             schema:
               $ref: "#/components/schemas/InspectorCustomHostCreate"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "201":
-          description: Host added
-        "409":
-          description: Host already exists
+          description: Host created; warning is present if optional DNS propagation failed or was unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InspectorCustomHostCreateResponse" }
+        "400":
+          description: Invalid JSON or custom-host body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Host record could not be saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/hosts/{host}:
     delete:
       operationId: deleteApiToolsTrafficInspectorHostsByHost
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Remove a custom capture host
       parameters:
@@ -12266,11 +12753,30 @@ paths:
           schema:
             type: string
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "204":
           description: Host removed
+          headers:
+            x-dns-warning:
+              description: DNS cleanup was unavailable or failed; the database record was still removed.
+              schema: { type: string }
+        "500":
+          description: Host record could not be removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     patch:
       operationId: patchApiToolsTrafficInspectorHostsByHost
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Toggle enabled state of a custom host
       parameters:
@@ -12290,27 +12796,70 @@ paths:
                 enabled:
                   type: boolean
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Host updated
+          description: Updated custom-host record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InspectorCustomHost" }
+        "400":
+          description: Invalid JSON or enabled flag.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Host not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Host state could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/capture-modes:
     get:
       operationId: getApiToolsTrafficInspectorCaptureModes
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Get state of all 4 capture modes
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Capture modes state
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/InspectorCaptureModesState"
+        "500":
+          description: Capture mode state lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/capture-modes/http-proxy:
     post:
       operationId: postApiToolsTrafficInspectorCaptureModesHttpProxy
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Start or stop the HTTP_PROXY listener (port 8080)
       description: SPAWN_CAPABLE — spawns a net.Server listener.
@@ -12321,15 +12870,46 @@ paths:
             schema:
               $ref: "#/components/schemas/InspectorCaptureModeAction"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Action executed
+          description: Proxy is stopped or was already running/stopped.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InspectorHttpProxyActionResponse" }
+        "201":
+          description: HTTP proxy listener started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InspectorHttpProxyActionResponse" }
+        "400":
+          description: Invalid JSON or action.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
         "409":
-          description: Port conflict (EADDRINUSE) when starting
+          description: Listener port is already in use.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Proxy listener failed to start or stop.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/capture-modes/system-proxy:
     post:
       operationId: postApiToolsTrafficInspectorCaptureModesSystemProxy
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Apply or revert system-wide proxy settings
       description: SPAWN_CAPABLE — executes networksetup/gsettings/netsh. Requires admin.
@@ -12340,15 +12920,36 @@ paths:
             schema:
               $ref: "#/components/schemas/InspectorSystemProxyAction"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: System proxy updated
+          description: System proxy applied or reverted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InspectorSystemProxyActionResponse" }
+        "400":
+          description: Invalid JSON or action/configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
         "500":
-          description: OS command failed (permission error)
+          description: Operating-system proxy change failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/capture-modes/tls-intercept:
     post:
       operationId: postApiToolsTrafficInspectorCaptureModesTlsIntercept
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Toggle TLS body decryption in HTTP_PROXY mode
       requestBody:
@@ -12358,27 +12959,57 @@ paths:
             schema:
               $ref: "#/components/schemas/InspectorTlsInterceptToggle"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: TLS intercept mode updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InspectorTlsInterceptResponse" }
+        "400":
+          description: Invalid JSON or enabled flag.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/sessions:
     get:
       operationId: getApiToolsTrafficInspectorSessions
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: List all saved recording sessions
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Sessions list
+          description: Recording sessions.
           content:
             application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/InspectorSession"
+              schema: { $ref: "#/components/schemas/InspectorSessionListResponse" }
+        "500":
+          description: Session list failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     post:
       operationId: postApiToolsTrafficInspectorSessions
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Start a new recording session
       requestBody:
@@ -12388,17 +13019,37 @@ paths:
             schema:
               $ref: "#/components/schemas/InspectorSessionStart"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "201":
           description: Session started
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/InspectorSession"
+        "400":
+          description: Invalid session body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Session creation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/sessions/{id}:
     get:
       operationId: getApiToolsTrafficInspectorSessionsById
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Get session snapshot (all captured requests)
       parameters:
@@ -12409,13 +13060,34 @@ paths:
             type: string
             format: uuid
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Session with embedded requests
+          description: Session and its captured request snapshots.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InspectorSessionDetailResponse" }
         "404":
           description: Session not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Session lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     patch:
       operationId: patchApiToolsTrafficInspectorSessionsById
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Stop or rename a recording session
       parameters:
@@ -12432,11 +13104,39 @@ paths:
             schema:
               $ref: "#/components/schemas/InspectorSessionPatch"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Session updated
+          description: Updated session record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InspectorSession" }
+        "400":
+          description: Invalid action or missing rename name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Session not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Session update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
     delete:
       operationId: deleteApiToolsTrafficInspectorSessionsById
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Delete a recording session
       parameters:
@@ -12447,13 +13147,33 @@ paths:
             type: string
             format: uuid
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "204":
           description: Session deleted
+        "404":
+          description: Session not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Session deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/sessions/{id}/export.har:
     get:
       operationId: getApiToolsTrafficInspectorSessionsByIdExportHar
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       tags: [Traffic Inspector]
       summary: Export a recorded session as HAR 1.2
       parameters:
@@ -12464,6 +13184,12 @@ paths:
             type: string
             format: uuid
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: HAR file for this session
           content:
@@ -12471,8 +13197,21 @@ paths:
               schema:
                 type: object
                 description: HAR 1.2 format
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string, const: no-store }
         "404":
           description: Session not found
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: HAR export failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   /api/tools/traffic-inspector/internal/ingest:
     post:
@@ -12483,8 +13222,12 @@ paths:
       description: >-
         Accepts a serialized InterceptedRequest from the CJS MITM server for requests
         that do not go through TypeScript handlers (e.g., passthrough hosts). Requires
-        INSPECTOR_INTERNAL_INGEST_TOKEN header. LOCAL_ONLY.
-      security: []
+        `Authorization: Bearer <INSPECTOR_INTERNAL_INGEST_TOKEN>` and the local-only peer gate.
+        Secret-like headers and body values are sanitized before the entry is stored. In locked
+        management mode, configure the explicit environment token so the central authz policy can
+        validate the internal call before it reaches this handler.
+      security:
+        - InspectorInternalIngestBearerAuth: []
       requestBody:
         required: true
         content:
@@ -12492,10 +13235,33 @@ paths:
             schema:
               $ref: "#/components/schemas/InterceptedRequest"
       responses:
-        "204":
-          description: Ingested
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "200":
+          description: Ingested entry acknowledgement.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, id]
+                properties:
+                  ok: { type: boolean, const: true }
+                  id: { type: string, format: uuid }
+                additionalProperties: false
+        "400":
+          description: Invalid JSON or intercepted-request payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
         "401":
-          description: Invalid or missing ingest token
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "500":
+          description: Ingest failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 
   # ─── OpenAPI Spec ──────────────────────────────────────────────
 
@@ -15081,17 +15847,72 @@ paths:
       tags:
         - Db
       summary: "GET db › health"
+      description: >-
+        Runs a read-only managed database health check. Authentication follows
+        the management policy: a valid management bearer credential or dashboard
+        session is accepted; requests may be anonymous when management login is
+        disabled. Reports detected issues without repairing them.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Database health result; no repair is attempted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbHealthCheckResult"
+        "401":
+          description: Authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbHealthErrorResponse"
+        "500":
+          description: The health check failed; the returned error message is sanitized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbHealthErrorResponse"
     post:
       operationId: postApiDbHealth
       tags:
         - Db
       summary: "POST db › health"
+      description: >-
+        Runs the managed database health check with automatic repair enabled.
+        It may remove or repair broken combo references, stale/orphaned quota
+        and domain rows, invalid persisted JSON, and a mismatched schema version.
+        A backup is attempted before the first repair where the active database
+        driver supports it. `issues` and `isHealthy` describe detected issues;
+        `repairedCount` reports the rows or values changed. Authentication
+        follows the management policy: a valid management bearer credential or
+        dashboard session is accepted; requests may be anonymous when
+        management login is disabled.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Database health result after the repair pass.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbHealthCheckResult"
+        "401":
+          description: Authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbHealthErrorResponse"
+        "500":
+          description: The health check or repair failed; the returned error message is sanitized.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbHealthErrorResponse"
   /api/discovery/results:
     get:
       operationId: getApiDiscoveryResults
@@ -23087,19 +23908,100 @@ paths:
       tags:
         - System
       summary: "GET system › version"
-      x-loopback-only: true
+      description: >-
+        Returns the installed version, latest available version, update
+        capability, channel, and active release announcement. This safe read is
+        exempt from the loopback-only guard; POST remains loopback-only.
+        Management authentication is required when enabled by the local auth
+        configuration, and disabled-login/bootstrap configurations may allow
+        anonymous access. The ETag is a SHA-256 digest of the JSON response.
+        A matching `If-None-Match` validator returns 304 without a body.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: Return 304 when this validator matches the current response ETag.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Installed and latest-version metadata.
+          headers:
+            ETag:
+              description: SHA-256 digest of the serialized response body.
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string, example: "private, no-cache, must-revalidate" }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionResponse"
+        "304":
+          description: The supplied ETag matches; the response has no body.
+        "401":
+          description: Management authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
     post:
       operationId: postApiSystemVersion
       tags:
         - System
       summary: "POST system › version"
+      description: >-
+        Starts an update to the latest release. This operation is loopback-only
+        and accepts no request body. Docker Compose mode returns a JSON result
+        after launching the detached update. Source-checkout and npm modes
+        return a `text/event-stream` whose `data:` frames contain JSON progress
+        events; failures after streaming begins are reported as `error` events
+        while the HTTP status remains 200. A successful launch does not mean
+        that the background update has completed.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       x-loopback-only: true
       responses:
         "200":
-          description: OK
+          description: >-
+            Docker Compose mode returns JSON. Source-checkout and npm modes
+            return progress as server-sent events; an event with `step: error`
+            indicates an update failure after the stream has started.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionUpdateJsonResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: >-
+                  Sequence of `data: <JSON>\n\n` frames. Each JSON frame is a
+                  SystemVersionUpdateEvent; the stream ends when the update
+                  operation finishes or reports an error.
+              x-sse-event-schema:
+                $ref: "#/components/schemas/SystemVersionUpdateEvent"
+        "400":
+          description: The configured update mode is unsupported in this runtime.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionUpdateJsonResponse"
+        "401":
+          description: Management authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          description: The registry could not be reached or the detached update could not be launched.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionUpdateJsonResponse"
   /api/tools/agent-bridge/agents/{id}:
     parameters:
       - name: id
@@ -23113,50 +24015,154 @@ paths:
         - Tools
       summary: "GET tools › agent bridge › agents › <id>"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      description: Returns the agent target, local detection result, and saved per-agent state.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Agent detail.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeAgentDetailResponse" }
+        "404":
+          description: Unknown agent ID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Agent detail lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     patch:
       operationId: patchApiToolsAgentBridgeAgentsById
       tags:
         - Tools
       summary: "PATCH tools › agent bridge › agents › <id>"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      description: Sets the `setup_completed` flag for the specified agent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [setup_completed]
+              properties:
+                setup_completed: { type: boolean }
+              additionalProperties: false
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Updated per-agent state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeAgentPatchResponse" }
+        "400":
+          description: Invalid JSON or setup state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Agent state update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/agent-bridge/agents/{id}/detect:
     parameters:
       - name: id
         in: path
         required: true
-        schema:
-          type: string
+        schema: { $ref: "#/components/schemas/AgentId" }
     get:
       operationId: getApiToolsAgentBridgeAgentsByIdDetect
       tags:
         - Tools
       summary: "GET tools › agent bridge › agents › <id> › detect"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      description: Probes the local IDE/CLI installation and returns installation/version/path data.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Local detection result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeAgentDetectionResponse" }
+        "404":
+          description: Unknown agent ID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Local detection probe failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/agent-bridge/agents/{id}/detected-models:
     parameters:
       - name: id
         in: path
         required: true
-        schema:
-          type: string
+        schema: { $ref: "#/components/schemas/AgentBridgeDetectedModelsAgentId" }
     get:
       operationId: getApiToolsAgentBridgeAgentsByIdDetectedModels
       tags:
         - Tools
       summary: "GET tools › agent bridge › agents › <id> › detected models"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      description: Returns unique source-model IDs observed for this agent in the in-memory traffic buffer.
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Detected model IDs and count of matching captured requests.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeDetectedModelsResponse" }
+        "404":
+          description: Unknown agent ID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Detected-model lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/agent-bridge/cert/download:
     get:
       operationId: getApiToolsAgentBridgeCertDownload
@@ -23164,9 +24170,37 @@ paths:
         - Tools
       summary: "GET tools › agent bridge › cert › download"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: PEM-encoded AgentBridge certificate.
+          headers:
+            Content-Disposition:
+              schema: { type: string, const: 'attachment; filename="omniroute-mitm.crt"' }
+            Content-Length:
+              schema: { type: string }
+          content:
+            application/x-pem-file:
+              schema: { type: string, format: binary }
+        "404":
+          description: Certificate not generated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Certificate file could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/agent-bridge/cert/regenerate:
     post:
       operationId: postApiToolsAgentBridgeCertRegenerate
@@ -23174,9 +24208,27 @@ paths:
         - Tools
       summary: "POST tools › agent bridge › cert › regenerate"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Regenerated certificate paths.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeCertRegenerateResponse" }
+        "500":
+          description: Certificate generation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/agent-bridge/config:
     get:
       operationId: getApiToolsAgentBridgeConfig
@@ -23184,18 +24236,64 @@ paths:
         - Tools
       summary: "GET tools › agent bridge › config"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Portable operator-controlled AgentBridge configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeConfig" }
+        "500":
+          description: Config export failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiToolsAgentBridgeConfig
       tags:
         - Tools
       summary: "POST tools › agent bridge › config"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentBridgeConfig" }
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Imported counts for bypass patterns, custom hosts, and agent mappings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeConfigImportResponse" }
+        "400":
+          description: Invalid portable configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Config import failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/agent-bridge/diagnose:
     get:
       operationId: getApiToolsAgentBridgeDiagnose
@@ -23203,9 +24301,35 @@ paths:
         - Tools
       summary: "GET tools › agent bridge › diagnose"
       x-loopback-only: true
+      description: >-
+        Returns a capture-pipeline diagnostic report. `agentId` is optional; when omitted, the DNS
+        result is aggregated across configured agents.
+      parameters:
+        - name: agentId
+          in: query
+          required: false
+          schema: { $ref: "#/components/schemas/AgentId" }
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Diagnostic report and probed port.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeDiagnosticsResponse" }
+        "500":
+          description: Diagnostic check failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/agent-bridge/repair:
     post:
       operationId: postApiToolsAgentBridgeRepair
@@ -23213,9 +24337,44 @@ paths:
         - Tools
       summary: "POST tools › agent bridge › repair"
       x-loopback-only: true
+      description: >-
+        Undo orphaned DNS, root-CA, and system-proxy state. Optional `sudoPassword` is used when
+        privileged system changes require elevation.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sudoPassword: { type: string, writeOnly: true }
+              additionalProperties: false
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Components repaired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeRepairResponse" }
+        "400":
+          description: Required sudo password is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Repair operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/agent-bridge/tproxy:
     delete:
       operationId: deleteApiToolsAgentBridgeTproxy
@@ -23223,27 +24382,90 @@ paths:
         - Tools
       summary: "DELETE tools › agent bridge › tproxy"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Stopped transparent-proxy capture status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeTproxyActionResponse" }
+        "500":
+          description: Stop operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     get:
       operationId: getApiToolsAgentBridgeTproxy
       tags:
         - Tools
       summary: "GET tools › agent bridge › tproxy"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Current transparent-proxy capture status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeTproxyStatus" }
     post:
       operationId: postApiToolsAgentBridgeTproxy
       tags:
         - Tools
       summary: "POST tools › agent bridge › tproxy"
       x-loopback-only: true
+      description: >-
+        Starts decrypt-capable transparent capture, installing system routing rules and a capture CA.
+        Optional fields override the runtime defaults; optional `sudoPassword` authorizes trust-store
+        installation when the process is not root.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentBridgeTproxyStartRequest" }
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Transparent-proxy capture started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeTproxyActionResponse" }
+        "400":
+          description: Invalid transparent-proxy configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Transparent-proxy start failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/agent-bridge/upstream-ca/test:
     post:
       operationId: postApiToolsAgentBridgeUpstreamCaTest
@@ -23251,9 +24473,32 @@ paths:
         - Tools
       summary: "POST tools › agent bridge › upstream ca › test"
       x-loopback-only: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentBridgeUpstreamCaPost" }
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Parsed certificate metadata; the CA path is not saved or activated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentBridgeUpstreamCaTestResponse" }
+        "400":
+          description: Invalid JSON/path, unreadable file, or invalid PEM certificate.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/tools/traffic-inspector/sessions/{id}/requests:
     parameters:
       - name: id
@@ -23267,9 +24512,43 @@ paths:
         - Tools
       summary: "POST tools › traffic inspector › sessions › <id> › requests"
       x-loopback-only: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      description: Persists one captured-request snapshot in the session and returns its sequence number.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/InspectorSessionRequestAppend" }
       responses:
-        "200":
-          description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "201":
+          description: Snapshot appended to the recording session.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/InspectorSessionRequestAppendResponse" }
+        "400":
+          description: Invalid JSON or snapshot payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: Session not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: Snapshot append failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
   /api/translator/transform-stream:
     post:
       operationId: postApiTranslatorTransformStream
@@ -23285,7 +24564,6 @@ paths:
       tags:
         - Tunnels
       summary: "GET tunnels › cloudflared"
-      x-loopback-only: true
       responses:
         "200":
           description: OK
@@ -28973,6 +30251,13 @@ components:
         includes `manage` or `admin` scope. See docs/guides/MANAGEMENT-AUTH.md.
         Bearer credentials are accepted on management routes that use this scheme;
         they are not rejected solely for being Bearer.
+    InspectorInternalIngestBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: inspector ingest token
+      description: >-
+        Process-local shared token used only by the AgentBridge server to post sanitized captured
+        entries to `/api/tools/traffic-inspector/internal/ingest`. This is not an OmniRoute API key.
     RelayTokenBearerAuth:
       type: http
       scheme: bearer
@@ -29084,6 +30369,13 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiErrorResponse"
+    LocalOnlyAccessDenied:
+      description: >-
+        The trusted peer boundary rejected this request, or a management credential lacked the
+        required scope. These SPAWN_CAPABLE routes do not permit public remote manage-scope bypass.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     ValidationError:
       description: Request body failed validation
       content:
@@ -32698,6 +33990,301 @@ components:
           type: string
           nullable: true
 
+    AgentBridgeDetectionState:
+      type: object
+      description: Per-agent detection result; fields vary by the detected local IDE/CLI.
+      properties:
+        installed: { type: boolean }
+        version: { type: string }
+        path: { type: string }
+      additionalProperties: true
+
+    AgentBridgeAgentListResponse:
+      type: object
+      required: [agents]
+      properties:
+        agents:
+          type: array
+          items:
+            type: object
+            required: [id, name, hosts, viability, state]
+            properties:
+              id: { $ref: "#/components/schemas/AgentId" }
+              name: { type: string }
+              hosts: { type: array, items: { type: string } }
+              viability: { type: string }
+              state: { $ref: "#/components/schemas/AgentBridgeDetectionState" }
+            additionalProperties: true
+      additionalProperties: false
+
+    AgentBridgeStateResponse:
+      type: object
+      required: [server, agents, serverState, agentStates, bypassPatterns, mappings]
+      properties:
+        server: { type: object, additionalProperties: true }
+        agents: { type: array, items: { type: object, additionalProperties: true } }
+        serverState: { type: object, additionalProperties: true }
+        agentStates:
+          type: array
+          items: { $ref: "#/components/schemas/AgentBridgeAgentState" }
+        bypassPatterns: { type: array, items: { type: string } }
+        mappings:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              required: [source, target]
+              properties:
+                source: { type: string }
+                target: { type: string }
+              additionalProperties: false
+      additionalProperties: false
+
+    AgentBridgeAgentDetailResponse:
+      type: object
+      required: [agent, detection, state]
+      properties:
+        agent: { type: object, additionalProperties: true }
+        detection: { $ref: "#/components/schemas/AgentBridgeDetectionState" }
+        state:
+          oneOf:
+            - $ref: "#/components/schemas/AgentBridgeAgentState"
+            - type: "null"
+      additionalProperties: false
+
+    AgentBridgeAgentPatchResponse:
+      type: object
+      required: [ok, state]
+      properties:
+        ok: { type: boolean, const: true }
+        state:
+          oneOf:
+            - $ref: "#/components/schemas/AgentBridgeAgentState"
+            - type: "null"
+      additionalProperties: false
+
+    AgentBridgeAgentDetectionResponse:
+      type: object
+      required: [agentId]
+      properties:
+        agentId: { $ref: "#/components/schemas/AgentId" }
+        installed: { type: boolean }
+        version: { type: string }
+        path: { type: string }
+      additionalProperties: true
+
+    AgentBridgeDetectedModelsAgentId:
+      type: string
+      enum:
+        [
+          antigravity,
+          kiro,
+          copilot,
+          codex,
+          cursor,
+          zed,
+          claude-code,
+          open-code,
+          trae,
+          windsurf,
+          jules,
+        ]
+
+    AgentBridgeDetectedModelsResponse:
+      type: object
+      required: [agentId, detectedModels, requestCount]
+      properties:
+        agentId: { $ref: "#/components/schemas/AgentBridgeDetectedModelsAgentId" }
+        detectedModels: { type: array, items: { type: string } }
+        requestCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    AgentBridgeCertRegenerateResponse:
+      type: object
+      required: [ok, certPath, keyPath]
+      properties:
+        ok: { type: boolean, const: true }
+        certPath: { type: string }
+        keyPath: { type: string }
+      additionalProperties: false
+
+    AgentBridgeConfig:
+      type: object
+      required: [version, bypassPatterns, customHosts, agentMappings]
+      properties:
+        version: { type: integer, const: 1 }
+        bypassPatterns: { type: array, items: { type: string } }
+        customHosts:
+          type: array
+          items:
+            type: object
+            required: [host]
+            properties:
+              host: { type: string, minLength: 1 }
+              kind: { type: string, enum: [llm, app, custom], default: custom }
+              label: { type: [string, "null"] }
+            additionalProperties: false
+        agentMappings:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: object
+              required: [source, target]
+              properties:
+                source: { type: string }
+                target: { type: string }
+              additionalProperties: false
+      additionalProperties: false
+
+    AgentBridgeConfigImportResponse:
+      type: object
+      required: [ok, bypassPatterns, customHosts, agents]
+      properties:
+        ok: { type: boolean, const: true }
+        bypassPatterns: { type: integer, minimum: 0 }
+        customHosts: { type: integer, minimum: 0 }
+        agents: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    AgentBridgeDiagnosticsResponse:
+      type: object
+      required: [port]
+      properties:
+        port: { type: integer, minimum: 1, maximum: 65535 }
+      additionalProperties: true
+
+    AgentBridgeRepairResponse:
+      type: object
+      required: [ok, repaired]
+      properties:
+        ok: { type: boolean, const: true }
+        repaired: { type: array, items: { type: string } }
+      additionalProperties: false
+
+    AgentBridgeTproxyStartRequest:
+      type: object
+      properties:
+        dport: { type: integer, minimum: 1, maximum: 65535, default: 443 }
+        mark: { type: integer, minimum: 1, default: 9011 }
+        onPort: { type: integer, minimum: 1, maximum: 65535, default: 8443 }
+        routeTable: { type: integer, minimum: 1, default: 233 }
+        bypassMark: { type: integer, minimum: 1, default: 1337 }
+        sudoPassword: { type: string, writeOnly: true }
+      additionalProperties: false
+
+    AgentBridgeTproxyStatus:
+      type: object
+      description: Runtime transparent-proxy capture state.
+      additionalProperties: true
+
+    AgentBridgeTproxyActionResponse:
+      type: object
+      required: [ok, status]
+      properties:
+        ok: { type: boolean, const: true }
+        status: { $ref: "#/components/schemas/AgentBridgeTproxyStatus" }
+      additionalProperties: false
+
+    AgentBridgeUpstreamCaTestResponse:
+      type: object
+      required: [ok, path, subject, validTo]
+      properties:
+        ok: { type: boolean, const: true }
+        path: { type: string }
+        subject: { type: string }
+        validTo: { type: string }
+      additionalProperties: false
+
+    AgentBridgeMappingsResponse:
+      type: object
+      required: [mappings]
+      properties:
+        mappings:
+          type: array
+          items: { $ref: "#/components/schemas/AgentBridgeMappingRow" }
+      additionalProperties: false
+
+    AgentBridgeMappingsUpdateResponse:
+      type: object
+      required: [ok, mappings]
+      properties:
+        ok: { type: boolean, const: true }
+        mappings:
+          type: array
+          items: { $ref: "#/components/schemas/AgentBridgeMappingRow" }
+      additionalProperties: false
+
+    AgentBridgeBypassListResponse:
+      type: object
+      required: [patterns]
+      properties:
+        patterns:
+          type: array
+          items: { $ref: "#/components/schemas/AgentBridgeBypassRow" }
+      additionalProperties: false
+
+    AgentBridgeBypassUpdateResponse:
+      type: object
+      required: [ok, patterns]
+      properties:
+        ok: { type: boolean, const: true }
+        patterns:
+          type: array
+          items: { $ref: "#/components/schemas/AgentBridgeBypassRow" }
+      additionalProperties: false
+
+    AgentBridgeCertStatusResponse:
+      type: object
+      required: [exists, trusted, path]
+      properties:
+        exists: { type: boolean }
+        trusted: { type: boolean }
+        path: { type: [string, "null"] }
+      additionalProperties: false
+
+    AgentBridgeCertTrustRequest:
+      type: object
+      properties:
+        sudoPassword: { type: string, writeOnly: true }
+      additionalProperties: false
+
+    AgentBridgeCertTrustResponse:
+      type: object
+      required: [ok, trusted]
+      properties:
+        ok: { type: boolean }
+        trusted: { type: boolean }
+        skippable: { type: boolean }
+        reason: { type: string }
+        message: { type: string }
+        manualGuide: { type: object, additionalProperties: true }
+      additionalProperties: true
+
+    AgentBridgeCertDeleteResponse:
+      type: object
+      required: [ok, trusted]
+      properties:
+        ok: { type: boolean, const: true }
+        trusted: { type: boolean }
+      additionalProperties: false
+
+    AgentBridgeServerActionResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean, const: true }
+      additionalProperties: true
+
+    AgentBridgeDnsActionResponse:
+      type: object
+      required: [ok, dns_enabled]
+      properties:
+        ok: { type: boolean, const: true }
+        dns_enabled: { type: boolean }
+      additionalProperties: false
+
     AgentBridgeServerState:
       type: object
       description: Global AgentBridge MITM server state
@@ -32725,6 +34312,8 @@ components:
         action:
           type: string
           enum: [start, stop, restart, trust-cert, regenerate-cert]
+        sudoPassword: { type: string, writeOnly: true }
+      additionalProperties: true
 
     AgentBridgeDnsAction:
       type: object
@@ -32732,6 +34321,8 @@ components:
       properties:
         enabled:
           type: boolean
+        sudoPassword: { type: string, writeOnly: true }
+      additionalProperties: true
 
     AgentBridgeMappingRow:
       type: object
@@ -32801,7 +34392,7 @@ components:
 
     CaptureSource:
       type: string
-      enum: [agent-bridge, custom-host, http-proxy, system-proxy]
+      enum: [agent-bridge, custom-host, http-proxy, system-proxy, tproxy]
 
     DetectedKind:
       type: string
@@ -32947,36 +34538,102 @@ components:
           enum: [llm, app, custom]
           default: custom
 
+    InspectorCustomHostCreateResponse:
+      type: object
+      required: [ok, host]
+      properties:
+        ok: { type: boolean, const: true }
+        host: { type: string }
+        warning: { type: string }
+      additionalProperties: false
+
     InspectorCaptureModesState:
       type: object
+      required: [agentBridge, customHosts, httpProxy, systemProxy, tlsIntercept]
       properties:
         agentBridge:
-          type: object
-          properties:
-            active:
-              type: boolean
+          type: boolean
         customHosts:
           type: object
+          required: [count, enabledCount]
           properties:
-            active:
-              type: boolean
-            count:
-              type: integer
+            count: { type: integer, minimum: 0 }
+            enabledCount: { type: integer, minimum: 0 }
+          additionalProperties: false
         httpProxy:
           type: object
+          required: [running, port]
           properties:
-            active:
-              type: boolean
-            port:
-              type: integer
-              example: 8080
+            running: { type: boolean }
+            port: { type: [integer, "null"], minimum: 1, maximum: 65535 }
+          additionalProperties: false
         systemProxy:
           type: object
+          required: [applied, guardUntil, port]
           properties:
-            active:
-              type: boolean
-            guardMinutes:
-              type: integer
+            applied: { type: boolean }
+            guardUntil: { type: [integer, "null"], minimum: 0 }
+            port: { type: [integer, "null"], minimum: 1, maximum: 65535 }
+          additionalProperties: false
+        tlsIntercept:
+          type: object
+          required: [enabled]
+          properties:
+            enabled: { type: boolean }
+          additionalProperties: false
+      additionalProperties: false
+
+    InspectorRequestListResponse:
+      type: object
+      required: [requests, total]
+      properties:
+        requests:
+          type: array
+          items: { $ref: "#/components/schemas/InterceptedRequest" }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    InspectorHostListResponse:
+      type: object
+      required: [hosts]
+      properties:
+        hosts:
+          type: array
+          items: { $ref: "#/components/schemas/InspectorCustomHost" }
+      additionalProperties: false
+
+    InspectorSessionListResponse:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/InspectorSession" }
+      additionalProperties: false
+
+    InspectorSessionDetailResponse:
+      type: object
+      required: [session, requests]
+      properties:
+        session: { $ref: "#/components/schemas/InspectorSession" }
+        requests:
+          type: array
+          items: { $ref: "#/components/schemas/InterceptedRequest" }
+      additionalProperties: false
+
+    InspectorSessionRequestAppend:
+      type: object
+      required: [payload]
+      properties:
+        payload: { type: string, maxLength: 1048576 }
+      additionalProperties: false
+
+    InspectorSessionRequestAppendResponse:
+      type: object
+      required: [seq]
+      properties:
+        seq: { type: integer, minimum: 1 }
+      additionalProperties: false
 
     InspectorCaptureModeAction:
       type: object
@@ -32985,6 +34642,26 @@ components:
         action:
           type: string
           enum: [start, stop]
+
+    InspectorHttpProxyActionResponse:
+      type: object
+      required: [ok, running, port]
+      properties:
+        ok: { type: boolean, const: true }
+        running: { type: boolean }
+        port: { type: [integer, "null"], minimum: 1, maximum: 65535 }
+      additionalProperties: false
+
+    InspectorSystemProxyActionResponse:
+      type: object
+      required: [ok, applied]
+      properties:
+        ok: { type: boolean, const: true }
+        applied: { type: boolean }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        platform: { type: string }
+        guardUntil: { type: [integer, "null"], minimum: 0 }
+      additionalProperties: false
 
     InspectorSystemProxyAction:
       type: object
@@ -33009,6 +34686,19 @@ components:
       properties:
         enabled:
           type: boolean
+
+    InspectorTlsInterceptResponse:
+      type: object
+      required: [ok, tlsIntercept]
+      properties:
+        ok: { type: boolean, const: true }
+        tlsIntercept:
+          type: object
+          required: [enabled]
+          properties:
+            enabled: { type: boolean }
+          additionalProperties: false
+      additionalProperties: false
 
     InspectorAnnotationPut:
       type: object
@@ -39915,6 +41605,141 @@ components:
       required: [error]
       properties:
         error: { type: string }
+      additionalProperties: false
+
+    SystemVersionResponse:
+      type: object
+      required:
+        - current
+        - latest
+        - updateAvailable
+        - channel
+        - autoUpdateSupported
+        - autoUpdateError
+        - news
+      properties:
+        current: { type: string }
+        latest:
+          type: string
+          description: Latest release version, or `unavailable` when lookup failed.
+        updateAvailable: { type: boolean }
+        channel:
+          type: string
+          enum: [npm, docker-compose, source]
+        autoUpdateSupported: { type: boolean }
+        autoUpdateError:
+          type: [string, "null"]
+          description: Null when the configured update mode is supported.
+        news:
+          oneOf:
+            - $ref: "#/components/schemas/SystemVersionNewsAnnouncement"
+            - type: "null"
+      additionalProperties: false
+
+    SystemVersionNewsAnnouncement:
+      type: object
+      required: [id, active, publishedAt, title, message, icon]
+      properties:
+        id: { type: string }
+        active: { type: boolean, const: true }
+        publishedAt: { type: string, format: date-time }
+        title: { type: string }
+        message: { type: string }
+        link: { type: string, format: uri }
+        linkLabel: { type: string }
+        icon:
+          type: string
+          enum: [campaign, celebration, info, new_releases, radar]
+      additionalProperties: false
+
+    SystemVersionUpdateJsonResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean }
+        message: { type: string }
+        error: { type: string }
+        current: { type: string }
+        latest: { type: string }
+        from: { type: string }
+        to: { type: string }
+        channel:
+          type: string
+          enum: [npm, docker-compose, source]
+        logPath: { type: string }
+      additionalProperties: false
+
+    SystemVersionUpdateEvent:
+      type: object
+      required: [step, status, message]
+      properties:
+        step:
+          type: string
+          enum: [install, rebuild, restart, complete, error]
+        status:
+          type: string
+          enum: [running, done, skipped, restart-required, error, failed]
+        message: { type: string }
+        from: { type: string }
+        to: { type: string }
+      additionalProperties: true
+
+    DbHealthIssue:
+      type: object
+      required: [type, table, description, count]
+      properties:
+        type:
+          type: string
+          enum: [integrity_check_failed, broken_reference, stale_snapshot, invalid_state]
+        table: { type: string }
+        description: { type: string }
+        count: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    DbHealthDriver:
+      type: object
+      required: [name, degraded]
+      properties:
+        name:
+          type: string
+          enum: [better-sqlite3, node:sqlite, bun:sqlite, sql.js]
+        degraded:
+          type: boolean
+          description: True when database writes are not durably backed by a database file.
+      additionalProperties: false
+
+    DbHealthCheckResult:
+      type: object
+      required: [isHealthy, issues, repairedCount, backupCreated, autoRepair, checkedAt, driver]
+      properties:
+        isHealthy:
+          type: boolean
+          description: Reflects detected issues, including issues that this request repaired.
+        issues:
+          type: array
+          items: { $ref: "#/components/schemas/DbHealthIssue" }
+        repairedCount:
+          type: integer
+          minimum: 0
+          description: Number of row or state repairs made during this check.
+        backupCreated:
+          type: boolean
+          description: Whether a pre-repair backup was created by a supporting driver.
+        autoRepair: { type: boolean }
+        checkedAt: { type: string, format: date-time }
+        driver: { $ref: "#/components/schemas/DbHealthDriver" }
+      additionalProperties: false
+
+    DbHealthErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message: { type: string }
+          additionalProperties: false
       additionalProperties: false
 
     SystemPromptConfig:

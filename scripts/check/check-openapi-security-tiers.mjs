@@ -103,8 +103,33 @@ function parsePatterns(name) {
   return out;
 }
 
+// Method-aware safe-read exemptions are stored as a ReadonlySet literal rather
+// than an array. Mirror the exact exported strings so the OpenAPI reverse pass
+// does not require a loopback annotation for safe reads such as
+// `GET /api/system/version` when routeGuard explicitly exempts that method.
+function parseStringSet(name) {
+  const match = guardSrc.match(
+    new RegExp(`export const ${name}\\b[\\s\\S]*?new Set\\s*\\(\\s*\\[([\\s\\S]*?)\\n\\]\\s*\\)`)
+  );
+  if (!match)
+    throw new Error(`openapi-security-tiers: could not locate ${name} set in routeGuard.ts`);
+  return stripLineComments(match[1])
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const value = entry.replace(/^["']|["']$/g, "");
+      if (value === entry) {
+        throw new Error(`openapi-security-tiers: unsupported ${name} entry '${entry}'`);
+      }
+      return value;
+    });
+}
+
 const LOCAL_ONLY_PREFIXES = parsePrefixes("LOCAL_ONLY_API_PREFIXES");
 const LOCAL_ONLY_PATTERNS = parsePatterns("LOCAL_ONLY_API_PATTERNS");
+const LOCAL_ONLY_GET_EXEMPTIONS = new Set(parseStringSet("LOCAL_ONLY_API_GET_EXEMPTIONS"));
+const SAFE_METHODS = new Set(["get", "head", "options"]);
 const ALWAYS_PROTECTED_PATHS = parsePrefixes("ALWAYS_PROTECTED_API_PATHS");
 // isAlwaysProtectedPath() is ALSO two-armed (paths || patterns) — reading only the
 // path array repeated, on this half, the very bug #12350 fixed on the LOCAL_ONLY
@@ -160,7 +185,15 @@ for (const [pathStr, methods] of Object.entries(paths)) {
   for (const [method, spec] of Object.entries(methods)) {
     if (!["get", "post", "put", "patch", "delete"].includes(method) || !spec) continue;
 
-    if (spec["x-loopback-only"] === true && !coveredByLocalOnly(pathStr)) {
+    const methodExempt =
+      SAFE_METHODS.has(method) && LOCAL_ONLY_GET_EXEMPTIONS.has(concretize(pathStr));
+
+    if (spec["x-loopback-only"] === true && methodExempt) {
+      errors.push(
+        `${method.toUpperCase()} ${pathStr}: has x-loopback-only but routeGuard explicitly ` +
+          `exempts this safe method`
+      );
+    } else if (spec["x-loopback-only"] === true && !coveredByLocalOnly(pathStr)) {
       errors.push(
         `${method.toUpperCase()} ${pathStr}: has x-loopback-only but is NOT covered by ` +
           `LOCAL_ONLY_API_PREFIXES or LOCAL_ONLY_API_PATTERNS`
@@ -177,14 +210,26 @@ for (const [pathStr, methods] of Object.entries(paths)) {
 }
 
 // Reverse pass: every YAML operation covered by a LOCAL_ONLY prefix should carry
-// `x-loopback-only`. Pattern-only routes are also guarded by the unit test, since
-// their dynamic segment can appear before the protected suffix.
+// `x-loopback-only`, except safe methods for exact paths in the routeGuard
+// method-aware exemption set. Pattern-only routes are also guarded by the unit
+// test, since their dynamic segment can appear before the protected suffix.
 const reverseWarnings = [];
 for (const [pathStr, methods] of Object.entries(paths)) {
   if (!methods || typeof methods !== "object") continue;
   if (!matchesPrefix(concretize(pathStr))) continue;
   for (const [method, spec] of Object.entries(methods)) {
     if (!["get", "post", "put", "patch", "delete"].includes(method) || !spec) continue;
+    const methodExempt =
+      SAFE_METHODS.has(method) && LOCAL_ONLY_GET_EXEMPTIONS.has(concretize(pathStr));
+    if (methodExempt) {
+      if (spec["x-loopback-only"] === true) {
+        errors.push(
+          `${method.toUpperCase()} ${pathStr}: routeGuard exempts this safe method from ` +
+            `LOCAL_ONLY, so x-loopback-only must be absent`
+        );
+      }
+      continue;
+    }
     if (spec["x-loopback-only"] !== true) {
       reverseWarnings.push(
         `${method.toUpperCase()} ${pathStr}: falls under LOCAL_ONLY_API_PREFIXES ` +
