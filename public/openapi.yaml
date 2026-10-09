@@ -21298,18 +21298,81 @@ paths:
       operationId: getApiRelayTokens
       tags:
         - Relay
-      summary: "GET relay › tokens"
+      summary: List relay tokens
+      description: >-
+        Returns relay-token configuration without `tokenHash`, raw token, or serialized metadata.
+        The route relies on the central management policy rather than a handler-local auth check:
+        protected profiles accept a dashboard session, a `read`-scoped Access Token, a `manage` or
+        `admin` API key, or trusted loopback CLI/internal-service credentials. An unlocked install
+        with `requireLogin=false` may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Relay-token summaries; the stored hash and metadata are omitted.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayTokenSummaryList" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiRelayTokens
       tags:
         - Relay
-      summary: "POST relay › tokens"
+      summary: Create relay token
+      description: >-
+        Creates a relay credential and returns the raw token once; later list/detail/update
+        responses do not return that raw credential. The route relies on the central management
+        policy rather than a handler-local auth check: protected profiles accept a dashboard
+        session, a `write`-scoped Access Token, a `manage` or `admin` API key, or trusted loopback
+        CLI/internal-service credentials. An unlocked install with `requireLogin=false` may permit
+        anonymous access. The current handler maps both parse/validation failures and caught
+        creation errors to status 400.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RelayTokenCreateRequest" }
       responses:
         "200":
-          description: OK
+          description: Newly created relay token, including its one-time raw credential.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayTokenCreatedResponse" }
+        "400":
+          description: >-
+            Invalid JSON or request fields, or a caught token-creation error. The legacy handler
+            returns an error string for parse/creation errors and a validation detail object for
+            schema failures.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/relay/tokens/{id}:
     parameters:
       - name: id
@@ -21321,26 +21384,117 @@ paths:
       operationId: deleteApiRelayTokensById
       tags:
         - Relay
-      summary: "DELETE relay › tokens › <id>"
+      summary: Delete relay token
+      description: >-
+        Deletes the token row and returns `{success:true}` even when the identifier did not exist;
+        the handler does not perform an existence check. Authentication is enforced by the central
+        management policy. Protected profiles accept a dashboard
+        session, a `write`-scoped Access Token, a `manage` or `admin` API key, or trusted loopback
+        CLI/internal-service credentials. An unlocked install with `requireLogin=false` may permit
+        anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Token deletion completed, including when no row matched the identifier.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayTokenDeletedResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiRelayTokensById
       tags:
         - Relay
-      summary: "GET relay › tokens › <id>"
+      summary: Get relay token details and usage
+      description: >-
+        Returns the stored relay-token record (including its SHA-256 `tokenHash` and serialized
+        metadata), usage summaries, and up to 20 request logs. It never returns the raw token.
+        Treat this response as sensitive because the logs include client IP and user-agent data.
+        Authentication is enforced by the central management policy. Protected profiles accept a
+        dashboard session, a `read`-scoped Access Token, a `manage` or
+        `admin` API key, or trusted loopback CLI/internal-service credentials. An unlocked install
+        with `requireLogin=false` may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Token record, usage windows, and at most 20 request logs.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayTokenDetailResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: No relay token has the requested identifier.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiRelayTokensById
       tags:
         - Relay
-      summary: "PATCH relay › tokens › <id>"
+      summary: Update relay token
+      description: >-
+        Updates token policy fields or toggles `enabled`. If `enabled` is present, the handler
+        toggles and returns immediately, so any other fields in that same request are ignored.
+        Successful responses contain the stored `tokenHash` and serialized metadata; they do not
+        contain the raw token. Authentication is enforced by the central management policy.
+        Protected profiles accept a dashboard session, a `write`-scoped
+        Access Token, a `manage` or `admin` API key, or trusted loopback CLI/internal-service
+        credentials. An unlocked install with `requireLogin=false` may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RelayTokenPatchRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated relay-token record, including its stored hash and metadata.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RelayTokenManagementRecord" }
+        "400":
+          description: Request fields fail validation or the patch contains no recognized update field.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: No relay token has the requested identifier.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/resilience/model-cooldowns:
     delete:
       operationId: deleteApiResilienceModelCooldowns
@@ -37765,6 +37919,177 @@ components:
           type: string
           format: uuid
 
+    RelayTokenSummary:
+      type: object
+      required:
+        [id, name, tokenPrefix, description, comboId, allowedModels, maxTokensPerRequest, maxRequestsPerMinute, maxRequestsPerDay, maxCostPerDay, enabled, createdAt, updatedAt, expiresAt, lastUsedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        tokenPrefix: { type: string, description: Redacted prefix; this is not the raw relay credential. }
+        description: { type: string }
+        comboId: { type: [string, "null"] }
+        allowedModels: { type: string, description: JSON-serialized model allowlist. }
+        maxTokensPerRequest: { type: integer }
+        maxRequestsPerMinute: { type: integer }
+        maxRequestsPerDay: { type: integer }
+        maxCostPerDay: { type: number }
+        enabled: { type: boolean }
+        createdAt: { type: integer, description: Unix epoch seconds. }
+        updatedAt: { type: integer, description: Unix epoch seconds. }
+        expiresAt: { type: [integer, "null"], description: Unix epoch seconds. }
+        lastUsedAt: { type: [integer, "null"], description: Unix epoch seconds. }
+      additionalProperties: false
+    RelayTokenSummaryList:
+      type: array
+      items: { $ref: "#/components/schemas/RelayTokenSummary" }
+    RelayTokenManagementRecord:
+      type: object
+      required:
+        [id, name, tokenHash, tokenPrefix, description, comboId, allowedModels, maxTokensPerRequest, maxRequestsPerMinute, maxRequestsPerDay, maxCostPerDay, enabled, createdAt, updatedAt, expiresAt, lastUsedAt, metadata]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        tokenHash: { type: string, x-sensitive: true, description: Stored SHA-256 hash; never the original raw token. }
+        tokenPrefix: { type: string }
+        description: { type: string }
+        comboId: { type: [string, "null"] }
+        allowedModels: { type: string, description: JSON-serialized model allowlist. }
+        maxTokensPerRequest: { type: integer }
+        maxRequestsPerMinute: { type: integer }
+        maxRequestsPerDay: { type: integer }
+        maxCostPerDay: { type: number }
+        enabled: { type: boolean }
+        createdAt: { type: integer, description: Unix epoch seconds. }
+        updatedAt: { type: integer, description: Unix epoch seconds. }
+        expiresAt: { type: [integer, "null"], description: Unix epoch seconds. }
+        lastUsedAt: { type: [integer, "null"], description: Unix epoch seconds. }
+        metadata: { type: string, description: JSON-serialized metadata object. }
+      additionalProperties: false
+    RelayTokenUsageWindow:
+      type: object
+      required: [requestCount, totalCost]
+      properties:
+        requestCount: { type: integer, minimum: 0 }
+        totalCost: { type: number }
+      additionalProperties: false
+    RelayTokenLogEntry:
+      type: object
+      required:
+        [id, token_id, request_id, model, prompt_tokens, completion_tokens, cost, status, status_code, latency_ms, client_ip, user_agent, created_at]
+      properties:
+        id: { type: integer }
+        token_id: { type: string }
+        request_id: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        cost: { type: number }
+        status: { type: string }
+        status_code: { type: integer }
+        latency_ms: { type: integer }
+        client_ip: { type: [string, "null"], x-sensitive: true }
+        user_agent: { type: [string, "null"], x-sensitive: true }
+        created_at: { type: integer, description: Unix epoch seconds. }
+      additionalProperties: false
+    RelayTokenDetailResponse:
+      type: object
+      required:
+        [id, name, tokenHash, tokenPrefix, description, comboId, allowedModels, maxTokensPerRequest, maxRequestsPerMinute, maxRequestsPerDay, maxCostPerDay, enabled, createdAt, updatedAt, expiresAt, lastUsedAt, metadata, usage, logs]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        tokenHash: { type: string, x-sensitive: true, description: Stored SHA-256 hash; never the original raw token. }
+        tokenPrefix: { type: string }
+        description: { type: string }
+        comboId: { type: [string, "null"] }
+        allowedModels: { type: string, description: JSON-serialized model allowlist. }
+        maxTokensPerRequest: { type: integer }
+        maxRequestsPerMinute: { type: integer }
+        maxRequestsPerDay: { type: integer }
+        maxCostPerDay: { type: number }
+        enabled: { type: boolean }
+        createdAt: { type: integer, description: Unix epoch seconds. }
+        updatedAt: { type: integer, description: Unix epoch seconds. }
+        expiresAt: { type: [integer, "null"], description: Unix epoch seconds. }
+        lastUsedAt: { type: [integer, "null"], description: Unix epoch seconds. }
+        metadata: { type: string, description: JSON-serialized metadata object. }
+        usage:
+          type: object
+          required: [lastHour, lastDay]
+          properties:
+            lastHour: { $ref: "#/components/schemas/RelayTokenUsageWindow" }
+            lastDay: { $ref: "#/components/schemas/RelayTokenUsageWindow" }
+          additionalProperties: false
+        logs:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/RelayTokenLogEntry" }
+      additionalProperties: false
+    RelayTokenCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, pattern: "\\S" }
+        description: { type: string }
+        comboId: { type: string, minLength: 1, pattern: "\\S" }
+        allowedModels:
+          type: array
+          items: { type: string, minLength: 1, pattern: "\\S" }
+        maxTokensPerRequest: { type: integer, minimum: 1 }
+        maxRequestsPerMinute: { type: integer, minimum: 1 }
+        maxRequestsPerDay: { type: integer, minimum: 1 }
+        maxCostPerDay: { type: number, minimum: 0 }
+        expiresAt: { type: integer, minimum: 1, description: Unix epoch seconds. }
+        metadata:
+          type: object
+          additionalProperties: {}
+      description: Unknown top-level fields are accepted by Zod and stripped before persistence.
+      additionalProperties: true
+    RelayTokenCreatedResponse:
+      type: object
+      x-sensitive: true
+      required: [id, name, rawToken, tokenPrefix]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        rawToken: { type: string, x-sensitive: true, description: Shown only in this creation response. }
+        tokenPrefix: { type: string }
+      additionalProperties: false
+    RelayTokenPatchRequest:
+      type: object
+      anyOf:
+        - required: [enabled]
+        - required: [name]
+        - required: [description]
+        - required: [comboId]
+        - required: [allowedModels]
+        - required: [maxTokensPerRequest]
+        - required: [maxRequestsPerMinute]
+        - required: [maxRequestsPerDay]
+        - required: [maxCostPerDay]
+      properties:
+        enabled: { type: boolean }
+        name: { type: string, minLength: 1, pattern: "\\S" }
+        description: { type: string }
+        comboId: { type: string, minLength: 1, pattern: "\\S" }
+        allowedModels:
+          type: array
+          items: { type: string, minLength: 1, pattern: "\\S" }
+        maxTokensPerRequest: { type: integer, minimum: 1 }
+        maxRequestsPerMinute: { type: integer, minimum: 1 }
+        maxRequestsPerDay: { type: integer, minimum: 1 }
+        maxCostPerDay: { type: number, minimum: 0 }
+      description: >-
+        Unknown top-level fields are stripped before the non-empty patch check. If `enabled` is
+        supplied, the handler toggles and returns without applying any other supplied properties.
+      additionalProperties: true
+    RelayTokenDeletedResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+      additionalProperties: false
     RelayErrorResponse:
       type: object
       required: [error]
