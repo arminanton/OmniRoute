@@ -493,6 +493,29 @@ forwards bounded streams. This is therefore a measured capability-versus-transpo
 proof that the Rust prototype replaces Bifrost or OmniRoute. It does independently reject any
 universal speed or memory claim from these measurements alone.
 
+### Bifrost feature and state parity (2026-10-09)
+
+The measured image above is Bifrost 1.3.9, while the official releases page now lists v2.2.6
+(released 2026-10-06); its authentication defaults changed, so the old image is only a historical
+performance point. The current gateway supports provider/model routing, request/response
+translation, streaming, virtual-key authentication, key rotation/fallback, budgets and rate limits,
+and MCP features. It persists its own gateway configuration and request logs (`config.db` and
+`logs.db`); that is separate from OmniRoute's SQLite-backed provider connections, account rules,
+combo strategies, key scopes, and call-log artifacts. Treat it as a capable alternative gateway or
+sidecar, with an explicit source-of-truth/synchronization boundary, rather than a drop-in reader or
+writer of OmniRoute state. See the [official overview](https://github.com/maximhq/bifrost/blob/dev/docs/overview.mdx),
+[v2.2.6 release](https://github.com/maximhq/bifrost/releases), and
+[benchmark harness](https://github.com/maximhq/bifrost-benchmarking).
+
+Bifrost's published approximately 11-microsecond latency at 5,000 RPS is a vendor claim; this
+repository has not reproduced it. Go's `GOMEMLIMIT` is documented as a soft target that may be
+exceeded to avoid GC thrashing, while Rust avoids a tracing garbage collector but still needs
+explicit bounded queues, cancellation, and admission. See the [Go GC guide](https://go.dev/doc/gc-guide),
+[Rust ownership guide](https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html), and
+[Tokio backpressure tutorial](https://tokio.rs/tokio/tutorial/channels). The useful next comparison is
+Bifrost 2.2.6 versus the complete Next route and policy-aware Rust candidate with identical cgroups,
+auth, request bodies, provider mocks, retry/cancellation behavior, and logging modes.
+
 ## One thousand simultaneous transport sessions
 
 The same 1,000-session transport workload was repeated with the gateway pinned to four CPUs, the
