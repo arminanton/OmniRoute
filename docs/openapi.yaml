@@ -1631,6 +1631,15 @@ paths:
         - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
+      parameters:
+        - name: X-Route-Model
+          in: header
+          description: >-
+            Supply a model in either this header or the request body. When both are present, this
+            header takes precedence over the body `model`.
+          required: false
+          schema:
+            type: string
       requestBody:
         required: true
         content:
@@ -1703,8 +1712,20 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "400":
+          description: Invalid JSON or request validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "415":
+          description: Content-Type must be application/json.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/InferenceUnauthorized"
         "502":
           description: All upstream providers failed
         "503":
@@ -1874,8 +1895,20 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "400":
+          description: Invalid JSON or request validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "415":
+          description: Content-Type must be application/json.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/InferenceUnauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
@@ -1942,8 +1975,14 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "400":
+          description: Invalid JSON or request validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/InferenceUnauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
@@ -6090,16 +6129,29 @@ paths:
       operationId: getApiUsageCallLogsById
       tags: [Usage]
       summary: Get a specific call log
-      description: Returns the persisted call-log row; this route does not merge in-flight or completed in-memory detail.
+      description: >-
+        Returns one persisted call-log row; this route does not merge in-flight or completed
+        in-memory detail. The response is sensitive and may include raw client prompts, provider
+        requests/responses, and stream frame text. Body and pipeline detail may be null or omitted
+        for API keys with `noLog` enabled. In an unlocked deployment where management
+        authentication is not required, this route can be accessed anonymously. Otherwise it
+        accepts a dashboard session, a `manage`/`admin` API key (Bearer, Anthropic `x-api-key`, or
+        Google `x-goog-api-key`), a loopback CLI token, or a trusted loopback internal-service
+        token. An `oma_live_` access token requires the `read` scope.
       security:
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
         - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
         "200":
           description: Call log detail
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -19479,10 +19531,24 @@ paths:
       tags:
         - Logs
       summary: "GET logs › detail"
-      description: Lists legacy detailed request-log rows and the current pipeline-capture setting.
+      description: >-
+        Lists legacy detailed request-log rows, which can contain raw client prompts, translated
+        requests, and provider/client responses. This response is sensitive. The `enabled` value
+        reads `ENABLE_REQUEST_LOGS` when that environment variable is set; otherwise it reads
+        `call_log_pipeline_enabled`. The chat pipeline itself gates capture from
+        `call_log_pipeline_enabled` directly, so an environment override can make `enabled`
+        diverge from actual chat pipeline capture. In an unlocked deployment where management
+        authentication is not required, this route can be accessed anonymously. Otherwise it
+        accepts a dashboard session, a `manage`/`admin` API key (Bearer, Anthropic `x-api-key`, or
+        Google `x-goog-api-key`), a loopback CLI token, or a trusted loopback internal-service
+        token. An `oma_live_` access token requires the `read` scope.
       security:
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
         - {}
       parameters:
         - name: limit
@@ -19497,7 +19563,8 @@ paths:
           schema: { type: integer, default: 0 }
       responses:
         "200":
-          description: Legacy detailed rows and capture enabled state
+          description: Sensitive legacy detailed rows and the reported pipeline-capture state
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -19516,11 +19583,24 @@ paths:
         - Logs
       summary: "POST logs › detail"
       description: >-
-        Enables capture only when `enabled` is the boolean true or the string `"1"`; any other
-        value (including omission) disables capture.
+        Changes the global `call_log_pipeline_enabled` database setting for new request artifacts;
+        it applies across API keys and providers, while API keys with `noLog` remain excluded.
+        Capture is enabled only when `enabled` is the boolean true or the string `"1"`; any other
+        value (including omission) disables it. This write does not change `ENABLE_REQUEST_LOGS`,
+        which can override the GET response's reported `enabled` value, or the separate
+        `OMNI_DIAGNOSTIC_OVERFLOW_ENABLED` opt-in for eligible private overflow captures. In an
+        unlocked deployment where management authentication is not required, this route can be
+        accessed anonymously. Otherwise it accepts a dashboard session, a `manage`/`admin` API
+        key (Bearer, Anthropic `x-api-key`, or Google `x-goog-api-key`), a loopback CLI token, or a
+        trusted loopback internal-service token. An `oma_live_` access token requires the `write`
+        scope.
       security:
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
         - {}
       requestBody:
         required: true
@@ -32560,13 +32640,16 @@ paths:
         (without query or fragment), and a small allowlist of credential-filtered headers. Raw
         captured request/response bodies are available only through the
         authenticated gzip download routes. This is always authenticated, even when
-        `requireLogin=false`: dashboard session, manage/admin API key, admin-scoped `oma_live_`
-        access token, loopback CLI token, or trusted loopback internal-service token. The storage
+        `requireLogin=false`: dashboard session, manage/admin API key via Bearer, Anthropic
+        `x-api-key`, or Google `x-goog-api-key`, admin-scoped `oma_live_` access token, loopback
+        CLI token, or trusted loopback internal-service token. The storage
         helper converts store read failures into an empty list; a 503 is reserved for auth
         infrastructure or an unexpected route-level failure. No anonymous alternative is allowed.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
       parameters:
@@ -32619,10 +32702,15 @@ paths:
       description: >-
         The handler authenticates first, then refuses implicit HEAD access without opening or
         listing private data. This route always requires authentication, including when
-        `requireLogin=false`.
+        `requireLogin=false`. An `oma_live_` access token requires the `admin` scope; API keys must
+        have `manage` or `admin` scope. The same dashboard-session, Bearer, Anthropic `x-api-key`,
+        Google `x-goog-api-key`, loopback CLI, and trusted loopback internal-service credentials
+        accepted by GET are valid.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
       responses:
@@ -32651,12 +32739,14 @@ paths:
         query/fragment values and attempt headers are allowlisted and credential-filtered, but
         metadata remains sensitive. Manifest read failures are normalized to 404. This route
         always requires authentication, including when
-        `requireLogin=false`: dashboard session, manage/admin API key, admin-scoped `oma_live_`
-        access token, loopback CLI token, or trusted loopback internal-service token. No anonymous
-        alternative is allowed.
+        `requireLogin=false`: dashboard session, manage/admin API key via Bearer, Anthropic
+        `x-api-key`, or Google `x-goog-api-key`, admin-scoped `oma_live_` access token, loopback
+        CLI token, or trusted loopback internal-service token. No anonymous alternative is allowed.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
       responses:
@@ -32702,9 +32792,15 @@ paths:
       description: >-
         The handler authenticates first, then refuses implicit HEAD access without reading a
         manifest. This route always requires authentication, including when `requireLogin=false`.
+        An `oma_live_` access token requires the `admin` scope; API keys must have `manage` or
+        `admin` scope. The same dashboard-session, Bearer, Anthropic `x-api-key`, Google
+        `x-goog-api-key`, loopback CLI, and trusted loopback internal-service credentials accepted
+        by GET are valid.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
       responses:
@@ -32736,12 +32832,14 @@ paths:
         with backpressure and is cancelled when the caller aborts. The client-request alias uses
         the trace ID as its attempt ID. A 409 means capture is still being written or its stored
         byte length/hash check failed. This route always requires authentication, including when
-        `requireLogin=false`: dashboard session, manage/admin API key, admin-scoped `oma_live_`
-        access token, loopback CLI token, or trusted loopback internal-service token. No anonymous
-        alternative is allowed.
+        `requireLogin=false`: dashboard session, manage/admin API key via Bearer, Anthropic
+        `x-api-key`, or Google `x-goog-api-key`, admin-scoped `oma_live_` access token, loopback
+        CLI token, or trusted loopback internal-service token. No anonymous alternative is allowed.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
       responses:
@@ -32799,10 +32897,15 @@ paths:
       description: >-
         The handler authenticates first, then refuses implicit HEAD access without opening the
         private capture. This route always requires authentication, including when
-        `requireLogin=false`.
+        `requireLogin=false`. An `oma_live_` access token requires the `admin` scope; API keys must
+        have `manage` or `admin` scope. The same dashboard-session, Bearer, Anthropic `x-api-key`,
+        Google `x-goog-api-key`, loopback CLI, and trusted loopback internal-service credentials
+        accepted by GET are valid.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
       responses:
@@ -32844,11 +32947,14 @@ paths:
         trace-level client request and requires `attemptId` to equal `traceId`. A 409 means
         capture is still being written or its stored byte length/hash check failed. This
         route always requires authentication, including when `requireLogin=false`: dashboard
-        session, manage/admin API key, admin-scoped `oma_live_` access token, loopback CLI token,
-        or trusted loopback internal-service token. No anonymous alternative is allowed.
+        session, manage/admin API key via Bearer, Anthropic `x-api-key`, or Google
+        `x-goog-api-key`, admin-scoped `oma_live_` access token, loopback CLI token, or trusted
+        loopback internal-service token. No anonymous alternative is allowed.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
       responses:
@@ -32906,10 +33012,15 @@ paths:
       description: >-
         The handler authenticates first, then refuses implicit HEAD access without opening a
         private capture. This route always requires authentication, including when
-        `requireLogin=false`.
+        `requireLogin=false`. An `oma_live_` access token requires the `admin` scope; API keys must
+        have `manage` or `admin` scope. The same dashboard-session, Bearer, Anthropic `x-api-key`,
+        Google `x-goog-api-key`, loopback CLI, and trusted loopback internal-service credentials
+        accepted by GET are valid.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
       responses:
@@ -33614,6 +33725,12 @@ components:
               error:
                 type: string
                 example: Unauthorized
+    InferenceUnauthorized:
+      description: Missing or invalid client API key for an inference endpoint.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
     V1ResourceAuthenticationRequired:
       description: A valid API key or dashboard session is required for this files/batches operation, regardless of `REQUIRE_API_KEY` configuration.
       content:
@@ -41425,13 +41542,17 @@ components:
 
     ChatCompletionRequest:
       type: object
-      required: [model, messages]
+      required: [messages]
       properties:
         model:
           type: string
+          description: >-
+            Model to route to. Optional when `X-Route-Model` is supplied; that header takes
+            precedence when both are present.
           example: gpt-4o
         messages:
           type: array
+          minItems: 1
           items:
             type: object
             required: [role]
@@ -41645,6 +41766,7 @@ components:
           example: claude-sonnet-4-5-20250514
         messages:
           type: array
+          minItems: 1
           items:
             type: object
             required: [role, content]
@@ -41804,6 +41926,9 @@ components:
     ResponsesRequest:
       type: object
       description: OpenAI Responses-compatible input with provider-specific fields passed through.
+      anyOf:
+        - required: [input]
+        - required: [messages]
       properties:
         model: { type: string }
         input:
@@ -41815,6 +41940,13 @@ components:
                   - type: string
                   - type: object
                     additionalProperties: true
+        messages:
+          type: array
+          minItems: 1
+          description: Chat-style message input accepted for compatibility.
+          items:
+            type: object
+            additionalProperties: true
         instructions:
           oneOf:
             - type: string
@@ -44258,7 +44390,11 @@ components:
         allowedQuotas:
           type: array
           items: { type: string }
-        noLog: { type: boolean }
+        noLog:
+          type: boolean
+          description: >-
+            When true, request and response bodies, pipeline diagnostics, and private diagnostic
+            overflow captures are omitted for requests made with this API key.
         autoResolve: { type: boolean }
         isActive:
           type: boolean
@@ -44670,8 +44806,11 @@ components:
       description: >-
         Optional diagnostic stages captured for a request. Persisted artifacts may compact
         repeated payloads internally; the detail API expands those references and returns the
-        original JSON bodies and stream frame text. Large bodies may instead be referenced by a
-        private diagnostic-overflow trace when capture is enabled for the provider.
+        original JSON bodies and stream frame text, which may contain sensitive prompts and
+        provider responses. Large bodies may instead be referenced by a private
+        diagnostic-overflow trace when capture is enabled for the provider. These details are
+        omitted for requests made with an API key whose `noLog` setting is true.
+      x-sensitive: true
       properties:
         diagnosticOverflow:
           $ref: "#/components/schemas/DiagnosticOverflowReference"
@@ -44752,15 +44891,21 @@ components:
           type: object
           description: Sensitive credential headers are masked before persistence.
           additionalProperties: true
-        body: {}
-        effectiveInput: {}
+        body:
+          x-sensitive: true
+          description: Captured client request body; may contain the raw prompt and sensitive data.
+        effectiveInput:
+          x-sensitive: true
+          description: Effective client input after continuation reconstruction; may contain prompts.
       additionalProperties: true
 
     CallLogBodyStage:
       type: object
       properties:
         timestamp: { type: string, format: date-time }
-        body: {}
+        body:
+          x-sensitive: true
+          description: Captured request or response body; may contain prompt or provider response data.
       additionalProperties: true
 
     CallLogProviderRequestStage:
@@ -44772,7 +44917,9 @@ components:
           type: object
           description: Sensitive credential headers are masked before persistence.
           additionalProperties: true
-        body: {}
+        body:
+          x-sensitive: true
+          description: Raw provider request body; may contain the prompt and sensitive data.
       additionalProperties: true
 
     CallLogProviderResponseStage:
@@ -44785,7 +44932,9 @@ components:
           type: object
           description: Sensitive credential headers are masked before persistence.
           additionalProperties: true
-        body: {}
+        body:
+          x-sensitive: true
+          description: Raw provider response body; may contain model output and sensitive data.
       additionalProperties: true
 
     TransportTelemetryClosure:
@@ -45399,12 +45548,17 @@ components:
       allOf:
         - $ref: "#/components/schemas/CallLogSummary"
         - type: object
+          description: >-
+            Sensitive persisted call-log detail. Body and pipeline properties may be null or absent
+            when capture was disabled or the request used an API key with `noLog` enabled.
           required: [requestBody, responseBody, active, detailState]
           properties:
             requestBody:
-              description: Raw request payload; explicitly null when details are unavailable.
+              x-sensitive: true
+              description: Raw request payload, potentially including the client prompt; null when unavailable.
             responseBody:
-              description: Raw response payload; explicitly null when details are unavailable.
+              x-sensitive: true
+              description: Raw response payload, potentially including provider output; null when unavailable.
             active: { type: boolean, const: false }
             detailState:
               type: string
@@ -48928,10 +49082,18 @@ components:
         id: { type: string }
         call_log_id: { type: [string, "null"] }
         timestamp: { type: string, format: date-time }
-        client_request: {}
-        translated_request: {}
-        provider_response: {}
-        client_response: {}
+        client_request:
+          x-sensitive: true
+          description: Raw client request payload; may contain prompts and sensitive data.
+        translated_request:
+          x-sensitive: true
+          description: Translated provider request payload; may contain prompts and sensitive data.
+        provider_response:
+          x-sensitive: true
+          description: Raw provider response payload; may contain model output and sensitive data.
+        client_response:
+          x-sensitive: true
+          description: Raw client response payload; may contain model output and sensitive data.
         provider: { type: [string, "null"] }
         model: { type: [string, "null"] }
         source_format: { type: [string, "null"] }

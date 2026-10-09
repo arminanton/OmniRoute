@@ -30,6 +30,8 @@ const routeFiles = [
 const authSchemes = [
   "ManagementSessionAuth",
   "BearerAuth",
+  "ManagementAnthropicApiKeyAuth",
+  "ManagementGoogleApiKeyAuth",
   "LocalCliTokenAuth",
   "InternalServiceTokenAuth",
 ];
@@ -70,6 +72,7 @@ test("diagnostic-overflow OAS operations match the private GET/HEAD route tree",
         ),
         `${method.toUpperCase()} ${route} is always authenticated, including requireLogin=false`
       );
+      assert.match(operation.description ?? "", /admin(?:-scoped|` scope)/);
       for (const status of ["401", "403", "503"]) {
         assert.ok(operation.responses?.[status], `${method.toUpperCase()} ${route} ${status}`);
       }
@@ -160,6 +163,11 @@ test("diagnostic-overflow contracts describe sensitive manifests, gzip bytes, an
   assert.match(management, /requireManagementAuth\(request,\s*\{\s*alwaysRequireAuth:\s*true/);
   assert.match(management, /"Content-Type":\s*"application\/gzip"/);
   assert.match(management, /highWaterMark:\s*64\s*\*\s*1024/);
+  assert.match(management, /file\.state === "missing" \? 404 : 409/);
+  assert.match(management, /\{ state: file\.state/);
+  const apiKeyAuth = fs.readFileSync(path.join(ROOT, "src/sse/services/auth.ts"), "utf8");
+  assert.match(apiKeyAuth, /readHeaderValue\(request\?\.headers, "x-api-key"\)/);
+  assert.match(apiKeyAuth, /extractGoogApiKeyHeader\(request\?\.headers\)/);
   const store = fs.readFileSync(path.join(ROOT, "src/lib/usage/diagnosticOverflow.ts"), "utf8");
   assert.match(store, /stat\.size !== metadata\.compressedBytes/);
   assert.match(store, /metadata\.gzipSha256/);

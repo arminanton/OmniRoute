@@ -7,6 +7,7 @@ import * as yaml from "js-yaml";
 type Schema = {
   $ref?: string;
   description?: string;
+  "x-sensitive"?: boolean;
   type?: string | string[];
   default?: unknown;
   maximum?: number;
@@ -23,7 +24,10 @@ type Operation = {
   security?: Array<Record<string, string[]>>;
   parameters?: Array<{ name: string; required?: boolean; schema?: Schema }>;
   requestBody?: { required?: boolean; content?: Record<string, { schema?: Schema }> };
-  responses?: Record<string, { content?: Record<string, { schema?: Schema }> }>;
+  responses?: Record<
+    string,
+    { description?: string; "x-sensitive"?: boolean; content?: Record<string, { schema?: Schema }> }
+  >;
 };
 
 const spec = yaml.load(fs.readFileSync(path.join(process.cwd(), "docs/openapi.yaml"), "utf8")) as {
@@ -86,6 +90,83 @@ test("persisted and in-memory call-log details distinguish the clientRequest com
   );
 });
 
+test("sensitive log contracts describe raw detail, noLog, global capture, auth, and token scopes", () => {
+  const detailGet = spec.paths["/api/logs/detail"]?.get;
+  const detailPost = spec.paths["/api/logs/detail"]?.post;
+  const callLogGet = spec.paths["/api/usage/call-logs/{id}"]?.get;
+  for (const [name, operation] of [
+    ["GET /api/logs/detail", detailGet],
+    ["POST /api/logs/detail", detailPost],
+    ["GET /api/usage/call-logs/{id}", callLogGet],
+  ] as const) {
+    assert.ok(operation, `${name} should be documented`);
+    for (const scheme of [
+      "BearerAuth",
+      "ManagementAnthropicApiKeyAuth",
+      "ManagementGoogleApiKeyAuth",
+      "ManagementSessionAuth",
+      "LocalCliTokenAuth",
+      "InternalServiceTokenAuth",
+    ]) {
+      assert.ok(
+        operation.security?.some((alternative) => scheme in alternative),
+        `${name} should document ${scheme}`
+      );
+    }
+    assert.ok(
+      operation.security?.some((alternative) => Object.keys(alternative).length === 0),
+      `${name} can be anonymous when management authentication is disabled`
+    );
+    assert.match(operation.description ?? "", /unlocked deployment.*accessed anonymously/s);
+  }
+
+  assert.equal(detailGet?.responses?.["200"]?.["x-sensitive"], true);
+  assert.match(detailGet?.description ?? "", /raw client prompts.*provider\/client responses/s);
+  assert.match(detailGet?.description ?? "", /ENABLE_REQUEST_LOGS.*call_log_pipeline_enabled/s);
+  assert.match(detailGet?.description ?? "", /diverge from actual chat pipeline capture/);
+  assert.match(detailGet?.description ?? "", /`read` scope/);
+  assert.match(detailPost?.description ?? "", /global.*across API keys and providers/s);
+  assert.match(detailPost?.description ?? "", /`noLog` remain excluded/);
+  assert.match(detailPost?.description ?? "", /OMNI_DIAGNOSTIC_OVERFLOW_ENABLED/);
+  assert.match(detailPost?.description ?? "", /`write` scope/);
+
+  const legacyRow = spec.components.schemas.RequestDetailLogRow.properties;
+  for (const field of [
+    "client_request",
+    "translated_request",
+    "provider_response",
+    "client_response",
+  ]) {
+    assert.equal(legacyRow?.[field]["x-sensitive"], true, `${field} contains raw payloads`);
+  }
+  const callLogDetail = spec.components.schemas.CallLogDetailResponse.allOf?.[1];
+  assert.equal(callLogGet?.responses?.["200"]?.["x-sensitive"], true);
+  assert.equal(callLogDetail?.properties?.requestBody["x-sensitive"], true);
+  assert.equal(callLogDetail?.properties?.responseBody["x-sensitive"], true);
+  assert.equal(spec.components.schemas.CallLogPipelinePayloads["x-sensitive"], true);
+  assert.match(callLogGet?.description ?? "", /raw client prompts.*provider requests\/responses/s);
+  assert.match(callLogGet?.description ?? "", /`noLog` enabled/);
+  assert.match(callLogGet?.description ?? "", /`read` scope/);
+  assert.match(
+    spec.components.schemas.ApiKey.properties?.noLog.description ?? "",
+    /request and response bodies, pipeline diagnostics, and private diagnostic overflow/
+  );
+
+  const root = process.cwd();
+  const toggleRoute = fs.readFileSync(path.join(root, "src/app/api/logs/detail/route.ts"), "utf8");
+  const detailedLogs = fs.readFileSync(path.join(root, "src/lib/db/detailedLogs.ts"), "utf8");
+  const chatCore = fs.readFileSync(path.join(root, "open-sse/handlers/chatCore.ts"), "utf8");
+  const callLogs = fs.readFileSync(path.join(root, "src/lib/usage/callLogs.ts"), "utf8");
+  const overflow = fs.readFileSync(path.join(root, "src/lib/usage/diagnosticOverflow.ts"), "utf8");
+  assert.match(toggleRoute, /updateSettings\(\{ call_log_pipeline_enabled: enabled \}\)/);
+  assert.match(toggleRoute, /detailedLogsEnabled: enabled/);
+  assert.match(detailedLogs, /process\.env\.ENABLE_REQUEST_LOGS/);
+  assert.match(chatCore, /settings\.call_log_pipeline_enabled === true/);
+  assert.match(callLogs, /noLogEnabled \? null : entry\.requestBody/);
+  assert.match(callLogs, /noLogEnabled\s*\?\s*null\s*:\s*\(entry\.pipelinePayloads/);
+  assert.match(overflow, /process\.env\.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED !== "true"/);
+});
+
 test("conversation limits and turn counts describe the source semantics", () => {
   const list = spec.paths["/api/conversations"]?.get;
   assert.equal(
@@ -117,6 +198,8 @@ test("private overflow routes document their category errors, auth failures, and
     const get = spec.paths[pathTemplate]?.get;
     assert.ok(get?.security?.some((alternative) => "ManagementSessionAuth" in alternative));
     assert.ok(get?.security?.some((alternative) => "BearerAuth" in alternative));
+    assert.ok(get?.security?.some((alternative) => "ManagementAnthropicApiKeyAuth" in alternative));
+    assert.ok(get?.security?.some((alternative) => "ManagementGoogleApiKeyAuth" in alternative));
     assert.ok(get?.responses?.["401"]);
     assert.ok(get?.responses?.["403"]);
     assert.ok(get?.responses?.["503"]);
@@ -135,7 +218,7 @@ test("private overflow routes document their category errors, auth failures, and
     assert.equal(
       spec.paths[pathTemplate]?.get?.responses?.["404"]?.content?.["application/json"]?.schema
         ?.$ref,
-      "#/components/schemas/DiagnosticOverflowFileUnavailableResponse"
+      "#/components/schemas/DiagnosticOverflowFileMissingResponse"
     );
     assert.equal(
       spec.paths[pathTemplate]?.get?.responses?.["409"]?.content?.["application/json"]?.schema
