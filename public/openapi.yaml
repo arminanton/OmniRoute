@@ -21532,69 +21532,406 @@ paths:
       operationId: deleteApiV1ManagementProxies
       tags:
         - V1 Management
-      summary: "DELETE management › proxies"
+      summary: Delete a proxy registry entry
+      description: >-
+        Deletes the proxy selected by required `id`. Set `force=1` to remove it despite assignments;
+        without force, assigned proxies may be rejected. Requires management scope when auth is on.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+        - name: force
+          in: query
+          required: false
+          description: The only truthy value is `1`.
+          schema: { type: string, enum: ["1"] }
       responses:
         "200":
-          description: OK
+          description: Proxy registry entry deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "400":
+          description: Missing or invalid query parameters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Proxy not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Proxy remains assigned and force removal was not requested.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Proxy deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiV1ManagementProxies
       tags:
         - V1 Management
-      summary: "GET management › proxies"
+      summary: List or look up proxy registry entries
+      description: >-
+        Lists proxies with username/password redacted, optionally looks up one proxy by `id`, or
+        returns assignments using `where_used=1`. Pagination is clamped to limit 1–200 and offset
+        0 or greater. Management authorization is required when enabled; the list path is anonymous
+        only when that auth mode is disabled.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: where_used
+          in: query
+          required: false
+          description: Use exact value `1` with `id` to return assignment usage.
+          schema: { type: string, enum: ["1"] }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
         "200":
-          description: OK
+          description: Proxy page, one masked record, or assignment usage depending on query.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/V1ManagementProxyListResponse"
+                  - $ref: "#/components/schemas/ProxyRegistryRecord"
+                  - $ref: "#/components/schemas/ProxyRegistryWhereUsedResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Proxy id lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Proxy lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiV1ManagementProxies
       tags:
         - V1 Management
-      summary: "PATCH management › proxies"
+      summary: Update a proxy registry entry
+      description: >-
+        Updates fields supplied in the request. An optional inline assignment updates the proxy and
+        its assignment in the same operation. Mutation responses may expose stored proxy credentials
+        in fields inherited from the proxy registry route.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProxyRegistryUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated proxy, optionally including the resulting assignment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyRegistryMutationResponse" }
+        "400":
+          description: Invalid JSON or proxy update fields.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied the mutation.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Proxy not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Proxy update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiV1ManagementProxies
       tags:
         - V1 Management
-      summary: "POST management › proxies"
+      summary: Create a proxy registry entry
+      description: >-
+        Creates a proxy, optionally with an inline assignment. Credentials are write-only in the
+        request; the registry mutation response can contain stored credential fields.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProxyRegistryCreateRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Proxy created, optionally with inline assignment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyRegistryMutationResponse" }
+        "400":
+          description: Invalid JSON or proxy fields.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied the mutation.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Proxy creation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/v1/management/proxies/assignments:
     get:
       operationId: getApiV1ManagementProxiesAssignments
       tags:
         - V1 Management
-      summary: "GET management › proxies › assignments"
+      summary: List proxy assignments or resolve one connection
+      description: >-
+        Lists assignments using optional filters, or returns the effective resolution when
+        `resolve_connection_id` is set. Pagination is clamped to limit 1–200 and offset ≥0.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: proxy_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: scope
+          in: query
+          required: false
+          schema: { type: string, enum: [global, provider, account, combo, key] }
+        - name: scope_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: resolve_connection_id
+          in: query
+          required: false
+          description: If supplied, returns the effective proxy resolution for this connection instead of a list.
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
         "200":
-          description: OK
+          description: Filtered assignment page or connection proxy-resolution result.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/V1ManagementProxyAssignmentsListResponse"
+                  - $ref: "#/components/schemas/ProxyResolutionResult"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Assignment lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiV1ManagementProxiesAssignments
       tags:
         - V1 Management
-      summary: "PUT management › proxies › assignments"
+      summary: Replace one proxy assignment
+      description: >-
+        Sets or clears an assignment. `scopeId` is required for provider, account, combo, or key
+        scopes; `proxyId: null` clears the assignment. Runtime egress policy can reject the change.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProxyAssignmentRequest" }
       responses:
         "200":
-          description: OK
+          description: Resulting assignment, or null after clearing the scope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyAssignmentMutationResponse" }
+        "400":
+          description: Invalid JSON or assignment fields.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime egress policy denied the assignment.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Referenced proxy id does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Assignment update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/v1/management/proxies/bulk-assign:
     put:
       operationId: putApiV1ManagementProxiesBulkAssign
       tags:
         - V1 Management
-      summary: "PUT management › proxies › bulk assign"
+      summary: Assign one proxy to multiple scopes
+      description: >-
+        Applies an assignment to the selected scopes and returns updated/failed counts. For the
+        `key` scope, storage normalizes the scope to `account`. Non-global scopes require at least
+        one `scopeIds` entry; global scope applies once.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProxyBulkAssignmentRequest" }
       responses:
         "200":
-          description: OK
+          description: Bulk assignment result. Per-scope failures are counted, not returned as an array.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyBulkAssignmentResponse" }
+        "400":
+          description: Invalid JSON or bulk assignment request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime egress policy denied the assignment.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Bulk assignment failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/v1/management/proxies/health:
     get:
       operationId: getApiV1ManagementProxiesHealth
       tags:
         - V1 Management
-      summary: "GET management › proxies › health"
+      summary: Get proxy health statistics
+      description: Reporting window is clamped to 1–720 hours; omitted or zero-like input uses 24 hours.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: hours
+          in: query
+          required: false
+          description: Requested history window in hours; clamped to 1–720.
+          schema: { type: number, minimum: 1, maximum: 720, default: 24 }
       responses:
         "200":
-          description: OK
+          description: Per-proxy request counts and latency within the requested history window.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyHealthStatsResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Proxy health statistics could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/v1/me/status:
     get:
       operationId: getApiV1MeStatus
@@ -24485,6 +24822,38 @@ components:
       properties:
         connectionId: { type: string }
       additionalProperties: true
+    V1ManagementProxyListResponse:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ProxyRegistryRecord" }
+        page:
+          type: object
+          required: [limit, offset, total]
+          properties:
+            limit: { type: integer, minimum: 1, maximum: 200 }
+            offset: { type: integer, minimum: 0 }
+            total: { type: integer, minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
+    V1ManagementProxyAssignmentsListResponse:
+      type: object
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ProxyAssignmentRecord" }
+        page:
+          type: object
+          required: [limit, offset, total]
+          properties:
+            limit: { type: integer, minimum: 1, maximum: 200 }
+            offset: { type: integer, minimum: 0 }
+            total: { type: integer, minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
     V1FileObject:
       type: object
       required: [id, bytes, created_at, filename, object, purpose, expires_at]
