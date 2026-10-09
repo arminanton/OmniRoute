@@ -10,9 +10,11 @@ process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
 process.env.API_KEY_SECRET = "exclusive-lease-auxiliary-test-secret";
 
 let externalCalls = 0;
+let lastFetchHeaders: Headers | null = null;
 const originalFetch = globalThis.fetch;
-globalThis.fetch = async () => {
+globalThis.fetch = async (_input, init) => {
   externalCalls += 1;
+  lastFetchHeaders = new Headers(init?.headers);
   throw new Error("unexpected external provider/model call");
 };
 
@@ -54,8 +56,10 @@ async function resetStorage(): Promise<void> {
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
   externalCalls = 0;
-  globalThis.fetch = async () => {
+  lastFetchHeaders = null;
+  globalThis.fetch = async (_input, init) => {
     externalCalls += 1;
+    lastFetchHeaders = new Headers(init?.headers);
     throw new Error("unexpected external provider/model call");
   };
 }
@@ -84,6 +88,7 @@ test("translator send accepts a FREE lease-capable connection and attempts provi
   );
 
   assert.equal(externalCalls, 1);
+  assert.equal(lastFetchHeaders?.get("authorization"), "Bearer sk-translator-free-lease");
 });
 
 test("translator send excludes an ACTIVE leased connection before provider fetch", async () => {
@@ -111,7 +116,7 @@ test("translator send excludes an ACTIVE leased connection before provider fetch
   assert.equal(externalCalls, 0);
 });
 
-test("translator request preview materializes a FREE lease-capable credential", async () => {
+test("translator request preview redacts a FREE lease-capable credential and keeps safe headers", async () => {
   const connection = await seedConnection("translator-preview-free-lease");
   await markLeaseOnly(connection.id);
 
@@ -126,10 +131,38 @@ test("translator request preview materializes a FREE lease-capable credential", 
       }),
     })
   );
-  const body = await response.text();
+  const body = await response.json();
 
   assert.equal(response.status, 200);
-  assert.equal(body.includes("sk-translator-preview-free-lease"), true);
+  assert.equal(body.success, true);
+  assert.equal(body.result.headers.Authorization, "Bearer [REDACTED]");
+  assert.equal(body.result.headers["Content-Type"], "application/json");
+  assert.equal(body.result.headers.Accept, "text/event-stream");
+  assert.equal(body.result.body.model, "gpt-4.1-mini");
+  assert.equal(JSON.stringify(body).includes("sk-translator-preview-free-lease"), false);
+  assert.equal(externalCalls, 0);
+});
+
+test("translator request preview redacts API-key auth headers for Anthropic and preserves version metadata", async () => {
+  const connection = await seedConnection("translator-preview-anthropic", "anthropic");
+  await markLeaseOnly(connection.id);
+
+  const response = await translatorPreview.POST(
+    new Request("http://omniroute.local/api/translator/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        step: 4,
+        provider: "anthropic",
+        body: { model: "claude-sonnet-4", messages: [{ role: "user", content: "test" }] },
+      }),
+    })
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.result.headers["x-api-key"], "[REDACTED]");
+  assert.equal(JSON.stringify(body).includes("sk-translator-preview-anthropic"), false);
   assert.equal(externalCalls, 0);
 });
 

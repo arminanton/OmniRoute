@@ -10,6 +10,7 @@ import { translateRequest } from "@omniroute/open-sse/translator/index.ts";
 import { FORMATS } from "@omniroute/open-sse/translator/formats.ts";
 import { getProviderConnections } from "@/lib/db/providers";
 import { isConnectionUnavailableToAuxiliaryActivity } from "@/lib/exclusiveLeaseIsolation";
+import { redactProviderRequestPreview } from "@/lib/translator/previewRedaction";
 import { translatorTranslateSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
@@ -232,11 +233,12 @@ export async function POST(request) {
           providerSpecificData: connection.providerSpecificData,
         });
         const headers = buildProviderHeaders(provider, credentials, true, actualBody);
+        const safePreview = redactProviderRequestPreview(url, headers, credentials);
 
         result = {
           timestamp: new Date().toISOString(),
-          url: url,
-          headers: headers,
+          url: safePreview.url,
+          headers: safePreview.headers,
           body: actualBody,
         };
         break;
