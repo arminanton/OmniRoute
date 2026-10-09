@@ -31,6 +31,7 @@ process.env.ANTIGRAVITY_CREDITS = "never";
 const captureCallLogs = process.env.RUN_ANTIGRAVITY_CAPTURE_BENCH === "1";
 const capturePrivateOverflow =
   captureCallLogs && process.env.ANTIGRAVITY_CAPTURE_OVERFLOW_BENCH === "1";
+const captureAdmissionBench = process.env.ANTIGRAVITY_CAPTURE_ADMISSION_BENCH === "1";
 const captureOverflowMinClientBytes = process.env.ANTIGRAVITY_CAPTURE_OVERFLOW_MIN_CLIENT_BYTES;
 const captureContextBytes = Math.max(0, Number(process.env.ANTIGRAVITY_CAPTURE_CONTEXT_BYTES || 0));
 const requestedSessionCounts = (process.env.ANTIGRAVITY_CAPTURE_SESSION_COUNTS || "")
@@ -217,6 +218,107 @@ async function verifyPrivateCaptureReadable(
   return rawBytes;
 }
 
+type AdmissionBenchmarkSnapshot = {
+  activeHeavy: number;
+  activeHealthyHeadroom: number;
+  byteBudgetQueuedBytes: number;
+  budgetSource: string;
+  inflightBytes: number;
+  maxInflightBytes: number;
+  queuedBytes: number;
+  shedTotal: number;
+  shedsByReason: Record<string, number>;
+  waiting: number;
+};
+
+/** Opt-in scalar-only sampler; never retain or emit the snapshot's opaque lane keys. */
+function createAdmissionSampler(
+  getSnapshot: () => AdmissionBenchmarkSnapshot,
+  maxQueuedBytes: number
+) {
+  const startedAt = Date.now();
+  const maxima = {
+    inflightBytes: 0,
+    maxInflightBytes: 0,
+    waiting: 0,
+    queuedBytes: 0,
+    byteBudgetQueuedBytes: 0,
+    activeHeavy: 0,
+    activeHealthyHeadroom: 0,
+    shedTotal: 0,
+    shedsByReason: {} as Record<string, number>,
+  };
+  const budgetSources = new Set<string>();
+  let samples = 0;
+  let finalSnapshot:
+    | (Omit<AdmissionBenchmarkSnapshot, "shedsByReason"> & {
+        shedsByReason: Record<string, number>;
+      })
+    | null = null;
+
+  const observe = () => {
+    const snapshot = getSnapshot();
+    samples++;
+    budgetSources.add(snapshot.budgetSource);
+    for (const key of [
+      "inflightBytes",
+      "maxInflightBytes",
+      "waiting",
+      "queuedBytes",
+      "byteBudgetQueuedBytes",
+      "activeHeavy",
+      "activeHealthyHeadroom",
+      "shedTotal",
+    ] as const) {
+      maxima[key] = Math.max(maxima[key], snapshot[key]);
+    }
+    for (const [reason, count] of Object.entries(snapshot.shedsByReason)) {
+      maxima.shedsByReason[reason] = Math.max(maxima.shedsByReason[reason] ?? 0, count);
+    }
+    finalSnapshot = {
+      activeHeavy: snapshot.activeHeavy,
+      activeHealthyHeadroom: snapshot.activeHealthyHeadroom,
+      byteBudgetQueuedBytes: snapshot.byteBudgetQueuedBytes,
+      budgetSource: snapshot.budgetSource,
+      inflightBytes: snapshot.inflightBytes,
+      maxInflightBytes: snapshot.maxInflightBytes,
+      queuedBytes: snapshot.queuedBytes,
+      shedTotal: snapshot.shedTotal,
+      shedsByReason: { ...snapshot.shedsByReason },
+      waiting: snapshot.waiting,
+    };
+  };
+
+  observe();
+  const timer = setInterval(observe, 75);
+  timer.unref?.();
+
+  return {
+    finish() {
+      clearInterval(timer);
+      observe();
+      return {
+        intervalMs: 75,
+        samples,
+        elapsedMs: Date.now() - startedAt,
+        maxQueuedBytes,
+        budgetSources: [...budgetSources].sort(),
+        maxima,
+        final: finalSnapshot,
+        inflightSaturated: maxima.inflightBytes >= maxima.maxInflightBytes,
+        structuralQueueSaturated: maxima.queuedBytes >= maxQueuedBytes,
+        byteQueueSaturated: maxima.byteBudgetQueuedBytes >= maxQueuedBytes,
+        maxInflightUtilization:
+          maxima.maxInflightBytes > 0 ? maxima.inflightBytes / maxima.maxInflightBytes : 0,
+        maxQueuedUtilization:
+          maxQueuedBytes > 0
+            ? Math.max(maxima.queuedBytes, maxima.byteBudgetQueuedBytes) / maxQueuedBytes
+            : 0,
+      };
+    },
+  };
+}
+
 async function finalPrivateManifest(traceId: string) {
   const { readDiagnosticOverflowManifest } =
     await import("../../src/lib/usage/diagnosticOverflow.ts");
@@ -280,6 +382,7 @@ test(
     const memorySampler = captureMemoryBench ? createProcessMemorySampler(1_000) : null;
     const eventLoopDelay = captureMemoryBench ? monitorEventLoopDelay({ resolution: 20 }) : null;
     eventLoopDelay?.enable();
+    let admissionSampler: ReturnType<typeof createAdmissionSampler> | null = null;
     let clientMemorySnapshot: Record<string, unknown> | null = null;
     let upstreamMemorySnapshot: Record<string, unknown> | null = null;
     let upstreamStatsForDiagnostics: Record<string, unknown> | null = null;
@@ -513,6 +616,13 @@ test(
         globalThis.fetch = originalFetch;
         instrumentedUpstreamUrl = null;
       };
+      if (captureAdmissionBench) {
+        const admission = await import("../../src/shared/middleware/chatBodyAdmission.ts");
+        admissionSampler = createAdmissionSampler(
+          () => admission.perConnectionAdmissionController.snapshot(),
+          admission.CHAT_ADMISSION_MAX_QUEUED_BYTES
+        );
+      }
       clientFixture = spawnFixture("antigravity-parallel-client.mjs", {
         ANTIGRAVITY_GATEWAY_URL: gatewayUrl,
         ANTIGRAVITY_TEST_API_KEY: key.key,
@@ -875,6 +985,11 @@ test(
     } finally {
       restoreUrl();
       restoreFetch();
+      if (admissionSampler) {
+        console.log(
+          `ANTIGRAVITY_ADMISSION_DIAGNOSTICS ${JSON.stringify(admissionSampler.finish())}`
+        );
+      }
       if (captureMemoryBench) {
         eventLoopDelay?.disable();
         if (!upstreamStatsForDiagnostics && upstreamFixture) {
