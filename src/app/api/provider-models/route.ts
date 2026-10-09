@@ -145,6 +145,7 @@ export async function POST(request) {
       // #1294: persist the per-model token limits set in the add-model form.
       max_input_tokens: maxInputTokens,
       max_output_tokens: maxOutputTokens,
+      contextWindowOverride,
       // #1904: manual vision-capability override set in the add-model form.
       supportsVision,
       // #9820: optional video-generation job preset (job/poll path).
@@ -168,7 +169,20 @@ export async function POST(request) {
       generationConfig,
       typeof isFree === "boolean" ? isFree : undefined
     );
-    return Response.json({ model });
+    let contextWindowOverrideResult: number | null | undefined;
+    if (contextWindowOverride === null) {
+      removeModelContextOverride(provider, modelId);
+      contextWindowOverrideResult = null;
+    } else if (contextWindowOverride !== undefined) {
+      setModelContextOverride(provider, modelId, contextWindowOverride, "manual");
+      contextWindowOverrideResult = contextWindowOverride;
+    }
+    return Response.json({
+      model,
+      ...(contextWindowOverrideResult !== undefined
+        ? { contextWindowOverride: contextWindowOverrideResult }
+        : {}),
+    });
   } catch (error) {
     console.error("Error adding provider model:", error);
     return Response.json(

@@ -3540,6 +3540,10 @@ paths:
         With `provider`, returns that provider's custom model array and compatibility overrides.
         Without it, `models` is keyed by provider ID and `modelCompatOverrides` is empty. The
         hidden-model map includes hidden IDs for all providers.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: provider
           in: query
@@ -3567,78 +3571,155 @@ paths:
       operationId: postApiProviderModels
       tags: [Providers]
       summary: Add a custom provider model
+      description: >-
+        The shared validator accepts the common mutation shape. This create handler persists model
+        identity, source, protocol/endpoints, token limits, vision/free flags, video-generation config,
+        and an optional context-window override. Compatibility-only fields are accepted by validation
+        but are only applied by PUT.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [provider, modelId]
-              properties:
-                provider: { type: string, minLength: 1 }
-                modelId: { type: string, minLength: 1 }
-                modelName: { type: string }
-                source: { type: string }
-                apiFormat: { type: string }
-                supportedEndpoints: { type: array, items: { type: string } }
-                targetFormat: { type: string }
-                max_input_tokens: { type: integer, minimum: 1 }
-                max_output_tokens: { type: integer, minimum: 1 }
-              additionalProperties: true
+              $ref: "#/components/schemas/ProviderModelMutationRequest"
       responses:
         "200":
           description: Custom provider model added or updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderModelCreateResponse" }
         "400":
           description: Invalid provider model data
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
         "401":
           description: Authentication required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Provider model creation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     put:
       operationId: putApiProviderModels
       tags: [Providers]
       summary: Replace or upsert a custom provider model
+      description: >-
+        Updates an existing custom model. Compatibility-only fields may instead create or update a
+        provider/model compatibility override when no custom model row exists. A context-window
+        override is stored independently and is cleared by sending `null`. `source` and
+        `max_input_tokens`/`max_output_tokens` are accepted by the shared validator but are only used
+        when creating a model; PUT does not change them.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [provider, modelId]
-              properties:
-                provider: { type: string, minLength: 1 }
-                modelId: { type: string, minLength: 1 }
-              additionalProperties: true
+              $ref: "#/components/schemas/ProviderModelMutationRequest"
       responses:
         "200":
           description: Custom provider model saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderModelPutResponse" }
         "400":
           description: Invalid provider model data
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
         "401":
           description: Authentication required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Custom model does not exist for a model update.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Provider model update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     patch:
       operationId: patchApiProviderModels
       tags: [Providers]
       summary: Update custom models for one provider
+      description: >-
+        Sets hidden state on one or more custom or catalog model IDs. IDs can be supplied in
+        `modelIds`, `modelId`, or the legacy `model` query parameter. Hiding removes managed aliases;
+        showing may assign them.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: provider
           in: query
           required: true
           schema: { type: string }
+        - name: modelId
+          in: query
+          schema: { type: string }
+        - name: model
+          in: query
+          description: Legacy alias for `modelId`.
+          schema: { type: string }
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, additionalProperties: true }
+            schema: { $ref: "#/components/schemas/ProviderModelsVisibilityUpdateRequest" }
       responses:
         "200":
           description: Provider custom models updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderModelsVisibilityUpdateResponse" }
         "400":
           description: Invalid provider or model data
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
           description: Authentication required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Provider model visibility update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     delete:
       operationId: deleteApiProviderModels
       tags: [Providers]
       summary: Delete custom provider models
+      description: >-
+        Deletes one model, clears a custom overlay while preserving the synced base when
+        `resetOverride=true`, or clears all custom/synced models and managed aliases when `all=true`.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: provider
           in: query
@@ -3649,17 +3730,33 @@ paths:
           schema: { type: string }
         - name: all
           in: query
-          schema: { type: boolean }
+          schema: { type: string, enum: ["true"] }
+          description: Set to the literal string `true` to clear all provider models.
         - name: resetOverride
           in: query
-          schema: { type: boolean }
+          schema: { type: string, enum: ["true"] }
+          description: Set to the literal string `true` to remove the custom overlay and retain the synced model.
       responses:
         "200":
           description: Custom provider model removed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderModelsDeleteResponse" }
         "400":
           description: Provider query parameter is missing
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
           description: Authentication required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Provider model deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/keys:
     get:
@@ -33805,6 +33902,249 @@ components:
           items:
             $ref: "#/components/schemas/TransportAttemptTelemetry"
       additionalProperties: true
+
+    ProviderModelUpstreamHeaders:
+      type: object
+      description: >-
+        User-supplied upstream headers. Header names are trimmed, limited to 128 characters, and
+        cannot contain whitespace, colons, or line breaks; the handler also rejects credential,
+        hop-by-hop, and other protected header names. Values are limited to 4,096 characters and
+        cannot contain line breaks. At most 16 headers are accepted.
+      maxProperties: 16
+      propertyNames:
+        minLength: 1
+        maxLength: 128
+        pattern: "^[^\\s:\\r\\n\\u0000]+$"
+      additionalProperties:
+        type: string
+        maxLength: 4096
+
+    ProviderModelProtocolCompatibility:
+      type: object
+      properties:
+        normalizeToolCallId: { type: boolean }
+        preserveOpenAIDeveloperRole: { type: boolean }
+        upstreamHeaders: { $ref: "#/components/schemas/ProviderModelUpstreamHeaders" }
+      additionalProperties: false
+
+    ProviderModelMutationRequest:
+      type: object
+      required: [provider, modelId]
+      properties:
+        provider:
+          { type: string, minLength: 1, maxLength: 120, description: Trimmed before storage. }
+        modelId:
+          { type: string, minLength: 1, maxLength: 240, description: Trimmed before storage. }
+        modelName: { type: string, maxLength: 240 }
+        source: { type: string, maxLength: 80, default: manual }
+        apiFormat:
+          type: string
+          enum:
+            [
+              chat-completions,
+              responses,
+              embeddings,
+              rerank,
+              audio-transcriptions,
+              audio-speech,
+              images-generations,
+              video,
+            ]
+          default: chat-completions
+        supportedEndpoints:
+          type: array
+          default: [chat]
+          items:
+            type: string
+            enum:
+              [
+                chat,
+                embeddings,
+                rerank,
+                images,
+                videos,
+                audio-speech,
+                audio-transcriptions,
+                images-generations,
+                video,
+                audio,
+              ]
+          description: Legacy video/audio inputs normalize to videos/audio endpoint values when persisted.
+        targetFormat:
+          { type: string, enum: [openai, openai-responses, claude, gemini, antigravity] }
+        max_input_tokens: { type: integer, minimum: 1 }
+        max_output_tokens: { type: integer, minimum: 1 }
+        contextWindowOverride:
+          type: [integer, "null"]
+          minimum: 1
+          description: Null clears the independently persisted manual context-window override.
+        supportsVision:
+          type: [boolean, "null"]
+          description: Null clears the manual capability override and restores ID-based detection.
+        isFree: { type: [boolean, "null"] }
+        normalizeToolCallId: { type: boolean }
+        preserveOpenAIDeveloperRole: { type: [boolean, "null"] }
+        upstreamHeaders:
+          oneOf:
+            - $ref: "#/components/schemas/ProviderModelUpstreamHeaders"
+            - type: "null"
+        compatByProtocol:
+          type: object
+          properties:
+            openai: { $ref: "#/components/schemas/ProviderModelProtocolCompatibility" }
+            openai-responses: { $ref: "#/components/schemas/ProviderModelProtocolCompatibility" }
+            claude: { $ref: "#/components/schemas/ProviderModelProtocolCompatibility" }
+          additionalProperties: false
+        generationConfig:
+          type: object
+          required: [preset]
+          properties:
+            preset:
+              { type: string, enum: [agnes-video-job, muapi-video-job, sora-job, openai-video] }
+          additionalProperties: false
+      additionalProperties: true
+
+    ProviderCustomModel:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        source: { type: string }
+        apiFormat: { type: string }
+        supportedEndpoints:
+          type: array
+          items: { type: string }
+        targetFormat: { type: string }
+        inputTokenLimit: { type: integer, minimum: 1 }
+        outputTokenLimit: { type: integer, minimum: 1 }
+        supportsVision: { type: [boolean, "null"] }
+        isFree: { type: [boolean, "null"] }
+        isHidden: { type: boolean }
+        contextWindowOverride: { type: integer, minimum: 1 }
+        contextWindowOverrideSource: { type: string, enum: [manual, auto] }
+        normalizeToolCallId: { type: boolean }
+        preserveOpenAIDeveloperRole: { type: [boolean, "null"] }
+        upstreamHeaders: { $ref: "#/components/schemas/ProviderModelUpstreamHeaders" }
+        generationConfig:
+          type: object
+          properties:
+            preset: { type: string }
+          additionalProperties: true
+        compatByProtocol:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ProviderModelProtocolCompatibility" }
+      additionalProperties: true
+
+    ProviderModelCreateResponse:
+      type: object
+      required: [model]
+      properties:
+        model: { $ref: "#/components/schemas/ProviderCustomModel" }
+        contextWindowOverride: { type: [integer, "null"], minimum: 1 }
+      additionalProperties: false
+
+    ProviderModelCompatOverrideResponse:
+      type: object
+      required: [ok, modelCompatOverrides]
+      properties:
+        ok: { type: boolean, const: true }
+        modelCompatOverrides:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        contextWindowOverride: { type: [integer, "null"], minimum: 1 }
+      additionalProperties: false
+
+    ProviderModelUpdatedResponse:
+      type: object
+      required: [model]
+      properties:
+        model: { $ref: "#/components/schemas/ProviderCustomModel" }
+        contextWindowOverride: { type: [integer, "null"], minimum: 1 }
+      additionalProperties: false
+
+    ProviderModelPutResponse:
+      oneOf:
+        - $ref: "#/components/schemas/ProviderModelUpdatedResponse"
+        - $ref: "#/components/schemas/ProviderModelCompatOverrideResponse"
+
+    ProviderModelsVisibilityUpdateRequest:
+      type: object
+      required: [isHidden]
+      properties:
+        isHidden: { type: boolean }
+        modelIds:
+          type: array
+          items: { type: string }
+          description: One or more IDs to update; an empty/absent list falls back to `modelId` or `model` query parameters.
+      additionalProperties: true
+
+    ProviderModelAliasChanges:
+      type: object
+      required: [removed, assigned]
+      properties:
+        removed:
+          type: array
+          items: { type: string }
+        assigned:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    ProviderModelAliasSyncResult:
+      type: object
+      required: [assignedAliases, removedAliases, storagePrefix]
+      properties:
+        assignedAliases:
+          type: array
+          items: { type: string }
+        removedAliases:
+          type: array
+          items: { type: string }
+        storagePrefix: { type: string }
+      additionalProperties: false
+
+    ProviderModelsVisibilityUpdateResponse:
+      type: object
+      required: [ok, updated, aliasChanges, models, modelCompatOverrides]
+      properties:
+        ok: { type: boolean, const: true }
+        updated: { type: integer, minimum: 1 }
+        aliasChanges: { $ref: "#/components/schemas/ProviderModelAliasChanges" }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderCustomModel" }
+        modelCompatOverrides:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      additionalProperties: false
+
+    ProviderModelsDeleteResponse:
+      oneOf:
+        - type: object
+          required: [cleared, syncedAvailableModelListsRemoved, aliasChanges]
+          properties:
+            cleared: { type: boolean, const: true }
+            syncedAvailableModelListsRemoved: { type: integer, minimum: 0 }
+            aliasChanges: { $ref: "#/components/schemas/ProviderModelAliasChanges" }
+          additionalProperties: false
+        - type: object
+          required: [removed, resetOverride, aliasChanges]
+          properties:
+            removed: { type: boolean }
+            resetOverride: { type: boolean, const: true }
+            aliasChanges: { $ref: "#/components/schemas/ProviderModelAliasSyncResult" }
+          additionalProperties: false
+        - type: object
+          required: [removed, aliasChanges]
+          properties:
+            removed: { type: boolean }
+            aliasChanges: { $ref: "#/components/schemas/ProviderModelAliasChanges" }
+          additionalProperties: false
 
     ProviderModelsResponse:
       type: object
