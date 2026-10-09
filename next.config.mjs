@@ -253,6 +253,12 @@ const nextConfig = {
           turbopackPluginRuntimeStrategy: process.env.OMNIROUTE_TURBOPACK_PLUGIN_RUNTIME_STRATEGY,
         }
       : {}),
+    ...(process.env.OMNIROUTE_TURBOPACK_MEMORY_EVICTION === "full" ||
+    process.env.OMNIROUTE_TURBOPACK_MEMORY_EVICTION === "auto"
+      ? { turbopackMemoryEviction: process.env.OMNIROUTE_TURBOPACK_MEMORY_EVICTION }
+      : process.env.OMNIROUTE_TURBOPACK_MEMORY_EVICTION === "false"
+        ? { turbopackMemoryEviction: false }
+        : {}),
     // Next.js proxy (middleware) has a default 10MB body clone limit. File
     // uploads (OpenAI-compatible /v1/files) routinely exceed this. Match the
     // 512 MB server-side cap; tune via env if needed.
