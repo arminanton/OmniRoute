@@ -22,6 +22,11 @@ type PayloadEnvelope = { body?: Record<string, unknown> };
 type PayloadMap = { providerResponse?: PayloadEnvelope; clientResponse?: PayloadEnvelope };
 
 import { useDecollidedMigrationsDir } from "./helpers/decollidedMigrationsDir.ts";
+import {
+  hasDiagnosticClientJson,
+  recordDiagnosticClientJson,
+  releaseDiagnosticClientJson,
+} from "../../open-sse/utils/diagnosticCaptureContext.ts";
 
 useDecollidedMigrationsDir();
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-calllogs-artifacts-"));
@@ -635,6 +640,160 @@ test("saveCallLog omits oversized non-stream pipeline payloads to enforce artifa
       reason: "call_log_artifact_size_limit_exceeded",
     },
   });
+});
+
+test("size-limit fallback preserves bounded Antigravity attempt diagnostics through detail read", async () => {
+  process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = "16";
+  const priorOverflowEnabled = process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED;
+  const priorMinimumClientBytes = process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
+  process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = "true";
+  process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = String(3 * 1024 * 1024);
+  const representativeRequest = {
+    messages: [{ role: "user", content: "x".repeat(Math.ceil(3.05 * 1024 * 1024)) }],
+  };
+  const smallerRequest = {
+    messages: [{ role: "user", content: "x".repeat(Math.floor(2.95 * 1024 * 1024)) }],
+  };
+  const representativeEnvelope = {};
+  const smallerEnvelope = {};
+  try {
+    recordDiagnosticClientJson(representativeEnvelope, representativeRequest, true);
+    recordDiagnosticClientJson(smallerEnvelope, smallerRequest, true);
+    assert.equal(hasDiagnosticClientJson(representativeEnvelope), true);
+    assert.equal(hasDiagnosticClientJson(smallerEnvelope), false);
+  } finally {
+    releaseDiagnosticClientJson(representativeEnvelope);
+    releaseDiagnosticClientJson(smallerEnvelope);
+    if (priorOverflowEnabled === undefined) delete process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED;
+    else process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = priorOverflowEnabled;
+    if (priorMinimumClientBytes === undefined)
+      delete process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
+    else process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = priorMinimumClientBytes;
+  }
+
+  const privatePayload = "RAW_PRIVATE_UPSTREAM_PAYLOAD_SENTINEL_" + "x".repeat(600 * 1024);
+  const attemptDiagnostics = [
+    {
+      kind: "http_error",
+      url: "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent",
+      status: 429,
+      statusText: "Too Many Requests",
+      headers: {
+        "retry-after": "30",
+        "x-goog-request-id": "synthetic-429-request-id",
+        authorization: "Bearer RAW_PRIVATE_AUTH_SENTINEL",
+      },
+      bodyBytes: 128,
+      bodyTruncated: false,
+      bodySha256: "synthetic-429-body-hash",
+      upstreamError: {
+        code: 429,
+        status: "RESOURCE_EXHAUSTED",
+        message: "Quota exceeded for this model.",
+        details: [
+          {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            reason: "RATE_LIMIT_EXCEEDED",
+            domain: "googleapis.com",
+            metadata: { service: "cloudcode-pa.googleapis.com", quota_metric: "generate_requests" },
+          },
+        ],
+      },
+    },
+    {
+      kind: "http_error",
+      url: "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent",
+      status: 502,
+      statusText: "Bad Gateway",
+      headers: { "x-goog-request-id": "synthetic-502-request-id" },
+      bodyBytes: 64,
+      bodyTruncated: false,
+      bodyFormat: "json",
+      bodySha256: "synthetic-502-body-hash",
+    },
+    {
+      kind: "transport_error",
+      url: "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent",
+      status: 504,
+      name: "HeadersTimeoutError",
+      code: "UND_ERR_HEADERS_TIMEOUT",
+      causeName: "HeadersTimeoutError",
+      causeCode: "UND_ERR_HEADERS_TIMEOUT",
+    },
+  ];
+
+  await callLogs.saveCallLog({
+    id: "antigravity-attempt-diagnostics-size-limit",
+    timestamp: "2026-03-31T10:06:30.000Z",
+    method: "POST",
+    path: "/v1/chat/completions",
+    status: 504,
+    model: "antigravity/gemini-3.8-flash-high",
+    provider: "antigravity",
+    requestBody: { prompt: privatePayload },
+    responseBody: { error: privatePayload },
+    error: "Antigravity upstream request failed",
+    pipelinePayloads: {
+      providerRequest: { body: { prompt: privatePayload } },
+      providerResponse: { status: 504, body: { data: privatePayload } },
+      providerAttemptDiagnostics: attemptDiagnostics,
+      providerAttemptDiagnosticsDropped: 2,
+    },
+  });
+
+  const detail = await callLogs.getCallLogById("antigravity-attempt-diagnostics-size-limit");
+  assert.equal(detail?.detailState, "ready");
+  assert.equal(detail?.pipelinePayloads?.error?.reason, "call_log_artifact_size_limit_exceeded");
+  assert.deepEqual(
+    detail?.pipelinePayloads?.providerAttemptDiagnostics?.map((item) => ({
+      kind: item.kind,
+      status: item.status,
+      retryAfter: (item.headers as Record<string, unknown> | undefined)?.["retry-after"],
+      requestId: (item.headers as Record<string, unknown> | undefined)?.["x-goog-request-id"],
+      errorStatus: (item.upstreamError as Record<string, unknown> | undefined)?.status,
+      errorReason: (((item.upstreamError as Record<string, unknown> | undefined)?.details as
+        Array<Record<string, unknown>> | undefined)?.[0])?.reason,
+      transportCode: item.code,
+    })),
+    [
+      {
+        kind: "http_error",
+        status: 429,
+        retryAfter: "30",
+        requestId: "synthetic-429-request-id",
+        errorStatus: "RESOURCE_EXHAUSTED",
+        errorReason: "RATE_LIMIT_EXCEEDED",
+        transportCode: undefined,
+      },
+      {
+        kind: "http_error",
+        status: 502,
+        retryAfter: undefined,
+        requestId: "synthetic-502-request-id",
+        errorStatus: undefined,
+        errorReason: undefined,
+        transportCode: undefined,
+      },
+      {
+        kind: "transport_error",
+        status: 504,
+        retryAfter: undefined,
+        requestId: undefined,
+        errorStatus: undefined,
+        errorReason: undefined,
+        transportCode: "UND_ERR_HEADERS_TIMEOUT",
+      },
+    ]
+  );
+  assert.equal(detail?.pipelinePayloads?.providerAttemptDiagnosticsDropped, 2);
+
+  const artifactPath = path.join(TEST_DATA_DIR, "call_logs", detail!.artifactRelPath!);
+  const serialized = fs.readFileSync(artifactPath, "utf8");
+  assert.doesNotMatch(serialized, /RAW_PRIVATE_UPSTREAM_PAYLOAD_SENTINEL|RAW_PRIVATE_AUTH_SENTINEL/);
+  assert.match(serialized, /\[REDACTED\]/);
+  const artifact = JSON.parse(serialized);
+  assert.equal(artifact.requestBody, "[omitted: call log artifact size limit exceeded]");
+  assert.equal(artifact.responseBody, "[omitted: call log artifact size limit exceeded]");
 });
 
 test("preparation budget refuses body clones but persists the private overflow pointer stub", async () => {

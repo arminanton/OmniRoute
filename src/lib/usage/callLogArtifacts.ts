@@ -336,10 +336,31 @@ function compactErrorPipeline(artifact: CallLogArtifact): RequestPipelinePayload
   const diagnosticOverflow = projectDiagnosticOverflowReference(
     artifact.pipeline?.diagnosticOverflow
   );
+  // RequestLogger already bounds these projections to 24 entries and records
+  // any excess separately. Preserve that safe evidence when the body-bearing
+  // pipeline is compacted; otherwise the size-limit fallback discards the only
+  // per-attempt status/retry/transport details for failures such as AG 429s.
+  const rawAttemptDiagnostics = artifact.pipeline?.providerAttemptDiagnostics;
+  const maxAttemptDiagnostics = 24;
+  const providerAttemptDiagnostics = Array.isArray(rawAttemptDiagnostics)
+    ? rawAttemptDiagnostics.slice(0, maxAttemptDiagnostics)
+    : [];
+  const existingDropped = artifact.pipeline?.providerAttemptDiagnosticsDropped;
+  const providerAttemptDiagnosticsDropped =
+    (typeof existingDropped === "number" && Number.isSafeInteger(existingDropped) && existingDropped > 0
+      ? existingDropped
+      : 0) +
+    (Array.isArray(rawAttemptDiagnostics)
+      ? Math.max(0, rawAttemptDiagnostics.length - maxAttemptDiagnostics)
+      : 0);
   return {
     error,
     ...(diagnosticOverflow ? { diagnosticOverflow } : {}),
     ...(providerResponse ? { providerResponse } : {}),
+    ...(providerAttemptDiagnostics.length ? { providerAttemptDiagnostics } : {}),
+    ...(providerAttemptDiagnosticsDropped
+      ? { providerAttemptDiagnosticsDropped }
+      : {}),
     ...(transportTelemetry ? { transportTelemetry } : {}),
   };
 }
