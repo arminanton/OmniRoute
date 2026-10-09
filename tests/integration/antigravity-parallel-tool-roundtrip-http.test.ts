@@ -9,7 +9,7 @@ import { Readable } from "node:stream";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import { gunzipSync } from "node:zlib";
+import { createGunzip, gunzipSync } from "node:zlib";
 import { fetch as clientFetch } from "undici";
 import {
   createProcessMemorySampler,
@@ -31,6 +31,7 @@ process.env.ANTIGRAVITY_CREDITS = "never";
 const captureCallLogs = process.env.RUN_ANTIGRAVITY_CAPTURE_BENCH === "1";
 const capturePrivateOverflow =
   captureCallLogs && process.env.ANTIGRAVITY_CAPTURE_OVERFLOW_BENCH === "1";
+const captureOverflowMinClientBytes = process.env.ANTIGRAVITY_CAPTURE_OVERFLOW_MIN_CLIENT_BYTES;
 const captureContextBytes = Math.max(0, Number(process.env.ANTIGRAVITY_CAPTURE_CONTEXT_BYTES || 0));
 const requestedSessionCounts = (process.env.ANTIGRAVITY_CAPTURE_SESSION_COUNTS || "")
   .split(",")
@@ -53,7 +54,11 @@ if (captureCallLogs) {
 if (capturePrivateOverflow) {
   process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = "true";
   process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = String(
-    captureContextBytes > 0 ? captureContextBytes * 4 : 0
+    captureOverflowMinClientBytes !== undefined
+      ? captureOverflowMinClientBytes
+      : captureContextBytes > 0
+        ? captureContextBytes * 4
+        : 0
   );
 }
 // Leave the background quota timer outside this isolated test lifetime.
@@ -177,6 +182,39 @@ async function readPrivateCapture(
   const chunks: Buffer[] = [];
   for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
   return gunzipSync(Buffer.concat(chunks));
+}
+
+/** Validate every persisted capture without retaining each decompressed payload. */
+async function verifyPrivateCaptureReadable(
+  traceId: string,
+  attemptId: string,
+  kind: "client-request" | "request" | "response",
+  expectedRawBytes: number
+): Promise<number> {
+  const { openDiagnosticOverflowFile } = await import("../../src/lib/usage/diagnosticOverflow.ts");
+  const opened = await openDiagnosticOverflowFile(traceId, attemptId, kind);
+  assert.equal(opened.state, "ready", `${kind} trace file should be readable`);
+  if (opened.state !== "ready") throw new Error(`private trace ${kind} is unavailable`);
+
+  const gunzip = createGunzip();
+  opened.stream.pipe(gunzip);
+  let rawBytes = 0;
+  let prefix = Buffer.alloc(0);
+  for await (const chunk of gunzip) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    rawBytes += bytes.byteLength;
+    if (prefix.byteLength < 4096) {
+      prefix = Buffer.concat([prefix, bytes.subarray(0, 4096 - prefix.byteLength)]);
+    }
+  }
+  assert.equal(rawBytes, expectedRawBytes, `${kind} decompressed byte count should match manifest`);
+  assert.ok(rawBytes > 0, `${kind} capture should not be empty`);
+  if (kind !== "response") {
+    assert.equal(prefix[0], 0x7b, `${kind} JSON should start with an object`);
+  } else {
+    assert.match(prefix.toString("utf8"), /data: /, "provider response should contain SSE data");
+  }
+  return rawBytes;
 }
 
 async function finalPrivateManifest(traceId: string) {
@@ -524,6 +562,24 @@ test(
       if (captureCallLogs) {
         const { closeCallLogSaves } = await import("../../src/lib/usage/callLogs.ts");
         await closeCallLogSaves(60_000);
+        const { getCallLogArtifactWriterSnapshot } =
+          await import("../../src/lib/usage/callLogArtifactWriter.ts");
+        const writerSnapshot = getCallLogArtifactWriterSnapshot();
+        console.log(`ANTIGRAVITY_ARTIFACT_WRITER ${JSON.stringify(writerSnapshot)}`);
+        assert.equal(writerSnapshot.activeJobs, 0, "artifact writer should have no active jobs");
+        assert.equal(writerSnapshot.queuedArtifacts, 0, "artifact writer queue should drain");
+        assert.equal(writerSnapshot.queuedDiagnosticStubs, 0, "diagnostic stub queue should drain");
+        assert.equal(
+          writerSnapshot.reservedArtifactBytes,
+          0,
+          "artifact reservations should be released after the write drain"
+        );
+        if (capturePrivateOverflow) {
+          assert.equal(writerSnapshot.preparationRefusalsTotal, 0);
+          assert.equal(writerSnapshot.detailOmissionsTotal, 0);
+          assert.equal(writerSnapshot.workerFailuresTotal, 0);
+          assert.equal(writerSnapshot.pointerFallbackFailuresTotal, 0);
+        }
         const rows = core
           .getDbInstance()
           .prepare(
@@ -767,6 +823,34 @@ test(
             },
             { rawBytes: 0, compressedBytes: 0 }
           );
+          let readableRawBytes = 0;
+          for (const manifest of manifests) {
+            assert.ok(manifest, "every call-log reference should resolve to a manifest");
+            if (!manifest) continue;
+            assert.ok(manifest.clientRequest, "every trace should include its client request");
+            readableRawBytes += await verifyPrivateCaptureReadable(
+              manifest.traceId,
+              manifest.traceId,
+              "client-request",
+              manifest.clientRequest!.rawBytes
+            );
+            for (const attempt of manifest.attempts) {
+              assert.ok(attempt.request, "every provider attempt should include its request");
+              assert.ok(attempt.response, "every provider attempt should include its response");
+              readableRawBytes += await verifyPrivateCaptureReadable(
+                manifest.traceId,
+                attempt.attemptId,
+                "request",
+                attempt.request.rawBytes
+              );
+              readableRawBytes += await verifyPrivateCaptureReadable(
+                manifest.traceId,
+                attempt.attemptId,
+                "response",
+                attempt.response.rawBytes
+              );
+            }
+          }
           const clientBody = await readPrivateCapture(
             sample!.traceId,
             sample!.traceId,
@@ -784,7 +868,7 @@ test(
           assert.ok(clientBody.byteLength >= captureContextBytes * 5);
           assert.match(providerBody.toString("utf8"), /data: /);
           console.log(
-            `ANTIGRAVITY_PRIVATE_OVERFLOW traces=${traceIds.size} complete=${completeTraceCount} retried=${retryTraceCount} incomplete=${manifests.length - completeTraceCount} rawBytes=${privateByteTotals.rawBytes} compressedBytes=${privateByteTotals.compressedBytes} sampleClientBytes=${clientBody.byteLength} sampleProviderBytes=${providerBody.byteLength}`
+            `ANTIGRAVITY_PRIVATE_OVERFLOW traces=${traceIds.size} complete=${completeTraceCount} retried=${retryTraceCount} incomplete=${manifests.length - completeTraceCount} rawBytes=${privateByteTotals.rawBytes} compressedBytes=${privateByteTotals.compressedBytes} readableRawBytes=${readableRawBytes} sampleClientBytes=${clientBody.byteLength} sampleProviderBytes=${providerBody.byteLength} minClientBytes=${process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES}`
           );
         }
       }
