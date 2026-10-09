@@ -14940,18 +14940,114 @@ paths:
       operationId: getApiA2aTasks
       tags:
         - A2a
-      summary: "GET a2a › tasks"
+      summary: List in-memory A2A tasks
+      description: >-
+        Lists tasks still present in the in-memory task manager. Valid API-key callers are
+        owner-scoped; management callers see the operator view, and ownerless keyless tasks remain
+        visible to all callers. `total` is computed after state/skill filters but before owner
+        filtering, so it may exceed the number of tasks visible to a keyed caller. When
+        `REQUIRE_API_KEY` is enabled, a valid API key or management identity is required; otherwise
+        authentication follows the management login policy and an unlocked `requireLogin=false`
+        install may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: state
+          in: query
+          description: Optional task-state filter; an unrecognized value is ignored by the handler.
+          schema: { type: string, enum: [submitted, working, completed, failed, cancelled] }
+        - name: skill
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          description: Parsed as an integer and clamped to 1–200; invalid values fall back to 50.
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          description: Parsed as an integer and clamped to zero or greater; invalid values fall back to zero.
+          schema: { type: integer, minimum: 0, default: 0 }
       responses:
         "200":
-          description: OK
+          description: Owner-filtered task page; `total` is not owner-filtered.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/A2ATaskListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Task manager read failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiA2aTasks
       tags:
         - A2a
-      summary: "POST a2a › tasks"
+      summary: Delegate an A2A task to the Conductor fleet
+      description: >-
+        Accepts only `conductor` and `conductor-cli-*` skills, extracts the latest user message as
+        the task prompt, and delegates the repository task to the configured Conductor hub. If
+        `OMNIROUTE_API_KEY` is configured, this route additionally requires that exact value as an
+        Authorization Bearer token; the central management policy may independently require a
+        management identity according to login/locked settings. With no shared A2A key and an
+        unlocked `requireLogin=false` profile, the route may be anonymous. The request contains
+        prompt and repository data and should be treated as sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/A2ATaskDelegationRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Conductor task created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/A2ATaskDelegationResponse" }
+        "400":
+          description: Invalid JSON/body, unsupported skill, or missing repository URL.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Configured A2A Bearer key or central management authentication is missing or invalid.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: A2A is disabled, Conductor is unavailable, or management auth is unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        default:
+          description: Conductor hub refusal; the returned status is propagated with an error string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/a2a/tasks/{id}:
     parameters:
       - name: id
@@ -14963,10 +15059,43 @@ paths:
       operationId: getApiA2aTasksById
       tags:
         - A2a
-      summary: "GET a2a › tasks › <id>"
+      summary: Get A2A task details
+      description: >-
+        Returns a live task or its persisted-history reconstruction. A valid API-key caller can
+        read tasks owned by that key; a foreign or missing task returns the same 404. Management
+        callers see the operator view. In-memory details may contain prompts, artifacts, events,
+        runtime metadata, and the hashed owner identifier; treat the response as sensitive.
+        Authentication follows `REQUIRE_API_KEY` and management login policy; an unlocked
+        `requireLogin=false` install may allow anonymous access to ownerless/keyless tasks.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: A live task or reconstituted persisted task.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/A2ATaskDetailResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Task is missing or not visible to the caller.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Task details could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/a2a/tasks/{id}/cancel:
     parameters:
       - name: id
@@ -14978,10 +15107,40 @@ paths:
       operationId: postApiA2aTasksByIdCancel
       tags:
         - A2a
-      summary: "POST a2a › tasks › <id> › cancel"
+      summary: Cancel an A2A task
+      description: >-
+        Cancels a live task owned by the caller or visible in the management operator view.
+        A foreign or missing task returns 404; cancellation of an invalid state transition returns
+        400. Authentication follows `REQUIRE_API_KEY` and management login policy; an unlocked
+        `requireLogin=false` install may allow anonymous access to ownerless/keyless tasks.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Task id and its new cancelled state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/A2ATaskCancelResponse" }
+        "400":
+          description: Task cancellation is not a valid state transition.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Task is missing or not visible to the caller.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/acp/agents:
     delete:
       operationId: deleteApiAcpAgents
@@ -35397,6 +35556,154 @@ components:
       properties:
         success: { type: boolean, const: true }
         message: { type: string }
+      additionalProperties: false
+    A2ATaskState:
+      type: string
+      enum: [submitted, working, completed, failed, cancelled]
+    A2ATaskMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string }
+        content: { type: string, x-sensitive: true }
+      additionalProperties: false
+    A2ATaskInput:
+      type: object
+      required: [skill, messages]
+      properties:
+        skill: { type: string }
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/A2ATaskMessage" }
+        metadata:
+          type: object
+          x-sensitive: true
+          additionalProperties: {}
+      additionalProperties: false
+    A2ATaskArtifact:
+      type: object
+      required: [type, content]
+      properties:
+        type: { type: string, enum: [text, json, error] }
+        content: { type: string, x-sensitive: true }
+      additionalProperties: false
+    A2ATaskEvent:
+      type: object
+      required: [timestamp, state]
+      properties:
+        timestamp: { type: string }
+        state: { $ref: "#/components/schemas/A2ATaskState" }
+        message: { type: string, x-sensitive: true }
+      additionalProperties: false
+    A2ATask:
+      type: object
+      x-sensitive: true
+      required: [id, skill, state, input, artifacts, events, metadata, createdAt, updatedAt, expiresAt]
+      properties:
+        id: { type: string }
+        skill: { type: string }
+        state: { $ref: "#/components/schemas/A2ATaskState" }
+        input: { $ref: "#/components/schemas/A2ATaskInput" }
+        artifacts:
+          type: array
+          items: { $ref: "#/components/schemas/A2ATaskArtifact" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/A2ATaskEvent" }
+        metadata:
+          type: object
+          x-sensitive: true
+          additionalProperties: {}
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        expiresAt: { type: string }
+        owner:
+          type: string
+          x-sensitive: true
+          description: Stable hash prefix for a keyed caller; absent for ownerless tasks.
+      additionalProperties: false
+    A2ATaskListResponse:
+      type: object
+      x-sensitive: true
+      required: [tasks, total, limit, offset]
+      properties:
+        tasks:
+          type: array
+          items: { $ref: "#/components/schemas/A2ATask" }
+        total:
+          type: integer
+          minimum: 0
+          description: Total after state/skill filtering but before API-key owner filtering.
+        limit: { type: integer, minimum: 1, maximum: 200 }
+        offset: { type: integer, minimum: 0 }
+      additionalProperties: false
+    A2ATaskDetailResponse:
+      type: object
+      x-sensitive: true
+      required: [task]
+      properties:
+        task: { $ref: "#/components/schemas/A2ATask" }
+      additionalProperties: false
+    A2ATaskCancelSummary:
+      type: object
+      required: [id, state]
+      properties:
+        id: { type: string }
+        state: { type: string, const: cancelled }
+      additionalProperties: false
+    A2ATaskCancelResponse:
+      type: object
+      required: [task]
+      properties:
+        task: { $ref: "#/components/schemas/A2ATaskCancelSummary" }
+      additionalProperties: false
+    A2ATaskDelegationRequest:
+      type: object
+      x-sensitive: true
+      required: [messages, metadata]
+      properties:
+        skill:
+          type: string
+          default: conductor
+          anyOf:
+            - const: conductor
+            - pattern: "^conductor-cli-"
+          description: Only conductor and conductor-cli-* skills are accepted by this route.
+        messages:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/A2ATaskMessage" }
+        metadata:
+          type: object
+          required: [conductor]
+          properties:
+            conductor:
+              type: object
+              required: [repo]
+              properties:
+                repo:
+                  type: object
+                  required: [url]
+                  properties:
+                    url: { type: string, minLength: 1 }
+                    base_ref: { type: string }
+                  additionalProperties: true
+                mode: { type: string }
+                cli: { type: string }
+                model: { type: string }
+              additionalProperties: true
+          additionalProperties: true
+      description: Unknown fields are accepted by Zod and stripped; the route also requires metadata.conductor.repo.url.
+      additionalProperties: true
+    A2ATaskDelegationResponse:
+      type: object
+      required: [conductor_task_id, state, note]
+      properties:
+        conductor_task_id: { type: string }
+        state: { type: string, const: submitted }
+        note:
+          type: string
+          const: States flow back through the SSE→A2A mirror (GET /api/a2a/tasks, skill=conductor).
       additionalProperties: false
     V1AccountKeyLimits:
       type: object
