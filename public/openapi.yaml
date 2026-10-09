@@ -31675,14 +31675,21 @@ paths:
       tags: [Usage]
       summary: List private diagnostic overflow traces
       description: >-
-        Lists at most 100 newest private request/response capture manifests. `before` is an
-        exclusive Unix-millisecond timestamp cursor. Payload bytes are available only through the
-        authenticated download routes. The storage helper converts store read failures into an
-        empty list; a 503 is reserved for authentication infrastructure or an unexpected route-level
-        failure.
+        Lists at most 100 newest private request/response capture manifests (50 by default).
+        `before` is an exclusive, nonnegative Unix-millisecond timestamp cursor. The manifests
+        contain sensitive operational metadata, including provider/attempt metadata, a URL path
+        (without query or fragment), and a small allowlist of credential-filtered headers. Raw
+        captured request/response bodies are available only through the
+        authenticated gzip download routes. This is always authenticated, even when
+        `requireLogin=false`: dashboard session, manage/admin API key, admin-scoped `oma_live_`
+        access token, loopback CLI token, or trusted loopback internal-service token. The storage
+        helper converts store read failures into an empty list; a 503 is reserved for auth
+        infrastructure or an unexpected route-level failure. No anonymous alternative is allowed.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       parameters:
         - name: limit
           in: query
@@ -31694,7 +31701,11 @@ paths:
           schema: { type: integer, minimum: 0 }
       responses:
         "200":
-          description: Private trace manifests
+          description: Private trace manifests; store read failures are returned as an empty list.
+          x-sensitive: true
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
               schema:
@@ -31706,13 +31717,16 @@ paths:
                     items: { $ref: "#/components/schemas/DiagnosticOverflowManifest" }
         "400":
           description: Pagination parameters are invalid
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503":
-          description: Authentication or diagnostic overflow storage is unavailable
+          description: Auth infrastructure or an unexpected route-level failure is unavailable.
           content:
             application/json:
               schema:
@@ -31723,14 +31737,22 @@ paths:
       operationId: headApiUsageDiagnosticOverflow
       tags: [Usage]
       summary: Reject implicit HEAD access to private overflow data
+      description: >-
+        The handler authenticates first, then refuses implicit HEAD access without opening or
+        listing private data. This route always requires authentication, including when
+        `requireLogin=false`.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       responses:
         "405":
           description: HEAD is intentionally refused; use GET to list manifests
           headers:
             Allow: { schema: { type: string, const: GET } }
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -31745,29 +31767,49 @@ paths:
       operationId: getApiUsageDiagnosticOverflowByTraceId
       tags: [Usage]
       summary: Read one private diagnostic trace manifest
+      description: >-
+        Returns private operational metadata without raw payload contents. Attempt URLs omit
+        query/fragment values and attempt headers are allowlisted and credential-filtered, but
+        metadata remains sensitive. Manifest read failures are normalized to 404. This route
+        always requires authentication, including when
+        `requireLogin=false`: dashboard session, manage/admin API key, admin-scoped `oma_live_`
+        access token, loopback CLI token, or trusted loopback internal-service token. No anonymous
+        alternative is allowed.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       responses:
         "200":
-          description: Trace manifest without raw payload contents
+          description: Trace manifest without raw payload contents; metadata is sensitive.
+          x-sensitive: true
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DiagnosticOverflowManifest" }
         "400":
           description: Trace ID is not a UUID
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "404":
-          description: Trace manifest was not found
+          description: Trace ID is valid, but no readable manifest is available.
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
         "503":
-          description: Authentication or diagnostic overflow storage is unavailable
+          description: Auth infrastructure or an unexpected route-level failure is unavailable.
           content:
             application/json:
               schema:
@@ -31778,14 +31820,21 @@ paths:
       operationId: headApiUsageDiagnosticOverflowByTraceId
       tags: [Usage]
       summary: Reject implicit HEAD access to a private overflow manifest
+      description: >-
+        The handler authenticates first, then refuses implicit HEAD access without reading a
+        manifest. This route always requires authentication, including when `requireLogin=false`.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       responses:
         "405":
           description: HEAD is intentionally refused; use GET to inspect the trace
           headers:
             Allow: { schema: { type: string, const: GET } }
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -31800,16 +31849,31 @@ paths:
       operationId: getApiUsageDiagnosticOverflowByTraceIdClientRequest
       tags: [Usage]
       summary: Download the private client request capture
-      description: Returns a gzip stream; response headers state whether capture completed fully.
+      description: >-
+        Streams the private client request capture as gzip bytes. This is not necessarily a
+        byte-for-byte copy of the inbound wire representation; the manifest's `representation`
+        field identifies the captured representation. Stored size and gzip SHA-256 are checked
+        before streaming; verification reads in bounded 64 KiB chunks, then the response streams
+        with backpressure and is cancelled when the caller aborts. The client-request alias uses
+        the trace ID as its attempt ID. A 409 means capture is still being written or its stored
+        byte length/hash check failed. This route always requires authentication, including when
+        `requireLogin=false`: dashboard session, manage/admin API key, admin-scoped `oma_live_`
+        access token, loopback CLI token, or trusted loopback internal-service token. No anonymous
+        alternative is allowed.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       responses:
         "200":
-          description: Gzip-compressed raw client request bytes
+          description: Gzip-compressed private client request capture; body contents are sensitive.
+          x-sensitive: true
           headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
             X-Diagnostic-Capture-State:
-              { schema: { type: string, enum: [capturing, complete, incomplete] } }
+              { schema: { type: string, enum: [complete, incomplete] } }
             X-Diagnostic-Capture-Complete: { schema: { type: string, enum: ["true", "false"] } }
             Content-Disposition: { schema: { type: string } }
           content:
@@ -31817,23 +31881,32 @@ paths:
               schema: { type: string, format: binary }
         "400":
           description: Trace ID or requested file alias is invalid
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "404":
-          description: Client request file or its trace/alias mapping is missing
+          description: Client-request capture is absent, or the trace/alias mapping is absent.
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/DiagnosticOverflowFileUnavailableResponse" }
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowFileMissingResponse" }
         "409":
-          description: Client request capture is still being written or the stored file is corrupt
+          description: Client request capture is still being written or its compressed file is corrupt.
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DiagnosticOverflowFileUnavailableResponse" }
         "503":
-          description: Authentication or diagnostic overflow storage is unavailable
+          description: Auth infrastructure or an unexpected route-level failure is unavailable.
           content:
             application/json:
               schema:
@@ -31844,14 +31917,22 @@ paths:
       operationId: headApiUsageDiagnosticOverflowByTraceIdClientRequest
       tags: [Usage]
       summary: Reject implicit HEAD access to a client request capture
+      description: >-
+        The handler authenticates first, then refuses implicit HEAD access without opening the
+        private capture. This route always requires authentication, including when
+        `requireLogin=false`.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       responses:
         "405":
           description: HEAD is intentionally refused; use GET to download the capture
           headers:
             Allow: { schema: { type: string, const: GET } }
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -31869,21 +31950,37 @@ paths:
       - name: kind
         in: path
         required: true
+        description: '`client-request` is valid only when attemptId equals traceId.'
         schema: { type: string, enum: [request, response, client-request] }
     get:
       operationId: getApiUsageDiagnosticOverflowByTraceIdByAttemptIdByKind
       tags: [Usage]
       summary: Download one private provider attempt capture
-      description: Returns a gzip stream; response headers state whether capture completed fully.
+      description: >-
+        Streams one private provider request or response capture as gzip bytes. The manifest's
+        `representation` field identifies whether bytes were parsed/re-serialized JSON,
+        serialized provider request UTF-8, or decoded upstream bytes. Stored size and gzip SHA-256
+        are checked before streaming in bounded 64 KiB chunks; the response then streams with
+        backpressure and is cancelled when the caller aborts. `client-request` is an alias for the
+        trace-level client request and requires `attemptId` to equal `traceId`. A 409 means
+        capture is still being written or its stored byte length/hash check failed. This
+        route always requires authentication, including when `requireLogin=false`: dashboard
+        session, manage/admin API key, admin-scoped `oma_live_` access token, loopback CLI token,
+        or trusted loopback internal-service token. No anonymous alternative is allowed.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       responses:
         "200":
-          description: Gzip-compressed request or response capture
+          description: Gzip-compressed private provider request/response capture; contents are sensitive.
+          x-sensitive: true
           headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
             X-Diagnostic-Capture-State:
-              { schema: { type: string, enum: [capturing, complete, incomplete] } }
+              { schema: { type: string, enum: [complete, incomplete] } }
             X-Diagnostic-Capture-Complete: { schema: { type: string, enum: ["true", "false"] } }
             Content-Disposition: { schema: { type: string } }
           content:
@@ -31891,23 +31988,32 @@ paths:
               schema: { type: string, format: binary }
         "400":
           description: Trace, attempt, or file alias is invalid
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DiagnosticOverflowErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "404":
-          description: Capture file, trace, or requested attempt/alias mapping is missing
+          description: Capture file, trace, or requested attempt/alias mapping is missing.
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/DiagnosticOverflowFileUnavailableResponse" }
+              schema: { $ref: "#/components/schemas/DiagnosticOverflowFileMissingResponse" }
         "409":
-          description: Capture is still being written or the stored file is corrupt
+          description: Capture is still being written or its compressed file failed size/hash integrity checks.
+          headers:
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DiagnosticOverflowFileUnavailableResponse" }
         "503":
-          description: Authentication or diagnostic overflow storage is unavailable
+          description: Auth infrastructure or an unexpected route-level failure is unavailable.
           content:
             application/json:
               schema:
@@ -31918,14 +32024,22 @@ paths:
       operationId: headApiUsageDiagnosticOverflowByTraceIdByAttemptIdByKind
       tags: [Usage]
       summary: Reject implicit HEAD access to a provider attempt capture
+      description: >-
+        The handler authenticates first, then refuses implicit HEAD access without opening a
+        private capture. This route always requires authentication, including when
+        `requireLogin=false`.
       security:
         - ManagementSessionAuth: []
         - BearerAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
       responses:
         "405":
           description: HEAD is intentionally refused; use GET to download the capture
           headers:
             Allow: { schema: { type: string, const: GET } }
+            Cache-Control: { schema: { type: string, const: "private, no-store" } }
+            X-Content-Type-Options: { schema: { type: string, const: nosniff } }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
@@ -37278,6 +37392,15 @@ components:
       additionalProperties: false
     DiagnosticOverflowFile:
       type: object
+      description: >-
+        Capture metadata. File payloads are stored as gzip bytes; rawBytes and compressedBytes
+        describe the captured representation and stored gzip size. `sha256` identifies the raw
+        capture when available, while `gzipSha256` identifies the stored compressed bytes. The
+        `representation` value is required in practice for a ready capture but can be absent from
+        incomplete metadata when writing failed. The writer caps raw bytes per file using
+        `OMNI_DIAGNOSTIC_OVERFLOW_FILE_BYTES` (default 64 MiB) and applies a shared storage budget
+        using `OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES` (default 2 GiB); captures stopped by a cap
+        or backpressure report `complete: false` and a reason instead of claiming full capture.
       required: [state, complete, rawBytes, compressedBytes]
       properties:
         representation:
@@ -37382,11 +37505,18 @@ components:
       additionalProperties: false
     DiagnosticOverflowFileUnavailableResponse:
       type: object
+      description: Capture exists but cannot yet be downloaded or failed storage integrity checks.
       required: [state]
       properties:
-        state: { type: string, enum: [capturing, missing, corrupt] }
+        state: { type: string, enum: [capturing, corrupt] }
         metadata:
           $ref: "#/components/schemas/DiagnosticOverflowFile"
+      additionalProperties: false
+    DiagnosticOverflowFileMissingResponse:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, const: missing }
       additionalProperties: false
     ExclusiveConnectionLeaseLifecycle:
       type: object
