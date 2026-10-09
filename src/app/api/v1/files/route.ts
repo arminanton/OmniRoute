@@ -63,7 +63,7 @@ export function parseFilesListQuery(searchParams: URLSearchParams):
 }
 
 export async function POST(request: Request) {
-  const scope = await getApiKeyRequestScope(request);
+  const scope = await getApiKeyRequestScope(request, { requireAuthenticated: true });
   if (scope.rejection) return scope.rejection;
   const apiKeyId = scope.apiKeyId;
 
@@ -128,9 +128,11 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const scope = await getApiKeyRequestScope(request);
+  const scope = await getApiKeyRequestScope(request, { requireAuthenticated: true });
   if (scope.rejection) return scope.rejection;
-  const apiKeyId = scope.apiKeyId;
+  // Dashboard sessions intentionally list across owners. A valid API key must
+  // always supply an owner id so a missing id cannot become an unfiltered query.
+  const apiKeyId = scope.isSessionAuth ? undefined : scope.apiKeyId!;
 
   const { searchParams } = new URL(request.url);
   const parsed = parseFilesListQuery(searchParams);

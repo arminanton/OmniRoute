@@ -411,19 +411,38 @@ export function deleteBatch(id: string): boolean {
   return result.changes > 0;
 }
 
-export function deleteCompletedBatches(): { deletedBatches: number; deletedFiles: number } {
+export function deleteCompletedBatches(apiKeyId?: string): {
+  deletedBatches: number;
+  deletedFiles: number;
+} {
   const db = getDbInstance();
+  const ownerFilter = apiKeyId ? " AND api_key_id = ?" : "";
+  const ownerParams = apiKeyId ? [apiKeyId] : [];
 
-  // Collect unique file IDs from all completed batches
+  // Select only this API key's completed batches when a caller owner is
+  // supplied. Dashboard callers omit the owner and intentionally clean up all.
   const rows = db
     .prepare(
-      "SELECT input_file_id, output_file_id, error_file_id FROM batches WHERE status = 'completed'"
+      `SELECT id, input_file_id, output_file_id, error_file_id
+       FROM batches WHERE status = 'completed'${ownerFilter}`
     )
-    .all() as Array<{
+    .all(...ownerParams) as Array<{
+    id: string;
     input_file_id: string | null;
     output_file_id: string | null;
     error_file_id: string | null;
   }>;
+
+  if (rows.length === 0) return { deletedBatches: 0, deletedFiles: 0 };
+
+  const batchIds = rows.map((row) => row.id);
+  const batchPlaceholders = batchIds.map(() => "?").join(", ");
+  db.prepare(`DELETE FROM batch_item_checkpoints WHERE batch_id IN (${batchPlaceholders})`).run(
+    ...batchIds
+  );
+  const deletedBatchResult = db
+    .prepare(`DELETE FROM batches WHERE id IN (${batchPlaceholders})`)
+    .run(...batchIds);
 
   const fileIds = new Set<string>();
   for (const row of rows) {
@@ -435,16 +454,21 @@ export function deleteCompletedBatches(): { deletedBatches: number; deletedFiles
   let deletedFiles = 0;
   for (const fid of fileIds) {
     try {
-      if (deleteFile(fid)) deletedFiles++;
+      // Input/output artifacts can be reused by another batch. Keep them until
+      // no remaining batch references the file, including a batch owned by a
+      // different API key.
+      const stillReferenced = db
+        .prepare(
+          `SELECT 1 FROM batches
+           WHERE input_file_id = ? OR output_file_id = ? OR error_file_id = ?
+           LIMIT 1`
+        )
+        .get(fid, fid, fid);
+      if (!stillReferenced && deleteFile(fid)) deletedFiles++;
     } catch {
       /* ignore */
     }
   }
 
-  db.prepare(
-    "DELETE FROM batch_item_checkpoints WHERE batch_id IN (SELECT id FROM batches WHERE status = 'completed')"
-  ).run();
-
-  const result = db.prepare("DELETE FROM batches WHERE status = 'completed'").run();
-  return { deletedBatches: result.changes, deletedFiles };
+  return { deletedBatches: deletedBatchResult.changes, deletedFiles };
 }

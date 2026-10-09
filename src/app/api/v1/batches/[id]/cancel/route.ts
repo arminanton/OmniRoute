@@ -1,7 +1,10 @@
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { getBatch, updateBatch } from "@/lib/db/batches";
 import { NextResponse } from "next/server";
-import { getApiKeyRequestScope } from "@/app/api/v1/_helpers/apiKeyScope";
+import {
+  getApiKeyRequestScope,
+  isApiKeyResourceAccessible,
+} from "@/app/api/v1/_helpers/apiKeyScope";
 import { formatBatchResponse } from "../../formatBatchResponse";
 
 export async function OPTIONS() {
@@ -9,14 +12,12 @@ export async function OPTIONS() {
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const scope = await getApiKeyRequestScope(request);
+  const scope = await getApiKeyRequestScope(request, { requireAuthenticated: true });
   if (scope.rejection) return scope.rejection;
-  const apiKeyId = scope.apiKeyId;
-
   const { id } = await params;
   const batch = getBatch(id);
 
-  if (!batch || (batch.apiKeyId !== null && batch.apiKeyId !== apiKeyId)) {
+  if (!batch || !isApiKeyResourceAccessible(scope, batch.apiKeyId)) {
     return NextResponse.json(
       { error: { message: "Batch not found", type: "invalid_request_error" } },
       { status: 404, headers: CORS_HEADERS }

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
+import { isApiKeyResourceAccessible } from "../../src/app/api/v1/_helpers/apiKeyScope.ts";
 
 // Tests for the business logic embedded in DELETE route handlers.
 // These verify every code path without importing Next.js route modules
@@ -7,41 +8,60 @@ import assert from "node:assert";
 
 const TERMINAL = ["completed", "failed", "cancelled", "expired"];
 
-function scopeCheck(
-  isSessionAuth: boolean,
-  recordApiKeyId: string | null | undefined,
-  apiKeyId: string | null
-): boolean {
-  if (isSessionAuth) return true;
-  if (recordApiKeyId === null || recordApiKeyId === undefined) return apiKeyId !== null;
-  return recordApiKeyId === apiKeyId;
-}
-
 function canDeleteBatch(status: string): boolean {
   return TERMINAL.includes(status);
 }
 
 test("scopeCheck — session auth always passes", () => {
-  assert.strictEqual(scopeCheck(true, "key-1", "key-1"), true);
-  assert.strictEqual(scopeCheck(true, "key-1", "different-key"), true);
-  assert.strictEqual(scopeCheck(true, null, null), true);
-  assert.strictEqual(scopeCheck(true, undefined, null), true);
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: true, apiKeyId: "key-1" }, "key-1"),
+    true
+  );
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: true, apiKeyId: "key-1" }, "different-key"),
+    true
+  );
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: true, apiKeyId: null }, null),
+    true
+  );
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: true, apiKeyId: null }, undefined),
+    true
+  );
 });
 
-test("scopeCheck — null record ApiKeyId requires an authenticated API key", () => {
-  assert.strictEqual(scopeCheck(false, null, null), false);
-  assert.strictEqual(scopeCheck(false, null, "any-key"), true);
-  assert.strictEqual(scopeCheck(false, undefined, null), false);
-  assert.strictEqual(scopeCheck(false, undefined, "any-key"), true);
+test("scopeCheck — an API key can access an unowned record, anonymous scope cannot", () => {
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: false, apiKeyId: null }, null),
+    false
+  );
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: false, apiKeyId: "any-key" }, null),
+    true
+  );
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: false, apiKeyId: "any-key" }, undefined),
+    true
+  );
 });
 
 test("scopeCheck — matching apiKeyId passes", () => {
-  assert.strictEqual(scopeCheck(false, "key-1", "key-1"), true);
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: false, apiKeyId: "key-1" }, "key-1"),
+    true
+  );
 });
 
 test("scopeCheck — mismatched apiKeyId fails", () => {
-  assert.strictEqual(scopeCheck(false, "key-1", null), false);
-  assert.strictEqual(scopeCheck(false, "key-1", "key-2"), false);
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: false, apiKeyId: "key-1" }, "key-2"),
+    false
+  );
+  assert.strictEqual(
+    isApiKeyResourceAccessible({ isSessionAuth: false, apiKeyId: null }, "key-2"),
+    false
+  );
 });
 
 test("batch deletion only allowed for terminal statuses", () => {

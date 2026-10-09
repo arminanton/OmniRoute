@@ -1,21 +1,22 @@
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { getFile, getFileContent } from "@/lib/db/files";
 import { NextResponse } from "next/server";
-import { getApiKeyRequestScope } from "@/app/api/v1/_helpers/apiKeyScope";
+import {
+  getApiKeyRequestScope,
+  isApiKeyResourceAccessible,
+} from "@/app/api/v1/_helpers/apiKeyScope";
 
 export async function OPTIONS() {
   return handleCorsOptions();
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const scope = await getApiKeyRequestScope(request);
+  const scope = await getApiKeyRequestScope(request, { requireAuthenticated: true });
   if (scope.rejection) return scope.rejection;
-  const apiKeyId = scope.apiKeyId;
-
   const { id } = await params;
   const file = getFile(id);
 
-  if (!file || (file.apiKeyId !== null && file.apiKeyId !== apiKeyId && !scope.isSessionAuth)) {
+  if (!file || !isApiKeyResourceAccessible(scope, file.apiKeyId)) {
     return NextResponse.json(
       { error: { message: "File not found", type: "invalid_request_error" } },
       { status: 404, headers: CORS_HEADERS }

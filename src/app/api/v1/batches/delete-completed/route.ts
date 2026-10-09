@@ -8,7 +8,7 @@ export async function OPTIONS() {
 }
 
 export async function DELETE(request: Request) {
-  const scope = await getApiKeyRequestScope(request);
+  const scope = await getApiKeyRequestScope(request, { requireAuthenticated: true });
   if (scope.rejection) return scope.rejection;
 
   // Allow session-authenticated (dashboard) requests; for API-key requests, require a key
@@ -19,7 +19,7 @@ export async function DELETE(request: Request) {
     );
   }
 
-  const result = deleteCompletedBatches();
+  const result = deleteCompletedBatches(scope.isSessionAuth ? undefined : scope.apiKeyId!);
 
   return NextResponse.json(
     { deleted: true, deletedBatches: result.deletedBatches, deletedFiles: result.deletedFiles },
