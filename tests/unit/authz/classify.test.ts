@@ -178,10 +178,10 @@ const cases: Case[] = [
     expectedClass: "MANAGEMENT",
   },
   {
-    name: "/api/oauth/* is PUBLIC",
+    name: "/api/oauth/* is MANAGEMENT",
     path: "/api/oauth/callback",
     method: "GET",
-    expectedClass: "PUBLIC",
+    expectedClass: "MANAGEMENT",
   },
   {
     name: "/api/sync/bundle is PUBLIC",

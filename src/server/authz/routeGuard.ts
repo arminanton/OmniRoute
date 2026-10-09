@@ -142,6 +142,11 @@ export const ALWAYS_PROTECTED_API_PATHS: ReadonlyArray<string> = [
   // which is false under requireLogin=false. (GHSA-v7g9-7f55-5g46)
   "/api/settings/export-json",
   "/api/settings/import-json",
+  // CLI key inventory includes each raw API key for its internal editor. Keep
+  // it behind a real management credential even when requireLogin is disabled;
+  // otherwise ordinary inference credentials (or anonymous bootstrap access)
+  // could disclose every stored key.
+  "/api/cli-tools/keys",
   // Bulk log export: call_logs carries prompts and responses, proxy_logs carries
   // client/public IPs, and the handler only calls requireManagementAuth() with no
   // alwaysRequireAuth. Found sweeping the GHSA-5926-2w35-7h4q class.

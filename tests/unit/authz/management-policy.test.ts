@@ -120,6 +120,40 @@ test("managementPolicy: allows when auth not required (no password set)", async 
   }
 });
 
+test("managementPolicy: CLI key listing still requires management auth when login is disabled", async () => {
+  await settingsDb.updateSettings({ requireLogin: false, password: null });
+  const policy = await loadPolicy();
+  const out = await policy.evaluate(ctx(new Headers(), "GET", "/api/cli-tools/keys"));
+
+  assert.equal(out.allow, false);
+  if (!out.allow) {
+    assert.equal(out.status, 401);
+    assert.equal(out.code, "AUTH_001");
+  }
+});
+
+test("managementPolicy: OAuth credential imports require a management key when login is enabled", async () => {
+  process.env.INITIAL_PASSWORD = "oauth-route-policy-pass";
+  await settingsDb.updateSettings({ requireLogin: true });
+  const client = await apiKeysDb.createApiKey("oauth-client", "machine-oauth-client", []);
+  const manage = await apiKeysDb.createApiKey("oauth-manage", "machine-oauth-manage", ["manage"]);
+  const policy = await loadPolicy();
+  const path = "/api/oauth/kiro/social-exchange";
+  const denied = await policy.evaluate(
+    ctx(new Headers({ authorization: `Bearer ${client.key}` }), "POST", path)
+  );
+  const allowed = await policy.evaluate(
+    ctx(new Headers({ authorization: `Bearer ${manage.key}` }), "POST", path)
+  );
+
+  assert.equal(denied.allow, false);
+  if (!denied.allow) {
+    assert.equal(denied.status, 403);
+    assert.equal(denied.code, "AUTH_001");
+  }
+  assert.equal(allowed.allow, true);
+});
+
 test("managementPolicy: rejects remote fresh bootstrap without a password", async () => {
   await settingsDb.updateSettings({ requireLogin: true, password: null });
   const policy = await loadPolicy();

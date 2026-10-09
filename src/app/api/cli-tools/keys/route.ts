@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
-import { requireCliToolsAuth } from "@/lib/api/requireCliToolsAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getApiKeys } from "@/lib/db/apiKeys";
 import { maskStoredApiKey } from "@/lib/apiKeyExposure";
 
 // GET /api/cli-tools/keys - List API keys with raw values for authenticated CLI tools UI only
 export async function GET(request: Request) {
-  const authError = await requireCliToolsAuth(request);
+  // This route returns each stored API key in `rawKey`; it must stay protected
+  // even when the operator has disabled the global login requirement.
+  const authError = await requireManagementAuth(request, { alwaysRequireAuth: true });
   if (authError) return authError;
 
   try {

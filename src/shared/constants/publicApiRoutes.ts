@@ -18,7 +18,6 @@
 const PUBLIC_API_ROUTE_PREFIXES = [
   "/api/auth/oidc/",
   "/api/v1/",
-  "/api/oauth/",
   // Public, ticket-gated Codex device-flow completion (validate + persist).
   // The handler enforces its own single-use ticket check; no dashboard auth.
   "/api/codex/connect/",
@@ -102,16 +101,6 @@ function isPublicCloudApiRoute(pathname: string, method: string): boolean {
   );
 }
 
-// OAuth "auto-import" routes read host-local credential files (Cursor / Kiro
-// tokens). The broad `/api/oauth/` PUBLIC prefix would classify them
-// PUBLIC, which skips the LOCAL_ONLY tier entirely (GHSA-wgwc-crjm-pmwv) and
-// exposes the host credential to a remote caller (GHSA-gxv4-955v-v6cm). Exclude
-// them so they fall through to MANAGEMENT and reach the loopback-only gate.
-const LOCAL_ONLY_OAUTH_IMPORT_ROUTES = [
-  "/api/oauth/cursor/auto-import",
-  "/api/oauth/kiro/auto-import",
-];
-
 /**
  * Whether the route classifies as read-only PUBLIC *with* the CORS origin
  * relaxation (authz/classify.ts reason `public_readonly_prefix`). Exported as a
@@ -124,14 +113,6 @@ export function isPublicReadonlyCorsRoute(pathname: string, method = "GET"): boo
 }
 
 export function isPublicApiRoute(pathname: string, method = "GET"): boolean {
-  if (
-    LOCAL_ONLY_OAUTH_IMPORT_ROUTES.some(
-      (route) => pathname === route || pathname.startsWith(`${route}/`)
-    )
-  ) {
-    return false;
-  }
-
   if (isPublicCloudApiRoute(pathname, method)) {
     return true;
   }

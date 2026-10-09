@@ -23,9 +23,16 @@ test("OAuth auto-import routes are LOCAL_ONLY (loopback-gated)", () => {
   }
 });
 
-test("the rest of /api/oauth/ (callbacks, browser flows) stays PUBLIC", () => {
-  assert.equal(isPublicApiRoute("/api/oauth/cursor/callback"), true);
-  assert.equal(isPublicApiRoute("/api/oauth/codex/authorize"), true);
-  // A sibling that merely shares the prefix must not be swept in.
-  assert.equal(isPublicApiRoute("/api/oauth/cursor/auto-import-status"), true);
+test("OAuth browser flows use the management policy without broad public-prefix auth", () => {
+  for (const path of [
+    "/api/oauth/cursor/callback",
+    "/api/oauth/codex/authorize",
+    "/api/oauth/cursor/auto-import-status",
+  ]) {
+    assert.equal(isPublicApiRoute(path), false, `${path} is management-classified`);
+    assert.equal(classifyRoute(path).routeClass, "MANAGEMENT", path);
+  }
+  // The actual public callback and ticket-gated login flows remain public.
+  assert.equal(isPublicApiRoute("/api/auth/oidc/callback"), true);
+  assert.equal(isPublicApiRoute("/api/codex/connect/device-ticket", "POST"), true);
 });

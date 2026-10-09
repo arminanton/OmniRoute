@@ -72,7 +72,6 @@ test("the reported bypass: /api/usage/om-usage<suffix> classifies MANAGEMENT", (
 
 test("genuine subtrees stay public all the way down", () => {
   assert.equal(isPublicApiRoute("/api/v1/chat/completions", "POST"), true);
-  assert.equal(isPublicApiRoute("/api/oauth/cursor/callback", "GET"), true);
   assert.equal(isPublicApiRoute("/api/auth/oidc/callback", "GET"), true);
   assert.equal(isPublicApiRoute("/api/codex/connect/complete", "POST"), true);
   assert.equal(isPublicApiRoute("/api/telegram/update", "POST"), true);
@@ -106,4 +105,32 @@ test("LOCAL_ONLY oauth auto-import exclusions still win over the /api/oauth/ sub
     assert.equal(isPublicApiRoute(route, "POST"), false, route);
     assert.equal(classifyRoute(route, "POST").routeClass, "MANAGEMENT", route);
   }
+});
+
+test("credential-changing OAuth flows use MANAGEMENT rather than the public OAuth prefix", () => {
+  const cases = [
+    ["/api/oauth/kiro/api-key", "POST"],
+    ["/api/oauth/kiro/social-authorize", "GET"],
+    ["/api/oauth/kiro/social-exchange", "POST"],
+    ["/api/oauth/kiro/import", "POST"],
+    ["/api/oauth/cursor/login/start", "POST"],
+    ["/api/oauth/cursor/login/poll", "POST"],
+    ["/api/oauth/cursor/login/cancel", "POST"],
+    ["/api/oauth/cursor/import", "POST"],
+    ["/api/oauth/codex/import", "POST"],
+    ["/api/oauth/codex/import-token", "POST"],
+    ["/api/oauth/cliproxy-import", "GET"],
+    ["/api/oauth/trae/import", "POST"],
+    ["/api/oauth/claude/paste-credentials", "POST"],
+  ];
+  for (const [route, method] of cases) {
+    assert.equal(isPublicApiRoute(route, method), false, `${method} ${route}`);
+    assert.equal(classifyRoute(route, method).routeClass, "MANAGEMENT", `${method} ${route}`);
+  }
+
+  // OAuth callback/redirect pages stay reachable through their intended public flow.
+  assert.equal(isPublicApiRoute("/api/oauth/cursor/callback", "GET"), false);
+  assert.equal(classifyRoute("/api/oauth/cursor/callback", "GET").routeClass, "MANAGEMENT");
+  assert.equal(isPublicApiRoute("/api/auth/oidc/callback", "GET"), true);
+  assert.equal(isPublicApiRoute("/api/codex/connect/device-ticket", "POST"), true);
 });

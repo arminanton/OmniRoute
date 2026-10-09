@@ -5,6 +5,7 @@ import { SignJWT } from "jose";
 const keysRoute = await import("../../src/app/api/keys/route.ts");
 const cliToolsKeysRoute = await import("../../src/app/api/cli-tools/keys/route.ts");
 const { createApiKey, deleteApiKey } = await import("../../src/lib/db/apiKeys.ts");
+const { updateSettings } = await import("../../src/lib/db/settings.ts");
 
 const originalJwtSecret = process.env.JWT_SECRET;
 const originalApiKeySecret = process.env.API_KEY_SECRET;
@@ -26,6 +27,28 @@ test.afterEach(() => {
   else process.env.JWT_SECRET = originalJwtSecret;
   if (originalApiKeySecret === undefined) delete process.env.API_KEY_SECRET;
   else process.env.API_KEY_SECRET = originalApiKeySecret;
+});
+
+test("CLI tools key list rejects anonymous and inference-only access with global login disabled", async () => {
+  process.env.API_KEY_SECRET = "test-api-key-secret";
+  await updateSettings({ requireLogin: false, password: null });
+  const client = await createApiKey("CLI Tools Client Key", "test-machine-cli-tools-client");
+
+  try {
+    const anonymous = await cliToolsKeysRoute.GET(
+      new Request("http://localhost/api/cli-tools/keys")
+    );
+    assert.equal(anonymous.status, 401);
+
+    const inferenceKey = await cliToolsKeysRoute.GET(
+      new Request("http://localhost/api/cli-tools/keys", {
+        headers: { authorization: `Bearer ${client.key}` },
+      })
+    );
+    assert.equal(inferenceKey.status, 403);
+  } finally {
+    await deleteApiKey(client.id);
+  }
 });
 
 test("CLI tools key list can return unmasked keys for authenticated internal consumers", async () => {

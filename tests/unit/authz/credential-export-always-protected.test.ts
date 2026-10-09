@@ -13,13 +13,12 @@ import {
 // An unauthenticated caller who knows a connection id could download the
 // operator's raw access_token / refresh_token / id_token.
 //
-// This is the THIRD recurrence of one class: GHSA-mghq-58h3-qcqj added
-// /api/db-backups, GHSA-v7g9-7f55-5g46 added the /api/settings/*-json siblings
-// it had missed, and this one is the siblings BOTH missed. So the test is
-// written as an inventory of the whole class rather than two more assertions:
-// a route that hands out stored credentials, dumps captured traffic, or writes
-// the operator's CLI config must be hard-gated (ALWAYS_PROTECTED or
-// LOCAL_ONLY), never left on the fail-open MANAGEMENT tier.
+// The same fail-open class has recurred across database backups, settings
+// exports, OAuth exports, captured logs, and local CLI credential surfaces.
+// Keep an inventory rather than one-off assertions: any route that hands out
+// stored credentials, dumps captured traffic, or writes the operator's CLI
+// config must be hard-gated (ALWAYS_PROTECTED or LOCAL_ONLY), never left on
+// the fail-open MANAGEMENT tier.
 
 const HARD_GATED_INVENTORY: ReadonlyArray<{ path: string; why: string }> = [
   // ── Reported in GHSA-5926-2w35-7h4q ──────────────────────────────────────
@@ -39,6 +38,10 @@ const HARD_GATED_INVENTORY: ReadonlyArray<{ path: string; why: string }> = [
   {
     path: "/api/cli-tools/codex-profiles",
     why: "PUT writes attacker-supplied auth.json and config.toml into the operator's Codex CLI config",
+  },
+  {
+    path: "/api/cli-tools/keys",
+    why: "returns every stored API key in rawKey to CLI-tools consumers",
   },
   // ── Same family: WRITE the operator's credentials into host CLI files ───
   // These do not hand the credential to the caller, so they are a step below
@@ -92,6 +95,7 @@ test("the trailing-slash spelling is gated too", () => {
     "/api/providers/abc/codex-auth/export/",
     "/api/logs/export/",
     "/api/cli-tools/codex-profiles/",
+    "/api/cli-tools/keys/",
   ]) {
     assert.ok(isAlwaysProtectedPath(path) || isLocalOnlyPath(path), path);
   }
