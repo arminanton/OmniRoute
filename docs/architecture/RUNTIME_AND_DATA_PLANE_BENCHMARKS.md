@@ -411,6 +411,26 @@ Bun `--smol` was tested once as an exploratory mode: RSS fell by only a few MiB 
 latency rose substantially. It is excluded from the repeated comparison table because that trial's
 load generator was not pinned identically.
 
+## Production SSE readiness bounds and accepted-request retries
+
+The production `ensureStreamReadiness()` gate now caps each request's pre-readiness retention at
+1 MiB across the raw replay chunks, decoded UTF-16 text, parser-owned line/event data, and bounded
+chunk/line/event counts. This prevents an SSE provider that emits a large partial event without a
+usable readiness signal from accumulating unbounded raw buffers and duplicate decoded strings.
+The cap is per request; at 100 concurrent requests its configured upper bound can still represent
+up to 100 MiB of readiness retention before object/runtime overhead, so the concurrency gate and
+the full request pipeline remain part of the memory budget.
+
+Once an upstream has returned HTTP 200, a readiness timeout or body-read error is now classified as
+`upstream_acceptance_uncertain`. Same-account transport retries and combo failover stop there,
+because the provider may still be generating and replaying the request could duplicate tool work or
+provider cost. The local readiness-buffer cap has its own terminal classification and does not mark
+the account/provider as unhealthy; a caller disconnect returns 499. These paths preserve distinct
+diagnostic codes so logs can separate local buffering pressure from an upstream transport failure.
+Unit/regression checks cover the classifications, bounded replay, cancellation, and no-replay
+behavior. This change has not yet been measured in the full Next standalone 70–100-session mock
+route benchmark or against a real provider, and it has not been deployed.
+
 ## Multi-turn, persistent-session transport run
 
 The harness now replays five sequential streamed requests for each independent agent session over a
