@@ -17,7 +17,10 @@ const { originals, context } = shared;
 
 const MAX_CLIENT_SNAPSHOT_VALUES = 500_000;
 const MAX_CLIENT_SNAPSHOT_DEPTH = 64;
-const DEFAULT_MIN_CLIENT_BYTES = 4 * 1024 * 1024;
+// Keep the synthetic 3.5 MB high-context agent request on the private-trace path
+// when overflow capture is explicitly enabled; ordinary call-log preparation
+// conservatively reserves more than the 128 MiB aggregate budget under fan-out.
+const DEFAULT_MIN_CLIENT_BYTES = 3_000_000;
 
 function getMinimumClientBytes(): number {
   const configured = process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;

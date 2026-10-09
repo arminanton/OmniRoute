@@ -1088,8 +1088,8 @@ request and each provider request/response, including partial-state labels. This
 payloads reachable from the call-log row while keeping them out of the ordinary artifact.
 
 The private-capture test sets `OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES` to 1 MiB for this
-1.31 MB (1.25 MiB) request corpus. Its normal production default is 4 MiB, so an operator investigating
-requests of this size must lower the threshold and enable private overflow. The diagnostic store
+1.31 MB (1.25 MiB) request corpus. Its current source default is 3,000,000 bytes, so an operator
+investigating requests of this size must lower the threshold and enable private overflow. The diagnostic store
 defaults to a 2 GiB aggregate budget and seven-day retention; do not interpret the 10 MiB call-artifact
 limit as that private-store budget.
 
@@ -1475,8 +1475,9 @@ trace, request logger, provider fetch observer, stream reader, gzip writers, and
 with a mocked Codex HTTP provider. It runs 100 independent requests with 4 MiB JSON bodies and
 64 KiB response streams, holds all 100 streams active together, and compares overflow disabled with
 overflow enabled. The payload uses base64-encoded random bytes to avoid the unrealistically high gzip
-ratio of repeated filler text. The 4 MiB size matches the default capture threshold; the benchmark
-uses a fresh, private temporary data directory and removes it at exit. Reproduce with:
+ratio of repeated filler text. The 4 MiB size is above the current 3,000,000-byte default capture
+threshold; the benchmark uses a fresh, private temporary data directory and removes it at exit.
+Reproduce with:
 
 ```bash
 OMNI_DIAGNOSTIC_OVERFLOW_ENABLED=false node --import tsx/esm --import ./open-sse/utils/setupPolyfill.ts scripts/perf/bench-diagnostic-overflow-concurrency.mjs 100 4194304 65536
@@ -1868,8 +1869,16 @@ resolved CLI versions in the image/build evidence.
   outbound provider fetch; the exact ingress/client contribution remains unisolated. Exhaustive
   private-file readback briefly raised host I/O PSI (about 15.7% some / 12.0% full avg10), then
   returned near zero after cleanup; memory pressure stayed zero. The 512 KiB overflow threshold was
-  test-only; the production default remains 4 MiB. These are in-process route-handler tests with
-  local mocks, not full standalone Next/middleware, external-provider, or deployed-image acceptance.
+  test-only; after the 3.5 MB fixture was found to be below the former default, the source default
+  was lowered to 3,000,000 bytes while overflow remains opt-in. A subsequent 70-session run at this
+  threshold with the harness's 8-connection pool and a 120 s request timeout completed 140/140
+  turns, persisted 140/140 rows and complete private traces, and recorded 980,396,918 raw / 738,464,178
+  compressed bytes in about 80 s. A matched 32-connection run under a 3 GiB `MemoryHigh` / 4 GiB
+  `MemoryMax` scope hit the resource guard at about 2,995 MiB with 507 cgroup-high events and returned
+  503 before completing; `memory.max` and OOM counters stayed zero. The route-handler harness shares
+  its cgroup with its synthetic client and mock upstream, so that 503 does not isolate the server's
+  own cgroup use. These are in-process route-handler tests with local mocks, not full standalone
+  Next/middleware, external-provider, or deployed-image acceptance.
   The Rust policy prototype remains benchmark-only and has no database-backed policies.
 - A separate 100-session, 700,000-byte run with call-log capture disabled measured the pre-provider
   admission path. The V8-derived ingest budget was 140,509,184 bytes; peak ingress use reached

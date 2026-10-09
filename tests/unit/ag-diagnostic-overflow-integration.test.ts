@@ -17,6 +17,7 @@ import {
   getDiagnosticClientBody,
   getDiagnosticClientJson,
   releaseDiagnosticClientJson,
+  recordDiagnosticClientBytes,
   runWithDiagnosticCaptureLifecycle,
 } from "../../open-sse/utils/diagnosticCaptureContext.ts";
 import {
@@ -574,6 +575,31 @@ test("private overflow snapshots only client requests above the configured size 
   } finally {
     if (original === undefined) delete process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
     else process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = original;
+  }
+});
+
+test("default private-overflow threshold captures the 3.5 MB high-context request", () => {
+  const originalEnabled = process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED;
+  const originalMinimum = process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
+  process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = "true";
+  delete process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
+  try {
+    const smallEnvelope = {};
+    recordDiagnosticClientBytes(smallEnvelope, new Uint8Array(2_900_000), true);
+    assert.equal(hasDiagnosticClientJson(smallEnvelope), false);
+
+    const highContextBytes = new Uint8Array(3_500_000);
+    const largeEnvelope = {};
+    recordDiagnosticClientBytes(largeEnvelope, highContextBytes, true);
+    assert.equal(hasDiagnosticClientJson(largeEnvelope), true);
+    assert.strictEqual(getDiagnosticClientBody(largeEnvelope), highContextBytes);
+    releaseDiagnosticClientJson(largeEnvelope);
+    assert.equal(hasDiagnosticClientJson(largeEnvelope), false);
+  } finally {
+    if (originalEnabled === undefined) delete process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED;
+    else process.env.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED = originalEnabled;
+    if (originalMinimum === undefined) delete process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES;
+    else process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES = originalMinimum;
   }
 });
 
