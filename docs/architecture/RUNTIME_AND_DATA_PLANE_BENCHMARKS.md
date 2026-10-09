@@ -1010,6 +1010,83 @@ The script removes its temporary database, data directory, and Next dist directo
 `unlimited` mode disables only automatic API-key limiting in that temporary server; it does not
 change persisted settings or the live instance.
 
+### Large-context comparison and artifact reservation limit
+
+The same Next HTTP harness was run at 100 concurrent conversations with four 200,000-character
+history messages per request (about 800,000 content characters); its mock response reported 800,000
+input tokens, but no tokenizer validated that count. It used model `openai/gpt-5.5` and a local mock
+upstream. All 100 tool-round trips completed in 24.49 s; per-conversation round-trip p95
+was 23.91 s, first-body p95 was 13.64 s, and the 6 GiB / 2 CPU cgroup peaked at 5.01 GB (4.66 GiB).
+It wrote all 201 call-log summary rows, but only 102 details were `ready`; 99 rows were `missing`
+with `preparation_memory_budget` as the reason, and only 102 artifact files remained. The mock was
+the generic `openai` API-key provider, which is not eligible for the Codex/Antigravity private
+overflow allowlist, so this test intentionally exposes the ordinary artifact reservation limit.
+The harness inherited the ordinary stream-capture default (off); it did not claim full stream capture.
+
+A separate Codex OAuth-shaped route test patches the Codex executor URL to a local HTTP Responses
+mock, then runs 1/30/70/100 independent tool-call/result conversations at the same 800,000-character
+history size. The 100-session phase passed 200/200 HTTP calls in 26.96 s (3.71 completed
+conversations/s), with 26.51 s tool-round-trip p95 and 10.71 s first-body p95. Across the four
+phases, all 402 call-log rows were ready: 101 had full ordinary artifacts and 301 had private-trace
+pointer artifacts. All 402 private diagnostic traces had a complete client request, provider request,
+and provider response. The traces retained 649.5 MB raw and used 6.07 MB compressed because this
+fixture's repeated `x` history gzip unusually well. Its mock also reported 800,000 input tokens, but
+the request was not tokenized by a model tokenizer. Gateway max RSS was 2.55 GB (2.38 GiB) and the
+6 GiB / 2 CPU cgroup peaked at 3.06 GB (2.85 GiB), with no OOM events. The explicit full-capture
+profile enabled stream chunks, a 10 MiB pipeline cap, and private overflow. This exercises the Codex
+executor, routing, tool loop, and capture path, but uses a synthetic OAuth token and local mock
+rather than ChatGPT's actual service or Prime's full process tree.
+
+The Antigravity CLI/IDE route test uses random-base64 context instead of repeated text and the
+private-overflow-only path. At 100 conversations it passed 402/402 tool/answer requests and stored
+402/402 complete private traces: 805.1 MB raw, 606.5 MB compressed. Gateway max RSS was 1.57 GB
+(1.46 GiB) and the 6 GiB / 2 CPU cgroup peaked at 2.53 GB (2.35 GiB), with zero OOM events. It exercises the direct
+chat route handler and local mock upstream, not Next middleware, an image, or real Google quotas.
+
+### Codex high-context capacity with the client isolated
+
+The earlier 100-session harness placed both the route and load generator in one cgroup. At an
+870,000-token-sized prompt it hit the 6 GiB cgroup pressure guard while the client was also consuming
+about 1.4 GiB there. That result overstated server pressure. The revised harness starts the route test
+in its own bounded systemd scope and the client in a separate 3 GiB scope; it also reports server
+heap, external memory, RSS, cgroup peak, and private-trace completion independently. Both scopes use
+two CPUs. The server uses the live-shaped 4 GiB cgroup and 2 GiB V8 old-space setting unless the row
+states otherwise. Prompt content is random Base64 to avoid repeated-text compression; each request
+contains four equal-sized historical messages. “Mock tokens” is a configured usage value, not a
+tokenizer measurement. All requests use a synthetic OAuth credential and local HTTP Responses mock.
+
+| Mock input tokens | Parallel conversations |         Result / round-trip p95 | Server heap peak | Server RSS peak | Server cgroup peak |      Private traces |
+| ----------------: | ---------------------: | ------------------------------: | ---------------: | --------------: | -----------------: | ------------------: |
+|           200,000 |                    100 |                 200/200; 31.1 s |         0.88 GiB |        1.78 GiB |   1.98 GiB / 4 GiB |    200/200 complete |
+|           500,000 |                    100 |                 200/200; 50.1 s |         1.81 GiB |        3.09 GiB |   3.40 GiB / 4 GiB |    200/200 complete |
+|           700,000 |                     70 |                 140/140; 42.5 s |         1.78 GiB |        3.23 GiB |   3.51 GiB / 4 GiB |    140/140 complete |
+|           700,000 |                    100 | first refusal at `codex-100-56` |         1.82 GiB |        3.47 GiB |   3.76 GiB / 4 GiB | partial run; no OOM |
+|           870,000 |                    100 |                 200/200; 72.1 s |         3.04 GiB |        5.02 GiB |   5.57 GiB / 6 GiB |    200/200 complete |
+
+The successful 100-session runs retained every private request/provider-request/provider-response
+trace. At 870,000 mock tokens, the 200 traces contained 1.395 GB raw and 1.050 GB compressed data;
+the server retained 19 full call-log artifacts and 181 trace-pointer artifacts. At 500,000 tokens,
+the same split was 23 full artifacts and 177 pointers, with 803 MB raw / 604 MB compressed traces.
+At 200,000 tokens the route used a 4 GiB cgroup and peaked at 2.13 GB; at 500,000 it peaked at
+3.65 GB. The 70-session 700,000-token run peaked at 3.77 GB. These measurements exercise an
+in-process route handler and local mock; they do not include a real Prime process tree, Next
+middleware or release image, and they do not establish provider quota behavior.
+
+At 700,000 mock tokens and 100 conversations, the V8 absolute-heap guard returned 503 while cgroup
+use was below its 4 GiB limit and PSI/OOM counters were zero. The log showed about 1.9 GiB of
+immediate V8 heap against the 1,904 MiB threshold. A separate 870,000-token request was accepted by
+the model-context estimator at 870,141 tokens; a 872,000-token mock request was rejected at 872,141
+against the 872,000 maximum because the tool/envelope added 141 tokens. This is test-estimator
+evidence, not a change to the advertised context window.
+
+The 700,000-token/100-session refusal moved from conversation index 8 in the original run to index
+49 after PII sanitization and secret redaction were fused into one pass, and then to index 56 after
+unchanged error-projection and encrypted-reasoning subtrees began using copy-on-write. These are
+directional measurements from separate random-payload runs, not an exactly repeatable concurrency
+threshold. A fresh 70-session run at that profile passed. Focused redaction/reasoning tests pass
+48/48. The 2 GiB heap guard still rejects before memory corruption or OOM, so the remaining limit is
+real and should not be hidden by simply raising the threshold.
+
 ## Repeated request-log payload
 
 The call-log path stores both the client request body and a reconstructed `effectiveInput`. For an
@@ -1023,6 +1100,14 @@ pipeline changed from 6.008 MiB to 3.058 MiB, saving 2.95 MiB per captured call.
 heap run, the modeled retained snapshots were 344.2 MiB before dedup and 339.8 MiB after dedup. Most
 of the direct benefit is reduced artifact size; the measured retained-object reduction is smaller
 because strings are immutable and bounded logging retains a limited array tail.
+
+The large-context Next run also exposed an ordering limit: call-log preparation reserves from its
+bounded raw payload estimate before the artifact writer applies the exact-text dictionary transform.
+With a 128 MiB aggregate reservation, 99 of 201 details were refused even though storage-time
+dedup could have reduced their encoded artifacts. Increasing the reservation would risk retaining
+too many large objects concurrently; the Codex and Antigravity private-overflow traces are the
+current bounded fallback, while reducing the preparation footprint before queue admission remains
+an open engineering item.
 
 The same 729-message/86-tool artifact shape was passed through the production queue estimator. Its
 estimated artifact footprint fell from 96.2 MB to 65.1 MB, and the synchronous estimate took a median

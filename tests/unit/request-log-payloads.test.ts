@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 
 const {
   normalizePayloadForLog,
+  omitEncryptedReasoningForLog,
   protectErrorPayloadForLog,
   protectPayloadForLog,
   serializePayloadForStorage,
@@ -506,6 +507,17 @@ test("omits encrypted reasoning values from structured log payloads", () => {
   );
   assert.equal(protectedPayload.output[0].reasoning_content, "visible diagnostic reasoning");
   assert.equal(payload.output[0].encrypted_content, encryptedContent);
+});
+
+test("reuses unchanged structured reasoning payloads by reference", () => {
+  const payload = {
+    input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
+      { type: "reasoning", summary: [{ type: "summary_text", text: "visible summary" }] },
+    ],
+  };
+
+  assert.equal(omitEncryptedReasoningForLog(payload), payload);
 });
 
 test("omits encrypted reasoning split across captured SSE chunks", () => {

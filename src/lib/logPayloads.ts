@@ -158,12 +158,18 @@ function projectErrorSubtreesForLog(
   if (Array.isArray(value)) {
     try {
       let found = false;
-      const projected = value.map((entry) => {
+      let projected: unknown[] | null = null;
+      for (let index = 0; index < value.length; index++) {
+        if (!(index in value)) continue;
+        const entry = value[index];
         const result = projectErrorSubtreesForLog(entry, seen, responsesFailure, false);
         found ||= result.found;
-        return result.value;
-      });
-      return { value: projected, found };
+        if (result.value !== entry) {
+          projected ??= value.slice();
+          projected[index] = result.value;
+        }
+      }
+      return { value: projected ?? value, found };
     } finally {
       seen.delete(value);
     }
@@ -171,10 +177,16 @@ function projectErrorSubtreesForLog(
 
   try {
     let found = responsesFailure;
-    const projected: JsonRecord = {};
-    for (const [key, entryValue] of Object.entries(value)) {
+    let projected: JsonRecord | null = null;
+    const entries = Object.entries(value);
+    const setProjected = (key: string, entryValue: unknown) => {
+      projected ??= Object.fromEntries(entries) as JsonRecord;
+      projected[key] = entryValue;
+    };
+    for (const [key, entryValue] of entries) {
       if (isErrorSubtreeKey(key) || (responsesFailure && isResponseFailureMessageKey(key))) {
-        projected[key] = sanitizeErrorSubtreeValue(entryValue);
+        const sanitized = sanitizeErrorSubtreeValue(entryValue);
+        if (sanitized !== entryValue) setProjected(key, sanitized);
         found = true;
         continue;
       }
@@ -187,10 +199,11 @@ function projectErrorSubtreesForLog(
         normalizedKey === "output" &&
         (protocolResponseObject || declaresResponsesFailure);
       if (preservePartialOutput) {
-        projected[key] = projectResponsesFailureOutput(
+        const output = projectResponsesFailureOutput(
           entryValue,
           (_field, stringValue) => sanitizeErrorMessage(stringValue) || "[REDACTED]"
         );
+        if (output !== entryValue) setProjected(key, output);
         found = true;
         continue;
       }
@@ -203,10 +216,10 @@ function projectErrorSubtreesForLog(
         responsesFailure,
         childIsProtocolResponse
       );
-      projected[key] = result.value;
+      if (result.value !== entryValue) setProjected(key, result.value);
       found ||= result.found;
     }
-    return { value: projected, found };
+    return { value: projected ?? value, found };
   } catch {
     return { value: "[REDACTED]", found: false };
   } finally {
@@ -400,19 +413,36 @@ export function normalizePayloadForLog(payload: unknown): unknown {
 export function omitEncryptedReasoningForLog(payload: unknown): unknown {
   if (!payload || typeof payload !== "object") return payload;
   if (isOpaqueBinary(payload)) return describeOpaqueBinary(payload);
-  if (Array.isArray(payload)) return payload.map(omitEncryptedReasoningForLog);
+  if (Array.isArray(payload)) {
+    let omitted: unknown[] | null = null;
+    for (let index = 0; index < payload.length; index++) {
+      if (!(index in payload)) continue;
+      const entry = payload[index];
+      const next = omitEncryptedReasoningForLog(entry);
+      if (next !== entry) {
+        omitted ??= payload.slice();
+        omitted[index] = next;
+      }
+    }
+    return omitted ?? payload;
+  }
 
-  const omitted: JsonRecord = {};
-  for (const [key, value] of Object.entries(payload)) {
+  let omitted: JsonRecord | null = null;
+  const entries = Object.entries(payload);
+  const setOmitted = (key: string, value: unknown) => {
+    omitted ??= Object.fromEntries(entries) as JsonRecord;
+    omitted[key] = value;
+  };
+  for (const [key, value] of entries) {
     if (key === ENCRYPTED_REASONING_KEY && typeof value === "string" && value.length > 0) {
-      omitted[key] = encryptedReasoningOmissionMarker(value.length);
+      const marker = encryptedReasoningOmissionMarker(value.length);
+      if (marker !== value) setOmitted(key, marker);
     } else if (typeof value === "object" && value !== null) {
-      omitted[key] = omitEncryptedReasoningForLog(value);
-    } else {
-      omitted[key] = value;
+      const next = omitEncryptedReasoningForLog(value);
+      if (next !== value) setOmitted(key, next);
     }
   }
-  return omitted;
+  return omitted ?? payload;
 }
 
 export function redactPayload(payload: unknown): unknown {
@@ -456,13 +486,35 @@ export function sanitizePayloadPII(payload: unknown): unknown {
   return sanitized;
 }
 
+/** Apply PII sanitization and credential redaction in one output tree walk. */
+function sanitizeAndRedactPayload(payload: unknown): unknown {
+  if (typeof payload === "string") return sanitizePII(payload).text;
+  if (!payload || typeof payload !== "object") return payload;
+  if (isOpaqueBinary(payload)) return describeOpaqueBinary(payload);
+  if (Array.isArray(payload)) return payload.map(sanitizeAndRedactPayload);
+
+  const protectedPayload: JsonRecord = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (isSensitivePayloadKey(key)) {
+      protectedPayload[key] = "[REDACTED]";
+    } else if (typeof value === "string" && value.startsWith("Bearer ")) {
+      protectedPayload[key] = "Bearer [REDACTED]";
+    } else {
+      protectedPayload[key] = sanitizeAndRedactPayload(value);
+    }
+  }
+  return protectedPayload;
+}
+
 export function protectPayloadForLog(payload: unknown): unknown {
   if (payload === null || payload === undefined) return null;
-  const normalized = normalizePayloadForLog(payload);
-  const errorProjected = projectErrorSubtreesForLog(normalized).value;
-  const reasoningOmitted = omitEncryptedReasoningForLog(errorProjected);
-  const piiSanitized = sanitizePayloadPII(reasoningOmitted);
-  return redactPayload(piiSanitized);
+  let projected = normalizePayloadForLog(payload);
+  projected = projectErrorSubtreesForLog(projected).value;
+  projected = omitEncryptedReasoningForLog(projected);
+  // These were separate full-tree maps. Fusing them avoids one additional
+  // retained copy of large request/response bodies while preserving the same
+  // PII and credential-redaction output.
+  return sanitizeAndRedactPayload(projected);
 }
 
 /** Project every string leaf because the payload is known to represent a failed response. */

@@ -7,8 +7,9 @@
  *
  * Run on an idle test host in a bounded user scope:
  *   systemd-run --user --scope --property=MemoryMax=6G --property=CPUQuota=200% \
- *     --property=Nice=10 npm run bench:next-http-tool-roundtrip
+ *     nice -n 10 npm run bench:next-http-tool-roundtrip
  *   npm run bench:next-http-tool-roundtrip -- --rate-limit=unlimited
+ *   npm run bench:next-http-tool-roundtrip -- --phases=100 --message-bytes=200000 --model=openai/gpt-5.5
  *
  * The benchmark owns a temporary DATA_DIR and Next dist directory and removes
  * them when it exits. Nothing is written to the live database or provider.
@@ -35,7 +36,7 @@ const options = Object.fromEntries(
   })
 );
 const unknownOptions = Object.keys(options).filter(
-  (name) => !["phases", "message-bytes", "rate-limit"].includes(name)
+  (name) => !["phases", "message-bytes", "model", "rate-limit"].includes(name)
 );
 if (unknownOptions.length > 0) {
   throw new Error(`Unknown benchmark option(s): ${unknownOptions.join(", ")}`);
@@ -46,6 +47,10 @@ const PHASES = (options.phases || "1,30,70,100")
   .filter((value) => Number.isInteger(value) && value > 0);
 if (PHASES.length === 0) throw new Error("At least one positive --phases entry is required");
 const MESSAGE_BYTES = Math.max(1024, Number(options["message-bytes"]) || 4096);
+const MODEL = options.model || "openai/gpt-4o-mini";
+if (typeof MODEL !== "string" || MODEL.length > 256) {
+  throw new Error("--model must be a nonempty model name of at most 256 characters");
+}
 const STARTUP_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 90_000;
 const CALL_LOG_DRAIN_TIMEOUT_MS = 30_000;
@@ -284,6 +289,7 @@ const env = {
   http_proxy: "",
   https_proxy: "",
   all_proxy: "",
+  OMNI_DIAGNOSTIC_OVERFLOW_ENABLED: "false",
 };
 // The harness also seeds settings and provider credentials in its own process
 // before spawning Next, so both processes must resolve the same isolated paths.
@@ -538,7 +544,7 @@ async function runConversation(sessionId) {
   const tools = [makeToolDefinition()];
   const first = await postChat(
     {
-      model: "openai/gpt-4o-mini",
+      model: MODEL,
       messages,
       tools,
       tool_choice: "auto",
@@ -557,7 +563,7 @@ async function runConversation(sessionId) {
 
   const second = await postChat(
     {
-      model: "openai/gpt-4o-mini",
+      model: MODEL,
       messages: [
         ...messages,
         { role: "assistant", tool_calls: [toolCall] },
@@ -609,6 +615,51 @@ async function countCallLogs() {
   }
 }
 
+async function countCallLogDetailStates() {
+  try {
+    const require = createRequire(import.meta.url);
+    const Database = require("better-sqlite3");
+    const db = new Database(path.join(dataDir, "storage.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      const rows = db
+        .prepare(
+          "SELECT COALESCE(detail_state, 'none') AS detailState, error_summary AS errorSummary, COUNT(*) AS count FROM call_logs GROUP BY COALESCE(detail_state, 'none'), error_summary"
+        )
+        .all();
+      const byState = {};
+      const missingReasons = {};
+      for (const row of rows) {
+        const state = String(row.detailState);
+        const count = Number(row.count);
+        byState[state] = (byState[state] || 0) + count;
+        if (state !== "missing") continue;
+        const summary = typeof row.errorSummary === "string" ? row.errorSummary.toLowerCase() : "";
+        const reason = summary.includes("preparation memory budget")
+          ? "preparation_memory_budget"
+          : summary.includes("artifact queue memory budget") ||
+              summary.includes("artifact memory budget")
+            ? "artifact_memory_budget"
+            : summary.includes("private diagnostic capture")
+              ? "private_overflow_not_persisted"
+              : summary.includes("worker")
+                ? "artifact_worker"
+                : summary
+                  ? "other_error_summary"
+                  : "no_error_summary";
+        missingReasons[reason] = (missingReasons[reason] || 0) + count;
+      }
+      return { byState, missingReasons };
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 async function countArtifacts() {
   let count = 0;
   async function walk(directory) {
@@ -630,14 +681,17 @@ async function countArtifacts() {
 
 async function waitForCallLogs(expected) {
   const deadline = Date.now() + CALL_LOG_DRAIN_TIMEOUT_MS;
-  let rows = await countCallLogs();
-  let artifacts = await countArtifacts();
-  while (rows !== null && rows < expected && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
+  let rows = null;
+  while (Date.now() < deadline) {
     rows = await countCallLogs();
-    artifacts = await countArtifacts();
+    if (rows !== null && rows >= expected) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  return { rows, artifacts };
+  const [artifacts, detailStates] = await Promise.all([
+    countArtifacts(),
+    countCallLogDetailStates(),
+  ]);
+  return { rows, artifacts, detailStates };
 }
 
 async function stopNext() {
@@ -657,6 +711,8 @@ async function stopNext() {
 
 let result;
 let failure = null;
+let callLogSnapshot = null;
+let expectedCallLogRows = null;
 const completedPhases = [];
 try {
   const upstreamBaseUrl = await startMockUpstream();
@@ -712,7 +768,7 @@ try {
 
   const warmup = await postChat(
     {
-      model: "openai/gpt-4o-mini",
+      model: MODEL,
       messages: [{ role: "user", content: "warmup" }],
       stream: true,
       stream_options: { include_usage: true },
@@ -755,12 +811,14 @@ try {
   }
 
   const expectedRequests = 1 + PHASES.reduce((total, count) => total + count * 2, 0);
+  expectedCallLogRows = expectedRequests;
   const expectedToolFollowups = PHASES.reduce((total, count) => total + count, 0);
   const callLogs = await waitForCallLogs(expectedRequests);
+  callLogSnapshot = callLogs;
   result = {
     benchmark: "next-http-openai-tool-roundtrip/v1",
     runtime: process.version,
-    mode: "Next development server with Turbopack, local HTTP mock provider, isolated DATA_DIR",
+    mode: "Next development server with Turbopack, local OpenAI API-key mock provider, isolated DATA_DIR",
     rateLimitMode: RATE_LIMIT_MODE,
     scope: {
       cgroupMemoryMaxBytes: cgroupMemoryMax,
@@ -782,26 +840,48 @@ try {
       mockToolFollowups: mockToolFollowups,
       callLogRowsIncludingWarmup: callLogs.rows,
       expectedCallLogRowsIncludingWarmup: expectedRequests,
+      callLogDetailStatesIncludingWarmup: callLogs.detailStates?.byState ?? null,
+      missingDetailReasonsIncludingWarmup: callLogs.detailStates?.missingReasons ?? null,
+      missingDetailRowsIncludingWarmup: callLogs.detailStates?.byState?.missing ?? null,
+      expectedReadyDetailRowsIncludingWarmup:
+        callLogs.detailStates === null ? null : (callLogs.detailStates.byState.ready ?? 0),
       capturedArtifactFiles: callLogs.artifacts,
+      captureComplete:
+        callLogs.rows === expectedRequests &&
+        callLogs.detailStates !== null &&
+        callLogs.detailStates.byState.ready === expectedRequests &&
+        (callLogs.detailStates.byState.missing ?? 0) === 0 &&
+        callLogs.artifacts === expectedRequests,
     },
     rootDiskAvailableBeforeBytes: availableDiskBefore,
   };
 
+  console.log(JSON.stringify(result, null, 2));
+  const validationErrors = [];
   if (mockRequestCount !== expectedRequests) {
-    throw new Error(`Expected ${expectedRequests} mock requests, received ${mockRequestCount}`);
+    validationErrors.push(
+      `expected ${expectedRequests} mock requests, received ${mockRequestCount}`
+    );
   }
   if (mockToolFollowups !== expectedToolFollowups) {
-    throw new Error(
-      `Expected ${expectedToolFollowups} tool follow-up requests, got ${mockToolFollowups}`
+    validationErrors.push(
+      `expected ${expectedToolFollowups} tool follow-up requests, got ${mockToolFollowups}`
     );
   }
   if (callLogs.rows !== expectedRequests) {
-    throw new Error(`Expected ${expectedRequests} call-log rows, got ${callLogs.rows}`);
+    validationErrors.push(`expected ${expectedRequests} call-log rows, got ${callLogs.rows}`);
   }
-  if (callLogs.artifacts !== expectedRequests) {
-    throw new Error(`Expected ${expectedRequests} call-log artifacts, got ${callLogs.artifacts}`);
+  if ((callLogs.detailStates?.byState?.ready ?? 0) !== expectedRequests) {
+    validationErrors.push(
+      `expected ${expectedRequests} ready detail rows, got ${callLogs.detailStates?.byState?.ready ?? 0} (missing=${callLogs.detailStates?.byState?.missing ?? "unknown"}; reasons=${JSON.stringify(callLogs.detailStates?.missingReasons ?? {})})`
+    );
   }
-  console.log(JSON.stringify(result, null, 2));
+  if (callLogs.artifacts !== (callLogs.detailStates?.byState?.ready ?? 0)) {
+    validationErrors.push(
+      `artifact file count ${callLogs.artifacts} does not match ready detail rows ${callLogs.detailStates?.byState?.ready ?? 0}`
+    );
+  }
+  if (validationErrors.length > 0) throw new Error(validationErrors.join("; "));
 } catch (error) {
   failure = error;
   console.error(
@@ -816,6 +896,11 @@ try {
           rateLimitMode: RATE_LIMIT_MODE,
           completedPhases,
           mockProviderRequests: mockRequestCount,
+          cgroupSampledPeakBytes: cgroupSamplePeak,
+          cgroupKernelPeakBytes: readCgroupInteger(cgroupDir, "memory.peak"),
+          expectedCallLogRowsIncludingWarmup: expectedCallLogRows,
+          callLogs: callLogSnapshot,
+          rootDiskAvailableBeforeBytes: availableDiskBefore,
         },
         null,
         2
