@@ -5194,22 +5194,50 @@ paths:
       operationId: getApiRateLimit
       tags: [Settings]
       summary: Get rate limit configuration
+      deprecated: true
+      description: Permanently redirects to `/api/rate-limits`.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
-        "200":
-          description: Rate limit settings
+        "308":
+          description: Permanent redirect to the consolidated rate-limit endpoint.
+          headers:
+            Location:
+              required: true
+              description: Absolute redirect URL to /api/rate-limits; the original query string is preserved.
+              schema: { type: string, format: uri }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiRateLimit
       tags: [Settings]
       summary: Update rate limit configuration
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
+      deprecated: true
+      description: Permanently redirects to `/api/rate-limits`.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
-        "200":
-          description: Updated rate limit settings
+        "308":
+          description: Permanent redirect to the consolidated rate-limit endpoint.
+          headers:
+            Location:
+              required: true
+              description: Absolute redirect URL to /api/rate-limits; the original query string is preserved.
+              schema: { type: string, format: uri }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/tags:
     get:
@@ -9292,22 +9320,66 @@ paths:
       operationId: getApiResilience
       tags: [System]
       summary: Get resilience configuration
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Request queue, connection cooldown, provider breaker, and wait settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResilienceSettingsResponse" }
+        "500":
+          description: Resilience settings could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiResilience
       tags: [System]
       summary: Update resilience configuration
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/ResilienceSettingsUpdate"
       responses:
         "200":
           description: Updated resilience configuration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResilienceSettingsPatchResponse" }
+        "400":
+          description: Invalid JSON body or resilience settings.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500":
+          description: Resilience settings update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/resilience/connections:
     get:
@@ -9320,6 +9392,10 @@ paths:
         breakers, model lockouts, and recent breaker transitions. Credential columns
         are excluded by an explicit database whitelist.
       x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: windowMs
           in: query
@@ -9337,10 +9413,25 @@ paths:
       responses:
         "200":
           description: Connection, breaker, lockout, window, and degradation metadata
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResilienceConnectionsResponse" }
         "400":
           description: Invalid query parameters
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           description: Failed to collect resilience state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/telegram/update:
     post:
@@ -9381,9 +9472,28 @@ paths:
       operationId: postApiResilienceReset
       tags: [System]
       summary: Reset circuit breakers
+      description: Resets all provider circuit breakers and model lockouts.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Circuit breakers reset
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ResilienceResetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Circuit-breaker reset failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/health:
     get:
@@ -9469,29 +9579,66 @@ paths:
       operationId: getApiRateLimits
       tags: [System]
       summary: Get per-account rate limit status
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Rate limit status by account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RateLimitsStatusResponse" }
+        "500":
+          description: Rate-limit status lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiRateLimits
       tags: [System]
       summary: Enable or disable account rate-limit protection
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [connectionId, enabled]
-              properties:
-                connectionId: { type: string, minLength: 1 }
-                enabled: { type: boolean }
-              additionalProperties: false
+              $ref: "#/components/schemas/RateLimitToggleRequest"
       responses:
         "200":
           description: Rate-limit protection updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RateLimitToggleResponse" }
         "400":
           description: Invalid request
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "500":
+          description: Rate-limit protection update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/sessions:
     get:
@@ -25889,6 +26036,529 @@ components:
         command: { type: string }
         sampleCount: { type: integer, minimum: 0 }
         filter: { $ref: "#/components/schemas/RtkSuggestedFilter" }
+      additionalProperties: false
+    ResilienceAuthCategory:
+      type: string
+      enum: [oauth, apikey]
+    ResilienceRequestQueueSettings:
+      type: object
+      required:
+        [
+          autoEnableApiKeyProviders,
+          requestsPerMinute,
+          minTimeBetweenRequestsMs,
+          concurrentRequests,
+          globalConcurrentRequests,
+          maxWaitMs,
+          executionMaxWaitMs,
+          maxQueueDepth,
+        ]
+      properties:
+        autoEnableApiKeyProviders: { type: boolean }
+        requestsPerMinute: { type: integer, minimum: 1 }
+        minTimeBetweenRequestsMs: { type: integer, minimum: 0 }
+        concurrentRequests: { type: integer, minimum: 1 }
+        globalConcurrentRequests: { type: integer, minimum: 0, maximum: 100000 }
+        maxWaitMs: { type: integer, minimum: 1 }
+        executionMaxWaitMs: { type: integer, minimum: 1 }
+        maxQueueDepth: { type: integer, minimum: 0, maximum: 100000 }
+      additionalProperties: false
+    ResilienceRequestQueuePatch:
+      type: object
+      description: Strict partial request-queue update; accepted settings are applied without requiring the other fields.
+      properties:
+        autoEnableApiKeyProviders: { type: boolean }
+        requestsPerMinute: { type: integer, minimum: 1 }
+        minTimeBetweenRequestsMs: { type: integer, minimum: 0 }
+        concurrentRequests: { type: integer, minimum: 1 }
+        globalConcurrentRequests:
+          type: integer
+          minimum: 0
+          maximum: 100000
+          description: Whole-process upstream concurrency cap; zero disables this gate.
+        maxWaitMs: { type: integer, minimum: 1 }
+        executionMaxWaitMs: { type: integer, minimum: 1 }
+        maxQueueDepth: { type: integer, minimum: 0, maximum: 100000 }
+      additionalProperties: false
+    ResilienceConnectionCooldownProfile:
+      type: object
+      required: [baseCooldownMs, useUpstreamRetryHints, maxBackoffSteps]
+      properties:
+        baseCooldownMs: { type: integer, minimum: 0 }
+        useUpstreamRetryHints: { type: boolean }
+        useUpstream429BreakerHints: { type: [boolean, "null"] }
+        maxBackoffSteps: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ResilienceConnectionCooldownProfilePatch:
+      type: object
+      properties:
+        baseCooldownMs: { type: integer, minimum: 0 }
+        useUpstreamRetryHints: { type: boolean }
+        useUpstream429BreakerHints: { type: [boolean, "null"] }
+        maxBackoffSteps: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ResilienceProviderBreakerProfile:
+      type: object
+      required: [failureThreshold, degradationThreshold, resetTimeoutMs]
+      properties:
+        failureThreshold: { type: integer, minimum: 1, maximum: 1000 }
+        degradationThreshold: { type: integer, minimum: 1, maximum: 1000 }
+        resetTimeoutMs: { type: integer, minimum: 1000 }
+      additionalProperties: false
+    ResilienceProviderBreakerProfilePatch:
+      type: object
+      description: degradationThreshold must remain below failureThreshold when both are set.
+      properties:
+        failureThreshold: { type: integer, minimum: 1, maximum: 1000 }
+        degradationThreshold: { type: integer, minimum: 1, maximum: 1000 }
+        resetTimeoutMs: { type: integer, minimum: 1000 }
+      additionalProperties: false
+    ResilienceWaitForCooldownSettings:
+      type: object
+      required: [enabled, maxRetries, maxRetryWaitSec]
+      properties:
+        enabled: { type: boolean }
+        maxRetries: { type: integer, minimum: 0, maximum: 10 }
+        maxRetryWaitSec: { type: integer, minimum: 0, maximum: 300 }
+      additionalProperties: false
+    ResilienceWaitForCooldownSettingsPatch:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        maxRetries: { type: integer, minimum: 0, maximum: 10 }
+        maxRetryWaitSec: { type: integer, minimum: 0, maximum: 300 }
+      additionalProperties: false
+    ResilienceComboCooldownWaitSettings:
+      type: object
+      required: [enabled, maxWaitMs, maxAttempts, budgetMs]
+      properties:
+        enabled: { type: boolean }
+        maxWaitMs: { type: integer, minimum: 0, maximum: 30000 }
+        maxAttempts: { type: integer, minimum: 0, maximum: 10 }
+        budgetMs: { type: integer, minimum: 0, maximum: 300000 }
+      additionalProperties: false
+    ResilienceComboCooldownWaitSettingsPatch:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        maxWaitMs: { type: integer, minimum: 0, maximum: 30000 }
+        maxAttempts: { type: integer, minimum: 0, maximum: 10 }
+        budgetMs: { type: integer, minimum: 0, maximum: 300000 }
+      additionalProperties: false
+    ResilienceQuotaShareConcurrencyLimit:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+      additionalProperties: false
+    ResilienceProviderCooldownSettings:
+      type: object
+      required: [enabled, minRetryCooldownMs, maxRetryCooldownMs]
+      properties:
+        enabled: { type: boolean }
+        minRetryCooldownMs: { type: integer, minimum: 0, maximum: 300000 }
+        maxRetryCooldownMs: { type: integer, minimum: 0, maximum: 3600000 }
+      additionalProperties: false
+    ResilienceProviderCooldownSettingsPatch:
+      type: object
+      description: When both cooldown values are set, maxRetryCooldownMs must be at least minRetryCooldownMs.
+      properties:
+        enabled: { type: boolean }
+        minRetryCooldownMs: { type: integer, minimum: 0, maximum: 300000 }
+        maxRetryCooldownMs: { type: integer, minimum: 0, maximum: 3600000 }
+      additionalProperties: false
+    ResilienceQuotaPreflightSettings:
+      type: object
+      required: [enabled, defaultThresholdPercent, warnThresholdPercent, providerWindowDefaults]
+      properties:
+        enabled: { type: boolean }
+        defaultThresholdPercent: { type: integer, minimum: 0, maximum: 99 }
+        warnThresholdPercent: { type: integer, minimum: 0, maximum: 100 }
+        providerWindowDefaults:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: { type: number, minimum: 0, maximum: 100 }
+      additionalProperties: false
+    ResilienceQuotaPreflightSettingsPatch:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        defaultThresholdPercent: { type: integer, minimum: 0, maximum: 99 }
+        warnThresholdPercent: { type: integer, minimum: 0, maximum: 100 }
+        providerWindowDefaults:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: { type: integer, minimum: 0, maximum: 100 }
+      additionalProperties: false
+    ResilienceProviderQuotaOverride:
+      type: object
+      properties:
+        rpm: { type: integer, minimum: 1 }
+        concurrency: { type: integer, minimum: 1 }
+        providerConcurrency: { type: integer, minimum: 0, maximum: 100000 }
+      additionalProperties: false
+    ResilienceCredentialHealthCheckSettings:
+      type: object
+      required: [intervalMinutes]
+      properties:
+        intervalMinutes: { type: integer, minimum: 0, maximum: 1440 }
+      additionalProperties: false
+    ResilienceCredentialHealthCheckSettingsPatch:
+      type: object
+      properties:
+        intervalMinutes: { type: integer, minimum: 0, maximum: 1440 }
+      additionalProperties: false
+    ResilienceLegacyProfile:
+      type: object
+      required:
+        [
+          transientCooldown,
+          rateLimitCooldown,
+          maxBackoffLevel,
+          circuitBreakerThreshold,
+          degradationThreshold,
+          circuitBreakerReset,
+        ]
+      properties:
+        transientCooldown: { type: number, minimum: 0 }
+        rateLimitCooldown: { type: number, minimum: 0 }
+        maxBackoffLevel: { type: integer, minimum: 0 }
+        circuitBreakerThreshold: { type: integer, minimum: 0 }
+        degradationThreshold: { type: integer, minimum: 0 }
+        circuitBreakerReset: { type: number, minimum: 0 }
+      additionalProperties: true
+    ResilienceLegacyProfileUpdate:
+      type: object
+      required:
+        [
+          transientCooldown,
+          rateLimitCooldown,
+          maxBackoffLevel,
+          circuitBreakerThreshold,
+          circuitBreakerReset,
+        ]
+      properties:
+        transientCooldown: { type: number, minimum: 0 }
+        rateLimitCooldown: { type: number, minimum: 0 }
+        maxBackoffLevel: { type: integer, minimum: 0 }
+        circuitBreakerThreshold: { type: integer, minimum: 0 }
+        circuitBreakerReset: { type: number, minimum: 0 }
+      description: Legacy profile validator ignores extra keys such as response-only degradationThreshold.
+      additionalProperties: true
+    ResilienceLegacyDefaults:
+      type: object
+      properties:
+        requestsPerMinute: { type: integer, minimum: 1 }
+        minTimeBetweenRequests: { type: integer, minimum: 0 }
+        concurrentRequests: { type: integer, minimum: 1 }
+        globalConcurrentRequests: { type: integer, minimum: 0, maximum: 100000 }
+      additionalProperties: false
+    ResilienceSettingsResponse:
+      type: object
+      required:
+        [
+          requestQueue,
+          connectionCooldown,
+          providerBreaker,
+          waitForCooldown,
+          comboCooldownWait,
+          quotaShareConcurrencyLimit,
+          providerCooldown,
+          quotaPreflight,
+          providerQuotaOverrides,
+          credentialHealthCheck,
+          legacy,
+        ]
+      properties:
+        requestQueue: { $ref: "#/components/schemas/ResilienceRequestQueueSettings" }
+        connectionCooldown:
+          type: object
+          required: [oauth, apikey]
+          properties:
+            oauth: { $ref: "#/components/schemas/ResilienceConnectionCooldownProfile" }
+            apikey: { $ref: "#/components/schemas/ResilienceConnectionCooldownProfile" }
+          additionalProperties: false
+        providerBreaker:
+          type: object
+          required: [oauth, apikey]
+          properties:
+            oauth: { $ref: "#/components/schemas/ResilienceProviderBreakerProfile" }
+            apikey: { $ref: "#/components/schemas/ResilienceProviderBreakerProfile" }
+          additionalProperties: false
+        waitForCooldown: { $ref: "#/components/schemas/ResilienceWaitForCooldownSettings" }
+        comboCooldownWait: { $ref: "#/components/schemas/ResilienceComboCooldownWaitSettings" }
+        quotaShareConcurrencyLimit:
+          { $ref: "#/components/schemas/ResilienceQuotaShareConcurrencyLimit" }
+        providerCooldown: { $ref: "#/components/schemas/ResilienceProviderCooldownSettings" }
+        quotaPreflight: { $ref: "#/components/schemas/ResilienceQuotaPreflightSettings" }
+        providerQuotaOverrides:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/ResilienceProviderQuotaOverride" }
+        credentialHealthCheck:
+          { $ref: "#/components/schemas/ResilienceCredentialHealthCheckSettings" }
+        legacy:
+          type: object
+          required: [profiles, defaults]
+          properties:
+            profiles:
+              type: object
+              required: [oauth, apikey]
+              properties:
+                oauth: { $ref: "#/components/schemas/ResilienceLegacyProfile" }
+                apikey: { $ref: "#/components/schemas/ResilienceLegacyProfile" }
+              additionalProperties: false
+            defaults: { $ref: "#/components/schemas/ResilienceLegacyDefaults" }
+          additionalProperties: false
+    ResilienceSettingsUpdate:
+      type: object
+      description: Strict partial PATCH; at least one resilience setting field must be provided.
+      minProperties: 1
+      properties:
+        requestQueue: { $ref: "#/components/schemas/ResilienceRequestQueuePatch" }
+        connectionCooldown:
+          type: object
+          properties:
+            oauth: { $ref: "#/components/schemas/ResilienceConnectionCooldownProfilePatch" }
+            apikey: { $ref: "#/components/schemas/ResilienceConnectionCooldownProfilePatch" }
+          additionalProperties: false
+        providerBreaker:
+          type: object
+          properties:
+            oauth: { $ref: "#/components/schemas/ResilienceProviderBreakerProfilePatch" }
+            apikey: { $ref: "#/components/schemas/ResilienceProviderBreakerProfilePatch" }
+          additionalProperties: false
+        waitForCooldown: { $ref: "#/components/schemas/ResilienceWaitForCooldownSettingsPatch" }
+        comboCooldownWait: { $ref: "#/components/schemas/ResilienceComboCooldownWaitSettingsPatch" }
+        quotaShareConcurrencyLimit:
+          { $ref: "#/components/schemas/ResilienceQuotaShareConcurrencyLimit" }
+        providerCooldown: { $ref: "#/components/schemas/ResilienceProviderCooldownSettingsPatch" }
+        quotaPreflight: { $ref: "#/components/schemas/ResilienceQuotaPreflightSettingsPatch" }
+        providerQuotaOverrides:
+          type: object
+          propertyNames: { minLength: 1 }
+          additionalProperties: { $ref: "#/components/schemas/ResilienceProviderQuotaOverride" }
+        credentialHealthCheck:
+          { $ref: "#/components/schemas/ResilienceCredentialHealthCheckSettingsPatch" }
+        profiles:
+          type: object
+          properties:
+            oauth: { $ref: "#/components/schemas/ResilienceLegacyProfileUpdate" }
+            apikey: { $ref: "#/components/schemas/ResilienceLegacyProfileUpdate" }
+          additionalProperties: true
+        defaults: { $ref: "#/components/schemas/ResilienceLegacyDefaults" }
+      additionalProperties: false
+    ResilienceSettingsPatchResponse:
+      allOf:
+        - { $ref: "#/components/schemas/ResilienceSettingsResponse" }
+        - type: object
+          required: [ok]
+          properties:
+            ok: { type: boolean, const: true }
+    RateLimitConnectionStatus:
+      type: object
+      required:
+        [connectionId, provider, name, rateLimitProtection, enabled, active, queued, running]
+      properties:
+        connectionId: { type: string }
+        provider: { type: string }
+        name: { type: string }
+        rateLimitProtection: { type: boolean }
+        enabled: { type: boolean }
+        active: { type: boolean }
+        queued: { type: integer, minimum: 0 }
+        running: { type: integer, minimum: 0 }
+        executing: { type: integer, minimum: 0 }
+        done: { type: integer, minimum: 0 }
+      additionalProperties: false
+    RateLimitOverviewStatus:
+      type: object
+      required: [queued, running, executing]
+      properties:
+        queued: { type: integer, minimum: 0 }
+        running: { type: integer, minimum: 0 }
+        executing: { type: integer, minimum: 0 }
+      additionalProperties: false
+    RateLimitModelLockout:
+      type: object
+      required: [provider, connectionId, model, reason, remainingMs, failureCount, lockedAt, until]
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        model: { type: string }
+        reason: { type: string }
+        remainingMs: { type: number }
+        failureCount: { type: integer, minimum: 0 }
+        lockedAt: { type: string, format: date-time }
+        until: { type: integer, minimum: 0 }
+      additionalProperties: false
+    SignatureCacheLayerStats:
+      type: object
+      required: [entries, patterns]
+      properties:
+        entries: { type: integer, minimum: 0 }
+        patterns: { type: integer, minimum: 0 }
+      additionalProperties: false
+    RateLimitsStatusResponse:
+      type: object
+      required: [connections, overview, lockouts, cacheStats]
+      properties:
+        connections:
+          type: array
+          items: { $ref: "#/components/schemas/RateLimitConnectionStatus" }
+        overview:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/RateLimitOverviewStatus" }
+        lockouts:
+          type: array
+          items: { $ref: "#/components/schemas/RateLimitModelLockout" }
+        cacheStats:
+          type: object
+          required: [tool, family, session, defaultCount]
+          properties:
+            tool: { $ref: "#/components/schemas/SignatureCacheLayerStats" }
+            family: { $ref: "#/components/schemas/SignatureCacheLayerStats" }
+            session: { $ref: "#/components/schemas/SignatureCacheLayerStats" }
+            defaultCount: { type: integer, minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
+    RateLimitToggleRequest:
+      type: object
+      required: [connectionId, enabled]
+      properties:
+        connectionId: { type: string, minLength: 1 }
+        enabled: { type: boolean }
+      additionalProperties: true
+    RateLimitToggleResponse:
+      type: object
+      required: [success, connectionId, enabled]
+      properties:
+        success: { type: boolean, const: true }
+        connectionId: { type: string }
+        enabled: { type: boolean }
+      additionalProperties: false
+    ResilienceTransitionRecord:
+      type: object
+      required: [from, to, timestamp, failureCount]
+      properties:
+        from: { type: string }
+        to: { type: string }
+        timestamp: { type: number }
+        failureCount: { type: integer, minimum: 0 }
+        reason: { type: string }
+      additionalProperties: false
+    ResilienceConnectionState:
+      type: object
+      required:
+        [
+          id,
+          provider,
+          name,
+          authType,
+          priority,
+          isActive,
+          connectionStatus,
+          rateLimitedUntil,
+          backoffLevel,
+          testStatus,
+          lastErrorType,
+          lastErrorAt,
+          errorCode,
+          lastUsedAt,
+          cooldownRemainingMs,
+          isCoolingDown,
+          breaker,
+          lockouts,
+        ]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        name: { type: [string, "null"] }
+        authType: { type: string }
+        priority: { type: integer }
+        isActive: { type: boolean }
+        connectionStatus: { type: string, enum: [healthy, cooling_down, circuit_open, terminal] }
+        rateLimitedUntil: { type: [string, "null"] }
+        backoffLevel: { type: integer, minimum: 0 }
+        testStatus: { type: [string, "null"] }
+        lastErrorType: { type: [string, "null"] }
+        lastErrorAt: { type: [string, "null"] }
+        errorCode:
+          { type: [string, "null"], enum: [rate_limit, auth, server, not_found, other, null] }
+        lastUsedAt: { type: [string, "null"] }
+        cooldownRemainingMs: { type: number, minimum: 0 }
+        isCoolingDown: { type: boolean }
+        breaker:
+          type: [object, "null"]
+          required: [state, failureCount, retryAfterMs, lastFailureKind]
+          properties:
+            state: { type: string }
+            failureCount: { type: integer, minimum: 0 }
+            retryAfterMs: { type: number, minimum: 0 }
+            lastFailureKind: { type: [string, "null"] }
+          additionalProperties: false
+        lockouts:
+          type: array
+          items:
+            type: object
+            required: [model, reason, remainingMs]
+            properties:
+              model: { type: string }
+              reason: { type: string }
+              remainingMs: { type: number, minimum: 0 }
+            additionalProperties: false
+      additionalProperties: false
+    ResilienceBreakerStatus:
+      type: object
+      required: [name, state, failureCount, retryAfterMs, lastFailureKind, transitionHistory]
+      properties:
+        name: { type: string }
+        state: { type: string }
+        failureCount: { type: integer, minimum: 0 }
+        retryAfterMs: { type: number, minimum: 0 }
+        lastFailureKind: { type: [string, "null"] }
+        transitionHistory:
+          type: array
+          items: { $ref: "#/components/schemas/ResilienceTransitionRecord" }
+      additionalProperties: false
+    ResilienceConnectionsResponse:
+      type: object
+      required: [connections, breakers, window, meta]
+      properties:
+        connections:
+          type: array
+          items: { $ref: "#/components/schemas/ResilienceConnectionState" }
+        breakers:
+          type: array
+          items: { $ref: "#/components/schemas/ResilienceBreakerStatus" }
+        window:
+          type: object
+          required: [sinceMs, untilMs, now]
+          properties:
+            sinceMs: { type: integer, minimum: 0 }
+            untilMs: { type: integer, minimum: 0 }
+            now: { type: integer, minimum: 0 }
+          additionalProperties: false
+        meta:
+          type: object
+          required:
+            [totalConnections, coolingDownCount, unhealthyBreakerCount, countsCapped, degraded]
+          properties:
+            totalConnections: { type: integer, minimum: 0 }
+            coolingDownCount: { type: integer, minimum: 0 }
+            unhealthyBreakerCount: { type: integer, minimum: 0 }
+            countsCapped: { type: boolean }
+            degraded: { type: array, items: { type: string } }
+          additionalProperties: false
+      additionalProperties: false
+    ResilienceResetResponse:
+      type: object
+      required: [ok, resetCount, message]
+      properties:
+        ok: { type: boolean, const: true }
+        resetCount: { type: integer, minimum: 0 }
+        message: { type: string }
       additionalProperties: false
     CompressionMode:
       type: string

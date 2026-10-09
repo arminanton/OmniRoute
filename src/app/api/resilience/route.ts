@@ -42,6 +42,9 @@ function normalizeLegacyPatch(body: JsonRecord): ResilienceSettingsPatch {
       ...(typeof defaults.concurrentRequests === "number"
         ? { concurrentRequests: defaults.concurrentRequests }
         : {}),
+      ...(typeof defaults.globalConcurrentRequests === "number"
+        ? { globalConcurrentRequests: defaults.globalConcurrentRequests }
+        : {}),
     };
   }
 

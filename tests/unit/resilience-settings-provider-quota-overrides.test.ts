@@ -26,6 +26,30 @@ test("updateResilienceSchema accepts providerQuotaOverrides entries", () => {
   assert.equal(parsed.success, true, "valid override map should parse");
 });
 
+test("requestQueue PATCH accepts the dashboard's global concurrency field", () => {
+  const parsed = updateResilienceSchema.safeParse({
+    requestQueue: {
+      autoEnableApiKeyProviders: true,
+      requestsPerMinute: 100,
+      minTimeBetweenRequestsMs: 0,
+      concurrentRequests: 8,
+      globalConcurrentRequests: 32,
+      maxWaitMs: 15000,
+      executionMaxWaitMs: 600000,
+      maxQueueDepth: 0,
+    },
+  });
+  assert.equal(parsed.success, true, "the full UI draft must pass strict requestQueue validation");
+  const merged = mergeResilienceSettings(cloneDefaults(), parsed.success ? parsed.data : {});
+  assert.equal(merged.requestQueue.globalConcurrentRequests, 32);
+  assert.equal(
+    updateResilienceSchema.safeParse({ requestQueue: { globalConcurrentRequests: 100001 } })
+      .success,
+    false,
+    "global concurrency must stay within the normalizer's 0–100000 bounds"
+  );
+});
+
 test("provider concurrency accepts zero as disabled and survives normalization", () => {
   const resolved = resolveResilienceSettings({
     resilienceSettings: {
@@ -151,5 +175,14 @@ test("syncRuntimeSettings re-applies provider quota overrides on the hot path", 
     source,
     /setProviderQuotaOverrides\(resilienceSettings\.providerQuotaOverrides\)/,
     "PATCH should hot-reload overrides without a process restart"
+  );
+});
+
+test("legacy defaults PATCH forwards globalConcurrentRequests into the request queue", () => {
+  const source = fs.readFileSync(RESILIENCE_ROUTE_PATH, "utf8");
+  assert.match(
+    source,
+    /globalConcurrentRequests:\s*defaults\.globalConcurrentRequests/,
+    "the validated legacy field must reach normalizeRequestQueueSettings"
   );
 });
