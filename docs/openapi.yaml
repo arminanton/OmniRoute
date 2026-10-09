@@ -20538,52 +20538,226 @@ paths:
       operationId: getApiV1AgentsCredentials
       tags:
         - V1 Agents
-      summary: "GET agents › credentials"
+      summary: List masked cloud-agent provider credentials
+      description: >-
+        Requires management authorization when authentication is enabled. Credential values are
+        masked to their final four characters; raw API keys are never returned. Anonymous access is
+        available only when management authentication is disabled for the instance.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Stored cloud-agent credentials with masked API keys.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudAgentCredentialListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Credential storage or decryption failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiV1AgentsCredentials
       tags:
         - V1 Agents
-      summary: "POST agents › credentials"
+      summary: Save a cloud-agent provider credential
+      description: >-
+        Stores the provider API key encrypted at rest. The response returns only its masked form.
+        Requires management authorization when enabled; anonymous calls are accepted only in an
+        instance configured without management authentication.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloudAgentCredentialSaveRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Credential saved and API key masked in the response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudAgentCredentialSaveResponse" }
+        "400":
+          description: Invalid credential request.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Credential could not be encrypted or stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/v1/agents/health:
     get:
       operationId: getApiV1AgentsHealth
       tags:
         - V1 Agents
-      summary: "GET agents › health"
+      summary: Probe configured cloud-agent providers
+      description: >-
+        Checks each registered provider with configured credentials and a five-second timeout.
+        Individual connection failures are returned as provider rows with `connected: false`;
+        management authorization is configuration-dependent.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Per-provider connection health and latency.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudAgentHealthResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Provider health check failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/v1/agents/tasks:
     delete:
       operationId: deleteApiV1AgentsTasks
       tags:
         - V1 Agents
-      summary: "DELETE agents › tasks"
+      summary: Delete a stored cloud-agent task
+      description: Deletes the task record by `id`; deletion is idempotent and does not cancel the external provider task.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: OK
+          description: Task record deletion acknowledged; a missing id is reported as 400.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudAgentSuccessResponse" }
+        "400":
+          description: Missing task id.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Task storage operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiV1AgentsTasks
       tags:
         - V1 Agents
-      summary: "GET agents › tasks"
+      summary: List cloud-agent tasks
+      description: >-
+        Returns serialized tasks. `limit` is parsed as an integer and clamped to 1–500; invalid or
+        absent values use 50. If `provider` is present it takes precedence over `status`.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          schema: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [queued, running, awaiting_approval, completed, failed, cancelled] }
+        - name: limit
+          in: query
+          required: false
+          description: Integer; defaults to 50 and is clamped to 1–500.
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
       responses:
         "200":
-          description: OK
+          description: Cloud-agent tasks matching the selected filter.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudAgentTaskListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Task storage operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiV1AgentsTasks
       tags:
         - V1 Agents
-      summary: "POST agents › tasks"
+      summary: Create a cloud-agent task
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloudAgentTaskCreateRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: External task created and locally recorded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudAgentTaskCreatedResponse" }
+        "400":
+          description: Invalid task input, unknown provider, or missing active provider credentials.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Provider or task storage operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/v1/agents/tasks/{id}:
     parameters:
       - name: id
@@ -20595,26 +20769,120 @@ paths:
       operationId: deleteApiV1AgentsTasksById
       tags:
         - V1 Agents
-      summary: "DELETE agents › tasks › <id>"
+      summary: Delete a cloud-agent task by id
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Task record deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudAgentSuccessResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Task not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Task storage operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiV1AgentsTasksById
       tags:
         - V1 Agents
-      summary: "GET agents › tasks › <id>"
+      summary: Get a cloud-agent task by id
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Locally stored task with a best-effort external status refresh.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudAgentTaskResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied status synchronization.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Task not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Task lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiV1AgentsTasksById
       tags:
         - V1 Agents
-      summary: "POST agents › tasks › <id>"
+      summary: Approve, message, or cancel a cloud-agent task
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloudAgentTaskActionRequest" }
       responses:
         "200":
-          description: OK
+          description: Task action applied; `data` is null only if the task disappeared after the update.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudAgentTaskActionResponse" }
+        "400":
+          description: Invalid action or the selected action cannot be applied to this task.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Invalid management credential or runtime policy denied the action.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404":
+          description: Task not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Provider or task action failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/v1/antigravity:
     post:
       operationId: postApiV1Antigravity
@@ -20644,18 +20912,74 @@ paths:
       operationId: getApiV1Batches
       tags:
         - V1 Batches
-      summary: "GET batches"
+      summary: List OpenAI-compatible batch jobs
+      description: >-
+        Lists batches visible to the authenticated API key, using cursor pagination. Authentication
+        follows the API v1 configuration: a valid client key or dashboard session when
+        `REQUIRE_API_KEY` is enabled; anonymous access is possible only when it is disabled.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size; defaults to 20 and must be an integer from 1 to 100.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: after
+          in: query
+          required: false
+          description: Batch id cursor; items after this record are returned.
+          schema: { type: string, pattern: "^batch_[0-9a-f]{24}$" }
       responses:
         "200":
-          description: OK
+          description: Cursor-paginated batch collection scoped to the API key when one is present.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1BatchListResponse" }
+        "400":
+          description: Invalid list limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
     post:
       operationId: postApiV1Batches
       tags:
         - V1 Batches
-      summary: "POST batches"
+      summary: Create an asynchronous batch job
+      description: >-
+        Creates a batch for an existing input file. This endpoint records and schedules an
+        asynchronous job; it is not a multiplexed streaming API for interactive agent sessions. The
+        file must be visible to the current API key or unowned.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/V1BatchCreateRequest" }
       responses:
         "200":
-          description: OK
+          description: Created batch job in its initial validating state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1BatchObject" }
+        "400":
+          description: Invalid body, unsupported endpoint/window, or inaccessible input file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /api/v1/batches/{id}:
     parameters:
       - name: id
@@ -20663,22 +20987,65 @@ paths:
         required: true
         schema:
           type: string
+          pattern: "^batch_[0-9a-f]{24}$"
     delete:
       operationId: deleteApiV1BatchesById
       tags:
         - V1 Batches
-      summary: "DELETE batches › <id>"
+      summary: Delete a terminal batch
+      description: >-
+        Deletes the batch and its associated record only after it is completed, failed, cancelled,
+        or expired. Nonterminal batches return 409. A batch owned by a different API key is reported
+        as not found.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Batch deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1BatchDeleteResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Batch not found or inaccessible to this API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Only terminal batch jobs can be deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     get:
       operationId: getApiV1BatchesById
       tags:
         - V1 Batches
-      summary: "GET batches › <id>"
+      summary: Get a batch job
+      description: Returns the batch only if it is visible to the current API key, unless it is unowned.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Batch status, output/error files, counters, metadata, and optional usage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1BatchObject" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Batch not found or inaccessible to this API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/batches/{id}/cancel:
     parameters:
       - name: id
@@ -20686,23 +21053,62 @@ paths:
         required: true
         schema:
           type: string
+          pattern: "^batch_[0-9a-f]{24}$"
     post:
       operationId: postApiV1BatchesByIdCancel
       tags:
         - V1 Batches
-      summary: "POST batches › <id> › cancel"
+      summary: Request cancellation of a batch
+      description: Sets a nonterminal batch to `cancelling`; a batch already cancelling is returned unchanged.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Updated or already-cancelling batch.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1BatchObject" }
+        "400":
+          description: Batch is already terminal and cannot be cancelled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Batch not found or inaccessible to this API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/batches/delete-completed:
     delete:
       operationId: deleteApiV1BatchesDeleteCompleted
       tags:
         - V1 Batches
-      summary: "DELETE batches › delete completed"
+      summary: Delete completed batch jobs and their files
+      description: >-
+        Deletes batches with status `completed` and their associated files. A dashboard session or
+        valid API key is always required, including when inference-key enforcement is disabled.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
       responses:
         "200":
-          description: OK
+          description: Aggregate deletion result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1BatchCleanupResponse" }
+        "401":
+          description: API key or dashboard session authentication is required by the current configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/classify:
     post:
       operationId: postApiV1Classify
@@ -20804,18 +21210,95 @@ paths:
       operationId: getApiV1Files
       tags:
         - V1 Files
-      summary: "GET files"
+      summary: List uploaded files
+      description: >-
+        Cursor-paginated file metadata. API-key callers see their own files plus unowned files;
+        dashboard sessions see all files. Anonymous access is possible only when API-key auth is
+        disabled for this instance.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Defaults to 20; must be an integer from 1 to 10,000.
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 20 }
+        - name: after
+          in: query
+          required: false
+          description: File id cursor.
+          schema: { type: string, pattern: "^file-[0-9a-f]{24}$" }
+        - name: order
+          in: query
+          required: false
+          description: Exact value `asc` sorts ascending; other or absent values use descending order.
+          schema: { type: string, enum: [asc, desc], default: desc }
+        - name: purpose
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: File metadata page; file contents are not included.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1FileListResponse" }
+        "400":
+          description: Invalid list limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
     post:
       operationId: postApiV1Files
       tags:
         - V1 Files
-      summary: "POST files"
+      summary: Upload a file
+      description: >-
+        Uploads a file as multipart form data. `file` and `purpose` are required. The route accepts
+        files up to 512 MiB; `expires_after` is applied only when the anchor is `created_at`.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, purpose]
+              properties:
+                file: { type: string, format: binary }
+                purpose: { type: string, minLength: 1 }
+                expires_after[anchor]: { type: string, enum: [created_at] }
+                expires_after[seconds]: { type: string, description: Parsed as an integer when supplied with the `created_at` anchor. }
+              additionalProperties: true
       responses:
         "200":
-          description: OK
+          description: Uploaded file metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1FileObject" }
+        "400":
+          description: Missing file/purpose, file exceeds 512 MiB, or upload failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          description: File upload or storage failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/files/{id}:
     parameters:
       - name: id
@@ -20823,22 +21306,56 @@ paths:
         required: true
         schema:
           type: string
+          pattern: "^file-[0-9a-f]{24}$"
     delete:
       operationId: deleteApiV1FilesById
       tags:
         - V1 Files
-      summary: "DELETE files › <id>"
+      summary: Delete a file
+      description: Soft-deletes a file and clears its stored content. API-key callers can delete only their own or unowned files; dashboard sessions may delete any file.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Deletion acknowledgement.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1FileDeleteResponse" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: File not found or inaccessible to this API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     get:
       operationId: getApiV1FilesById
       tags:
         - V1 Files
-      summary: "GET files › <id>"
+      summary: Get file metadata
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: File metadata without the stored content.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/V1FileObject" }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: File not found or inaccessible to this API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/files/{id}/content:
     parameters:
       - name: id
@@ -20846,14 +21363,36 @@ paths:
         required: true
         schema:
           type: string
+          pattern: "^file-[0-9a-f]{24}$"
     get:
       operationId: getApiV1FilesByIdContent
       tags:
         - V1 Files
-      summary: "GET files › <id> › content"
+      summary: Download file content
+      description: Returns the raw content with the stored MIME type, or `application/octet-stream` when no type was stored.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Raw file bytes. The filename is supplied in Content-Disposition.
+          headers:
+            Content-Disposition:
+              description: Sanitized filename plus UTF-8 filename parameter.
+              schema: { type: string }
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: File or file content not found, or inaccessible to this API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/images/edits:
     post:
       operationId: postApiV1ImagesEdits
@@ -23946,6 +24485,322 @@ components:
       properties:
         connectionId: { type: string }
       additionalProperties: true
+    V1FileObject:
+      type: object
+      required: [id, bytes, created_at, filename, object, purpose, expires_at]
+      properties:
+        id: { type: string, pattern: "^file-[0-9a-f]{24}$" }
+        bytes: { type: integer, minimum: 0 }
+        created_at: { type: integer, minimum: 0, description: Unix epoch seconds. }
+        filename: { type: string }
+        object: { type: string, const: file }
+        purpose: { type: string }
+        expires_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds when set. }
+      additionalProperties: false
+    V1FileListResponse:
+      type: object
+      required: [object, data, first_id, last_id, has_more, total_count]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/V1FileObject" }
+        first_id: { type: [string, "null"] }
+        last_id: { type: [string, "null"] }
+        has_more: { type: boolean }
+        total_count: { type: integer, minimum: 0 }
+      additionalProperties: false
+    V1FileDeleteResponse:
+      type: object
+      required: [id, object, deleted]
+      properties:
+        id: { type: string, pattern: "^file-[0-9a-f]{24}$" }
+        object: { type: string, const: file }
+        deleted: { type: boolean, const: true }
+      additionalProperties: false
+    V1BatchObject:
+      type: object
+      required: [id, object, endpoint, errors, input_file_id, completion_window, status, output_file_id, error_file_id, created_at, in_progress_at, expires_at, finalizing_at, completed_at, failed_at, expired_at, cancelling_at, cancelled_at, request_counts, metadata, model, usage]
+      properties:
+        id: { type: string, pattern: "^batch_[0-9a-f]{24}$" }
+        object: { type: string, const: batch }
+        endpoint:
+          type: string
+          enum: [/v1/responses, /v1/chat/completions, /v1/embeddings, /v1/completions, /v1/moderations, /v1/images/generations, /v1/videos/generations]
+        errors: { description: Nullable structured batch-level errors; provider/worker shape may vary. }
+        input_file_id: { type: string, pattern: "^file-[0-9a-f]{24}$" }
+        completion_window: { type: string, const: 24h }
+        status: { type: string, enum: [validating, failed, in_progress, finalizing, completed, expired, cancelling, cancelled] }
+        output_file_id: { type: [string, "null"], pattern: "^file-[0-9a-f]{24}$" }
+        error_file_id: { type: [string, "null"], pattern: "^file-[0-9a-f]{24}$" }
+        created_at: { type: integer, minimum: 0, description: Unix epoch seconds. }
+        in_progress_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+        expires_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+        finalizing_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+        completed_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+        failed_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+        expired_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+        cancelling_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+        cancelled_at: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+        request_counts:
+          type: object
+          required: [total, completed, failed]
+          properties:
+            total: { type: integer, minimum: 0 }
+            completed: { type: integer, minimum: 0 }
+            failed: { type: integer, minimum: 0 }
+          additionalProperties: false
+        metadata:
+          type: [object, "null"]
+          maxProperties: 16
+          propertyNames: { type: string, maxLength: 64 }
+          additionalProperties: { type: string }
+        model: { type: [string, "null"] }
+        usage: { description: Nullable worker-supplied usage object; fields are not fixed by the route. }
+      additionalProperties: false
+    V1BatchCreateRequest:
+      type: object
+      required: [input_file_id, endpoint, completion_window]
+      properties:
+        input_file_id: { type: string, pattern: "^file-[0-9a-f]{24}$" }
+        endpoint:
+          type: string
+          enum: [/v1/responses, /v1/chat/completions, /v1/embeddings, /v1/completions, /v1/moderations, /v1/images/generations, /v1/videos/generations]
+        completion_window: { type: string, const: 24h }
+        metadata:
+          type: object
+          maxProperties: 16
+          propertyNames: { type: string, maxLength: 64 }
+          additionalProperties: { type: string, maxLength: 512 }
+        output_expires_after:
+          type: object
+          required: [anchor, seconds]
+          properties:
+            anchor: { type: string, const: created_at }
+            seconds: { type: integer, minimum: 3600, maximum: 2592000 }
+          additionalProperties: false
+      additionalProperties: true
+    V1BatchListResponse:
+      type: object
+      required: [object, data, first_id, last_id, has_more, total_count]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/V1BatchObject" }
+        first_id: { type: [string, "null"] }
+        last_id: { type: [string, "null"] }
+        has_more: { type: boolean }
+        total_count: { type: integer, minimum: 0 }
+      additionalProperties: false
+    V1BatchDeleteResponse:
+      type: object
+      required: [id, object, deleted]
+      properties:
+        id: { type: string, pattern: "^batch_[0-9a-f]{24}$" }
+        object: { type: string, const: batch }
+        deleted: { type: boolean, const: true }
+      additionalProperties: false
+    V1BatchCleanupResponse:
+      type: object
+      required: [deleted, deletedBatches, deletedFiles]
+      properties:
+        deleted: { type: boolean, const: true }
+        deletedBatches: { type: integer, minimum: 0 }
+        deletedFiles: { type: integer, minimum: 0 }
+      additionalProperties: false
+    CloudAgentCredential:
+      type: object
+      required: [providerId, apiKey, baseUrl, updatedAt]
+      properties:
+        providerId: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
+        apiKey: { type: string, description: API key masked to its final four characters; raw credentials are never returned. }
+        baseUrl: { type: [string, "null"], format: uri }
+        updatedAt: { type: string }
+      additionalProperties: false
+    CloudAgentCredentialListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CloudAgentCredential" }
+      additionalProperties: false
+    CloudAgentCredentialSaveRequest:
+      type: object
+      required: [providerId, apiKey]
+      properties:
+        providerId: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
+        apiKey: { type: string, minLength: 1, writeOnly: true }
+        baseUrl: { type: string, format: uri }
+      additionalProperties: true
+    CloudAgentCredentialSaveResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [providerId, apiKey, baseUrl]
+          properties:
+            providerId: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
+            apiKey: { type: string, description: API key masked to its final four characters. }
+            baseUrl: { type: [string, "null"], format: uri }
+          additionalProperties: false
+      additionalProperties: false
+    CloudAgentHealthResponse:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          items:
+            type: object
+            required: [id, name, connected, latencyMs]
+            properties:
+              id: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
+              name: { type: string }
+              connected: { type: boolean }
+              latencyMs: { type: number, minimum: 0 }
+              error: { type: string }
+            additionalProperties: false
+      additionalProperties: false
+    CloudAgentTaskSource:
+      type: object
+      required: [repoName, repoUrl]
+      properties:
+        repoName: { type: string, minLength: 1 }
+        repoUrl: { type: string, format: uri }
+        branch: { type: string }
+      additionalProperties: true
+    CloudAgentTaskOptions:
+      type: object
+      properties:
+        autoCreatePr: { type: boolean }
+        planApprovalRequired: { type: boolean }
+        environment:
+          type: object
+          additionalProperties: { type: string }
+      additionalProperties: true
+    CloudAgentTaskResult:
+      type: object
+      properties:
+        prUrl: { type: string, format: uri }
+        prNumber: { type: integer }
+        commitMessage: { type: string }
+        diffUrl: { type: string, format: uri }
+        summary: { type: string }
+        duration: { type: number, minimum: 0 }
+        cost: { type: number, minimum: 0 }
+      additionalProperties: true
+    CloudAgentActivity:
+      type: object
+      required: [id, type, content, timestamp]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [plan, command, code_change, message, error, completion] }
+        content: { type: string }
+        timestamp: { type: string }
+        metadata: { type: object, additionalProperties: true }
+      additionalProperties: true
+    CloudAgentTask:
+      type: object
+      required: [id, providerId, externalId, status, prompt, source, options, result, activities, error, createdAt, updatedAt, completedAt]
+      properties:
+        id: { type: string }
+        providerId: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
+        externalId: { type: [string, "null"] }
+        status: { type: string, enum: [queued, running, awaiting_approval, completed, failed, cancelled] }
+        prompt: { type: string }
+        source: { $ref: "#/components/schemas/CloudAgentTaskSource" }
+        options: { $ref: "#/components/schemas/CloudAgentTaskOptions" }
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/CloudAgentTaskResult"
+            - type: "null"
+        activities:
+          type: array
+          items: { $ref: "#/components/schemas/CloudAgentActivity" }
+        error: { type: [string, "null"] }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        completedAt: { type: [string, "null"] }
+      additionalProperties: false
+    CloudAgentTaskListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CloudAgentTask" }
+      additionalProperties: false
+    CloudAgentTaskResponse:
+      type: object
+      required: [data]
+      properties:
+        data: { $ref: "#/components/schemas/CloudAgentTask" }
+      additionalProperties: false
+    CloudAgentTaskCreateRequest:
+      type: object
+      required: [providerId, prompt, source]
+      properties:
+        providerId: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
+        prompt: { type: string, minLength: 1, maxLength: 10000 }
+        source: { $ref: "#/components/schemas/CloudAgentTaskSource" }
+        options: { $ref: "#/components/schemas/CloudAgentTaskOptions" }
+      additionalProperties: true
+    CloudAgentTaskCreatedResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: object
+          required: [id, providerId, status, prompt, source, options, createdAt]
+          properties:
+            id: { type: string }
+            providerId: { type: string, enum: [jules, devin, codex-cloud, cursor-cloud] }
+            externalId: { type: string }
+            status: { type: string, enum: [queued, running, awaiting_approval, completed, failed, cancelled] }
+            prompt: { type: string }
+            source: { $ref: "#/components/schemas/CloudAgentTaskSource" }
+            options: { $ref: "#/components/schemas/CloudAgentTaskOptions" }
+            createdAt: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+    CloudAgentTaskActionRequest:
+      oneOf:
+        - type: object
+          required: [action]
+          properties:
+            action: { type: string, const: approve }
+          additionalProperties: true
+        - type: object
+          required: [action, message]
+          properties:
+            action: { type: string, const: message }
+            message: { type: string, minLength: 1 }
+          additionalProperties: true
+        - type: object
+          required: [action]
+          properties:
+            action: { type: string, const: cancel }
+          additionalProperties: true
+      discriminator: { propertyName: action }
+    CloudAgentTaskActionResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          oneOf:
+            - $ref: "#/components/schemas/CloudAgentTask"
+            - type: "null"
+      additionalProperties: false
+    CloudAgentSuccessResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+      additionalProperties: false
     CanaryReadiness:
       type: object
       required: [schema, generation, ready, databaseReady, coordination, conversationState, lifecycle]
