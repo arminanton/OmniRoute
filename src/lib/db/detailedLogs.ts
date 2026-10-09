@@ -52,13 +52,8 @@ export function resetRequestDetailLogsTableExistsCache(): void {
   requestDetailLogsTableExistsCache = undefined;
 }
 
-/** Returns true if detailed logging is enabled in settings */
-export async function isDetailedLoggingEnabled(): Promise<boolean> {
-  const envOverride = process.env.ENABLE_REQUEST_LOGS;
-  if (envOverride !== undefined) {
-    return envOverride.trim().toLowerCase() === "true";
-  }
-
+/** Read the database-backed call-log pipeline capture setting without env overrides. */
+export async function isCallLogPipelineEnabled(): Promise<boolean> {
   try {
     const settings = await getSettings();
     const val = settings.call_log_pipeline_enabled;
@@ -66,6 +61,15 @@ export async function isDetailedLoggingEnabled(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** Returns the legacy detailed-logging state, including its environment override. */
+export async function isDetailedLoggingEnabled(): Promise<boolean> {
+  const envOverride = process.env.ENABLE_REQUEST_LOGS;
+  if (envOverride !== undefined) {
+    return envOverride.trim().toLowerCase() === "true";
+  }
+  return isCallLogPipelineEnabled();
 }
 
 /** Save a detailed log entry — caller must verify isDetailedLoggingEnabled() first */

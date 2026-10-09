@@ -123,12 +123,27 @@ test("sensitive log contracts describe raw detail, noLog, global capture, auth, 
   assert.equal(detailGet?.responses?.["200"]?.["x-sensitive"], true);
   assert.match(detailGet?.description ?? "", /raw client prompts.*provider\/client responses/s);
   assert.match(detailGet?.description ?? "", /ENABLE_REQUEST_LOGS.*call_log_pipeline_enabled/s);
-  assert.match(detailGet?.description ?? "", /diverge from actual chat pipeline capture/);
+  assert.match(
+    detailGet?.description ?? "",
+    /two values can differ when `ENABLE_REQUEST_LOGS` is set/
+  );
   assert.match(detailGet?.description ?? "", /`read` scope/);
   assert.match(detailPost?.description ?? "", /global.*across API keys and providers/s);
   assert.match(detailPost?.description ?? "", /`noLog` remain excluded/);
   assert.match(detailPost?.description ?? "", /OMNI_DIAGNOSTIC_OVERFLOW_ENABLED/);
+  assert.match(detailPost?.description ?? "", /Both POST and GET return `pipelineEnabled`/);
   assert.match(detailPost?.description ?? "", /`write` scope/);
+
+  const listResponse = spec.components.schemas.RequestDetailLogListResponse;
+  assert.deepEqual(listResponse.required, ["enabled", "pipelineEnabled", "total", "logs"]);
+  assert.match(listResponse.properties.enabled.description ?? "", /ENABLE_REQUEST_LOGS/);
+  assert.match(
+    listResponse.properties.pipelineEnabled.description ?? "",
+    /database-backed.*without an environment override/i
+  );
+  const captureResponse = spec.components.schemas.RequestDetailCaptureResponse;
+  assert.deepEqual(captureResponse.required, ["success", "enabled", "pipelineEnabled", "message"]);
+  assert.match(captureResponse.properties.pipelineEnabled.description ?? "", /database-backed/i);
 
   const legacyRow = spec.components.schemas.RequestDetailLogRow.properties;
   for (const field of [
@@ -159,12 +174,27 @@ test("sensitive log contracts describe raw detail, noLog, global capture, auth, 
   const callLogs = fs.readFileSync(path.join(root, "src/lib/usage/callLogs.ts"), "utf8");
   const overflow = fs.readFileSync(path.join(root, "src/lib/usage/diagnosticOverflow.ts"), "utf8");
   assert.match(toggleRoute, /updateSettings\(\{ call_log_pipeline_enabled: enabled \}\)/);
+  assert.match(toggleRoute, /pipelineEnabled/);
+  assert.match(toggleRoute, /isCallLogPipelineEnabled/);
   assert.match(toggleRoute, /detailedLogsEnabled: enabled/);
+  assert.match(detailedLogs, /export async function isCallLogPipelineEnabled/);
   assert.match(detailedLogs, /process\.env\.ENABLE_REQUEST_LOGS/);
   assert.match(chatCore, /settings\.call_log_pipeline_enabled === true/);
   assert.match(callLogs, /noLogEnabled \? null : entry\.requestBody/);
   assert.match(callLogs, /noLogEnabled\s*\?\s*null\s*:\s*\(entry\.pipelinePayloads/);
   assert.match(overflow, /process\.env\.OMNI_DIAGNOSTIC_OVERFLOW_ENABLED !== "true"/);
+
+  for (const file of [
+    "src/shared/components/RequestLoggerV2.tsx",
+    "src/shared/components/RequestTimeline.tsx",
+    "src/app/(dashboard)/dashboard/conversations/page.tsx",
+  ]) {
+    const source = fs.readFileSync(path.join(root, file), "utf8");
+    assert.match(
+      source,
+      /typeof data\.pipelineEnabled === "boolean" \? data\.pipelineEnabled : data\.enabled === true/
+    );
+  }
 });
 
 test("conversation limits and turn counts describe the source semantics", () => {

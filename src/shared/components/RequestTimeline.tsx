@@ -92,7 +92,9 @@ export default function RequestTimeline({
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!data) return;
-        setDetailLoggingEnabled(data.enabled === true);
+        setDetailLoggingEnabled(
+          typeof data.pipelineEnabled === "boolean" ? data.pipelineEnabled : data.enabled === true
+        );
       })
       .catch(() => {});
   }, []);

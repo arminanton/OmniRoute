@@ -1,5 +1,5 @@
 /**
- * GET  /api/logs/detail  — List legacy detailed request logs + current enabled flag
+ * GET  /api/logs/detail  — List legacy detailed request logs + legacy and DB capture states
  * POST /api/logs/detail — Enable/disable pipeline capture for unified call log artifacts
  */
 import { NextRequest, NextResponse } from "next/server";
@@ -7,6 +7,7 @@ import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import {
   getRequestDetailLogs,
   getRequestDetailLogCount,
+  isCallLogPipelineEnabled,
   isDetailedLoggingEnabled,
 } from "@/lib/db/detailedLogs";
 import { getUserDatabaseSettings, updateDatabaseSettings } from "@/lib/db/databaseSettings";
@@ -25,8 +26,9 @@ export async function GET(req: NextRequest) {
   const logs = getRequestDetailLogs(limit, offset);
   const total = getRequestDetailLogCount();
   const enabled = await isDetailedLoggingEnabled();
+  const pipelineEnabled = await isCallLogPipelineEnabled();
 
-  return NextResponse.json({ enabled, total, logs });
+  return NextResponse.json({ enabled, pipelineEnabled, total, logs });
 }
 
 export async function POST(req: NextRequest) {
@@ -45,10 +47,12 @@ export async function POST(req: NextRequest) {
       callLogPipelineEnabled: enabled,
     },
   });
+  const pipelineEnabled = await isCallLogPipelineEnabled();
 
   return NextResponse.json({
     success: true,
     enabled,
+    pipelineEnabled,
     message: enabled
       ? "Pipeline capture enabled. New request artifacts will include per-stage payloads."
       : "Pipeline capture disabled.",

@@ -18,6 +18,7 @@ const core = await import("../../src/lib/db/core.ts");
 const settingsDb = await import("../../src/lib/db/settings.ts");
 const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const detailedLogsDb = await import("../../src/lib/db/detailedLogs.ts");
+const logsDetailRoute = await import("../../src/app/api/logs/detail/route.ts");
 const { createStructuredSSECollector } =
   await import("../../open-sse/utils/streamPayloadCollector.ts");
 
@@ -93,6 +94,61 @@ test("ENABLE_REQUEST_LOGS=true enables detailed logging despite the stored setti
   process.env.ENABLE_REQUEST_LOGS = "true";
 
   assert.equal(await detailedLogsDb.isDetailedLoggingEnabled(), true);
+});
+
+test("logs detail route reports legacy enabled and the database pipeline state separately", async () => {
+  await settingsDb.updateSettings({ requireLogin: false, call_log_pipeline_enabled: true });
+  process.env.ENABLE_REQUEST_LOGS = "false";
+
+  const get = async () =>
+    logsDetailRoute.GET(new Request("http://localhost/api/logs/detail?limit=1"));
+  const initialGet = await get();
+  assert.equal(initialGet.status, 200);
+  assert.deepEqual(await initialGet.json(), {
+    enabled: false,
+    pipelineEnabled: true,
+    total: 0,
+    logs: [],
+  });
+
+  const disableResponse = await logsDetailRoute.POST(
+    new Request("http://localhost/api/logs/detail", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    })
+  );
+  assert.equal(disableResponse.status, 200);
+  const disabled = (await disableResponse.json()) as {
+    enabled: boolean;
+    pipelineEnabled: boolean;
+  };
+  assert.equal(disabled.enabled, false);
+  assert.equal(disabled.pipelineEnabled, false);
+
+  const enableResponse = await logsDetailRoute.POST(
+    new Request("http://localhost/api/logs/detail", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    })
+  );
+  assert.equal(enableResponse.status, 200);
+  const enabled = (await enableResponse.json()) as {
+    enabled: boolean;
+    pipelineEnabled: boolean;
+  };
+  assert.equal(enabled.enabled, true);
+  assert.equal(enabled.pipelineEnabled, true);
+
+  const finalGet = await get();
+  assert.equal(finalGet.status, 200);
+  const finalState = (await finalGet.json()) as {
+    enabled: boolean;
+    pipelineEnabled: boolean;
+  };
+  assert.equal(finalState.enabled, false, "the legacy field keeps the env override");
+  assert.equal(finalState.pipelineEnabled, true, "the new field reads the database setting");
 });
 
 test("legacy detailed log helpers tolerate databases without request_detail_logs", () => {

@@ -312,7 +312,9 @@ const RequestLoggerV2 = forwardRef<RequestLoggerV2Handle, { initialSelectedId?: 
         })
         .then((data) => {
           if (!data) return;
-          setDetailLoggingEnabled(data.enabled === true);
+          setDetailLoggingEnabled(
+            typeof data.pipelineEnabled === "boolean" ? data.pipelineEnabled : data.enabled === true
+          );
         })
         .catch(() => {});
     }, []);

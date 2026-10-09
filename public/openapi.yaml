@@ -19535,9 +19535,10 @@ paths:
         Lists legacy detailed request-log rows, which can contain raw client prompts, translated
         requests, and provider/client responses. This response is sensitive. The `enabled` value
         reads `ENABLE_REQUEST_LOGS` when that environment variable is set; otherwise it reads
-        `call_log_pipeline_enabled`. The chat pipeline itself gates capture from
-        `call_log_pipeline_enabled` directly, so an environment override can make `enabled`
-        diverge from actual chat pipeline capture. In an unlocked deployment where management
+        `call_log_pipeline_enabled` for backward compatibility. The new `pipelineEnabled` value
+        always reads the database-backed `call_log_pipeline_enabled` setting without the
+        environment override; chat pipeline capture follows this database setting. The two values
+        can differ when `ENABLE_REQUEST_LOGS` is set. In an unlocked deployment where management
         authentication is not required, this route can be accessed anonymously. Otherwise it
         accepts a dashboard session, a `manage`/`admin` API key (Bearer, Anthropic `x-api-key`, or
         Google `x-goog-api-key`), a loopback CLI token, or a trusted loopback internal-service
@@ -19587,10 +19588,12 @@ paths:
         it applies across API keys and providers, while API keys with `noLog` remain excluded.
         Capture is enabled only when `enabled` is the boolean true or the string `"1"`; any other
         value (including omission) disables it. This write does not change `ENABLE_REQUEST_LOGS`,
-        which can override the GET response's reported `enabled` value, or the separate
-        `OMNI_DIAGNOSTIC_OVERFLOW_ENABLED` opt-in for eligible private overflow captures. In an
-        unlocked deployment where management authentication is not required, this route can be
-        accessed anonymously. Otherwise it accepts a dashboard session, a `manage`/`admin` API
+        which can override the GET response's legacy `enabled` value, or the separate
+        `OMNI_DIAGNOSTIC_OVERFLOW_ENABLED` opt-in for eligible private overflow captures. Both POST
+        and GET return `pipelineEnabled` from the database-backed `call_log_pipeline_enabled`
+        setting. In an unlocked deployment where management authentication is not required, this
+        route can be accessed anonymously. Otherwise it accepts a dashboard session, a
+        `manage`/`admin` API
         key (Bearer, Anthropic `x-api-key`, or Google `x-goog-api-key`), a loopback CLI token, or a
         trusted loopback internal-service token. An `oma_live_` access token requires the `write`
         scope.
@@ -49103,9 +49106,17 @@ components:
 
     RequestDetailLogListResponse:
       type: object
-      required: [enabled, total, logs]
+      description: >-
+        `enabled` preserves the legacy environment-overridable state. `pipelineEnabled` is the
+        database-backed pipeline setting used by chat request capture.
+      required: [enabled, pipelineEnabled, total, logs]
       properties:
-        enabled: { type: boolean }
+        enabled:
+          type: boolean
+          description: Legacy state; ENABLE_REQUEST_LOGS overrides the database setting when present.
+        pipelineEnabled:
+          type: boolean
+          description: Database-backed call_log_pipeline_enabled state, without an environment override.
         total: { type: integer, minimum: 0 }
         logs:
           type: array
@@ -49124,10 +49135,18 @@ components:
 
     RequestDetailCaptureResponse:
       type: object
-      required: [success, enabled, message]
+      description: >-
+        `enabled` preserves the parsed POST value for compatibility. `pipelineEnabled` reports the
+        database-backed call_log_pipeline_enabled state without an environment override.
+      required: [success, enabled, pipelineEnabled, message]
       properties:
         success: { type: boolean, const: true }
-        enabled: { type: boolean }
+        enabled:
+          type: boolean
+          description: Legacy response field echoing the parsed POST value.
+        pipelineEnabled:
+          type: boolean
+          description: Database-backed call_log_pipeline_enabled state, without an environment override.
         message: { type: string }
       additionalProperties: false
 
