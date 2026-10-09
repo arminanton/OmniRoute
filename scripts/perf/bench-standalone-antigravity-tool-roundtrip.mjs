@@ -329,6 +329,9 @@ function spawnTracked(command, args, options = {}) {
     get stderr() {
       return stderr;
     },
+    get output() {
+      return trimTail(`${stdout}\n${stderr}`, LOG_TAIL_LIMIT);
+    },
   };
 }
 
@@ -1290,8 +1293,14 @@ async function main() {
     if (server?.startOutput) {
       console.error(`[standalone-antigravity-e2e] systemd start: ${server.startOutput}`);
     }
-    if (client?.output)
-      console.error(`[standalone-antigravity-e2e] client tail:\n${client.output}`);
+    if (client?.stdout)
+      console.error(
+        `[standalone-antigravity-e2e] client stdout tail:\n${trimTail(client.stdout, LOG_TAIL_LIMIT)}`
+      );
+    if (client?.stderr)
+      console.error(
+        `[standalone-antigravity-e2e] client stderr tail:\n${trimTail(client.stderr, LOG_TAIL_LIMIT)}`
+      );
     if (mock?.output) console.error(`[standalone-antigravity-e2e] mock tail:\n${mock.output}`);
   } finally {
     process.off("SIGINT", onSignal);
@@ -1314,6 +1323,42 @@ async function main() {
         if (appJournalTail)
           console.error(`[standalone-antigravity-e2e] journal tail:\n${appJournalTail}`);
       }
+    }
+    if (resultError) {
+      let fetchAudit = null;
+      let bridgeStats = null;
+      let mockSummary = null;
+      try {
+        fetchAudit = parseAuditFiles(auditDir);
+      } catch {
+        fetchAudit = { unavailable: true };
+      }
+      bridgeStats = tlsBridge?.snapshot() ?? null;
+      if (mock?.url) {
+        try {
+          const stats = await waitForMockStats(mock.url);
+          mockSummary = {
+            received: stats.received,
+            profiles: stats.profiles,
+            egressProbes: stats.egressProbes,
+            errorCount: stats.errors?.length ?? 0,
+            errorSamples: (stats.errors ?? []).slice(0, 5),
+          };
+        } catch (error) {
+          mockSummary = {
+            unavailable: error instanceof Error ? error.message : String(error),
+          };
+        }
+      }
+      console.error(
+        `[standalone-antigravity-e2e] post-shutdown network diagnostics: ${JSON.stringify({
+          fetchAudit,
+          blockedReasonAggregate: fetchAudit?.blockedSocketReasons ?? null,
+          blockedSocketTargets: fetchAudit?.blockedSocketTargets ?? [],
+          syntheticTlsBridge: bridgeStats,
+          mock: mockSummary,
+        })}`
+      );
     }
     await tlsBridge?.close();
     await stopChild(mock?.child);

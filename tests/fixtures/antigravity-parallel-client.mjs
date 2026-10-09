@@ -72,7 +72,7 @@ async function turn(session, messages, stream, phaseSignal, turnNumber) {
     const text = await response.text();
     responseBodiesCompleted++;
     stage = "response_validation";
-    assert.equal(response.status, 200, text.slice(0, 500));
+    assert.equal(response.status, 200, `unexpected gateway HTTP status ${response.status}`);
     if (!stream) return JSON.parse(text).choices[0].message;
 
     const calls = new Map();
@@ -81,7 +81,7 @@ async function turn(session, messages, stream, phaseSignal, turnNumber) {
     for (const line of text.split("\n")) {
       if (!line.startsWith("data:") || line.includes("[DONE]")) continue;
       const event = JSON.parse(line.slice(5));
-      assert.ok(!event.error, JSON.stringify(event));
+      assert.ok(!event.error, "synthetic stream returned an error event");
       const delta = event.choices?.[0]?.delta;
       if (delta?.content) content += delta.content;
       for (const part of delta?.tool_calls ?? []) {
