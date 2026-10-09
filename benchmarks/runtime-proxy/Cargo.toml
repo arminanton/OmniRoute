@@ -16,11 +16,17 @@ path = "src/bin/account-scheduler-bench.rs"
 name = "omniroute-multigate-admission-bench"
 path = "src/bin/multigate-admission-bench.rs"
 
+[[bin]]
+name = "omniroute-coordination-probe"
+path = "src/bin/coordination-probe.rs"
+
 [dependencies]
 async-stream = "0.3"
 axum = "0.8.9"
 bytes = "1"
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+rusqlite = { version = "=0.37.0", features = ["bundled"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+uuid = { version = "1", features = ["v4"] }

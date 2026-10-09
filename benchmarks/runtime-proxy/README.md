@@ -155,6 +155,22 @@ atomically, and drops every reservation when a waiter or lease is cancelled. It 
 with a 10-second wait limit and 256 queued waiters per gate. It does not implement shared Redis
 admission or the production adaptive-controller feedback loop.
 
+### SQLite cross-process coordination protocol probe
+
+Run the Rust/TypeScript interoperability test with:
+
+```bash
+cargo test --manifest-path benchmarks/runtime-proxy/Cargo.toml --test coordination_sqlite_interop -- --nocapture
+```
+
+The test creates a disposable database under the local system temp directory and removes it after
+the test. It launches separate Rust and TypeScript processes to check a shared cap-1 resource,
+independent-resource progress, cancellation cleanup, release, renewal and expiry, fencing, and owner
+checks. `coordination_sqlite.rs` matches the existing `omni-coordination/v1` SQLite/WAL schema and
+atomic lease operations. This first Rust slice accepts only static gates; it rejects adaptive
+requirements rather than silently applying a different cap. Use a dedicated local POSIX volume for
+coordination, never NFS or the application data DB.
+
 ```bash
 python3 benchmarks/runtime-proxy/run_bench.py \
   --runtime rust-chat-gateway --api-path chat-completions --model cx/gpt-5.6 \
