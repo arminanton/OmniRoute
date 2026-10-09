@@ -1,4 +1,4 @@
-//! Synthetic account eligibility, least-loaded selection, and in-flight leases.
+//! Synthetic account eligibility, configurable selection, and in-flight leases.
 //!
 //! This benchmark model uses only synthetic account metadata. It is not connected to
 //! OmniRoute's database, provider credentials, quota cache, or routing settings.
@@ -25,6 +25,16 @@ pub struct SyntheticAccount {
     pub priority: u32,
 }
 
+/// Selection rules available in this benchmark model. `PriorityOrderedFillFirst` corresponds to
+/// OmniRoute's default fallback branch only when the caller has already supplied the TypeScript-
+/// filtered, priority-ordered candidate list. The normal constructor remains least-loaded so
+/// capacity-scheduling experiments retain their previous behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntheticRoutingStrategy {
+    LeastLoaded,
+    PriorityOrderedFillFirst,
+}
+
 struct Account {
     metadata: SyntheticAccount,
     in_flight: AtomicUsize,
@@ -38,6 +48,7 @@ struct AffinityPin {
 
 struct SchedulerInner {
     accounts: Vec<Arc<Account>>,
+    routing_strategy: SyntheticRoutingStrategy,
     affinity: Mutex<HashMap<String, AffinityPin>>,
     changed: Arc<Notify>,
     affinity_ttl: Option<Duration>,
@@ -76,6 +87,21 @@ impl AccountScheduler {
         accounts: Vec<SyntheticAccount>,
         affinity_ttl: Option<Duration>,
     ) -> Result<Self, &'static str> {
+        Self::new_with_strategy(
+            accounts,
+            affinity_ttl,
+            SyntheticRoutingStrategy::LeastLoaded,
+        )
+    }
+
+    /// Build the synthetic scheduler with a named strategy. For `PriorityOrderedFillFirst`,
+    /// provide accounts in the order the TypeScript routing layer has already selected after
+    /// applying its active/model/quota/cooldown/connection gates.
+    pub fn new_with_strategy(
+        accounts: Vec<SyntheticAccount>,
+        affinity_ttl: Option<Duration>,
+        routing_strategy: SyntheticRoutingStrategy,
+    ) -> Result<Self, &'static str> {
         let mut seen = HashMap::with_capacity(accounts.len());
         let mut stored = Vec::with_capacity(accounts.len());
         for metadata in accounts {
@@ -93,6 +119,7 @@ impl AccountScheduler {
         Ok(Self {
             inner: Arc::new(SchedulerInner {
                 accounts: stored,
+                routing_strategy,
                 affinity: Mutex::new(HashMap::new()),
                 changed: Arc::new(Notify::new()),
                 affinity_ttl: affinity_ttl.filter(|ttl| !ttl.is_zero()),
@@ -169,11 +196,15 @@ impl AccountScheduler {
             let selected = pinned_index
                 .map(|index| eligible[index].clone())
                 .or_else(|| {
-                    eligible
-                        .iter()
-                        .filter(|account| has_capacity(account))
-                        .min_by(|left, right| compare_load(left, right))
-                        .cloned()
+                    let mut available = eligible.iter().filter(|account| has_capacity(account));
+                    match self.inner.routing_strategy {
+                        SyntheticRoutingStrategy::LeastLoaded => available
+                            .min_by(|left, right| compare_load(left, right))
+                            .cloned(),
+                        SyntheticRoutingStrategy::PriorityOrderedFillFirst => {
+                            available.next().cloned()
+                        }
+                    }
                 });
 
             if let Some(account) = selected {
@@ -337,6 +368,56 @@ mod tests {
         );
         drop(first);
         drop(second);
+    }
+
+    #[tokio::test]
+    async fn type_script_fill_first_and_rust_least_loaded_choose_differently_under_headroom() {
+        // This captures one source-grounded strategy mismatch after candidate gates: TypeScript's
+        // default `fill-first` branch returns orderedConnections[0], while AccountScheduler::new
+        // minimizes in-flight/capacity utilization. Both accounts have ample capacity here, so
+        // the difference is strategy choice, not a full-account fallback.
+        let mut preferred = account("preferred", true, None, false, 100);
+        preferred.priority = 1;
+        let mut secondary = account("secondary", true, None, false, 100);
+        secondary.priority = 2;
+        let fill_first = AccountScheduler::new_with_strategy(
+            vec![preferred, secondary],
+            None,
+            SyntheticRoutingStrategy::PriorityOrderedFillFirst,
+        )
+        .unwrap();
+
+        let fill_first_a = fill_first
+            .acquire(None, Duration::from_millis(20))
+            .await
+            .unwrap();
+        let fill_first_b = fill_first
+            .acquire(None, Duration::from_millis(20))
+            .await
+            .unwrap();
+        assert_eq!(fill_first_a.account_id(), "preferred");
+        assert_eq!(fill_first_b.account_id(), "preferred");
+
+        let least_loaded = AccountScheduler::new(
+            vec![
+                account("preferred", true, None, false, 100),
+                account("secondary", true, None, false, 100),
+            ],
+            None,
+        )
+        .unwrap();
+        let least_loaded_a = least_loaded
+            .acquire(None, Duration::from_millis(20))
+            .await
+            .unwrap();
+        let least_loaded_b = least_loaded
+            .acquire(None, Duration::from_millis(20))
+            .await
+            .unwrap();
+        assert_eq!(least_loaded_a.account_id(), "preferred");
+        assert_eq!(least_loaded_b.account_id(), "secondary");
+
+        drop((fill_first_a, fill_first_b, least_loaded_a, least_loaded_b));
     }
 
     #[tokio::test]

@@ -139,6 +139,23 @@ eligible account with capacity, and its waiter wake-up is not FIFO. It does not 
 database-backed account selection, model/API-key filters, provider/global caps, distributed leases,
 provider quotas, or adaptive/shared admission.
 
+One exact routing-choice difference is covered by `account_scheduler::tests`: TypeScript selects
+`providerStrategies[provider].fallbackStrategy || fallbackStrategy || "fill-first"`; after its
+filters and affinity/lease handling, that default branch chooses `orderedConnections[0]`, whose
+order is priority-based. The Rust scheduler's normal constructor instead chooses the least-loaded
+in-flight/capacity ratio. A benchmark-only `PriorityOrderedFillFirst` mode now reproduces the
+TypeScript final choice when given the already-filtered, priority-ordered candidate vector; the
+test shows the two choices diverge while both accounts have headroom. It does not port TypeScript's
+candidate filtering, quota score, round-robin/weighted/P2C variants, or persistence semantics.
+Run this focused comparison with the cached build tree:
+
+```bash
+. "$HOME/.cargo/env"
+CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target cargo test --offline \
+  --manifest-path benchmarks/runtime-proxy/Cargo.toml --bin rust-chat-gateway \
+  account_scheduler::tests
+```
+
 ### Credential-free TypeScript policy-context adapter
 
 `src/policy_context.rs` defines a benchmark-only JSON contract (`schema_version: 1`) for a
