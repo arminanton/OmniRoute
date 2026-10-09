@@ -24625,25 +24625,106 @@ paths:
       tags:
         - Settings
       summary: "DELETE settings › notion"
+      description: >-
+        Disconnects the Notion integration by clearing the stored token. In protected profiles,
+        this `isAuthenticated()` management route accepts a management API key or dashboard
+        session. An unlocked profile may permit anonymous access when `requireLogin=false` or the
+        first-run loopback bootstrap applies; locked management overrides those bypasses.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Integration disconnected; no token value is returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotionIntegrationDisconnectResponse" }
+        "401":
+          description: Authentication required when management login is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Stored integration state could not be cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     get:
       operationId: getApiSettingsNotion
       tags:
         - Settings
       summary: "GET settings › notion"
+      description: >-
+        Returns redacted connection state (`connected` and `hasToken`); the stored token is never
+        included. In protected profiles, this `isAuthenticated()` management route accepts a
+        management API key or dashboard session. An unlocked profile may permit anonymous access
+        when `requireLogin=false` or the first-run loopback bootstrap applies; locked management
+        overrides those bypasses.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Redacted Notion integration status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotionIntegrationStatusResponse" }
+        "401":
+          description: Authentication required when management login is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Stored integration state could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiSettingsNotion
       tags:
         - Settings
       summary: "POST settings › notion"
+      description: >-
+        Stores the Notion token, makes an outbound Notion search request to validate it, and clears
+        the token if validation fails. The token is not returned. In protected profiles, this
+        `isAuthenticated()` management route accepts a management API key or dashboard session. An
+        unlocked profile may permit anonymous access when `requireLogin=false` or the first-run
+        loopback bootstrap applies; locked management overrides those bypasses.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        description: Sensitive integration credential; the token is never echoed in responses.
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NotionIntegrationSetTokenRequest" }
       responses:
         "200":
-          description: OK
+          description: Token validated and saved; no token value is returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotionIntegrationConnectResponse" }
+        "400":
+          description: Invalid JSON, token shape, or failed outbound token validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NotionIntegrationErrorResponse" }
+        "401":
+          description: Authentication required when management login is enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/settings/obsidian:
     delete:
       operationId: deleteApiSettingsObsidian
@@ -33220,6 +33301,22 @@ components:
         Bearer API key whose metadata includes `manage` or `admin` scope. Legacy database-backup
         handlers that call `isAuthenticated()` validate these API keys and dashboard sessions when
         authentication is required; they do not validate `oma_live_` access tokens in that mode.
+    ManagementAnthropicApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: >-
+        Management-scoped API key in `x-api-key`; the shared parser accepts this header only when
+        `anthropic-version` is present or the User-Agent identifies Claude/Anthropic. The key must
+        carry `manage` or `admin` scope when management authentication is required.
+    ManagementGoogleApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-goog-api-key
+      description: >-
+        Management-scoped API key in `x-goog-api-key`. The shared parser accepts this header on
+        management routes, and the key must carry `manage` or `admin` scope when management
+        authentication is required.
     InspectorInternalIngestBearerAuth:
       type: http
       scheme: bearer
@@ -46558,6 +46655,57 @@ components:
         apiKeyId: { type: string }
         budget:
           $ref: "#/components/schemas/UsageBudgetConfig"
+      additionalProperties: false
+
+    NotionIntegrationStatusResponse:
+      type: object
+      description: Redacted Notion connection state; it reports token presence without returning the token.
+      required: [connected, hasToken]
+      properties:
+        connected: { type: boolean }
+        hasToken: { type: boolean }
+      additionalProperties: false
+
+    NotionIntegrationSetTokenRequest:
+      type: object
+      description: Notion integration credential. Never include this token in logs or responses.
+      x-sensitive: true
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 1
+          maxLength: 500
+          format: password
+          writeOnly: true
+          x-sensitive: true
+      additionalProperties: false
+
+    NotionIntegrationConnectResponse:
+      type: object
+      required: [connected, message]
+      properties:
+        connected: { type: boolean, const: true }
+        message: { type: string, const: "Notion integration token saved and validated" }
+      additionalProperties: false
+
+    NotionIntegrationDisconnectResponse:
+      type: object
+      required: [connected, message]
+      properties:
+        connected: { type: boolean, const: false }
+        message: { type: string, const: "Notion integration disconnected" }
+      additionalProperties: false
+
+    NotionIntegrationErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        connected: { type: boolean }
+        details:
+          type: array
+          items: { type: object, additionalProperties: true }
       additionalProperties: false
 
     StringErrorResponse:
