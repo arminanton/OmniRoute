@@ -32,6 +32,26 @@ test("authenticated monitoring health specifies separate ingest-byte queue gauge
     )
   );
 
+  assert.ok(authenticated.required.includes("callLogArtifacts"));
+  const writerProperty = authenticated.properties.callLogArtifacts;
+  assert.ok(writerProperty.oneOf.some((entry: Record<string, unknown>) => entry.type === "null"));
+  assert.ok(
+    writerProperty.oneOf.some(
+      (entry: Record<string, unknown>) =>
+        entry.$ref === "#/components/schemas/CallLogArtifactWriterSnapshot"
+    )
+  );
+  const writer = spec.components.schemas.CallLogArtifactWriterSnapshot;
+  for (const field of [
+    "preparationRefusalsInvalidEstimateTotal",
+    "preparationRefusalsSingleArtifactBudgetTotal",
+    "preparationRefusalsAggregateReservationBudgetTotal",
+  ]) {
+    assert.ok(writer.required.includes(field), `missing required writer counter ${field}`);
+    assert.equal(writer.properties[field]?.type, "integer");
+    assert.equal(writer.properties[field]?.minimum, 0);
+  }
+
   const summary = spec.components.schemas.ChatAdmissionHealthSummary;
   for (const field of [
     "activeHeavy",

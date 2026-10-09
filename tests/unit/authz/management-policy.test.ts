@@ -14,6 +14,7 @@ process.env.OMNIROUTE_DISABLE_REDIS_AUTH_CACHE = "1";
 
 const core = await import("../../../src/lib/db/core.ts");
 const apiKeysDb = await import("../../../src/lib/db/apiKeys.ts");
+const accessTokensDb = await import("../../../src/lib/db/accessTokens.ts");
 const settingsDb = await import("../../../src/lib/db/settings.ts");
 const modelSync = await import("../../../src/shared/services/modelSyncScheduler.ts");
 const internalServiceAuth = await import("../../../src/lib/api/internalServiceAuth.ts");
@@ -130,6 +131,118 @@ test("managementPolicy: CLI key listing still requires management auth when logi
     assert.equal(out.status, 401);
     assert.equal(out.code, "AUTH_001");
   }
+});
+
+test("managementPolicy: CLI secret/config surfaces still require credentials when login is disabled", async () => {
+  await settingsDb.updateSettings({ requireLogin: false, password: null });
+  const policy = await loadPolicy();
+  const targets = [
+    ["GET", "/api/cli-tools/detect"],
+    ["GET", "/api/cli-tools/codex-settings"],
+    ["POST", "/api/cli-tools/codex-settings"],
+    ["DELETE", "/api/cli-tools/codex-settings"],
+  ] as const;
+
+  for (const [method, path] of targets) {
+    for (const context of [
+      ctx(new Headers(), method, path),
+      remoteCtx(new Headers(), method, path),
+    ]) {
+      const out = await policy.evaluate(context);
+      assert.equal(out.allow, false, `${method} ${path} must reject anonymous access`);
+      if (!out.allow) {
+        assert.equal(out.status, 401);
+        assert.equal(out.code, "AUTH_001");
+      }
+    }
+  }
+});
+
+test("managementPolicy: sensitive CLI detection and Codex settings reject anonymous no-login requests", async () => {
+  await settingsDb.updateSettings({ requireLogin: false, password: null });
+  const policy = await loadPolicy();
+  const targets = [
+    ["GET", "/api/cli-tools/detect"],
+    ["GET", "/api/cli-tools/codex-settings"],
+    ["POST", "/api/cli-tools/codex-settings"],
+    ["DELETE", "/api/cli-tools/codex-settings"],
+  ] as const;
+
+  for (const [method, path] of targets) {
+    for (const requestContext of [
+      ctx(new Headers(), method, path),
+      remoteCtx(new Headers(), method, path),
+    ]) {
+      const out = await policy.evaluate(requestContext);
+      assert.equal(out.allow, false, `${method} ${path} must reject anonymous access`);
+      if (!out.allow) {
+        assert.equal(out.status, 401);
+        assert.equal(out.code, "AUTH_001");
+      }
+    }
+  }
+});
+
+test("managementPolicy: Detect requires admin token scope while Codex settings keep read/write scopes", async () => {
+  await settingsDb.updateSettings({ requireLogin: false, password: null });
+  const readToken = accessTokensDb.createAccessToken({ name: "cli-detect-read", scope: "read" });
+  const writeToken = accessTokensDb.createAccessToken({
+    name: "codex-settings-write",
+    scope: "write",
+  });
+  const adminToken = accessTokensDb.createAccessToken({ name: "cli-detect-admin", scope: "admin" });
+  const policy = await loadPolicy();
+
+  const detectRead = await policy.evaluate(
+    remoteCtx(
+      new Headers({ authorization: `Bearer ${readToken.secret}` }),
+      "GET",
+      "/api/cli-tools/detect"
+    )
+  );
+  assert.equal(detectRead.allow, false);
+  if (!detectRead.allow) {
+    assert.equal(detectRead.status, 403);
+    assert.equal(detectRead.code, "AUTH_SCOPE");
+  }
+
+  const detectAdmin = await policy.evaluate(
+    remoteCtx(
+      new Headers({ authorization: `Bearer ${adminToken.secret}` }),
+      "GET",
+      "/api/cli-tools/detect"
+    )
+  );
+  assert.equal(detectAdmin.allow, true);
+
+  const codexRead = await policy.evaluate(
+    remoteCtx(
+      new Headers({ authorization: `Bearer ${readToken.secret}` }),
+      "GET",
+      "/api/cli-tools/codex-settings"
+    )
+  );
+  assert.equal(codexRead.allow, true);
+  const codexReadWrite = await policy.evaluate(
+    remoteCtx(
+      new Headers({ authorization: `Bearer ${readToken.secret}` }),
+      "POST",
+      "/api/cli-tools/codex-settings"
+    )
+  );
+  assert.equal(codexReadWrite.allow, false);
+  if (!codexReadWrite.allow) {
+    assert.equal(codexReadWrite.status, 403);
+    assert.equal(codexReadWrite.code, "AUTH_SCOPE");
+  }
+  const codexWrite = await policy.evaluate(
+    remoteCtx(
+      new Headers({ authorization: `Bearer ${writeToken.secret}` }),
+      "POST",
+      "/api/cli-tools/codex-settings"
+    )
+  );
+  assert.equal(codexWrite.allow, true);
 });
 
 test("managementPolicy: OAuth credential imports require a management key when login is enabled", async () => {

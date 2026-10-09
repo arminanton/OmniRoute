@@ -147,6 +147,12 @@ export const ALWAYS_PROTECTED_API_PATHS: ReadonlyArray<string> = [
   // otherwise ordinary inference credentials (or anonymous bootstrap access)
   // could disclose every stored key.
   "/api/cli-tools/keys",
+  // The detector returns raw configContents for every known CLI tool, which can
+  // contain API keys and OAuth tokens. Do not let requireLogin=false expose them.
+  "/api/cli-tools/detect",
+  // Codex settings reads local config and writes auth.json/config.toml. Keep the
+  // complete settings lifecycle behind an identity even when login is disabled.
+  "/api/cli-tools/codex-settings",
   // Bulk log export: call_logs carries prompts and responses, proxy_logs carries
   // client/public IPs, and the handler only calls requireManagementAuth() with no
   // alwaysRequireAuth. Found sweeping the GHSA-5926-2w35-7h4q class.

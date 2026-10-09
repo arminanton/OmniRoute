@@ -118,6 +118,15 @@ test("isAlwaysProtectedPath: legacy settings export/import-json are always prote
   assert.equal(isAlwaysProtectedPath("/api/settings/proxy"), false);
 });
 
+test("isAlwaysProtectedPath: CLI credential detection and Codex settings stay authenticated with login disabled", () => {
+  assert.equal(isAlwaysProtectedPath("/api/cli-tools/detect"), true);
+  assert.equal(isAlwaysProtectedPath("/api/cli-tools/codex-settings"), true);
+  // Keep the hardening exact; ordinary status/settings siblings remain Tier 3.
+  assert.equal(isAlwaysProtectedPath("/api/cli-tools/status"), false);
+  assert.equal(isAlwaysProtectedPath("/api/cli-tools/all-statuses"), false);
+  assert.equal(isAlwaysProtectedPath("/api/cli-tools/claude-settings"), false);
+});
+
 test("isAlwaysProtectedPath: ordinary settings routes are not always protected", () => {
   assert.equal(isAlwaysProtectedPath("/api/settings"), false);
   assert.equal(isAlwaysProtectedPath("/api/settings/proxy"), false);

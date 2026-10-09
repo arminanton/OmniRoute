@@ -30,6 +30,7 @@ export const ADMIN_SCOPE_PREFIXES: readonly string[] = [
   "/api/policy", // policy engine
   "/api/services", // embedded-service lifecycle (also loopback-blocked)
   "/api/mcp", // MCP process surface (also loopback-blocked)
+  "/api/cli-tools/detect", // returns full local CLI config files, including credentials
 ];
 
 /** Require `admin` only for mutating methods; GET/HEAD under these stay `read`. */

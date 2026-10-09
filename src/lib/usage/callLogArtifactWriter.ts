@@ -60,6 +60,9 @@ const lastWarningAt = new Map<string, number>();
 let reservedArtifactFootprintBytes = 0;
 let reservedDiagnosticStubBytes = 0;
 let preparationRefusalsTotal = 0;
+let preparationRefusalsInvalidEstimateTotal = 0;
+let preparationRefusalsSingleArtifactBudgetTotal = 0;
+let preparationRefusalsAggregateReservationBudgetTotal = 0;
 let detailOmissionsTotal = 0;
 let workerFailuresTotal = 0;
 let pointerFallbacksTotal = 0;
@@ -69,6 +72,27 @@ let diagnosticStubRefusalsTotal = 0;
 function incrementCounter(value: number, amount = 1): number {
   if (!Number.isSafeInteger(amount) || amount <= 0) return value;
   return Math.min(Number.MAX_SAFE_INTEGER, value + amount);
+}
+
+type PreparationRefusalReason =
+  "invalid_estimate" | "single_artifact_budget" | "aggregate_reservation_budget";
+
+function notePreparationRefusal(reason: PreparationRefusalReason): void {
+  preparationRefusalsTotal = incrementCounter(preparationRefusalsTotal);
+  detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
+  if (reason === "invalid_estimate") {
+    preparationRefusalsInvalidEstimateTotal = incrementCounter(
+      preparationRefusalsInvalidEstimateTotal
+    );
+  } else if (reason === "single_artifact_budget") {
+    preparationRefusalsSingleArtifactBudgetTotal = incrementCounter(
+      preparationRefusalsSingleArtifactBudgetTotal
+    );
+  } else {
+    preparationRefusalsAggregateReservationBudgetTotal = incrementCounter(
+      preparationRefusalsAggregateReservationBudgetTotal
+    );
+  }
 }
 
 function notePointerFallbackFailure(refused = false): void {
@@ -89,6 +113,9 @@ export type CallLogArtifactWriterSnapshot = Readonly<{
   diagnosticStubFootprintLimitBytes: number;
   workerState: "not_started" | "idle" | "active" | "closing";
   preparationRefusalsTotal: number;
+  preparationRefusalsInvalidEstimateTotal: number;
+  preparationRefusalsSingleArtifactBudgetTotal: number;
+  preparationRefusalsAggregateReservationBudgetTotal: number;
   detailOmissionsTotal: number;
   workerFailuresTotal: number;
   pointerFallbacksTotal: number;
@@ -112,6 +139,9 @@ export function getCallLogArtifactWriterSnapshot(): CallLogArtifactWriterSnapsho
     diagnosticStubFootprintLimitBytes: MAX_QUEUED_DIAGNOSTIC_STUB_BYTES,
     workerState: closing ? "closing" : active ? "active" : worker ? "idle" : "not_started",
     preparationRefusalsTotal,
+    preparationRefusalsInvalidEstimateTotal,
+    preparationRefusalsSingleArtifactBudgetTotal,
+    preparationRefusalsAggregateReservationBudgetTotal,
     detailOmissionsTotal,
     workerFailuresTotal,
     pointerFallbacksTotal,
@@ -316,8 +346,7 @@ export function reserveCallLogArtifactPreparation(
 ): CallLogArtifactReservation | null {
   const estimate = estimateCallLogArtifactFootprint(compactArtifactForFootprint(rawPayloads));
   if (estimate.reason) {
-    preparationRefusalsTotal = incrementCounter(preparationRefusalsTotal);
-    detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
+    notePreparationRefusal("invalid_estimate");
     warnRateLimited(
       `[callLogs] Call-log detail preparation refused (reason=${estimate.reason}, estimateMiB=${(estimate.estimatedBytes / (1024 * 1024)).toFixed(1)}, reservedMiB=${(reservedArtifactFootprintBytes / (1024 * 1024)).toFixed(1)}).`,
       `preparation_refused:${estimate.reason}`
@@ -334,12 +363,11 @@ export function reserveCallLogArtifactPreparation(
     estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES ||
     reservedArtifactFootprintBytes + estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
   ) {
-    preparationRefusalsTotal = incrementCounter(preparationRefusalsTotal);
-    detailOmissionsTotal = incrementCounter(detailOmissionsTotal);
     const reason =
       !Number.isSafeInteger(estimatedBytes) || estimatedBytes > MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES
         ? "single_artifact_budget"
         : "aggregate_reservation_budget";
+    notePreparationRefusal(reason);
     warnRateLimited(
       `[callLogs] Call-log detail preparation refused (reason=${reason}, estimateMiB=${(estimatedBytes / (1024 * 1024)).toFixed(1)}, reservedMiB=${(reservedArtifactFootprintBytes / (1024 * 1024)).toFixed(1)}, capMiB=${(MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES / (1024 * 1024)).toFixed(0)}).`,
       `preparation_refused:${reason}`

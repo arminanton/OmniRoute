@@ -83,6 +83,15 @@ export function projectCallLogArtifactWriterSummary(
     diagnosticStubFootprintLimitBytes: count(snapshot.diagnosticStubFootprintLimitBytes),
     workerState,
     preparationRefusalsTotal: count(snapshot.preparationRefusalsTotal),
+    preparationRefusalsInvalidEstimateTotal: count(
+      snapshot.preparationRefusalsInvalidEstimateTotal
+    ),
+    preparationRefusalsSingleArtifactBudgetTotal: count(
+      snapshot.preparationRefusalsSingleArtifactBudgetTotal
+    ),
+    preparationRefusalsAggregateReservationBudgetTotal: count(
+      snapshot.preparationRefusalsAggregateReservationBudgetTotal
+    ),
     detailOmissionsTotal: count(snapshot.detailOmissionsTotal),
     workerFailuresTotal: count(snapshot.workerFailuresTotal),
     pointerFallbacksTotal: count(snapshot.pointerFallbacksTotal),

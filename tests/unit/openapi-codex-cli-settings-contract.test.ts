@@ -47,12 +47,12 @@ function sourceOperations() {
   return result;
 }
 
-test("Codex CLI settings operations match the conditionally authenticated source route", () => {
+test("Codex CLI settings operations are always-protected with method-specific Access Token scopes", () => {
   const documented = new Set(METHODS.map((method) => `${method} ${ROUTE}`));
   assert.deepEqual([...documented].sort(), [...sourceOperations()].sort());
   assert.equal(documented.size, 3);
   assert.equal(classifyRoute(ROUTE, "GET").routeClass, "MANAGEMENT");
-  assert.equal(isAlwaysProtectedPath(ROUTE), false);
+  assert.equal(isAlwaysProtectedPath(ROUTE), true);
   assert.equal(isLocalOnlyPath(ROUTE, "GET"), false);
 
   const expectedAccessTokenScope = { get: "read", post: "write", delete: "write" } as const;
@@ -60,15 +60,8 @@ test("Codex CLI settings operations match the conditionally authenticated source
     const upper = method.toUpperCase();
     const op = operation(method);
     assert.equal(inferRequiredScope(upper, ROUTE), expectedAccessTokenScope[method]);
-    assert.match(
-      op.description ?? "",
-      /requireLogin=false.*bypasses credentials regardless of peer address/s
-    );
-    assert.match(
-      op.description ?? "",
-      /fresh,? incomplete setup[\s\S]+anonymous loopback bootstrap access/
-    );
-    assert.match(op.description ?? "", /neither loopback-only nor always-protected/s);
+    assert.equal(op["x-always-protected"], true);
+    assert.match(op.description ?? "", /always-protected.*requireLogin=false/s);
     for (const scheme of AUTH_SCHEMES) {
       assert.ok(
         op.security?.some((alternative: Record<string, unknown>) => scheme in alternative),
@@ -76,10 +69,10 @@ test("Codex CLI settings operations match the conditionally authenticated source
       );
     }
     assert.ok(
-      op.security?.some(
+      !op.security?.some(
         (alternative: Record<string, unknown>) => Object.keys(alternative).length === 0
       ),
-      `${upper} preserves anonymous access when requireLogin=false`
+      `${upper} must not document anonymous access`
     );
     assert.ok(op.responses?.["401"] && op.responses?.["403"] && op.responses?.["503"]);
   }

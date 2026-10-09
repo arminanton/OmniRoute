@@ -24,6 +24,9 @@ test("admin-prefix routes require admin for ANY method", () => {
   assert.equal(inferRequiredScope("POST", "/api/auth/login"), "admin");
   assert.equal(inferRequiredScope("POST", "/api/policy"), "admin");
   assert.equal(inferRequiredScope("POST", "/api/services/foo/start"), "admin");
+  // Detect returns complete CLI configuration files, so even reads need an
+  // admin-scoped Access Token (API-key/session policy is separate).
+  assert.equal(inferRequiredScope("GET", "/api/cli-tools/detect"), "admin");
 });
 
 test("admin-mutation prefixes: GET stays read, mutations become admin", () => {
@@ -34,6 +37,10 @@ test("admin-mutation prefixes: GET stays read, mutations become admin", () => {
   assert.equal(inferRequiredScope("DELETE", "/api/providers/openai"), "admin");
   // cli-tools/apply writes to the host fs
   assert.equal(inferRequiredScope("POST", "/api/cli-tools/apply"), "admin");
+  // Codex settings preserve method scopes: read config vs write/reset files.
+  assert.equal(inferRequiredScope("GET", "/api/cli-tools/codex-settings"), "read");
+  assert.equal(inferRequiredScope("POST", "/api/cli-tools/codex-settings"), "write");
+  assert.equal(inferRequiredScope("DELETE", "/api/cli-tools/codex-settings"), "write");
 });
 
 test("a brand-new mutating route is write by default (not admin)", () => {

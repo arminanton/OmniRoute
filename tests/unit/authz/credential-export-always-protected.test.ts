@@ -40,6 +40,14 @@ const HARD_GATED_INVENTORY: ReadonlyArray<{ path: string; why: string }> = [
     why: "PUT writes attacker-supplied auth.json and config.toml into the operator's Codex CLI config",
   },
   {
+    path: "/api/cli-tools/detect",
+    why: "returns verbatim configContents for CLI tools, including API keys and tokens",
+  },
+  {
+    path: "/api/cli-tools/codex-settings",
+    why: "returns local Codex configuration and writes the API key into auth.json",
+  },
+  {
     path: "/api/cli-tools/keys",
     why: "returns every stored API key in rawKey to CLI-tools consumers",
   },

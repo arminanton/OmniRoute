@@ -7844,20 +7844,16 @@ paths:
         Probes the local Codex executable (trying `--version` and then `-v`) and returns either
         runtime status plus a not-installed or not-runnable message, or the full
         `~/.codex/config.toml` text, OmniRoute-detection flag, and config path. The config text and
-        filesystem path are sensitive and may contain arbitrary user configuration. This uses
-        conditional management authentication. In an unlocked profile, `requireLogin=false`
-        bypasses credentials regardless of peer address. A fresh, incomplete setup
-        without a configured password/OIDC/`INITIAL_PASSWORD` also permits anonymous loopback
-        bootstrap access. This route is neither loopback-only nor always-protected, so a reachable
-        no-login server can expose the config text and trigger the local CLI version probe.
-        Protected profiles accept a `read` Access Token, a `manage` or `admin` API key, a dashboard
-        session, or trusted loopback CLI or internal-service credentials.
+        filesystem path are sensitive and may contain arbitrary user configuration. This route is
+        always-protected, including when `requireLogin=false`. Protected profiles accept a `read`
+        Access Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback CLI or
+        internal-service credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
       responses:
         "200":
           description: Runtime status and either an unavailable message or the full config text.
@@ -7889,19 +7885,16 @@ paths:
         by validation, except `keyId`, which is read first and, when it resolves, replaces the
         supplied API key with that stored key. The supplied `apiKey` must still be nonempty. An
         omitted `wireApi` defaults to `responses`; an empty/omitted `modelMappings` removes the
-        existing model-migration section. Authentication is conditional. Protected profiles accept
-        a `write` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted
-        loopback CLI or internal-service credentials. In an unlocked profile, `requireLogin=false`
-        bypasses credentials regardless of peer address; fresh incomplete setup permits anonymous
-        loopback bootstrap access when no password/OIDC/`INITIAL_PASSWORD` is configured. This
-        route is neither loopback-only nor always-protected, so a reachable no-login server can
-        accept anonymous local config writes.
+        existing model-migration section. This route is always-protected, including when
+        `requireLogin=false`. Protected profiles accept a `write` Access Token, a `manage` or
+        `admin` API key, a dashboard session, or trusted loopback CLI or internal-service
+        credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
       requestBody:
         required: true
         x-sensitive: true
@@ -7951,19 +7944,16 @@ paths:
         the handler asks the CLI backup service to snapshot the existing config and auth files;
         backup copies can contain credentials. If `config.toml` is absent, it returns a successful
         no-config message before editing `auth.json`. The write gate must allow CLI config changes
-        (`CLI_ALLOW_CONFIG_WRITES` defaults to enabled). Authentication is conditional. Protected
-        profiles accept a `write` Access Token, a `manage` or `admin` API key, a dashboard session,
-        or trusted loopback CLI or internal-service credentials. In an unlocked profile,
-        `requireLogin=false` bypasses credentials regardless of peer address; fresh incomplete
-        setup permits anonymous loopback bootstrap access when no password/OIDC/`INITIAL_PASSWORD`
-        is configured. This route is neither loopback-only nor always-protected, so a reachable
-        no-login server can accept anonymous local file writes.
+        (`CLI_ALLOW_CONFIG_WRITES` defaults to enabled). This route is always-protected, including
+        when `requireLogin=false`. Protected profiles accept a `write` Access Token, a `manage` or
+        `admin` API key, a dashboard session, or trusted loopback CLI or internal-service
+        credentials.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
-        - {}
+      x-always-protected: true
       responses:
         "200":
           description: OmniRoute settings were removed, or there was no config file to reset.
@@ -16226,15 +16216,18 @@ paths:
         - Cli tools
       summary: "GET cli tools › detect"
       description: >-
-        Detects one CLI tool or all known CLI tools. Management authentication is required when
-        management login is enabled; a valid local CLI token is accepted only from loopback, and
-        deployments that disable management login may allow anonymous access. `configContents` is
-        returned verbatim when readable and may contain local credentials.
+        Detects one CLI tool or all known CLI tools. It probes local executables and returns each
+        readable configuration file as verbatim `configContents`, which can contain API keys, OAuth
+        tokens, and other credentials. This route is always-protected, including when
+        `requireLogin=false`; an `oma_live_` Access Token must have `admin` scope. Management or
+        admin API keys, a dashboard session, and trusted loopback CLI/internal-service credentials
+        are also accepted. No anonymous alternative is allowed.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
-        - {}
+        - InternalServiceTokenAuth: []
+      x-always-protected: true
       parameters:
         - name: tool
           in: query
@@ -16244,6 +16237,7 @@ paths:
       responses:
         "200":
           description: One detected CLI tool or the complete detection list.
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -37487,6 +37481,9 @@ components:
         - diagnosticStubFootprintLimitBytes
         - workerState
         - preparationRefusalsTotal
+        - preparationRefusalsInvalidEstimateTotal
+        - preparationRefusalsSingleArtifactBudgetTotal
+        - preparationRefusalsAggregateReservationBudgetTotal
         - detailOmissionsTotal
         - workerFailuresTotal
         - pointerFallbacksTotal
@@ -37504,6 +37501,24 @@ components:
           type: string
           enum: [not_started, idle, active, closing]
         preparationRefusalsTotal: { type: integer, minimum: 0 }
+        preparationRefusalsInvalidEstimateTotal:
+          type: integer
+          minimum: 0
+          description: >-
+            Cumulative detail-preparation refusals when the bounded payload estimator rejects or
+            cannot safely measure an input.
+        preparationRefusalsSingleArtifactBudgetTotal:
+          type: integer
+          minimum: 0
+          description: >-
+            Cumulative detail-preparation refusals when one estimated artifact exceeds the
+            per-artifact reservation budget or cannot be represented as a safe integer.
+        preparationRefusalsAggregateReservationBudgetTotal:
+          type: integer
+          minimum: 0
+          description: >-
+            Cumulative detail-preparation refusals when the artifact is individually eligible but
+            the currently reserved aggregate budget has insufficient capacity.
         detailOmissionsTotal: { type: integer, minimum: 0 }
         workerFailuresTotal: { type: integer, minimum: 0 }
         pointerFallbacksTotal: { type: integer, minimum: 0 }

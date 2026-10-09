@@ -204,12 +204,19 @@ test("artifact footprint estimation rejects accessors without invoking them", ()
 
 test("artifact preparation refusal logs a bounded reason and never the payload", () => {
   const secretLike = `private-body-marker-${"x".repeat(7 * 1024 * 1024)}`;
+  const before = getCallLogArtifactWriterSnapshot();
   const warnings: string[] = [];
   const originalWarn = console.warn;
   console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
   try {
     const reservation = reserveCallLogArtifactPreparation({ requestBody: secretLike });
     assert.equal(reservation, null);
+    const after = getCallLogArtifactWriterSnapshot();
+    assert.equal(after.preparationRefusalsTotal, before.preparationRefusalsTotal + 1);
+    assert.equal(
+      after.preparationRefusalsSingleArtifactBudgetTotal,
+      before.preparationRefusalsSingleArtifactBudgetTotal + 1
+    );
     const warning = warnings.find((message) => message.includes("preparation refused"));
     assert.ok(warning);
     assert.match(warning, /reason=single_artifact_budget/);
@@ -218,6 +225,30 @@ test("artifact preparation refusal logs a bounded reason and never the payload",
   } finally {
     console.warn = originalWarn;
   }
+});
+
+test("invalid preparation estimates have a separate bounded refusal counter", () => {
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+  const before = getCallLogArtifactWriterSnapshot();
+
+  assert.equal(reserveCallLogArtifactPreparation(cyclic), null);
+
+  const after = getCallLogArtifactWriterSnapshot();
+  assert.equal(after.preparationRefusalsTotal, before.preparationRefusalsTotal + 1);
+  assert.equal(after.detailOmissionsTotal, before.detailOmissionsTotal + 1);
+  assert.equal(
+    after.preparationRefusalsInvalidEstimateTotal,
+    before.preparationRefusalsInvalidEstimateTotal + 1
+  );
+  assert.equal(
+    after.preparationRefusalsSingleArtifactBudgetTotal,
+    before.preparationRefusalsSingleArtifactBudgetTotal
+  );
+  assert.equal(
+    after.preparationRefusalsAggregateReservationBudgetTotal,
+    before.preparationRefusalsAggregateReservationBudgetTotal
+  );
 });
 
 test("preparation reservation counts exact shared stage bodies once", () => {
@@ -345,6 +376,10 @@ test("high-context Antigravity stage bodies use exact shared and aggregate reser
       null,
       "a concurrent second request must fail open at aggregate admission"
     );
+    assert.equal(
+      getCallLogArtifactWriterSnapshot().preparationRefusalsAggregateReservationBudgetTotal,
+      before.preparationRefusalsAggregateReservationBudgetTotal + 1
+    );
 
     const distinctPayload = payload([
       clientBody,
@@ -362,6 +397,10 @@ test("high-context Antigravity stage bodies use exact shared and aggregate reser
       reserveCallLogArtifactPreparation(distinctPayload),
       null,
       "distinct client/OpenAI/provider copies must be refused before cloning"
+    );
+    assert.equal(
+      getCallLogArtifactWriterSnapshot().preparationRefusalsSingleArtifactBudgetTotal,
+      before.preparationRefusalsSingleArtifactBudgetTotal + 1
     );
   } finally {
     releaseCallLogArtifactPreparation(sharedReservation);
