@@ -19162,27 +19162,81 @@ paths:
       tags:
         - Settings
       summary: "GET settings › cc discovery metrics"
+      description: >-
+        Returns aggregate counters for Claude Code discovery-alias model requests, the per-model
+        breakdown, and `/v1/models` catalog requests detected as Claude Code.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Claude Code discovery alias and catalog counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CcDiscoveryMetricsResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Metrics storage failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/compression/rules:
     get:
       operationId: getApiSettingsCompressionRules
       tags:
         - Settings
       summary: "GET settings › compression › rules"
+      description: Alias of `/api/compression/rules`; lists the Caveman compression rule metadata.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Caveman compression rule metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionRuleListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/compression/run-telemetry:
     get:
       operationId: getApiSettingsCompressionRunTelemetry
       tags:
         - Settings
       summary: "GET settings › compression › run telemetry"
+      description: >-
+        Returns a summary of persisted compression runs. When telemetry storage is unavailable, the
+        route returns a zeroed summary with status 200 rather than an error response.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Persisted compression-run counters and applied-style counts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionRunTelemetrySummary" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/database:
     get:
       operationId: getApiSettingsDatabase
@@ -27104,6 +27158,40 @@ components:
           additionalProperties: { $ref: "#/components/schemas/CachePromptStrategyStats" }
         lastUpdated: { type: string, format: date-time }
       additionalProperties: false
+
+    CcDiscoveryMetricsResponse:
+      type: object
+      required: [aliasRequests, discoveryHits, byModel]
+      properties:
+        aliasRequests: { type: integer, minimum: 0 }
+        discoveryHits: { type: integer, minimum: 0 }
+        byModel:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    CompressionRunTelemetrySummary:
+      type: object
+      required:
+        [
+          totalRuns,
+          totalTokensSaved,
+          runsWithStyles,
+          bypassCount,
+          totalOutputTokens,
+          appliedStyleCounts,
+        ]
+      properties:
+        totalRuns: { type: integer, minimum: 0 }
+        totalTokensSaved: { type: integer, minimum: 0 }
+        runsWithStyles: { type: integer, minimum: 0 }
+        bypassCount: { type: integer, minimum: 0 }
+        totalOutputTokens: { type: number }
+        appliedStyleCounts:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+      additionalProperties: false
+
     CacheTrendPoint:
       type: object
       required:
