@@ -7513,30 +7513,134 @@ paths:
     get:
       operationId: getApiCliToolsClineSettings
       tags: [CLI Tools]
-      summary: Get Cline CLI settings
+      summary: Get Cline CLI runtime status and settings
+      description: >-
+        Probes the local Cline executable and returns selected `globalState.json` settings and
+        their paths; the API-key value from `secrets.json` is not returned. This route is
+        management-classified but is not marked LOCAL_ONLY or ALWAYS_PROTECTED; an unlocked
+        install with `requireLogin=false` may permit anonymous access. Protected profiles accept a
+        `read` Access Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
+        CLI/internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Cline CLI configuration
+          description: Cline runtime status, selected settings, and configuration-file paths.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClineCliSettingsStatusResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Runtime status or settings lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCliToolsClineSettings
       tags: [CLI Tools]
-      summary: Apply Cline CLI settings
+      summary: Configure Cline to use OmniRoute
+      description: >-
+        Writes OpenAI-compatible provider settings to Cline's `globalState.json` and stores the
+        resolved API key (or the `sk_omniroute` placeholder) in `secrets.json`. A supplied `keyId`
+        resolves to the full API-key value; otherwise `apiKey` is used. `reasoningEffort`, `wireApi`,
+        and `modelMappings` are accepted by the shared schema but ignored by this route. The
+        operation requires CLI-config writes to be enabled. This route is not ALWAYS_PROTECTED; an
+        unlocked `requireLogin=false` install may permit anonymous access and writes to local Cline
+        configuration. Treat the request as sensitive. Protected profiles accept a `write` Access
+        Token, a `manage` or `admin` API key, a dashboard session, or trusted loopback
+        CLI/internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/ClineSettingsUpdateRequest"
       responses:
         "200":
-          description: Cline CLI settings applied
+          description: Settings were applied; the API key is not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClineSettingsUpdateResponse" }
+        "400":
+          description: Invalid JSON body or model configuration failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Authentication was rejected or CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Cline settings files could not be read or written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiCliToolsClineSettings
       tags: [CLI Tools]
-      summary: Reset Cline CLI settings
+      summary: Remove OmniRoute provider settings from Cline
+      description: >-
+        If `globalState.json` exists, removes the OpenAI model/base-URL fields and resets the
+        provider to Cline when act mode currently uses OpenAI, then removes `openAiApiKey` from
+        `secrets.json`. If `globalState.json` is absent, returns a no-op success before processing
+        `secrets.json`. The operation requires CLI-config writes to be enabled. This route is not
+        ALWAYS_PROTECTED; an unlocked `requireLogin=false` install may permit anonymous access and
+        local file writes. Protected profiles accept a `write` Access Token, a `manage` or `admin`
+        API key, a dashboard session, or trusted loopback CLI/internal-service credentials.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Cline CLI settings reset
+          description: Settings were reset, or no globalState file was present.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClineSettingsResetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Authentication was rejected or CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Cline settings files could not be read or written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/cli-tools/codex-profiles:
     get:
@@ -35961,6 +36065,80 @@ components:
         message:
           type: string
           enum: [Settings reset successfully, No settings file to reset]
+      additionalProperties: false
+    ClineCliSettingsStatusResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, settings]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        settings:
+          type: [object, "null"]
+          x-sensitive: true
+          description: >-
+            Selected values projected from Cline globalState.json; secrets.json values are not
+            included. A non-runnable CLI yields null; undefined settings fields are omitted.
+          properties:
+            actModeApiProvider: {}
+            planModeApiProvider: {}
+            openAiBaseUrl: { x-sensitive: true }
+            openAiModelId: {}
+            planModeOpenAiModelId: {}
+          additionalProperties: false
+        hasOmniRoute: { type: boolean }
+        globalStatePath: { type: string }
+        secretsPath: { type: string }
+        message: { type: string }
+      additionalProperties: false
+    ClineSettingsUpdateRequest:
+      type: object
+      x-sensitive: true
+      required: [baseUrl, model]
+      properties:
+        keyId:
+          type: string
+          description: Optional API-key record id; if found, its key is written to secrets.json.
+        baseUrl:
+          type: string
+          minLength: 1
+          pattern: "\\S"
+          description: A trailing /v1 is removed before storing the Cline OpenAI base URL.
+        apiKey: { type: [string, "null"], x-sensitive: true }
+        model: { type: string, minLength: 1, pattern: "\\S" }
+        reasoningEffort:
+          type: string
+          enum: [none, low, medium, high, xhigh, max, ultra]
+        wireApi: { type: string, enum: [chat, responses] }
+        modelMappings:
+          type: object
+          propertyNames: { type: string, minLength: 1, pattern: "\\S" }
+          additionalProperties: { type: string, minLength: 1, pattern: "\\S" }
+      description: >-
+        Unknown fields are accepted by Zod and stripped, except `keyId`, which the handler reads
+        before validation. `reasoningEffort`, `wireApi`, and `modelMappings` are validated but not
+        used by this Cline-specific route.
+      additionalProperties: true
+    ClineSettingsUpdateResponse:
+      type: object
+      required: [success, message, globalStatePath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Cline settings applied successfully! }
+        globalStatePath: { type: string }
+      additionalProperties: false
+    ClineSettingsResetResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          enum: [OmniRoute settings removed from Cline, No settings file to reset]
       additionalProperties: false
     A2ATaskState:
       type: string
