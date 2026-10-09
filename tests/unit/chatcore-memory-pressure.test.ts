@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import os from "node:os";
 
 // ── estimateSizeFast (truncateForLog dependency) ───────────────────────
 
@@ -44,15 +45,28 @@ test("estimateSizeFast handles circular references", async () => {
 
 test("HEAP_PRESSURE_THRESHOLD_MB auto-calibrates from the live V8 heap ceiling (no fixed 200)", async () => {
   const { getHeapStatistics } = await import("node:v8");
-  const { HEAP_PRESSURE_THRESHOLD_MB, computeHeapPressureThresholdMb } = await import(
-    "../../open-sse/utils/heapPressure.ts"
-  );
+  const { HEAP_PRESSURE_THRESHOLD_MB, computeHeapPressureThresholdMb } =
+    await import("../../open-sse/utils/heapPressure.ts");
   const limitMb = getHeapStatistics().heap_size_limit / (1024 * 1024);
+  const bunMemoryLimitMb =
+    typeof process.versions.bun === "string"
+      ? (() => {
+          const proc = process as NodeJS.Process & { constrainedMemory?: () => number };
+          const constrained = proc.constrainedMemory?.() ?? 0;
+          const ceilingBytes =
+            Number.isFinite(constrained) && constrained > 0 ? constrained : os.totalmem();
+          return ceilingBytes / (1024 * 1024);
+        })()
+      : null;
   // The live constant must equal the pure helper applied to this process's
-  // actual ceiling — no drift between the resolved value and the formula.
+  // actual runtime memory ceiling — no drift between the resolved value and the formula.
   assert.equal(
     HEAP_PRESSURE_THRESHOLD_MB,
-    computeHeapPressureThresholdMb(limitMb, process.env.HEAP_PRESSURE_THRESHOLD_MB)
+    computeHeapPressureThresholdMb(
+      limitMb,
+      process.env.HEAP_PRESSURE_THRESHOLD_MB,
+      bunMemoryLimitMb
+    )
   );
   // With no operator override it must clear the ~260MB baseline, otherwise the
   // guard would reject every request at idle (the bug we are fixing).
@@ -62,6 +76,13 @@ test("HEAP_PRESSURE_THRESHOLD_MB auto-calibrates from the live V8 heap ceiling (
       `live threshold ${HEAP_PRESSURE_THRESHOLD_MB}MB must clear the ~260MB app baseline`
     );
   }
+});
+
+test("Bun heap threshold uses the stable constrained-memory ceiling, not its changing JSC heap cap", async () => {
+  const { computeHeapPressureThresholdMb } = await import("../../open-sse/utils/heapPressure.ts");
+  assert.equal(computeHeapPressureThresholdMb(1164, undefined, 24000), 20400);
+  assert.equal(computeHeapPressureThresholdMb(1164, undefined, 4000), 3400);
+  assert.equal(computeHeapPressureThresholdMb(1164, "990", 24000), 990);
 });
 
 // ── estimateSizeFast vs MAX_LOG_BODY_CHARS threshold ───────────────────

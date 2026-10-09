@@ -383,6 +383,28 @@ test("100 concurrent preparations stay under the shared cap and transfer or rele
   releaseCallLogArtifactPreparation(released);
 });
 
+test("402 private-overflow stub references fit the bounded diagnostic queue", async () => {
+  const results = await Promise.all(
+    Array.from({ length: 402 }, (_, index) => {
+      const artifact = buildArtifact(`diagnostic-stub-burst-${index}`);
+      const diagnosticOverflow = {
+        schema: "omni-diagnostic-overflow/v1" as const,
+        traceId: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
+        state: "complete" as const,
+      };
+      return writeDiagnosticOverflowStubAsync(artifact.summary, diagnosticOverflow);
+    })
+  );
+
+  const written = results.filter((result) => result !== null);
+  assert.equal(written.length, 402, "every high-context turn keeps a private trace pointer row");
+  assert.ok(written.every((result) => result?.diagnosticOverflowStub === true));
+  assert.ok(
+    written.reduce((total, result) => total + (result?.sizeBytes ?? 0), 0) <= 16 * 1024 * 1024,
+    "bounded pointer artifacts must remain within the diagnostic stub budget"
+  );
+});
+
 test("bounded queue fails open and rate-limits saturation warnings", async () => {
   const originalWarn = console.warn;
   let warningCount = 0;

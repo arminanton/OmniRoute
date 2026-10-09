@@ -65,7 +65,10 @@ async function listen(server: http.Server): Promise<string> {
 
 function spawnFixture(scriptName: string, extraEnv: Record<string, string> = {}) {
   const fixturePath = path.resolve("tests/fixtures", scriptName);
-  const child = spawn(process.execPath, [fixturePath], {
+  // Keep mock upstream/client runtimes independently selectable from the gateway runtime so
+  // Bun-vs-Node route tests do not also change the load generator's HTTP stack.
+  const fixtureRuntime = process.env.ANTIGRAVITY_FIXTURE_RUNTIME || process.execPath;
+  const child = spawn(fixtureRuntime, [fixturePath], {
     cwd: process.cwd(),
     env: { ...process.env, ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
@@ -469,6 +472,22 @@ test(
           );
           const sample = manifests[0];
           assert.ok(sample);
+          const privateByteTotals = manifests.reduce(
+            (total, manifest) => {
+              if (!manifest) return total;
+              const files = [
+                manifest.clientRequest,
+                ...manifest.attempts.flatMap((attempt) => [attempt.request, attempt.response]),
+              ];
+              for (const file of files) {
+                if (!file) continue;
+                total.rawBytes += file.rawBytes;
+                total.compressedBytes += file.compressedBytes;
+              }
+              return total;
+            },
+            { rawBytes: 0, compressedBytes: 0 }
+          );
           const clientBody = await readPrivateCapture(
             sample!.traceId,
             sample!.traceId,
@@ -482,7 +501,7 @@ test(
           assert.ok(clientBody.byteLength >= captureContextBytes * 5);
           assert.match(providerBody.toString("utf8"), /data: /);
           console.log(
-            `ANTIGRAVITY_PRIVATE_OVERFLOW traces=${traceIds.size} complete=${manifests.length} sampleClientBytes=${clientBody.byteLength} sampleProviderBytes=${providerBody.byteLength}`
+            `ANTIGRAVITY_PRIVATE_OVERFLOW traces=${traceIds.size} complete=${manifests.length} rawBytes=${privateByteTotals.rawBytes} compressedBytes=${privateByteTotals.compressedBytes} sampleClientBytes=${clientBody.byteLength} sampleProviderBytes=${providerBody.byteLength}`
           );
         }
       }

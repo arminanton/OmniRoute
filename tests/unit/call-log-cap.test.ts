@@ -695,6 +695,45 @@ test("preparation budget refuses body clones but persists the private overflow p
   assert.equal(artifact.summary.path, "/v1/responses");
 });
 
+test("an unpersisted private capture reason is visible when the stub cannot be stored", async () => {
+  const blocker = artifactWriter.reserveCallLogArtifactPreparation({
+    content: "x".repeat(6_000_000),
+  });
+  assert.ok(blocker);
+  const diagnosticOverflow = {
+    schema: "omni-diagnostic-overflow/v1" as const,
+    traceId: "21234567-89ab-cdef-0123-456789abcdef",
+    state: "incomplete" as const,
+    reason: "aggregate_budget" as const,
+    persisted: false as const,
+  };
+
+  try {
+    await callLogs.saveCallLog({
+      id: "unpersisted-diagnostic-overflow",
+      timestamp: "2026-03-31T09:06:01.000Z",
+      method: "POST",
+      path: "/v1/chat/completions",
+      status: 200,
+      model: "antigravity/gemini-3.8-flash-high",
+      requestedModel: "antigravity/gemini-3.8-flash-high",
+      provider: "antigravity",
+      requestBody: { content: "r".repeat(2_000_000) },
+      pipelinePayloads: { diagnosticOverflow },
+    });
+  } finally {
+    artifactWriter.releaseCallLogArtifactPreparation(blocker);
+  }
+
+  const detail = await callLogs.getCallLogById("unpersisted-diagnostic-overflow");
+  assert.equal(detail?.detailState, "missing");
+  assert.equal(detail?.requestSummary, null);
+  assert.match(
+    typeof detail?.error === "string" ? detail.error : "",
+    /Private diagnostic capture was not persisted \(aggregate_budget\)/
+  );
+});
+
 test("saveCallLog honors CALL_LOG_PIPELINE_MAX_SIZE_KB for pipeline artifacts", async () => {
   process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = "8";
   const hugePayload = "x".repeat(32 * 1024);

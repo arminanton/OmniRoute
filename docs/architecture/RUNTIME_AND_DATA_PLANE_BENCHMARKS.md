@@ -739,6 +739,75 @@ zero max/OOM events; its aggregate memory and prior peak are not attributable to
 averages were zero. This one run is lower than the earlier process-RSS range, but without matched
 before/after runs it does not establish which source change caused the difference.
 
+### Bun direct-route comparison at 100 sessions
+
+The official [Bun v1.4.2 ARM64 release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2)
+binary was checksum-verified and run from a temporary directory. The benchmark executes the same
+production Antigravity chat route and synthetic 1/30/70/100-conversation tool-call workload as the
+Node test; it keeps the load client and mock upstream on Node 24.21.0 so only the gateway runtime
+changes. All runs use five high-entropy 256 KiB user-context strings per conversation and 1,311,796
+byte maximum requests. This is a route-handler test, not Next middleware, a standalone image, or a
+real provider/Prime session.
+
+| Gateway runtime | Capture mode                             | Requests | Test wall time | Gateway process high-water RSS | Capture result                |
+| --------------- | ---------------------------------------- | -------: | -------------: | -----------------------------: | ----------------------------- |
+| Node 24.21.0    | logs off                                 |  402/402 |         61.5 s |     1,692,942,336 B (1.58 GiB) | No request artifacts expected |
+| Bun 1.4.2       | logs off                                 |  402/402 |         48.3 s |     2,943,635,456 B (2.74 GiB) | No request artifacts expected |
+| Node 24.21.0    | private overflow, 2 GiB total budget     |  402/402 |         75.9 s |     1,604,333,568 B (1.49 GiB) | 402/402 traces complete       |
+| Bun 1.4.2       | private overflow, 2 GiB total budget     |  402/402 |         59.9 s |     3,052,023,808 B (2.84 GiB) | 390/402 traces persisted      |
+| Bun 1.4.2       | private overflow, 4 GiB test-only budget |  402/402 |         60.7 s |     3,052,023,808 B (2.84 GiB) | 402/402 traces complete       |
+
+The timed Bun process peaked at 2,980,492 KiB during private capture. Its final sample showed
+1,742,401,536 bytes RSS and 831,579,368 bytes external memory. Node's matching private-capture
+sample showed 1,580,822,528 bytes RSS and 303,771,499 bytes external memory. Bun completed the
+mock workload sooner but its Linux process high-water was about 1.9 times Node's in the private
+capture run; its no-log high-water was about 1.7 times Node's. These measurements do not prove a
+general runtime ranking, but this workload does not support adopting Bun for lower peak memory.
+
+The first Bun run returned a false local 503 after the module-cached heap threshold remained at
+990 MiB while Bun's `node:v8` compatibility layer reported a live limit of about 19.6 GiB, process
+RSS near 1.7 GiB, and no cgroup memory cap or PSI pressure. The heap guard now uses Bun's
+`process.constrainedMemory()` ceiling (cgroup when available, host RAM otherwise), while Node
+continues using its V8 heap limit. Node and Bun unit checks pass, and the matched 100-session Bun
+reruns after this change produced no local pressure 503s. This does not yet verify the policy with
+Bun inside the production 4 GiB container limit.
+
+At the existing 2 GiB private-overflow aggregate budget, the Bun run persisted 390 of 402 trace
+references; the unpersisted traces coincided with the aggregate storage budget. A temporary 4 GiB
+budget for the isolated test persisted all 402 client/provider traces and was removed with its temp
+data directory. The successful run totaled 1,054,961,321 raw payload bytes and 1,053,107,174
+compressed bytes across those trace files. Those totals exclude the coordination database and the
+larger in-flight reservations, so they do not describe the exact peak-budget requirement. The
+application default remains 2 GiB. The normal artifact writer also keeps its
+separate 128 MiB in-memory reservation cap; high-context ordinary details can be refused while
+inference succeeds. The metadata-pointer queue is now bounded at 1,024 jobs and 16 MiB, with a
+402-stub unit test. When a private trace cannot be persisted, its safe reason is now written into
+the call-log summary so the missing detail is diagnosable. A 2 GiB miss is therefore visible as an
+incomplete capture, not a provider failure. Do not treat this synthetic burst as a recommendation
+to raise the production disk budget automatically.
+
+The Bun benchmark keeps the route gateway on Bun while running the client and mock upstream with
+Node, using `ANTIGRAVITY_FIXTURE_RUNTIME` so the load generator does not confound the gateway
+comparison. The Bun test binary's SHA256 was checked against the official ARM64 v1.4.2 release:
+`54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7`. Reproduce the full private
+capture variant on an isolated temp data directory with:
+
+```bash
+ANTIGRAVITY_FIXTURE_RUNTIME="$(command -v node)" \
+RUN_ANTIGRAVITY_CAPTURE_BENCH=1 \
+ANTIGRAVITY_CAPTURE_OVERFLOW_BENCH=1 \
+ANTIGRAVITY_CAPTURE_CONTEXT_BYTES=262144 \
+ANTIGRAVITY_CAPTURE_REQUEST_TIMEOUT_MS=120000 \
+ANTIGRAVITY_CAPTURE_MEMORY_BENCH=1 \
+OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES=4294967296 \
+DISABLE_SQLITE_AUTO_BACKUP=true \
+bun test --timeout=600000 tests/integration/antigravity-parallel-tool-roundtrip-http.test.ts
+```
+
+The 4 GiB environment override is only for this temporary benchmark. The default 2 GiB run's
+missing traces and the no-cgroup Bun threshold fallback still need a decision before a production
+Bun configuration can be considered.
+
 `ANTIGRAVITY_CAPTURE_MEMORY_BENCH=1` emits a sanitized memory-diagnostics record with separate
 snapshots for the route/test process, parent test runner, client process, mock upstream, and their
 current cgroup-v2 scope. Process snapshots include Node heap/RSS/external/array-buffer values, V8
@@ -1204,15 +1273,22 @@ no-auth catalog filter with the optional model ID shape.
 - Complete production builds and runtime smokes for the locked `Dockerfile.bun` path on Bun 1.4.0
   and 1.4.2 using a dedicated builder; the current 1.4.2 Turbopack trial stopped at 3m06s for host
   memory safety before compilation completed. Record native-module, database, streaming, and
-  shutdown differences.
+  shutdown differences. The Bun 1.4.2 direct route/tool/capture test now passes, but does not test
+  the full Next server, production image, or 4 GiB cgroup behavior.
+- Resolve the diagnostic-storage policy before relying on Bun high-context captures: the default
+  2 GiB private-overflow budget left 12/402 Bun traces unpersisted, while the isolated 4 GiB run
+  captured 402/402. The default is unchanged; decide whether a temporary 4 GiB diagnostic budget is
+  acceptable only after checking image/container free space and retention cleanup.
 - Exercise the full OmniRoute app with mock provider credentials at 70 and 100 active sessions,
   including actual tool-call cycles, authentication, account-level limits, and verified artifact
-  capture. The current TypeScript long-stream adapter exercises admission but not the full route;
-  the Rust policy prototype has one static key and alias map but no database-backed policies.
+  capture through standalone Next and middleware. The direct route test now runs 1/30/70/100
+  synthetic Antigravity conversations in both Node and Bun, but uses an in-process route handler,
+  Node test fixtures, and mock upstream. The Rust policy prototype still has one static key and
+  alias map but no database-backed policies.
 - Compare the current TypeScript route, Bun/Turbopack candidate, Rust policy-aware prototype, and
   Bifrost only with equivalent authentication, model/account policy, request bodies, and provider
-  mocks. Current Rust-vs-Rust rows isolate a few extra gateway stages only; they do not rank entire
-  languages or runtimes.
+  mocks. The new Node/Bun rows compare one direct route handler; current Rust-vs-Rust rows isolate
+  extra gateway stages. They do not rank production-ready applications or real providers.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.

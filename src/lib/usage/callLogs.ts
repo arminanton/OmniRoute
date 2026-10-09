@@ -749,12 +749,18 @@ async function saveCallLogOperation(entry: any): Promise<void> {
     const hasPipelineDetails = preparationRefused
       ? rawHasPipelineDetails
       : protectedPipelinePayloads !== null;
+    const unpersistedDiagnosticSummary =
+      diagnosticOverflowReference?.persisted === false
+        ? `Private diagnostic capture was not persisted (${diagnosticOverflowReference.reason ?? "storage_limit"}).`
+        : null;
     const errorSummary = artifactWorkerUnavailable
-      ? unavailableWorkerErrorSummary
+      ? [unavailableWorkerErrorSummary, unpersistedDiagnosticSummary]
+          .filter((part): part is string => typeof part === "string" && part.length > 0)
+          .join("; ")
+          .slice(0, 512) || null
       : preparationRefused
-        ? rawHasError
-          ? "Call-log detail omitted because the preparation memory budget was full."
-          : null
+        ? (unpersistedDiagnosticSummary ??
+          "Call-log detail omitted because the preparation memory budget was full.")
         : toStoredErrorSummary(protectedError);
     entry = null;
 
