@@ -967,6 +967,14 @@ the mock upstream returns immediately. The code defaults for API-key providers a
 consistent with that local limiter being the throughput ceiling in this mock test; provider latency
 and quota were removed from the experiment.
 
+Scope matters for the reported Codex and Antigravity incidents: the automatic queue-enable branch in
+`open-sse/services/rateLimitManager.ts` requires `getProviderCategory(provider) === "apikey"`. The
+current `codex` and `antigravity` registry entries both declare `authType: "oauth"`, so this
+API-key safety limiter is not automatically enabled for those providers. An operator can still
+explicitly enable rate-limit protection on an OAuth connection, in which case the queue settings
+apply. This A/B therefore demonstrates the API-key path's local queue ceiling; it does not explain
+the Codex OAuth or Antigravity 429/503 failures shown in the incident reports.
+
 With `RATE_LIMIT_AUTO_ENABLE=false` applied only to the isolated test process, the same HTTP/tool
 workload completed through 100 concurrent conversations:
 
