@@ -21254,25 +21254,113 @@ paths:
       tags:
         - Settings
       summary: "GET settings › task routing"
+      description: Returns the active task-routing config together with built-in models and detection patterns.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current routing configuration, runtime counters, and immutable defaults.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskRoutingGetResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Configuration could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsTaskRouting
       tags:
         - Settings
       summary: "POST settings › task routing"
+      description: Resets routing counters or detects a task from a supplied request-shaped object.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskRoutingActionRequest" }
       responses:
         "200":
-          description: OK
+          description: Counter reset or task-detection result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskRoutingActionResponse" }
+        "400":
+          description: Invalid JSON or unsupported action payload.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Action could not be completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsTaskRouting
       tags:
         - Settings
       summary: "PUT settings › task routing"
+      description: >-
+        Applies a non-empty partial update. Pattern override arrays replace the built-in arrays for
+        that task and are limited to 50 non-empty strings of at most 500 characters each.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TaskRoutingUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated configuration and current runtime counters.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TaskRoutingUpdateResponse" }
+        "400":
+          description: Invalid JSON, empty update, or a value outside the task-routing schema.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Management authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Configuration could not be updated or persisted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/tier-config:
     get:
       operationId: getApiSettingsTierConfig
@@ -38742,6 +38830,166 @@ components:
         cleared: { type: integer, minimum: 0 }
         message: { type: string }
       additionalProperties: false
+
+    TaskRoutingTaskType:
+      type: string
+      enum: [coding, creative, analysis, vision, summarization, background, chat]
+
+    TaskRoutingStats:
+      type: object
+      required: [detected, routed]
+      properties:
+        detected: { type: integer, minimum: 0 }
+        routed: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    TaskRoutingModelMap:
+      type: object
+      properties:
+        coding: { type: string, maxLength: 200 }
+        creative: { type: string, maxLength: 200 }
+        analysis: { type: string, maxLength: 200 }
+        vision: { type: string, maxLength: 200 }
+        summarization: { type: string, maxLength: 200 }
+        background: { type: string, maxLength: 200 }
+        chat: { type: string, maxLength: 200 }
+      additionalProperties: false
+
+    TaskRoutingDefaultModelMap:
+      type: object
+      required: [coding, creative, analysis, vision, summarization, background, chat]
+      properties:
+        coding: { type: string, maxLength: 200 }
+        creative: { type: string, maxLength: 200 }
+        analysis: { type: string, maxLength: 200 }
+        vision: { type: string, maxLength: 200 }
+        summarization: { type: string, maxLength: 200 }
+        background: { type: string, maxLength: 200 }
+        chat: { type: string, maxLength: 200 }
+      additionalProperties: false
+
+    TaskPattern:
+      type: object
+      required: [patterns]
+      properties:
+        patterns:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { type: string, minLength: 1, maxLength: 500 }
+        userPatterns:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { type: string, minLength: 1, maxLength: 500 }
+      additionalProperties: false
+
+    TaskPatternOverride:
+      type: object
+      properties:
+        patterns:
+          type: array
+          maxItems: 50
+          items: { type: string, minLength: 1, maxLength: 500 }
+        userPatterns:
+          type: array
+          maxItems: 50
+          items: { type: string, minLength: 1, maxLength: 500 }
+      additionalProperties: false
+
+    TaskPatternOverrides:
+      type: object
+      properties:
+        coding: { $ref: "#/components/schemas/TaskPatternOverride" }
+        creative: { $ref: "#/components/schemas/TaskPatternOverride" }
+        analysis: { $ref: "#/components/schemas/TaskPatternOverride" }
+        vision: { $ref: "#/components/schemas/TaskPatternOverride" }
+        summarization: { $ref: "#/components/schemas/TaskPatternOverride" }
+        background: { $ref: "#/components/schemas/TaskPatternOverride" }
+        chat: { $ref: "#/components/schemas/TaskPatternOverride" }
+      additionalProperties: false
+
+    TaskRoutingGetResponse:
+      type: object
+      required:
+        [enabled, taskModelMap, detectionEnabled, stats, defaultTaskModelMap, defaultTaskPatterns]
+      properties:
+        enabled: { type: boolean }
+        taskModelMap: { $ref: "#/components/schemas/TaskRoutingModelMap" }
+        patternOverrides: { $ref: "#/components/schemas/TaskPatternOverrides" }
+        detectionEnabled: { type: boolean }
+        stats: { $ref: "#/components/schemas/TaskRoutingStats" }
+        defaultTaskModelMap: { $ref: "#/components/schemas/TaskRoutingDefaultModelMap" }
+        defaultTaskPatterns:
+          type: object
+          required: [coding, creative, analysis, vision, summarization, background, chat]
+          properties:
+            coding: { $ref: "#/components/schemas/TaskPattern" }
+            creative: { $ref: "#/components/schemas/TaskPattern" }
+            analysis: { $ref: "#/components/schemas/TaskPattern" }
+            vision: { $ref: "#/components/schemas/TaskPattern" }
+            summarization: { $ref: "#/components/schemas/TaskPattern" }
+            background: { $ref: "#/components/schemas/TaskPattern" }
+            chat: { $ref: "#/components/schemas/TaskPattern" }
+          additionalProperties: false
+      additionalProperties: false
+
+    TaskRoutingUpdateRequest:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        taskModelMap: { $ref: "#/components/schemas/TaskRoutingModelMap" }
+        detectionEnabled: { type: boolean }
+        patternOverrides: { $ref: "#/components/schemas/TaskPatternOverrides" }
+      anyOf:
+        - required: [enabled]
+        - required: [taskModelMap]
+        - required: [detectionEnabled]
+        - required: [patternOverrides]
+      additionalProperties: false
+
+    TaskRoutingUpdateResponse:
+      type: object
+      required: [success, enabled, taskModelMap, detectionEnabled, stats]
+      properties:
+        success: { type: boolean, const: true }
+        enabled: { type: boolean }
+        taskModelMap: { $ref: "#/components/schemas/TaskRoutingModelMap" }
+        patternOverrides: { $ref: "#/components/schemas/TaskPatternOverrides" }
+        detectionEnabled: { type: boolean }
+        stats: { $ref: "#/components/schemas/TaskRoutingStats" }
+      additionalProperties: false
+
+    TaskRoutingActionRequest:
+      oneOf:
+        - type: object
+          required: [action]
+          properties:
+            action: { type: string, const: reset-stats }
+          additionalProperties: false
+        - type: object
+          required: [action]
+          properties:
+            action: { type: string, const: detect }
+            body: { type: object, additionalProperties: true }
+          additionalProperties: false
+      discriminator:
+        propertyName: action
+
+    TaskRoutingActionResponse:
+      oneOf:
+        - type: object
+          required: [success, stats]
+          properties:
+            success: { type: boolean, const: true }
+            stats: { $ref: "#/components/schemas/TaskRoutingStats" }
+          additionalProperties: false
+        - type: object
+          required: [taskType, preferredModel]
+          properties:
+            taskType: { $ref: "#/components/schemas/TaskRoutingTaskType" }
+            preferredModel: { type: string }
+          additionalProperties: false
 
     RestartResponse:
       type: object
