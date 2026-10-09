@@ -4886,25 +4886,70 @@ paths:
       operationId: getApiSettingsComboDefaults
       tags: [Settings]
       summary: Get combo default settings
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Default combo settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboDefaultsResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo defaults could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     patch:
       operationId: patchApiSettingsComboDefaults
       tags: [Settings]
       summary: Update combo default settings
+      description: >-
+        Partial update for global defaults and/or provider overrides. The body must contain at least
+        one of those fields. Numeric fields use Zod coercion (numeric strings are accepted and
+        normalized); `compositeTiers` is rejected here because it is supported only by concrete combos.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              additionalProperties: true
+              $ref: "#/components/schemas/ComboDefaultsUpdateRequest"
       responses:
         "200":
           description: Updated combo default settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComboDefaultsResponse" }
         "400":
           description: Invalid combo default settings
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Combo defaults update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/settings/proxy:
     get:
@@ -38406,8 +38451,39 @@ components:
       description: >-
         Runtime behavior settings for a combo. Known fields below cover retry, timeout, stickiness,
         compression, fallback, SLA, context filtering, and routing weights; this object is
-        passthrough in the source schema for forward-compatible config additions.
+        passthrough in the source schema for forward-compatible config additions. Numeric fields
+        marked/coerced by the validator also accept numeric-string inputs and are normalized to JSON
+        numbers before persistence/response.
       properties:
+        responseValidation:
+          type: object
+          properties:
+            forbiddenSubstrings:
+              type: array
+              maxItems: 50
+              items: { type: string, minLength: 1, maxLength: 500 }
+            requiredSubstrings:
+              type: array
+              maxItems: 50
+              items: { type: string, minLength: 1, maxLength: 500 }
+            minContentLength: { type: integer, minimum: 0, maximum: 1000000 }
+            jsonPathPredicates:
+              type: array
+              maxItems: 20
+              items:
+                type: object
+                required: [path, condition]
+                properties:
+                  path: { type: string, minLength: 1, maxLength: 300 }
+                  condition: { type: string, enum: [exists, nonEmpty, equals, notEquals] }
+                  value:
+                    anyOf:
+                      - type: string
+                        maxLength: 1000
+                      - type: number
+                      - type: boolean
+                additionalProperties: false
+          additionalProperties: false
         strategy:
           {
             type: string,
@@ -38437,13 +38513,30 @@ components:
           }
         maxRetries: { type: integer, minimum: 0, maximum: 10 }
         retryDelayMs: { type: integer, minimum: 0, maximum: 60000 }
+        fallbackDelayMs: { type: integer, minimum: 0, maximum: 60000 }
         timeoutMs: { type: integer, minimum: 1000 }
         targetTimeoutMs: { type: integer, minimum: 0, maximum: 600000 }
         concurrencyPerModel: { type: integer, minimum: 1, maximum: 20 }
         queueTimeoutMs: { type: integer, minimum: 1000, maximum: 120000 }
+        queueDepth: { type: integer, minimum: 0, maximum: 100 }
         disableSessionStickiness: { type: boolean }
+        stickyRoundRobinLimit: { type: integer, minimum: 0, maximum: 1000 }
+        stickyWeightedLimit: { type: integer, minimum: 0, maximum: 1000 }
+        healthCheckEnabled: { type: boolean }
+        healthCheckTimeoutMs: { type: integer, minimum: 100, maximum: 30000 }
+        handoffThreshold: { type: number, minimum: 0.5, maximum: 0.94 }
+        handoffModel: { type: string, maxLength: 200 }
+        handoffProviders:
+          type: array
+          maxItems: 10
+          items: { type: string, minLength: 1, maxLength: 100 }
+        maxMessagesForSummary: { type: integer, minimum: 5, maximum: 100 }
+        maxComboDepth: { type: integer, minimum: 1, maximum: 10 }
+        maxGlobalAttempts: { type: integer, minimum: 1, maximum: 200 }
         nestedComboMode: { type: string, enum: [flatten, execute] }
         trackMetrics: { type: boolean }
+        reasoningTokenBufferEnabled: { type: boolean }
+        reasoningTransportFallback: { type: string, enum: [skip, drop] }
         compressionMode:
           {
             type: string,
@@ -38451,6 +38544,8 @@ components:
               [off, lite, standard, aggressive, ultra, rtk, stacked, codex-responses, omniglyph],
           }
         failoverBeforeRetry: { type: boolean }
+        maxSetRetries: { type: integer, minimum: 0, maximum: 10 }
+        setRetryDelayMs: { type: integer, minimum: 0, maximum: 60000 }
         zeroLatencyOptimizationsEnabled: { type: boolean }
         hedging: { type: boolean }
         hedgeDelayMs: { type: integer, minimum: 0, maximum: 60000 }
@@ -38464,9 +38559,35 @@ components:
         predictiveTtftMs: { type: integer, minimum: 0, maximum: 300000 }
         relayMode: { type: string, enum: [schema-locked, standard] }
         candidatePool: { type: array, items: { type: string, minLength: 1 } }
-        weights: { type: object, additionalProperties: { type: number, minimum: 0, maximum: 1 } }
+        weights:
+          type: object
+          description: Known scoring factors; request validation requires the six base factors and normalizes optional factors, while older stored values may be sparse.
+          properties:
+            quota: { type: number, minimum: 0, maximum: 1 }
+            health: { type: number, minimum: 0, maximum: 1 }
+            costInv: { type: number, minimum: 0, maximum: 1 }
+            latencyInv: { type: number, minimum: 0, maximum: 1 }
+            taskFit: { type: number, minimum: 0, maximum: 1 }
+            stability: { type: number, minimum: 0, maximum: 1 }
+            tierPriority: { type: number, minimum: 0, maximum: 1, default: 0.05 }
+            tierAffinity: { type: number, minimum: 0, maximum: 1, default: 0.05 }
+            specificityMatch: { type: number, minimum: 0, maximum: 1, default: 0.05 }
+            contextAffinity: { type: number, minimum: 0, maximum: 1, default: 0.08 }
+            cacheAffinity: { type: number, minimum: 0, maximum: 1, default: 0 }
+            sessionAvailability: { type: number, minimum: 0, maximum: 1, default: 0.05 }
+            resetWindowAffinity: { type: number, minimum: 0, maximum: 1, default: 0 }
+            connectionDensity: { type: number, minimum: 0, maximum: 1, default: 0.0476 }
+            quality: { type: number, minimum: 0, maximum: 1, default: 0.03 }
+            reliability: { type: number, minimum: 0, maximum: 1, default: 0 }
+          additionalProperties: true
         budgetCap: { type: number, exclusiveMinimum: 0 }
         explorationRate: { type: number, minimum: 0, maximum: 1 }
+        modePack: { type: string, maxLength: 100 }
+        routerStrategy: { type: string }
+        slaTargetP95Ms: { type: integer, exclusiveMinimum: 0, maximum: 300000 }
+        slaMaxErrorRate: { type: number, minimum: 0, maximum: 1 }
+        slaMaxCostPer1MTokens: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
+        slaHardConstraints: { type: boolean }
         sla:
           type: object
           properties:
@@ -38474,6 +38595,75 @@ components:
             maxErrorRate: { type: number, minimum: 0, maximum: 1 }
             maxCostPer1MTokens: { type: number, exclusiveMinimum: 0, maximum: 1000000 }
             hardConstraints: { type: boolean }
+          additionalProperties: false
+        compositeTiers:
+          type: object
+          required: [defaultTier, tiers]
+          properties:
+            defaultTier: { type: string, minLength: 1, maxLength: 100 }
+            tiers:
+              type: object
+              propertyNames: { minLength: 1, maxLength: 100 }
+              additionalProperties:
+                type: object
+                required: [stepId]
+                properties:
+                  stepId: { type: string, minLength: 1, maxLength: 200 }
+                  fallbackTier: { type: string, minLength: 1, maxLength: 100 }
+                  label: { type: string, minLength: 1, maxLength: 200 }
+                  description: { type: string, minLength: 1, maxLength: 500 }
+                additionalProperties: false
+          additionalProperties: false
+        resetAwareSessionWeight: { type: number, minimum: 0, maximum: 100 }
+        resetAwareWeeklyWeight: { type: number, minimum: 0, maximum: 100 }
+        resetAwareTieBandPercent: { type: number, minimum: 0, maximum: 100 }
+        resetAwareExhaustionGuardPercent: { type: number, minimum: 0, maximum: 100 }
+        quotaWeightedFloorPercent: { type: number, minimum: 0, maximum: 100 }
+        resetAwareQuotaCacheTtlMs: { type: integer, minimum: 0, maximum: 300000 }
+        resetAwareQuotaCacheMaxStaleMs: { type: integer, minimum: 0, maximum: 3600000 }
+        resetWindowWindows:
+          type: array
+          items: { type: string, enum: [weekly, session, monthly] }
+        resetWindowIncludeSession: { type: boolean }
+        resetWindowTieBandMs: { type: integer, minimum: 0, maximum: 86400000 }
+        resetWindowQuotaCacheTtlMs: { type: integer, minimum: 0, maximum: 300000 }
+        resetWindowQuotaCacheMaxStaleMs: { type: integer, minimum: 0, maximum: 3600000 }
+        connectionAwareExpansion: { type: boolean }
+        connectionAwareExpansionMaxPerTarget: { type: integer, minimum: 1, maximum: 64 }
+        shadowRouting:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            targets:
+              type: array
+              maxItems: 20
+              items: { $ref: "#/components/schemas/ComboModelEntry" }
+            sampleRate: { type: number, minimum: 0, maximum: 1 }
+            maxTargets: { type: integer, minimum: 1, maximum: 10 }
+            timeoutMs: { type: integer, minimum: 1000, maximum: 120000 }
+          additionalProperties: false
+        evalRouting:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            suiteIds:
+              type: array
+              maxItems: 50
+              items: { type: string, minLength: 1, maxLength: 200 }
+            maxAgeHours: { type: number, minimum: 1, maximum: 8760 }
+            minCases: { type: integer, minimum: 1, maximum: 100000 }
+            qualityWeight: { type: number, minimum: 0, maximum: 1 }
+            latencyWeight: { type: number, minimum: 0, maximum: 1 }
+            cacheTtlMs: { type: integer, minimum: 1000, maximum: 300000 }
+          additionalProperties: false
+        judgeModel: { type: string, maxLength: 200 }
+        fusionTuning:
+          type: object
+          properties:
+            minPanel: { type: integer, minimum: 1, maximum: 50 }
+            stragglerGraceMs: { type: integer, minimum: 0, maximum: 120000 }
+            panelHardTimeoutMs: { type: integer, minimum: 1000, maximum: 600000 }
+            maxPanel: { type: integer, minimum: 1, maximum: 200 }
           additionalProperties: false
         contextRequirements:
           type: object
@@ -38483,7 +38673,44 @@ components:
             preferLargeContext: { type: boolean }
             contextFilterMode: { type: string, enum: [strict, lenient] }
           additionalProperties: false
+        modelSort:
+          type: object
+          required: [method]
+          properties:
+            method: { type: string, enum: [manual, provider, score, name] }
+          additionalProperties: true
       additionalProperties: true
+
+    ComboDefaultsResponse:
+      type: object
+      required: [comboDefaults, providerOverrides]
+      properties:
+        comboDefaults: { $ref: "#/components/schemas/ComboRuntimeConfig" }
+        providerOverrides:
+          type: object
+          propertyNames:
+            { minLength: 1, description: Provider IDs are trimmed and cannot be empty. }
+          additionalProperties: { $ref: "#/components/schemas/ComboRuntimeConfig" }
+      additionalProperties: false
+
+    ComboDefaultsUpdateRequest:
+      type: object
+      description: >-
+        Partial update. Supply `comboDefaults`, `providerOverrides`, or both. Runtime numeric fields
+        use Zod number coercion; numeric-string inputs are normalized to JSON numbers. Unknown
+        top-level keys are accepted but stripped by validation.
+      anyOf:
+        - required: [comboDefaults]
+        - required: [providerOverrides]
+      properties:
+        comboDefaults: { $ref: "#/components/schemas/ComboRuntimeConfig" }
+        providerOverrides:
+          type: object
+          propertyNames:
+            { minLength: 1, description: Provider IDs are trimmed and cannot be empty. }
+          additionalProperties: { $ref: "#/components/schemas/ComboRuntimeConfig" }
+      additionalProperties: true
+
     ComboRecord:
       type: object
       required: [id, name, models]
