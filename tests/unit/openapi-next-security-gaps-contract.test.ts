@@ -71,6 +71,21 @@ const operations = [
   ["post", "/api/mcp/stream"],
   ["get", "/api/memory/rerank-providers"],
   ["delete", "/api/middleware/hooks/{name}"],
+  ["get", "/api/middleware/hooks/{name}"],
+  ["put", "/api/middleware/hooks/{name}"],
+  ["get", "/api/models"],
+  ["put", "/api/models"],
+  ["get", "/api/models/alias"],
+  ["put", "/api/models/alias"],
+  ["delete", "/api/models/alias"],
+  ["get", "/api/models/catalog"],
+  ["delete", "/api/monitoring/health"],
+  ["get", "/api/network/info"],
+  ["post", "/api/omniroute/route/preview"],
+  ["get", "/api/omniroute/status"],
+  ["post", "/api/playground/simulate-route"],
+  ["get", "/api/pricing/models"],
+  ["get", "/api/provider-metrics"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -85,7 +100,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 59 effective OpenAPI operations", () => {
+test("the audited batches declare all 74 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -176,6 +191,109 @@ test("rerank-provider auth documents the central/handler intersection", () => {
   assert.match(rerank.description, /central.*MANAGEMENT.*handler.*isAuthenticated/s);
   assert.match(rerank.description, /`oma_`.*loopback CLI.*internal-service/i);
   assert.equal(rerank.responses["200"]["x-sensitive"], true);
+});
+
+test("model endpoints document their distinct central and delegated auth policies", () => {
+  for (const [method, route, scope] of [
+    ["get", "/api/models", "read"],
+    ["put", "/api/models", "write"],
+    ["get", "/api/models/alias", "read"],
+    ["put", "/api/models/alias", "write"],
+    ["delete", "/api/models/alias", "write"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.match(routeOperation.description, new RegExp(`method-derived.*${scope}.*scope`, "i"));
+    assert.match(routeOperation.description, /requireLogin.*anonymous requests/i);
+    assert.equal(routeOperation.responses["401"] !== undefined, true);
+    assert.equal(routeOperation.responses["403"] !== undefined, true);
+    assert.equal(routeOperation.responses["503"] !== undefined, true);
+  }
+  const catalog = operation("get", "/api/models/catalog");
+  assert.ok(hasScheme(catalog.security, "ManagementApiKeyBearerAuth"));
+  assert.ok(hasScheme(catalog.security, "ManagementSessionAuth"));
+  assert.ok(catalog.security.some((alternative: object) => Object.keys(alternative).length === 0));
+  assert.ok(!hasScheme(catalog.security, "BearerAuth"));
+  assert.ok(!hasScheme(catalog.security, "LocalCliTokenAuth"));
+  assert.ok(!hasScheme(catalog.security, "InternalServiceTokenAuth"));
+  assert.match(catalog.description, /delegated catalog handler.*`requireAuthForModels`/);
+  assert.match(catalog.description, /`oma_`.*loopback CLI.*internal-service.*401/);
+  assert.equal(catalog.responses["200"]["x-sensitive"], true);
+});
+
+test("middleware hook reads and updates preserve the LOCAL_ONLY boundary and mark code/logs sensitive", () => {
+  for (const [method, scope] of [["get", "read"], ["put", "write"]] as const) {
+    const routeOperation = operation(method, "/api/middleware/hooks/{name}");
+    assert.equal(routeOperation["x-local-only"], true);
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.match(routeOperation.description, /middleware code.*executed on the request path/i);
+    assert.match(routeOperation.description, /default bypass list is only `\/api\/mcp\//i);
+    assert.match(routeOperation.description, new RegExp(`method-derived.*${scope}.*scope`, "i"));
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+  assert.equal(operation("put", "/api/middleware/hooks/{name}").requestBody["x-sensitive"], true);
+});
+
+test("monitoring reset and network information preserve the isAuthenticated intersection", () => {
+  const healthGet = operation("get", "/api/monitoring/health");
+  assert.ok(hasScheme(healthGet.security, "BearerAuth"));
+  assert.ok(healthGet.security.some((alternative: object) => Object.keys(alternative).length === 0));
+  assert.match(healthGet.description, /Anonymous callers.*public liveness view/s);
+
+  const reset = operation("delete", "/api/monitoring/health");
+  assert.ok(hasScheme(reset.security, "ManagementApiKeyBearerAuth"));
+  assert.ok(hasScheme(reset.security, "ManagementGoogleApiKeyAuth"));
+  assert.ok(hasScheme(reset.security, "ManagementAnthropicApiKeyAuth"));
+  assert.ok(hasScheme(reset.security, "ManagementSessionAuth"));
+  assert.ok(reset.security.some((alternative: object) => Object.keys(alternative).length === 0));
+  assert.ok(!hasScheme(reset.security, "BearerAuth"));
+  assert.ok(!hasScheme(reset.security, "LocalCliTokenAuth"));
+  assert.match(reset.description, /`isAuthenticated\(\)`.*central management gate/s);
+  assert.match(reset.description, /`oma_`.*machine\/internal credentials.*401/);
+  assert.equal(reset.responses["200"]["x-sensitive"], true);
+  assert.ok(reset.responses["403"]);
+  assert.ok(reset.responses["503"]);
+
+  const network = operation("get", "/api/network/info");
+  assert.ok(hasScheme(network.security, "ManagementApiKeyBearerAuth"));
+  assert.ok(hasScheme(network.security, "ManagementGoogleApiKeyAuth"));
+  assert.ok(hasScheme(network.security, "ManagementAnthropicApiKeyAuth"));
+  assert.ok(hasScheme(network.security, "ManagementSessionAuth"));
+  assert.ok(network.security.some((alternative: object) => Object.keys(alternative).length === 0));
+  assert.ok(!hasScheme(network.security, "BearerAuth"));
+  assert.ok(!hasScheme(network.security, "LocalCliTokenAuth"));
+  assert.match(network.description, /central management gate.*`isAuthenticated\(\)`/s);
+  assert.match(network.description, /network topology.*sensitive/i);
+  assert.equal(network.responses["200"]["x-sensitive"], true);
+  assert.ok(network.responses["403"]);
+  assert.ok(network.responses["503"]);
+});
+
+test("routing preview/status, playground, pricing, and provider metrics mark operational data sensitive", () => {
+  for (const [method, route, scope] of [
+    ["post", "/api/omniroute/route/preview", "write"],
+    ["get", "/api/omniroute/status", "read"],
+    ["post", "/api/playground/simulate-route", "write"],
+    ["get", "/api/pricing/models", "read"],
+    ["get", "/api/provider-metrics", "read"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.match(routeOperation.description, /requireLogin.*anonymous requests/i);
+    assert.match(routeOperation.description, new RegExp(`method-derived.*${scope}.*scope`, "i"));
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+  assert.equal(operation("post", "/api/omniroute/route/preview").requestBody["x-sensitive"], true);
+  assert.equal(operation("post", "/api/playground/simulate-route").requestBody["x-sensitive"], true);
+  assert.match(operation("post", "/api/omniroute/route/preview").description, /without making an upstream model request/i);
+  assert.match(operation("post", "/api/playground/simulate-route").description, /does not execute an upstream request/i);
 });
 
 test("job history and MCP operational outputs are sensitive", () => {

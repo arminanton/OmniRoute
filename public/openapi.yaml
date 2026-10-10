@@ -2579,17 +2579,48 @@ paths:
       operationId: getApiModels
       tags: [Models]
       summary: List models (management)
+      description: >-
+        Lists configured/active model IDs and aliases; `all=true` also includes models for inactive
+        providers. This management route uses method-derived `read` scope for `oma_` access tokens.
+        Management auth is conditional on local `requireLogin`; when disabled, anonymous requests
+        are admitted by the central management gate, including remote requests. The model/provider
+        inventory and aliases are operational configuration and are treated as sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Internal model list with aliases
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ManagementModelListResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     put:
       operationId: putApiModels
       tags: [Models]
       summary: Set a model alias
+      description: >-
+        Creates or replaces a model alias. This management route uses method-derived `write` scope
+        for `oma_` access tokens. Management auth is conditional on local `requireLogin`; when
+        disabled, anonymous requests are admitted by the central management gate, including remote
+        requests.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -2604,18 +2635,36 @@ paths:
       responses:
         "200":
           description: Model alias saved
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelAliasMutationResponse"
         "400":
           description: Invalid model or alias
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/models/alias:
     get:
       operationId: getApiModelsAlias
       tags: [Models]
       summary: List or resolve model aliases
+      description: >-
+        Lists aliases or resolves the supplied alias and returns catalog metadata/diagnostic headers.
+        This route calls `requireManagementAuth`; method-derived `read` scope applies to `oma_`
+        access tokens. On local profiles with `requireLogin=false`, anonymous requests are admitted
+        by that helper, including remote requests. Alias targets and resolved provider/model
+        metadata are sensitive operational configuration.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: alias
           in: query
@@ -2623,16 +2672,33 @@ paths:
       responses:
         "200":
           description: Alias map or resolution for the requested alias
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelAliasLookupResponse"
         "400":
           description: Alias could not be resolved
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     put:
       operationId: putApiModelsAlias
       tags: [Models]
       summary: Create or update a model alias
+      description: >-
+        Creates or updates an alias and attempts cloud synchronization when cloud sync is enabled.
+        This route calls `requireManagementAuth`; method-derived `write` scope applies to `oma_`
+        access tokens. On local profiles with `requireLogin=false`, anonymous requests are admitted
+        by that helper, including remote requests.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -2646,16 +2712,33 @@ paths:
       responses:
         "200":
           description: Alias created/updated
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelAliasMutationResponse"
         "400":
           description: Model or alias is invalid
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     delete:
       operationId: deleteApiModelsAlias
       tags: [Models]
       summary: Delete a model alias
+      description: >-
+        Deletes the requested alias and attempts cloud synchronization when cloud sync is enabled.
+        This route calls `requireManagementAuth`; method-derived `write` scope applies to `oma_`
+        access tokens. On local profiles with `requireLogin=false`, anonymous requests are admitted
+        by that helper, including remote requests.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: alias
           in: query
@@ -2664,25 +2747,53 @@ paths:
       responses:
         "200":
           description: Alias deleted
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelAliasDeleteResponse"
         "400":
           description: Alias query parameter is required
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/models/catalog:
     get:
       operationId: getApiModelsCatalog
       tags: [Models]
       summary: Get full model catalog
+      description: >-
+        Returns the unified provider/model catalog. The central route guard applies management
+        authentication; the delegated catalog handler also applies `requireAuthForModels` when
+        client API authentication is required. In that branch it accepts a valid client API key
+        (Bearer, Anthropic `x-api-key`, or Google `x-goog-api-key`) or dashboard session. Consequently, a centrally
+        accepted `oma_` access token, loopback CLI token, or internal-service token can still receive
+        401 when `requireAuthForModels` is enabled. With `requireLogin=false`, the central gate
+        admits anonymous access. If `requireAuthForModels=false`, only the additional catalog-key
+        check is disabled; any enabled central management requirement still applies. This route is
+        otherwise not explicitly public.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Complete catalog with all providers
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/GroupedModelCatalogResponse"
+        "401":
+          description: Central management auth or the delegated `requireAuthForModels` client-key/session check rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   # ─── Management Endpoints ──────────────────────────────────────
 
@@ -7071,13 +7182,29 @@ paths:
         Returns the model catalog grouped by provider. Each provider entry combines registry,
         synchronized, custom, and pricing-only model IDs; pricing values themselves remain in the
         separate pricing settings response.
+        Management auth is enforced by the central management gate when local `requireLogin` is
+        enabled, with method-derived `read` scope for `oma_` access tokens. If `requireLogin=false`,
+        that gate permits anonymous requests, including remote requests. Provider/model inventory
+        is sensitive operational metadata.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Model catalog grouped by provider
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/PricingModelCatalogResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
         "500":
           description: Model catalog could not be fetched
           content:
@@ -12518,14 +12645,31 @@ paths:
       operationId: deleteApiMonitoringHealth
       tags: [System]
       summary: Reset provider circuit breakers
-      description: Requires authentication and resets every provider circuit breaker to its healthy state.
+      description: >-
+        Resets every provider circuit breaker to its healthy state, clearing failure counts and
+        persisted state. The route uses `isAuthenticated()` after the central management gate:
+        when local login is enabled it accepts a management-scoped Bearer/Google/Anthropic API key
+        or dashboard session,
+        but scoped `oma_` access tokens and machine/internal credentials accepted by the central
+        gate can still fail the handler check with 401. When `requireLogin=false`, the handler admits
+        anonymous requests, including remote requests. This mutation affects provider resilience
+        state and its result is sensitive operational telemetry.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Circuit breakers reset
+          x-sensitive: true
         "401":
           description: Authentication required
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500":
           description: Circuit breaker reset failed
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/monitoring/compression:
     get:
@@ -16906,6 +17050,8 @@ paths:
         management credentials do not bypass that peer boundary.
       security:
         - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       x-local-only: true
@@ -25060,19 +25206,154 @@ paths:
       tags:
         - Middleware
       summary: "GET middleware › hooks › <name>"
+      description: >-
+        Reads the stored hook configuration and, with `logs=true`, recent execution logs. Middleware
+        code is executed on the request path, so this route is `LOCAL_ONLY` by default. Locked local
+        peers require management auth; `requireLogin=false` permits anonymous local/LAN access.
+        Scoped `oma_` access tokens use method-derived `read` scope for GET. Remote peers are
+        rejected by default; an operator may explicitly add this eligible prefix to the live
+        manage-scope bypass settings, which then accepts a management API key or dashboard session.
+        The default bypass list is only `/api/mcp/`. Hook code, configuration, and logs are
+        sensitive operational data.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security: [{ }]
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with an explicitly configured manage-scope bypass for this eligible prefix
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - ManagementSessionAuth: []
+          note: The default bypass allowlist is only `/api/mcp/`; remote access is not enabled for middleware by default.
+        - when: Remote peer without an explicitly configured manage-scope bypass
+          note: Rejected by the LOCAL_ONLY peer gate before ordinary management authentication.
       responses:
         "200":
-          description: OK
+          description: Hook configuration and optional execution logs.
+          x-sensitive: true
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "404":
+          description: Hook was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Hook details or execution logs could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     put:
       operationId: putApiMiddlewareHooksByName
       tags:
         - Middleware
       summary: "PUT middleware › hooks › <name>"
+      description: >-
+        Updates hook metadata, scope, enabled state, or code. Supplied code is persisted and
+        re-registered in the live middleware registry. Middleware code is executed on the request
+        path, so this route is `LOCAL_ONLY` by default. Locked local peers require management auth;
+        `requireLogin=false` permits anonymous local/LAN access. Scoped `oma_` access tokens use
+        method-derived `write` scope for PUT. Remote peers are rejected by default; an operator may
+        explicitly add this eligible prefix to the live manage-scope bypass settings, which then
+        accepts a management API key or dashboard session. The default bypass list is only
+        `/api/mcp/`. Hook code and configuration are sensitive operational data.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security: [{ }]
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with an explicitly configured manage-scope bypass for this eligible prefix
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - ManagementSessionAuth: []
+          note: The default bypass allowlist is only `/api/mcp/`; remote access is not enabled for middleware by default.
+        - when: Remote peer without an explicitly configured manage-scope bypass
+          note: Rejected by the LOCAL_ONLY peer gate before ordinary management authentication.
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description: { type: string }
+                priority: { type: integer }
+                scope:
+                  oneOf:
+                    - type: object
+                      required: [type]
+                      properties: { type: { const: global } }
+                    - type: object
+                      required: [type, comboId]
+                      properties:
+                        type: { const: combo }
+                        comboId: { type: string, minLength: 1 }
+                enabled: { type: boolean }
+                code: { type: string }
+              anyOf:
+                - required: [description]
+                - required: [priority]
+                - required: [scope]
+                - required: [enabled]
+                - required: [code]
       responses:
         "200":
-          description: OK
+          description: Updated hook; code changes are immediately re-registered.
+          x-sensitive: true
+        "400":
+          description: No valid hook update fields were supplied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "404":
+          description: Hook was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Hook persistence or registration failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/model-capability-overrides:
     delete:
       operationId: deleteApiModelCapabilityOverrides
@@ -25536,9 +25817,24 @@ paths:
       tags:
         - Network
       summary: "GET network › info"
+      description: >-
+        Returns local, LAN, and detected Tailscale API base URLs. The central management gate runs
+        before the handler's `isAuthenticated()` check. With login enabled, the handler accepts a
+        management Bearer/Google API key, an Anthropic `x-api-key` with the matching Anthropic
+        header/User-Agent, or dashboard session; central-only `oma_`, loopback CLI, and
+        internal-service credentials may pass the outer gate but still receive 401 here. With
+        `requireLogin=false`, anonymous requests are admitted, including remote requests. Network
+        topology and reachable endpoint URLs are sensitive.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Local, LAN, and detected Tailscale base URLs for the OpenAI-compatible API.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/NetworkInfoResponse" }
@@ -25547,6 +25843,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/oauth/{provider}/paste-credentials:
     parameters:
       - name: provider
@@ -25809,18 +26107,83 @@ paths:
       tags:
         - Omniroute
       summary: "POST omniroute › route › preview"
+      description: >-
+        Deterministically ranks the caller-supplied routing candidates without making an upstream
+        model request. This management route uses method-derived `write` scope for `oma_` access
+        tokens. Management authentication is conditional on local `requireLogin`; when disabled,
+        anonymous requests are admitted by the central management gate, including remote requests.
+        Candidate providers/models, health and circuit state, quota state, error rates, latency, and
+        cost preferences are sensitive routing telemetry.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [candidates]
+              properties:
+                candidates:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    required: [providerId, modelId, capabilityScore, allocation, healthScore, circuit, quota]
+                    properties:
+                      providerId: { type: string, minLength: 1 }
+                      modelId: { type: string, minLength: 1 }
+                      capabilityScore: { type: number, minimum: 0, maximum: 1 }
+                      allocation: { type: string, enum: [allow, warn, deny] }
+                      healthScore: { type: number, minimum: 0, maximum: 1 }
+                      circuit: { type: string, enum: [closed, open, half_open] }
+                      quota: { type: string, enum: [healthy, approaching_limit, exhausted, unavailable, unknown] }
+                      latencyMs: { type: number, minimum: 0 }
+                      errorRate: { type: number, minimum: 0, maximum: 1 }
+                      modelPreference: { type: number, minimum: 0, maximum: 1 }
+                      costPreference: { type: number, minimum: 0, maximum: 1 }
       responses:
         "200":
-          description: OK
+          description: Ranked candidate preview; no live request was executed.
+          x-sensitive: true
+        "400":
+          description: Candidate payload failed validation.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/omniroute/status:
     get:
       operationId: getApiOmnirouteStatus
       tags:
         - Omniroute
       summary: "GET omniroute › status"
+      description: >-
+        Returns a read-only operational snapshot and never performs an upstream model request.
+        This management route uses method-derived `read` scope for `oma_` access tokens.
+        Management authentication is conditional on local `requireLogin`; when disabled, anonymous
+        requests are admitted by the central management gate, including remote requests. Provider
+        connectivity, breaker/quota state, routing candidates, cost and latency telemetry in this
+        response are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Sanitized status snapshot; does not execute a live model request.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OmniRouteStatusResponse" }
@@ -25841,9 +26204,62 @@ paths:
       tags:
         - Playground
       summary: "POST playground › simulate route"
+      description: >-
+        Simulates combo routing from a saved combo or inline configuration and reports candidate
+        order and estimated cost/latency; it does not execute an upstream request. The route has no
+        handler-level auth and relies on the central management gate, with method-derived `write`
+        scope for `oma_` access tokens. When local `requireLogin=false`, anonymous requests are
+        admitted, including remote requests. Combo configuration, provider/model choices, quota and
+        cost/latency estimates are sensitive routing data.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comboId: { type: string, minLength: 1 }
+                combo:
+                  type: object
+                  required: [name, strategy, targets]
+                  properties:
+                    name: { type: string, minLength: 1 }
+                    strategy: { type: string, minLength: 1 }
+                    targets:
+                      type: array
+                      minItems: 1
+                      items:
+                        type: object
+                        required: [provider, model]
+                        properties:
+                          provider: { type: string, minLength: 1 }
+                          model: { type: string, minLength: 1 }
+                          weight: { type: number }
+                promptTokens: { type: integer, minimum: 1 }
+                taskType: { type: string }
+              oneOf:
+                - required: [comboId]
+                  not: { required: [combo] }
+                - required: [combo]
+                  not: { required: [comboId] }
       responses:
         "200":
-          description: OK
+          description: Simulated target order and estimated outcome; no upstream model request was executed.
+          x-sensitive: true
+        "400":
+          description: Request must contain exactly one of `comboId` or `combo`, with a valid configuration.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/plugins:
     get:
       operationId: getApiPlugins
@@ -26308,13 +26724,29 @@ paths:
       description: >-
         Per-provider counts and latest request/error status from retained call logs. Providers with
         no current connection are omitted; nullable latency, timestamp, and status fields are
-        returned as `null` when the source data is unavailable.
+        returned as `null` when the source data is unavailable. This route has no handler-level
+        auth and relies on the central management gate, with method-derived `read` scope for `oma_`
+        access tokens. When local `requireLogin=false`, anonymous requests are admitted, including
+        remote requests. Provider topology, request/error counts, status codes, timing, and activity
+        timestamps are sensitive telemetry.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Provider metrics and latest-provider topology.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProviderMetricsResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/provider-stats:
     get:
       operationId: getApiProviderStats
