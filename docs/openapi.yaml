@@ -2532,12 +2532,17 @@ paths:
       tags: [Models]
       summary: List available models
       description: >-
-        Returns all models available across configured providers. Authentication follows
-        `requireAuthForModels`: when false, the request may be anonymous; when enabled,
-        a valid Bearer API key or authenticated dashboard session is required. A supplied
-        invalid API key is rejected even when anonymous access is enabled.
+        Returns all models available across configured providers. The central CLIENT_API policy
+        requires a valid client API credential (`Authorization: Bearer`, `x-api-key`, or
+        `x-goog-api-key`) or dashboard session when `REQUIRE_API_KEY` is enabled. Separately, the
+        model-catalog handler requires a valid client credential or dashboard session when
+        `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false. Anonymous
+        access is possible only when both applicable gates are open; an invalid supplied API key can
+        still be rejected by the model-catalog gate.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       responses:
@@ -18188,6 +18193,44 @@ paths:
   # are parsed from each route.ts's exports; summaries are path-derived.
   # Regenerate with: node scripts/ad-hoc/gen-openapi-missing-paths.mjs --apply
   /api/{omnirouteApiCatchAll}:
+    description: >-
+      This Next.js catch-all runs only when no more-specific `/api/*` route matches. Its handler has no
+      route-level auth and returns a JSON 404 that echoes the requested pathname; it performs no
+      lookup or mutation. The central proxy still classifies the actual path and method first, so
+      authentication is not uniform across this placeholder: explicit PUBLIC exact/prefix paths can
+      reach the 404 anonymously; MANAGEMENT paths follow management login/locked-mode rules and
+      `requireLogin=false` may allow anonymous access except for ALWAYS_PROTECTED paths, while
+      first-run setup can permit anonymous loopback requests; and
+      LOCAL_ONLY prefixes can reject remote peers before the 404. Only the eligible configured local
+      manage-scope bypass applies remotely (default `/api/mcp/`); mutating method scope for `oma_`
+      tokens is inferred from the actual path/method, not this placeholder.
+    x-authentication-branches:
+      - when: The unmatched actual path and method classify as PUBLIC
+        security: [{}]
+        result: The fallback emits a JSON 404; no route data is returned.
+      - when: The actual path is MANAGEMENT, auth is unlocked, and the path is not ALWAYS_PROTECTED or LOCAL_ONLY
+        security: [{}]
+        note: "`requireLogin=false` can permit anonymous requests, including remote requests."
+      - when: The actual path is MANAGEMENT and auth is required or the path is ALWAYS_PROTECTED
+        security:
+          - BearerAuth: []
+          - ManagementGoogleApiKeyAuth: []
+          - ManagementAnthropicApiKeyAuth: []
+          - ManagementSessionAuth: []
+          - LocalCliTokenAuth: []
+          - InternalServiceTokenAuth: []
+        note: >-
+          `oma_` scope is inferred from the real path and method (normally read for GET/HEAD and
+          write for mutations); a matching ALWAYS_PROTECTED endpoint may impose a stricter scope.
+      - when: A remote peer reaches a LOCAL_ONLY prefix without its eligible configured bypass
+        result: Rejected with 403 before the fallback handler runs.
+      - when: "A remote peer reaches the eligible `/api/mcp/` local-only bypass with accepted credentials"
+        security:
+          - McpConnectApiKeyBearerAuth: []
+          - McpConnectGoogleApiKeyAuth: []
+          - McpConnectAnthropicApiKeyAuth: []
+          - ManagementSessionAuth: []
+        note: The bypass is settings-controlled and is not available to spawn-capable paths.
     parameters:
       - name: omnirouteApiCatchAll
         in: path
@@ -18198,64 +18241,176 @@ paths:
       operationId: headApiByOmnirouteApiCatchAll
       tags: [OmnirouteApiCatchAll]
       summary: Return the catch-all API not-found response for HEAD
+      description: >-
+        Returns the fallback 404 only after the central proxy evaluates the actual path and method;
+        unmatched MANAGEMENT paths can permit anonymous requests when `requireLogin=false`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - {}
       responses:
         "404":
           description: No matching API route exists
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     delete:
       operationId: deleteApiByOmnirouteApiCatchAll
       tags:
         - OmnirouteApiCatchAll
       summary: "DELETE <omnirouteApiCatchAll>"
+      description: >-
+        The auth-free fallback emits JSON 404 only; the proxy evaluates the actual unmatched path and
+        method first. On ordinary MANAGEMENT paths `requireLogin=false` may allow anonymous access;
+        ALWAYS_PROTECTED or LOCAL_ONLY paths retain their stronger central gates.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - {}
       responses:
         "404":
           description: Unknown API route; the handler returns a JSON not-found body.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     get:
       operationId: getApiByOmnirouteApiCatchAll
       tags:
         - OmnirouteApiCatchAll
       summary: "GET <omnirouteApiCatchAll>"
+      description: >-
+        The auth-free fallback emits JSON 404 only; the proxy evaluates the actual unmatched path and
+        method first. On ordinary MANAGEMENT paths `requireLogin=false` may allow anonymous access;
+        ALWAYS_PROTECTED or LOCAL_ONLY paths retain their stronger central gates.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - {}
       responses:
         "404":
           description: Unknown API route; the handler returns a JSON not-found body.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     patch:
       operationId: patchApiByOmnirouteApiCatchAll
       tags:
         - OmnirouteApiCatchAll
       summary: "PATCH <omnirouteApiCatchAll>"
+      description: >-
+        The auth-free fallback emits JSON 404 only; the proxy evaluates the actual unmatched path and
+        method first. On ordinary MANAGEMENT paths `requireLogin=false` may allow anonymous access;
+        ALWAYS_PROTECTED or LOCAL_ONLY paths retain their stronger central gates.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - {}
       responses:
         "404":
           description: Unknown API route; the handler returns a JSON not-found body.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiByOmnirouteApiCatchAll
       tags:
         - OmnirouteApiCatchAll
       summary: "POST <omnirouteApiCatchAll>"
+      description: >-
+        The auth-free fallback emits JSON 404 only; the proxy evaluates the actual unmatched path and
+        method first. On ordinary MANAGEMENT paths `requireLogin=false` may allow anonymous access;
+        ALWAYS_PROTECTED or LOCAL_ONLY paths retain their stronger central gates.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - {}
       responses:
         "404":
           description: Unknown API route; the handler returns a JSON not-found body.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     put:
       operationId: putApiByOmnirouteApiCatchAll
       tags:
         - OmnirouteApiCatchAll
       summary: "PUT <omnirouteApiCatchAll>"
+      description: >-
+        The auth-free fallback emits JSON 404 only; the proxy evaluates the actual unmatched path and
+        method first. On ordinary MANAGEMENT paths `requireLogin=false` may allow anonymous access;
+        ALWAYS_PROTECTED or LOCAL_ONLY paths retain their stronger central gates.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - {}
       responses:
         "404":
           description: Unknown API route; the handler returns a JSON not-found body.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/a2a/status:
     get:
       operationId: getApiA2aStatus
@@ -39562,74 +39717,197 @@ paths:
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/v1/{omnirouteCatchAll}:
+    description: >-
+      This Next.js catch-all runs only when no more-specific `/api/v1/*` route matches. Its handler has
+      no route-level auth and returns a JSON 404 that echoes the requested pathname; it performs no
+      model/provider lookup or mutation. The central route classifier always treats `/api/v1/*` as
+      CLIENT_API before consulting the broader public-prefix table. The `REQUIRE_API_KEY` client policy
+      accepts a valid API key or dashboard session when enabled, and permits anonymous access when
+      disabled. A VS Code path-scoped API key is also recognized on matching tokenized paths; path
+      tokens are credentials and can leak through URL logging.
+    x-authentication-branches:
+      - when: REQUIRE_API_KEY is enabled and the path reaches this versioned catch-all
+        security:
+          - BearerAuth: []
+          - ClientApiKeyAuth: []
+          - GoogleApiKeyAuth: []
+          - ManagementSessionAuth: []
+        note: The path-scoped VS Code API key parser is also accepted for matching VS Code URL shapes.
+      - when: REQUIRE_API_KEY is disabled
+        security: [{}]
+        note: Invalid supplied API keys degrade to anonymous access while the key requirement is disabled.
     parameters:
       - name: omnirouteCatchAll
         in: path
         required: true
+        x-sensitive: true
         schema:
           type: string
+        description: >-
+          Unmatched versioned path suffix; may include a VS Code path-scoped API key segment. Treat as
+          sensitive when it contains such a credential.
     head:
       operationId: headApiV1ByOmnirouteCatchAll
       tags: [V1 OmnirouteCatchAll]
       summary: Return the versioned API not-found response for HEAD
+      description: >-
+        Returns the fallback 404 only after the central CLIENT_API policy evaluates this unknown path;
+        anonymous requests pass only when `REQUIRE_API_KEY` is disabled.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "404":
           description: No matching versioned API route exists
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     delete:
       operationId: deleteApiV1ByOmnirouteCatchAll
       tags:
         - V1 OmnirouteCatchAll
       summary: Return JSON not-found for an unknown versioned API route
+      description: >-
+        The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is
+        conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials
+        degrade to anonymous only in that disabled configuration.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "404":
           description: Unknown versioned API route.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     get:
       operationId: getApiV1ByOmnirouteCatchAll
       tags:
         - V1 OmnirouteCatchAll
       summary: Return JSON not-found for an unknown versioned API route
+      description: >-
+        The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is
+        conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials
+        degrade to anonymous only in that disabled configuration.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "404":
           description: Unknown versioned API route.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     patch:
       operationId: patchApiV1ByOmnirouteCatchAll
       tags:
         - V1 OmnirouteCatchAll
       summary: Return JSON not-found for an unknown versioned API route
+      description: >-
+        The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is
+        conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials
+        degrade to anonymous only in that disabled configuration.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "404":
           description: Unknown versioned API route.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: postApiV1ByOmnirouteCatchAll
       tags:
         - V1 OmnirouteCatchAll
       summary: Return JSON not-found for an unknown versioned API route
+      description: >-
+        The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is
+        conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials
+        degrade to anonymous only in that disabled configuration.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "404":
           description: Unknown versioned API route.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     put:
       operationId: putApiV1ByOmnirouteCatchAll
       tags:
         - V1 OmnirouteCatchAll
       summary: Return JSON not-found for an unknown versioned API route
+      description: >-
+        The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is
+        conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials
+        degrade to anonymous only in that disabled configuration.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "404":
           description: Unknown versioned API route.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/V1UnknownRouteResponse" }
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/v1/accounts/{id}/limits:
     parameters:
       - name: id
@@ -42527,14 +42805,27 @@ paths:
       - name: token
         in: path
         required: true
+        x-sensitive: true
         schema:
           type: string
-        description: Path segment required by the route; this static version handler does not read it or authenticate it.
+        description: >-
+          VS Code path-scoped API key. The version route handler does not read it, but the central
+          CLIENT_API policy extracts and validates it when `REQUIRE_API_KEY` is enabled; treat the URL
+          value as a credential.
     get:
       operationId: getApiV1VscodeByTokenApiVersion
       tags: [V1 Vscode]
       summary: Return the Ollama compatibility version
-      description: Returns the static Ollama-compatible version and does not use the path token for authentication.
+      description: >-
+        Returns the static Ollama-compatible version. The handler performs no auth check, but central
+        CLIENT_API policy uses the path token as a client API key when `REQUIRE_API_KEY` is enabled;
+        when disabled, anonymous access is permitted and the token is ignored by the handler.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Ollama compatibility version.
@@ -42542,6 +42833,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VscodeOllamaVersionResponse"
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/v1/vscode/{token}/chat/completions:
     parameters:
       - name: token
@@ -42615,19 +42912,33 @@ paths:
       - name: token
         in: path
         required: true
+        x-sensitive: true
         schema:
           type: string
-        description: Path segment required by the route; this combo-list handler does not use it for authentication.
+        description: >-
+          VS Code path-scoped API key. The combo-list handler does not read it, but the central
+          CLIENT_API policy extracts and validates it when `REQUIRE_API_KEY` is enabled; treat the URL
+          value as a credential.
     get:
       operationId: getApiV1VscodeByTokenCombos
       tags: [V1 Vscode]
       summary: List combos for VS Code import
       description: >-
-        Returns the projected combo list in both `data` and the compatibility `combos`
-        property. This handler reads the combo store directly and does not use the path token.
+        Returns the projected combo list in both `data` and the compatibility `combos` property. This
+        handler reads the combo store directly and does not independently authenticate the path token;
+        central CLIENT_API policy does validate it when `REQUIRE_API_KEY` is enabled, and anonymous
+        access is allowed when that policy is disabled. The projection omits internal account IDs,
+        weights, and routing labels.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Combo list with resolved public capabilities.
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -42637,6 +42948,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/v1/vscode/{token}/models:
     parameters:
       - name: token
@@ -42835,18 +43152,35 @@ paths:
       - name: token
         in: path
         required: true
+        x-sensitive: true
         schema:
           type: string
-        description: VS Code client API token carried in the path; treat this value as a credential.
+        description: >-
+          VS Code client API token carried in the path. The handler forwards it as an API-key
+          credential to the shared model-catalog auth check when explicit credential headers are
+          absent. Treat this URL value as secret; URLs can be recorded in access/proxy logs.
     get:
       operationId: getApiV1VscodeCombosByToken
       tags:
         - V1 Vscode
       summary: List combo models in VS Code catalog format
-      description: Returns the combo-only catalog with OpenAI-compatible list metadata.
+      description: >-
+        Returns the combo-only catalog with OpenAI-compatible list metadata. The central CLIENT_API
+        policy validates client credentials when `REQUIRE_API_KEY` is enabled; the handler also
+        applies the shared model-catalog gate when `isAuthRequired()` is true and
+        `requireAuthForModels` is not explicitly false. The path token is copied to an API-key header
+        for that handler check when no explicit credential is supplied. Anonymous access is possible
+        only when both applicable gates are open. No `oma_` management-token scope is consumed.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Combo model catalog
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -42857,6 +43191,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          description: Client API key or model-catalog authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: postApiV1VscodeCombosByToken
       tags:

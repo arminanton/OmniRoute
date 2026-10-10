@@ -175,6 +175,22 @@ const operations = [
   ["head", "/api/v1/models/{model}"],
   ["get", "/api/v1/provider-plugin-manifest"],
   ["get", "/api/v1/search"],
+  ["delete", "/api/{omnirouteApiCatchAll}"],
+  ["get", "/api/{omnirouteApiCatchAll}"],
+  ["head", "/api/{omnirouteApiCatchAll}"],
+  ["patch", "/api/{omnirouteApiCatchAll}"],
+  ["post", "/api/{omnirouteApiCatchAll}"],
+  ["put", "/api/{omnirouteApiCatchAll}"],
+  ["delete", "/api/v1/{omnirouteCatchAll}"],
+  ["get", "/api/v1/{omnirouteCatchAll}"],
+  ["head", "/api/v1/{omnirouteCatchAll}"],
+  ["patch", "/api/v1/{omnirouteCatchAll}"],
+  ["post", "/api/v1/{omnirouteCatchAll}"],
+  ["put", "/api/v1/{omnirouteCatchAll}"],
+  ["get", "/api/v1/vscode/{token}/api/version"],
+  ["get", "/api/v1/vscode/{token}/combos"],
+  ["get", "/api/v1/vscode/combos/{token}"],
+  ["get", "/api/v1/models"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -189,7 +205,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 178 effective OpenAPI operations", () => {
+test("the audited batches declare all 194 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -1242,4 +1258,86 @@ test("remaining v1 catalog and search reads use conditional CLIENT_API authentic
   assert.match(operation("get", "/api/v1/provider-plugin-manifest").description, /service-backend model IDs and capabilities.*no provider credentials/i);
   assert.match(operation("get", "/api/v1/provider-plugin-manifest").description, /publicly cacheable for 60 seconds/i);
   assert.match(operation("get", "/api/v1/search").description, /no credentials are returned/i);
+
+  const modelList = operation("get", "/api/v1/models");
+  assert.ok(hasScheme(modelList.security, "ClientApiKeyAuth"));
+  assert.ok(hasScheme(modelList.security, "GoogleApiKeyAuth"));
+  assert.match(modelList.description, /`x-api-key`.*`x-goog-api-key`/s);
+});
+
+test("generic API catchalls document their path-dependent central authorization before JSON 404", () => {
+  const pathItem = spec.paths["/api/{omnirouteApiCatchAll}"];
+  assert.match(pathItem.description, /only when no more-specific.*route matches/i);
+  assert.match(pathItem.description, /PUBLIC.*MANAGEMENT.*ALWAYS_PROTECTED.*LOCAL_ONLY/s);
+  assert.match(pathItem.description, /does not override.*central|central.*actual path and method/i);
+  assert.deepEqual(pathItem["x-authentication-branches"].map((branch: any) => branch.when), [
+    "The unmatched actual path and method classify as PUBLIC",
+    "The actual path is MANAGEMENT, auth is unlocked, and the path is not ALWAYS_PROTECTED or LOCAL_ONLY",
+    "The actual path is MANAGEMENT and auth is required or the path is ALWAYS_PROTECTED",
+    "A remote peer reaches a LOCAL_ONLY prefix without its eligible configured bypass",
+    "A remote peer reaches the eligible `/api/mcp/` local-only bypass with accepted credentials",
+  ]);
+  assert.ok(hasScheme(pathItem["x-authentication-branches"][4].security, "ManagementSessionAuth"));
+  for (const method of ["delete", "get", "head", "patch", "post", "put"] as const) {
+    const routeOperation = operation(method, "/api/{omnirouteApiCatchAll}");
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(hasScheme(routeOperation.security, "LocalCliTokenAuth"));
+    assert.ok(hasScheme(routeOperation.security, "InternalServiceTokenAuth"));
+    assert.ok(hasScheme(routeOperation.security, "McpConnectApiKeyBearerAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+    if (method !== "head") assert.equal(routeOperation.responses["404"]["x-sensitive"], true);
+  }
+});
+
+test("generic v1 catchalls are conditional CLIENT_API 404s and flag echoed token-bearing paths", () => {
+  const pathItem = spec.paths["/api/v1/{omnirouteCatchAll}"];
+  assert.match(pathItem.description, /only when no more-specific.*route matches/i);
+  assert.match(pathItem.description, /CLIENT_API.*REQUIRE_API_KEY/);
+  assert.match(pathItem.description, /path-scoped API key.*URL logging/i);
+  assert.deepEqual(pathItem["x-authentication-branches"].map((branch: any) => branch.when), [
+    "REQUIRE_API_KEY is enabled and the path reaches this versioned catch-all",
+    "REQUIRE_API_KEY is disabled",
+  ]);
+  assert.equal(pathItem.parameters[0]["x-sensitive"], true);
+  for (const method of ["delete", "get", "head", "patch", "post", "put"] as const) {
+    const routeOperation = operation(method, "/api/v1/{omnirouteCatchAll}");
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ClientApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "GoogleApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(!hasScheme(routeOperation.security, "LocalCliTokenAuth"));
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["503"]);
+    if (method !== "head") assert.equal(routeOperation.responses["404"]["x-sensitive"], true);
+  }
+});
+
+test("VS Code tokenized endpoints distinguish central token validation from handler behavior", () => {
+  for (const route of [
+    "/api/v1/vscode/{token}/api/version",
+    "/api/v1/vscode/{token}/combos",
+    "/api/v1/vscode/combos/{token}",
+  ]) {
+    const routeOperation = operation("get", route);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ClientApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "GoogleApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["503"]);
+    const token = spec.paths[route].parameters.find((parameter: any) => parameter.name === "token");
+    assert.equal(token["x-sensitive"], true);
+  }
+  assert.match(operation("get", "/api/v1/vscode/{token}/api/version").description, /handler performs no auth.*central CLIENT_API.*uses the path token/i);
+  assert.match(operation("get", "/api/v1/vscode/{token}/combos").description, /does not independently authenticate.*central CLIENT_API/i);
+  assert.match(operation("get", "/api/v1/vscode/{token}/combos").description, /omits internal account IDs.*weights.*routing labels/i);
+  const tokenizedCatalog = operation("get", "/api/v1/vscode/combos/{token}");
+  assert.match(tokenizedCatalog.description, /model-catalog gate.*path token is copied to an API-key header/i);
+  assert.equal(tokenizedCatalog.responses["200"]["x-sensitive"], true);
 });

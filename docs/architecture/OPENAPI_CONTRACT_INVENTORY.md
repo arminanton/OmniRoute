@@ -42,15 +42,15 @@ The candidate denominator excludes HEAD/OPTIONS, operations whose only success i
 
 ## Security declarations
 
-- Operation-level declarations: 1005
+- Operation-level declarations: 1020
 - Inherited declarations: path=0, root=0
-- Missing effective declarations: 24
+- Missing effective declarations: 9
 - Invalid declarations: 0
 - Explicitly public (security: []): 17
 - Nonempty declarations requiring a named scheme: 156
-- Nonempty declarations including an anonymous empty-object alternative: 832
-- Conditional-auth language detected in operation text: 475
-- Conditional-auth language with an effective security declaration: 475
+- Nonempty declarations including an anonymous empty-object alternative: 847
+- Conditional-auth language detected in operation text: 490
+- Conditional-auth language with an effective security declaration: 490
 - Conditional-auth language with no effective security declaration: 0
 
 A missing security declaration is reported as undocumented, not presumed public. The conditional-auth detector is a review aid based on operation text, not an authorization evaluator. Complete missing-declaration candidates are included in the command's `--json` output.
