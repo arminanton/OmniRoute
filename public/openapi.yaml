@@ -50926,7 +50926,33 @@ components:
       additionalProperties: true
     AuthenticatedSystemHealthResponse:
       type: object
-      required: [status, timestamp, system, chatAdmission, callLogArtifacts]
+      required:
+        - status
+        - timestamp
+        - system
+        - version
+        - uptime
+        - memoryUsage
+        - activeConnections
+        - circuitBreakers
+        - providerBreakers
+        - providerHealth
+        - connectionHealth
+        - codexAccountPools
+        - providerSummary
+        - localProviders
+        - rateLimitStatus
+        - learnedLimits
+        - lockouts
+        - quotaMonitor
+        - sessions
+        - adaptiveAdmission
+        - chatAdmission
+        - walMaintenance
+        - callLogArtifacts
+        - dedup
+        - cryptography
+        - setupComplete
       properties:
         status: { type: string, const: healthy }
         timestamp: { type: string, format: date-time }
@@ -50935,36 +50961,62 @@ components:
           required: [version, nodeVersion, uptime, memoryUsage, resourcePressure, pid, platform]
           properties:
             version: { type: string }
-            buildSha: { type: string }
+            buildSha:
+              type: string
+              description: Running artifact commit SHA; omitted when it cannot be determined.
             nodeVersion: { type: string }
             uptime: { type: number, minimum: 0 }
             pid: { type: integer, minimum: 1 }
             platform: { type: string }
-            memoryUsage:
-              type: object
-              required: [rss, heapTotal, heapUsed, external, arrayBuffers]
-              properties:
-                rss: { type: number, minimum: 0 }
-                heapTotal: { type: number, minimum: 0 }
-                heapUsed: { type: number, minimum: 0 }
-                external: { type: number, minimum: 0 }
-                arrayBuffers: { type: number, minimum: 0 }
-              additionalProperties: true
-            resourcePressure:
-              $ref: "#/components/schemas/RuntimeMemoryPressureSnapshot"
-          additionalProperties: true
+            memoryUsage: { $ref: "#/components/schemas/NodeMemoryUsage" }
+            resourcePressure: { $ref: "#/components/schemas/RuntimeMemoryPressureSnapshot" }
+          additionalProperties: false
         version: { type: string }
         uptime: { type: number, minimum: 0 }
-        memoryUsage:
+        memoryUsage: { $ref: "#/components/schemas/NodeMemoryUsage" }
+        activeConnections: { type: integer, minimum: 0 }
+        circuitBreakers:
           type: object
-          required: [rss, heapTotal, heapUsed, external, arrayBuffers]
+          required: [open, halfOpen, degraded, closed, total]
           properties:
-            rss: { type: number, minimum: 0 }
-            heapTotal: { type: number, minimum: 0 }
-            heapUsed: { type: number, minimum: 0 }
-            external: { type: number, minimum: 0 }
-            arrayBuffers: { type: number, minimum: 0 }
-          additionalProperties: true
+            open: { type: integer, minimum: 0 }
+            halfOpen: { type: integer, minimum: 0 }
+            degraded: { type: integer, minimum: 0 }
+            closed: { type: integer, minimum: 0 }
+            total: { type: integer, minimum: 0 }
+          additionalProperties: false
+        providerBreakers:
+          type: array
+          items: { $ref: "#/components/schemas/MonitoringProviderBreaker" }
+        providerHealth:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/MonitoringProviderHealth" }
+        connectionHealth:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/MonitoringConnectionHealth" }
+        codexAccountPools: { $ref: "#/components/schemas/MonitoringCodexAccountPools" }
+        providerSummary: { $ref: "#/components/schemas/MonitoringProviderSummary" }
+        localProviders:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/MonitoringLocalProviderHealth" }
+        rateLimitStatus:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/MonitoringRateLimitStatus" }
+        learnedLimits:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/MonitoringLearnedLimit" }
+        lockouts:
+          type: array
+          items: { $ref: "#/components/schemas/MonitoringModelLockout" }
+        quotaMonitor: { $ref: "#/components/schemas/MonitoringQuotaSummary" }
+        sessions: { $ref: "#/components/schemas/MonitoringSessionSummary" }
+        credentialHealth:
+          description: Cached provider credential-health summary; omitted if that subsystem is unavailable.
+          $ref: "#/components/schemas/MonitoringCredentialHealth"
+        adaptiveAdmission:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/AdaptiveAdmissionHealthSummary"
         chatAdmission:
           description: >-
             Process-local structural and ingest-byte admission gauges. `waiting` counts structural
@@ -50980,7 +51032,14 @@ components:
           oneOf:
             - type: "null"
             - $ref: "#/components/schemas/CallLogArtifactWriterSnapshot"
-      additionalProperties: true
+        walMaintenance:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/MonitoringWalMaintenance"
+        dedup: { $ref: "#/components/schemas/MonitoringDedupSummary" }
+        cryptography: { $ref: "#/components/schemas/MonitoringCryptographySummary" }
+        setupComplete: { type: boolean }
+      additionalProperties: false
     ChatAdmissionHealthSummary:
       type: object
       required:
@@ -51036,17 +51095,391 @@ components:
       type: object
       required: [status]
       properties:
-        status: { type: string }
+        status: { type: string, enum: [healthy, degraded, unknown] }
         setupComplete: { type: boolean }
       additionalProperties: false
     DegradedHealthResponse:
       type: object
-      required: [status, timestamp, error]
+      description: Management-authenticated degraded health details after a full-payload failure.
+      required:
+        - status
+        - timestamp
+        - error
+        - providerBreakers
+        - providerHealth
+        - rateLimitStatus
+        - learnedLimits
+        - lockouts
+        - quotaMonitor
+        - sessions
+        - adaptiveAdmission
+        - chatAdmission
+        - callLogArtifacts
+        - dedup
       properties:
         status: { type: string, const: degraded }
         timestamp: { type: string, format: date-time }
         error: { type: string }
-      additionalProperties: true
+        providerBreakers:
+          type: array
+          items: { $ref: "#/components/schemas/MonitoringProviderBreaker" }
+        providerHealth:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/MonitoringProviderHealth" }
+        rateLimitStatus:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/MonitoringRateLimitStatus" }
+        learnedLimits:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/MonitoringLearnedLimit" }
+        lockouts:
+          type: array
+          items: { $ref: "#/components/schemas/MonitoringModelLockout" }
+        quotaMonitor: { $ref: "#/components/schemas/MonitoringQuotaSummary" }
+        sessions: { $ref: "#/components/schemas/MonitoringSessionSummary" }
+        adaptiveAdmission:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/AdaptiveAdmissionHealthSummary"
+        chatAdmission:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/ChatAdmissionHealthSummary"
+        callLogArtifacts:
+          oneOf:
+            - type: "null"
+            - $ref: "#/components/schemas/CallLogArtifactWriterSnapshot"
+        dedup: { $ref: "#/components/schemas/MonitoringDedupSummary" }
+      additionalProperties: false
+    NodeMemoryUsage:
+      type: object
+      required: [rss, heapTotal, heapUsed, external, arrayBuffers]
+      properties:
+        rss: { type: integer, minimum: 0, description: Resident set size in bytes. }
+        heapTotal: { type: integer, minimum: 0, description: V8 heap capacity in bytes. }
+        heapUsed: { type: integer, minimum: 0, description: V8 heap currently used in bytes. }
+        external:
+          { type: integer, minimum: 0, description: Native memory associated with JavaScript objects in bytes. }
+        arrayBuffers:
+          { type: integer, minimum: 0, description: ArrayBuffer and SharedArrayBuffer memory in bytes. }
+      additionalProperties: false
+    MonitoringProviderBreaker:
+      type: object
+      required: [provider, state, failureCount, lastFailure, retryAfterMs]
+      properties:
+        provider: { type: string }
+        state: { type: string }
+        failureCount: { type: integer, minimum: 0 }
+        lastFailure: { type: [string, "null"] }
+        retryAfterMs: { type: number, minimum: 0 }
+      additionalProperties: false
+    MonitoringProviderHealth:
+      type: object
+      required: [state, failures, lastFailure, retryAfterMs]
+      properties:
+        state: { type: string }
+        failures: { type: integer, minimum: 0 }
+        lastFailure: { type: [string, "null"] }
+        retryAfterMs: { type: number, minimum: 0 }
+      additionalProperties: false
+    MonitoringConnectionHealth:
+      type: object
+      required: [coolingDown, total, soonestRetryAfterMs]
+      properties:
+        coolingDown: { type: integer, minimum: 1 }
+        total: { type: integer, minimum: 0 }
+        soonestRetryAfterMs: { type: number, minimum: 0 }
+      additionalProperties: false
+    MonitoringCodexAccountPools:
+      type: object
+      required: [total, available, partiallyLimited, fullyLimited, quotaObserved, soonestRetryAfterMs]
+      properties:
+        total: { type: integer, minimum: 0 }
+        available: { type: integer, minimum: 0 }
+        partiallyLimited: { type: integer, minimum: 0 }
+        fullyLimited: { type: integer, minimum: 0 }
+        quotaObserved: { type: integer, minimum: 0 }
+        soonestRetryAfterMs: { type: number, minimum: 0 }
+      additionalProperties: false
+    MonitoringProviderSummary:
+      type: object
+      required: [catalogCount, configuredCount, activeCount, monitoredCount]
+      properties:
+        catalogCount: { type: integer, minimum: 0 }
+        configuredCount: { type: integer, minimum: 0 }
+        activeCount: { type: integer, minimum: 0 }
+        monitoredCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+    MonitoringLocalProviderHealth:
+      type: object
+      required: [nodeId, prefix, isHealthy, lastCheck, consecutiveFailures]
+      properties:
+        nodeId: { type: string }
+        prefix: { type: string }
+        isHealthy: { type: boolean }
+        lastCheck: { type: string, format: date-time }
+        lastError: { type: string }
+        consecutiveFailures: { type: integer, minimum: 0 }
+        responseTimeMs: { type: number, minimum: 0 }
+      additionalProperties: false
+    MonitoringRateLimitStatus:
+      type: object
+      required: [queued, running, executing]
+      properties:
+        queued: { type: integer, minimum: 0 }
+        running: { type: integer, minimum: 0 }
+        executing: { type: integer, minimum: 0 }
+      additionalProperties: false
+    MonitoringLearnedLimit:
+      type: object
+      required: [provider, connectionId, lastUpdated]
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        lastUpdated: { type: number, minimum: 0 }
+        limit: { type: number, minimum: 0 }
+        remaining: { type: number, minimum: 0 }
+        minTime: { type: number, minimum: 0 }
+      additionalProperties: false
+    MonitoringModelLockout:
+      type: object
+      required:
+        - provider
+        - connectionId
+        - model
+        - reason
+        - remainingMs
+        - failureCount
+        - lockedAt
+        - until
+      properties:
+        provider: { type: string }
+        connectionId: { type: string }
+        model: { type: string }
+        reason: { type: string }
+        remainingMs: { type: number, minimum: 0 }
+        failureCount: { type: integer, minimum: 0 }
+        lockedAt: { type: string, format: date-time }
+        until: { type: number, minimum: 0 }
+      additionalProperties: false
+    MonitoringQuotaStatusCounts:
+      type: object
+      required: [starting, idle, healthy, warning, exhausted, error]
+      properties:
+        starting: { type: integer, minimum: 0 }
+        idle: { type: integer, minimum: 0 }
+        healthy: { type: integer, minimum: 0 }
+        warning: { type: integer, minimum: 0 }
+        exhausted: { type: integer, minimum: 0 }
+        error: { type: integer, minimum: 0 }
+      additionalProperties: false
+    MonitoringQuotaSession:
+      type: object
+      required:
+        - sessionId
+        - provider
+        - accountId
+        - status
+        - startedAt
+        - lastPolledAt
+        - lastSuccessAt
+        - lastErrorAt
+        - lastError
+        - lastQuotaPercent
+        - lastQuotaUsed
+        - lastQuotaTotal
+        - lastResetAt
+        - lastAlertAt
+        - nextPollDelayMs
+        - nextPollAt
+        - totalPolls
+        - totalAlerts
+        - consecutiveFailures
+      properties:
+        sessionId: { type: string }
+        provider: { type: string }
+        accountId: { type: string }
+        status: { type: string, enum: [starting, idle, healthy, warning, exhausted, error] }
+        startedAt: { type: string, format: date-time }
+        lastPolledAt: { type: [string, "null"], format: date-time }
+        lastSuccessAt: { type: [string, "null"], format: date-time }
+        lastErrorAt: { type: [string, "null"], format: date-time }
+        lastError: { type: [string, "null"] }
+        lastQuotaPercent: { type: [number, "null"] }
+        lastQuotaUsed: { type: [number, "null"], minimum: 0 }
+        lastQuotaTotal: { type: [number, "null"], minimum: 0 }
+        lastResetAt: { type: [string, "null"] }
+        lastAlertAt: { type: [string, "null"], format: date-time }
+        nextPollDelayMs: { type: [number, "null"], minimum: 0 }
+        nextPollAt: { type: [string, "null"], format: date-time }
+        totalPolls: { type: integer, minimum: 0 }
+        totalAlerts: { type: integer, minimum: 0 }
+        consecutiveFailures: { type: integer, minimum: 0 }
+      additionalProperties: false
+    MonitoringQuotaSummary:
+      type: object
+      required: [active, alerting, exhausted, errors, statusCounts, byProvider, monitors]
+      properties:
+        active: { type: integer, minimum: 0 }
+        alerting: { type: integer, minimum: 0 }
+        exhausted: { type: integer, minimum: 0 }
+        errors: { type: integer, minimum: 0 }
+        statusCounts: { $ref: "#/components/schemas/MonitoringQuotaStatusCounts" }
+        byProvider:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        monitors:
+          type: array
+          maxItems: 8
+          items: { $ref: "#/components/schemas/MonitoringQuotaSession" }
+      additionalProperties: false
+    MonitoringSessionItem:
+      type: object
+      required: [sessionId, requestCount, connectionId, ageMs, idleMs, createdAt, lastActiveAt]
+      properties:
+        sessionId: { type: string }
+        requestCount: { type: integer, minimum: 0 }
+        connectionId: { type: [string, "null"] }
+        ageMs: { type: number, minimum: 0 }
+        idleMs: { type: number, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        lastActiveAt: { type: string, format: date-time }
+      additionalProperties: false
+    MonitoringSessionSummary:
+      type: object
+      required: [activeCount, stickyBoundCount, byApiKey, top]
+      properties:
+        activeCount: { type: integer, minimum: 0 }
+        stickyBoundCount: { type: integer, minimum: 0 }
+        byApiKey:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        top:
+          type: array
+          maxItems: 8
+          items: { $ref: "#/components/schemas/MonitoringSessionItem" }
+      additionalProperties: false
+    MonitoringCredentialHealth:
+      type: object
+      required: [total, healthy, failed, unknown, stale]
+      properties:
+        total: { type: integer, minimum: 0 }
+        healthy: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        unknown: { type: integer, minimum: 0 }
+        stale: { type: integer, minimum: 0 }
+      additionalProperties: false
+    AdaptiveAdmissionHealthSummary:
+      type: object
+      required:
+        - mode
+        - currentLimit
+        - minLimit
+        - maxLimit
+        - activeCost
+        - activeCount
+        - queuedCost
+        - queuedCount
+        - virtualActiveCost
+        - virtualActiveCount
+        - virtualQueuedCost
+        - virtualQueuedCount
+        - virtualLanes
+        - laneCount
+        - laneQueuedCost
+        - laneQueuedCount
+        - laneTenants
+        - admittedCount
+        - rejectedCount
+        - wouldAdmitCount
+        - wouldQueueCount
+        - wouldRejectCount
+        - shortLatencyEwma
+        - longLatencyEwma
+        - utilization
+        - pressure
+        - shutdown
+        - resourceSeverity
+        - resourceReason
+        - resourceObservedAtMs
+        - pressureGuardRejectCount
+      properties:
+        mode: { type: string, enum: [off, shadow, enforce] }
+        currentLimit: { type: number, minimum: 0 }
+        minLimit: { type: number, minimum: 0 }
+        maxLimit: { type: number, minimum: 0 }
+        activeCost: { type: number, minimum: 0 }
+        activeCount: { type: integer, minimum: 0 }
+        queuedCost: { type: number, minimum: 0 }
+        queuedCount: { type: integer, minimum: 0 }
+        virtualActiveCost: { type: number, minimum: 0 }
+        virtualActiveCount: { type: integer, minimum: 0 }
+        virtualQueuedCost: { type: number, minimum: 0 }
+        virtualQueuedCount: { type: integer, minimum: 0 }
+        virtualLanes: { type: boolean }
+        laneCount: { type: integer, minimum: 0 }
+        laneQueuedCost: { type: number, minimum: 0 }
+        laneQueuedCount: { type: integer, minimum: 0 }
+        laneTenants:
+          type: array
+          items:
+            type: object
+            required: [tenantKey, queuedCount, queuedCost]
+            properties:
+              tenantKey:
+                type: string
+                description: Opaque fairness key; never a raw API key.
+              queuedCount: { type: integer, minimum: 0 }
+              queuedCost: { type: number, minimum: 0 }
+            additionalProperties: false
+        admittedCount: { type: integer, minimum: 0 }
+        rejectedCount: { type: integer, minimum: 0 }
+        wouldAdmitCount: { type: integer, minimum: 0 }
+        wouldQueueCount: { type: integer, minimum: 0 }
+        wouldRejectCount: { type: integer, minimum: 0 }
+        shortLatencyEwma: { type: number, minimum: 0 }
+        longLatencyEwma: { type: number, minimum: 0 }
+        utilization: { type: number, minimum: 0 }
+        pressure: { type: string, enum: [normal, high, critical] }
+        shutdown: { type: boolean }
+        resourceSeverity: { type: string, enum: [normal, high, critical] }
+        resourceReason:
+          type: string
+          enum:
+            - none
+            - v8_heap_ratio
+            - v8_heap_absolute
+            - cgroup_ratio
+            - cgroup_high
+            - psi_some
+            - psi_full
+            - oom_event
+        resourceObservedAtMs: { type: number, minimum: 0 }
+        pressureGuardRejectCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+    MonitoringWalMaintenance:
+      type: object
+      required: [ticks, busyStreak, busyTotal, lastBusyAt, lastOkAt]
+      properties:
+        ticks: { type: integer, minimum: 0 }
+        busyStreak: { type: integer, minimum: 0 }
+        busyTotal: { type: integer, minimum: 0 }
+        lastBusyAt: { type: [string, "null"], format: date-time }
+        lastOkAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+    MonitoringDedupSummary:
+      type: object
+      required: [inflightRequests]
+      properties:
+        inflightRequests: { type: integer, minimum: 0 }
+      additionalProperties: false
+    MonitoringCryptographySummary:
+      type: object
+      required: [status, provider]
+      properties:
+        status: { type: string, enum: [healthy, missing_or_invalid] }
+        provider: { type: string, const: aes-256-gcm }
+      additionalProperties: false
     CallLogArtifactWriterSnapshot:
       type: object
       description: >-

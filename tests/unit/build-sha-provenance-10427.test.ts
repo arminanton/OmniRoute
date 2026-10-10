@@ -106,7 +106,7 @@ function healthOptions(buildSha?: string) {
     circuitBreakers: [],
     rateLimitStatus: {},
     learnedLimits: {},
-    lockouts: {},
+    lockouts: [],
     localProviders: {},
     inflightRequests: 0,
     quotaMonitorSummary: {},

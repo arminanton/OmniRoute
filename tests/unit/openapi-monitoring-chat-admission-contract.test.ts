@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { parse } from "yaml";
+import { buildHealthPayload } from "../../src/lib/monitoring/observability.ts";
 
 const ROOT = process.cwd();
 const spec = parse(fs.readFileSync(path.join(ROOT, "docs/openapi.yaml"), "utf8")) as any;
@@ -79,4 +80,98 @@ test("authenticated monitoring health specifies separate ingest-byte queue gauge
 
 test("monitoring health OpenAPI contract mirrors the public artifact", () => {
   assert.deepEqual(publicSpec, spec, "public OpenAPI artifact must mirror canonical docs");
+});
+
+test("health contract separates public degraded liveness from management diagnostics", () => {
+  const publicHealth = spec.components.schemas.PublicHealthResponse;
+  assert.deepEqual(publicHealth.properties.status.enum, ["healthy", "degraded", "unknown"]);
+  assert.equal(publicHealth.additionalProperties, false);
+
+  const degraded = spec.components.schemas.DegradedHealthResponse;
+  assert.equal(degraded.additionalProperties, false);
+  assert.match(degraded.description, /management-authenticated/i);
+  for (const field of [
+    "providerBreakers",
+    "providerHealth",
+    "rateLimitStatus",
+    "learnedLimits",
+    "lockouts",
+    "quotaMonitor",
+    "sessions",
+    "adaptiveAdmission",
+    "chatAdmission",
+    "callLogArtifacts",
+    "dedup",
+  ]) {
+    assert.ok(degraded.required.includes(field), `degraded management response omits ${field}`);
+    assert.ok(degraded.properties[field], `degraded management response does not declare ${field}`);
+  }
+});
+
+test("authenticated health schema declares every serialized implementation field", () => {
+  const payload = JSON.parse(
+    JSON.stringify(
+      buildHealthPayload({
+        appVersion: "test",
+        buildSha: "0123456789abcdef0123456789abcdef01234567",
+        catalogCount: 1,
+        settings: { setupComplete: true },
+        connections: [],
+        circuitBreakers: [],
+        rateLimitStatus: {},
+        learnedLimits: {},
+        lockouts: [],
+        localProviders: {},
+        inflightRequests: 0,
+        quotaMonitorSummary: {
+          active: 0,
+          alerting: 0,
+          exhausted: 0,
+          errors: 0,
+          statusCounts: {
+            starting: 0,
+            idle: 0,
+            healthy: 0,
+            warning: 0,
+            exhausted: 0,
+            error: 0,
+          },
+          byProvider: {},
+        },
+        quotaMonitorMonitors: [],
+        activeSessions: [],
+        activeSessionsByKey: {},
+        credentialHealth: { total: 0, healthy: 0, failed: 0, unknown: 0, stale: 0 },
+      })
+    )
+  ) as Record<string, unknown>;
+
+  const schema = spec.components.schemas.AuthenticatedSystemHealthResponse;
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(
+    Object.keys(payload).sort(),
+    Object.keys(schema.properties).sort(),
+    "the authenticated health schema must enumerate the complete serialized payload"
+  );
+
+  const system = payload.system as Record<string, unknown>;
+  const systemSchema = schema.properties.system;
+  assert.equal(systemSchema.additionalProperties, false);
+  assert.deepEqual(Object.keys(system).sort(), Object.keys(systemSchema.properties).sort());
+
+  const pressureSchema = spec.components.schemas.RuntimeMemoryPressureSnapshot;
+  assert.deepEqual(pressureSchema.required, [
+    "heapPressureThresholdMb",
+    "psiSource",
+    "state",
+    "sampleAgeMs",
+    "signals",
+  ]);
+  assert.deepEqual(Object.keys(pressureSchema.properties).sort(), [
+    "heapPressureThresholdMb",
+    "psiSource",
+    "sampleAgeMs",
+    "signals",
+    "state",
+  ]);
 });

@@ -198,7 +198,7 @@ test("buildHealthPayload reports Codex persisted parents through aggregate child
     circuitBreakers: [],
     rateLimitStatus: {},
     learnedLimits: {},
-    lockouts: {},
+    lockouts: [],
     localProviders: {},
     inflightRequests: 0,
     quotaMonitorSummary: {
@@ -248,7 +248,7 @@ test("buildHealthPayload keeps legacy aliases and adds session/quota observabili
       { name: "test-ignore", state: "OPEN", failureCount: 9, lastFailureTime: null },
     ],
     rateLimitStatus: { codex: { blocked: 1 } },
-    lockouts: { codex: { "conn-1": { until: "2026-04-12T13:00:00Z" } } },
+    lockouts: [],
     localProviders: { ollama: { ok: true } },
     inflightRequests: 4,
     quotaMonitorSummary: {
@@ -363,7 +363,7 @@ test("buildHealthPayload projects allowlisted adaptiveAdmission aggregates only"
     circuitBreakers: [],
     rateLimitStatus: {},
     learnedLimits: {},
-    lockouts: {},
+    lockouts: [],
     localProviders: {},
     inflightRequests: 0,
     quotaMonitorSummary: {
@@ -460,7 +460,7 @@ test("buildHealthPayload projects allowlisted structural chatAdmission fields on
     circuitBreakers: [],
     rateLimitStatus: {},
     learnedLimits: {},
-    lockouts: {},
+    lockouts: [],
     localProviders: {},
     inflightRequests: 0,
     quotaMonitorSummary: {
@@ -577,7 +577,7 @@ test("buildHealthPayload projects call-log writer metrics as an additive health 
     circuitBreakers: [],
     rateLimitStatus: {},
     learnedLimits: {},
-    lockouts: {},
+    lockouts: [],
     localProviders: {},
     inflightRequests: 0,
     quotaMonitorSummary: {
@@ -634,7 +634,7 @@ test("buildHealthPayload projects allowlisted walMaintenance fields only", () =>
     circuitBreakers: [],
     rateLimitStatus: {},
     learnedLimits: {},
-    lockouts: {},
+    lockouts: [],
     localProviders: {},
     inflightRequests: 0,
     quotaMonitorSummary: {

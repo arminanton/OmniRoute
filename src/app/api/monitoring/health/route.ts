@@ -23,12 +23,23 @@ import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 let healthPayloadCache: { payload: unknown; expiresAt: number } | null = null;
 let healthPayloadRefreshInFlight = false;
 let healthPayloadCacheGeneration = 0;
+let healthPayloadBuilderForTests: (() => Promise<unknown>) | null = null;
 const HEALTH_PAYLOAD_TTL_MS = 1000;
 
 /** Test-only: drop the in-process health payload cache. */
 export function __test_resetMonitoringHealthPayloadCache(): void {
   healthPayloadCache = null;
   healthPayloadRefreshInFlight = false;
+  healthPayloadCacheGeneration += 1;
+  healthPayloadBuilderForTests = null;
+}
+
+/** Test-only: inject a payload failure to exercise the health fallback boundary. */
+export function __test_setMonitoringHealthPayloadBuilder(
+  builder: (() => Promise<unknown>) | null
+): void {
+  healthPayloadBuilderForTests = builder;
+  healthPayloadCache = null;
   healthPayloadCacheGeneration += 1;
 }
 
@@ -76,11 +87,11 @@ export async function GET(request: Request) {
   }
 
   try {
-    const payload = await rebuildHealthPayload();
+    const payload = await (healthPayloadBuilderForTests ?? rebuildHealthPayload)();
     return serveHealthPayload(fullView, payload);
   } catch (error) {
     console.error("[API] GET /api/monitoring/health error:", error);
-    return NextResponse.json({
+    const degradedPayload = {
       status: "degraded",
       error: "Health check partially unavailable",
       timestamp: new Date().toISOString(),
@@ -103,7 +114,8 @@ export async function GET(request: Request) {
       chatAdmission: null,
       callLogArtifacts: null,
       dedup: { inflightRequests: 0 },
-    });
+    };
+    return serveHealthPayload(fullView, degradedPayload);
   }
 }
 

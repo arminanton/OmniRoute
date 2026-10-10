@@ -18,6 +18,8 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const core = await import("../../src/lib/db/core.ts");
 const route = await import("../../src/app/api/monitoring/health/route.ts");
 
+test.afterEach(() => route.__test_resetMonitoringHealthPayloadCache());
+
 test.after(() => {
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -33,6 +35,38 @@ test("anonymous health GET is reduced to liveness only (GHSA-mvf8)", async () =>
   for (const k of keys) {
     assert.ok(allowed.has(k), `anonymous health view leaked field: ${k}`);
   }
+});
+
+test("anonymous degraded health GET remains liveness-only when payload construction fails", async () => {
+  route.__test_setMonitoringHealthPayloadBuilder(async () => {
+    throw new Error("synthetic health payload failure");
+  });
+
+  const res = await route.GET(new Request("http://localhost/api/monitoring/health") as never);
+  const body = (await res.json()) as Record<string, unknown>;
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(body, { status: "degraded" });
+});
+
+test("management caller receives degraded health details after payload construction fails", async () => {
+  route.__test_setMonitoringHealthPayloadBuilder(async () => {
+    throw new Error("synthetic health payload failure");
+  });
+  const sessionReq = (await makeManagementSessionRequest(
+    "http://localhost/api/monitoring/health"
+  )) as unknown as NextRequest;
+
+  const res = await route.GET(sessionReq as never);
+  const body = (await res.json()) as Record<string, unknown>;
+
+  assert.equal(res.status, 200);
+  assert.equal(body.status, "degraded");
+  assert.ok(Array.isArray(body.providerBreakers));
+  assert.ok(body.quotaMonitor && typeof body.quotaMonitor === "object");
+  assert.ok(body.sessions && typeof body.sessions === "object");
+  assert.ok(body.chatAdmission === null);
+  assert.ok(body.callLogArtifacts === null);
 });
 
 test("management session sees the full health payload", async () => {
