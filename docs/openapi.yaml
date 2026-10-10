@@ -29569,12 +29569,24 @@ paths:
         "200":
           description: Candidate proxy reachability, latency, and aggregate success counts.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyFallbackTestResponse" }
         "400":
           description: Invalid request or a private/local target or proxy URL was blocked.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500":
           description: Proxy candidates could not be tested.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/quota/groups:
     get:
@@ -29839,12 +29851,24 @@ paths:
           headers:
             Cache-Control:
               schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarCatalogResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "404":
           description: Radar is disabled. Under locked management, central auth may reject before the handler reaches this feature-flag check.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           description: Local Radar catalog could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/intel:
     get:
@@ -29874,12 +29898,21 @@ paths:
           headers:
             Cache-Control:
               schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarIntelResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "404":
           description: Radar is disabled. Under locked management, central auth may reject before the handler reaches this feature-flag check.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           description: Local Radar Intel could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/intel/sync:
     post:
@@ -29902,17 +29935,41 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      requestBody:
+        required: false
+        description: Optional body; if supplied it must be exactly `{}` and must not exceed 1 KiB.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RadarSyncBodyRequest" }
       responses:
         "200":
           description: Radar Intel sync result; the supporter key is not returned.
           x-sensitive: true
-        "400": { description: Sync request body was invalid. }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarIntelSyncStatus" }
+        "400":
+          description: Sync request body was invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "404":
           description: Radar is disabled. Under locked management, central auth may reject before the handler reaches this feature-flag check.
-        "413": { description: Sync request body exceeds the 1 KiB limit. }
-        "500": { description: Radar Intel sync failed. }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Sync request body exceeds the 1 KiB limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar Intel sync failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/local-model-state:
     delete:
@@ -29952,11 +30009,32 @@ paths:
           headers:
             Cache-Control:
               schema: { type: string, const: "no-store" }
-        "400": { description: Provider/model identity is missing or invalid. }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarLocalModelStateResponse" }
+        "400":
+          description: Provider/model identity is missing or invalid.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "404": { description: Radar is disabled. }
-        "500": { description: Radar local state could not be updated. }
+        "404":
+          description: Radar is disabled.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar local state could not be updated.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     get:
       operationId: getApiRadarLocalModelState
@@ -29985,10 +30063,25 @@ paths:
           headers:
             Cache-Control:
               schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarLocalModelStateResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "404": { description: Radar is disabled. }
-        "500": { description: Radar local state could not be read. }
+        "404":
+          description: Radar is disabled.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar local state could not be read.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     patch:
       operationId: patchApiRadarLocalModelState
@@ -30010,6 +30103,13 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      requestBody:
+        required: true
+        description: JSON patch body capped at 4 KiB; at least one editable field must be present.
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RadarLocalOverridePatchRequest" }
       responses:
         "200":
           description: Radar local model overrides and tombstones after update.
@@ -30017,12 +30117,39 @@ paths:
           headers:
             Cache-Control:
               schema: { type: string, const: "no-store" }
-        "400": { description: Invalid Radar local override. }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarLocalModelStateResponse" }
+        "400":
+          description: Invalid Radar local override or malformed body.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "404": { description: Radar is disabled. }
-        "413": { description: Request body exceeds the 4 KiB limit. }
-        "500": { description: Radar local state could not be updated. }
+        "404":
+          description: Radar is disabled.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the 4 KiB limit.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar local state could not be updated.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     put:
       operationId: putApiRadarLocalModelState
@@ -30044,6 +30171,13 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      requestBody:
+        required: true
+        description: JSON tombstone update capped at 4 KiB.
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RadarLocalTombstoneRequest" }
       responses:
         "200":
           description: Radar local model overrides and tombstones after update.
@@ -30051,12 +30185,39 @@ paths:
           headers:
             Cache-Control:
               schema: { type: string, const: "no-store" }
-        "400": { description: Invalid Radar tombstone. }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarLocalModelStateResponse" }
+        "400":
+          description: Invalid Radar tombstone or malformed body.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "404": { description: Radar is disabled. }
-        "413": { description: Request body exceeds the 4 KiB limit. }
-        "500": { description: Radar local state could not be updated. }
+        "404":
+          description: Radar is disabled.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the 4 KiB limit.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar local state could not be updated.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/offers:
     get:
@@ -30086,10 +30247,21 @@ paths:
           headers:
             Cache-Control:
               schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarOffersResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "404": { description: Radar is disabled. }
-        "500": { description: Local Radar offers could not be loaded. }
+        "404":
+          description: Radar is disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Local Radar offers could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/offers/sync:
     post:
@@ -30111,16 +30283,41 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      requestBody:
+        required: false
+        description: Optional body; if supplied it must be exactly `{}` and must not exceed 1 KiB.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RadarSyncBodyRequest" }
       responses:
         "200":
           description: Radar offers sync result; the supporter key is not returned.
           x-sensitive: true
-        "400": { description: Sync request body was invalid. }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarOffersSyncStatus" }
+        "400":
+          description: Sync request body was invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "404": { description: Radar is disabled. }
-        "413": { description: Sync request body exceeds the 1 KiB limit. }
-        "500": { description: Radar offers sync failed. }
+        "404":
+          description: Radar is disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Sync request body exceeds the 1 KiB limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar offers sync failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/referrals:
     get:
@@ -30151,10 +30348,21 @@ paths:
           headers:
             Cache-Control:
               schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarReferralsResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "404": { description: Radar is disabled. }
-        "500": { description: Radar referrals could not be loaded. }
+        "404":
+          description: Radar is disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar referrals could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/settings:
     get:
@@ -30184,19 +30392,70 @@ paths:
           headers:
             Cache-Control:
               schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarSettingsGetResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "404": { description: Radar is disabled. }
-        "500": { description: Radar settings could not be read. }
+        "404":
+          description: Radar is disabled.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar settings could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiRadarSettings
       tags:
         - Radar
       summary: "POST radar › settings"
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RadarSettingsUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: Updated Radar settings; any supplied supporter key is returned masked.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              description: Handler-generated settings responses are not cached.
+              schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarSettingsPostResponse" }
+        "400":
+          description: Malformed JSON, invalid settings, or no update fields supplied.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Radar is disabled.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar settings could not be updated.
+          headers:
+            Cache-Control: { schema: { type: string, const: "no-store" } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/status:
     get:
       operationId: getApiRadarStatus
@@ -30205,16 +30464,69 @@ paths:
       summary: "GET radar › status"
       responses:
         "200":
-          description: OK
+          description: Local Radar settings and cache freshness for each feed.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarStatusResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Radar is disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar status could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/sync:
     post:
       operationId: postApiRadarSync
       tags:
         - Radar
       summary: "POST radar › sync"
+      requestBody:
+        required: false
+        description: Optional body; if supplied it must be exactly `{}` and must not exceed 1 KiB.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RadarSyncBodyRequest" }
       responses:
         "200":
-          description: OK
+          description: Catalog sync result; sync outcomes are represented in the returned status union.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarSyncStatus" }
+        "400":
+          description: Sync body is malformed or contains fields; only absent/blank or `{}` is accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Radar is disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Sync body exceeds the 1 KiB limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Radar sync failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/sync-all:
     post:
       operationId: postApiRadarSyncAll
@@ -69332,4 +69644,592 @@ components:
         errors:
           type: array
           items: { type: string }
+      additionalProperties: false
+
+    ProxyFallbackTestResult:
+      type: object
+      x-sensitive: true
+      required: [proxyUrl, ok, latencyMs]
+      properties:
+        proxyUrl: { type: string, x-sensitive: true }
+        ok: { type: boolean }
+        latencyMs: { type: [number, "null"], minimum: 0 }
+      additionalProperties: false
+
+    ProxyFallbackNoCandidatesResponse:
+      type: object
+      required: [results, message]
+      properties:
+        results: { type: array, maxItems: 0, items: { $ref: "#/components/schemas/ProxyFallbackTestResult" } }
+        message: { type: string, const: No proxy candidates available to test. Configure a proxy first. }
+      additionalProperties: false
+
+    ProxyFallbackTestResultsResponse:
+      type: object
+      x-sensitive: true
+      required: [results, summary]
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/ProxyFallbackTestResult" }
+        summary:
+          type: object
+          required: [total, working, failed]
+          properties:
+            total: { type: integer, minimum: 0 }
+            working: { type: integer, minimum: 0 }
+            failed: { type: integer, minimum: 0 }
+          additionalProperties: false
+      additionalProperties: false
+
+    ProxyFallbackTestResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/ProxyFallbackNoCandidatesResponse" }
+        - { $ref: "#/components/schemas/ProxyFallbackTestResultsResponse" }
+      x-sensitive: true
+
+    RadarLocalizedText:
+      oneOf:
+        - { type: string }
+        - type: object
+          required: [en]
+          properties:
+            en: { type: string, minLength: 1 }
+            pt: { type: string, minLength: 1 }
+          additionalProperties: false
+
+    RadarCatalogEntry:
+      type: object
+      x-sensitive: true
+      required: [provider, modelId, displayName, monthlyTokens, creditTokens, freeType, poolKey, tos, origin]
+      properties:
+        provider: { type: string }
+        modelId: { type: string }
+        displayName: { type: string }
+        familyId: { type: [string, "null"] }
+        monthlyTokens: { type: number }
+        creditTokens: { type: number }
+        freeType:
+          type: string
+          enum: [recurring-daily, recurring-monthly, recurring-uncapped, recurring-credit, keyless, one-time-initial, discontinued]
+        poolKey: { type: [string, "null"] }
+        tos: { type: string, enum: [ok, caution, ambiguous, avoid, unknown] }
+        trainsOnPrompts: { type: boolean }
+        eligibilityGate: { type: string, const: regional-identity }
+        enabled: { type: boolean }
+        origin: { type: string, enum: [baseline, radar, local] }
+        disabledBy: { type: string, const: radar }
+        contextWindow: { type: [integer, "null"], minimum: 0 }
+        capabilities:
+          type: object
+          required: [tools, vision, thinking]
+          properties:
+            tools: { type: [boolean, "null"] }
+            vision: { type: [boolean, "null"] }
+            thinking: { type: [boolean, "null"] }
+          additionalProperties: false
+        metadataEvidenceUrls:
+          type: array
+          items: { type: string, format: uri }
+        limits:
+          type: object
+          required: [rpm, rpd, tpm, tpd]
+          properties:
+            rpm: { type: [integer, "null"] }
+            rpd: { type: [integer, "null"] }
+            tpm: { type: [integer, "null"] }
+            tpd: { type: [integer, "null"] }
+          additionalProperties: false
+        setup:
+          oneOf:
+            - type: object
+              required: [keyUrl, steps]
+              properties:
+                keyUrl: { type: [string, "null"], format: uri }
+                steps:
+                  type: array
+                  items: { $ref: "#/components/schemas/RadarLocalizedText" }
+              additionalProperties: false
+            - { type: "null" }
+      additionalProperties: false
+
+    RadarCatalogMeta:
+      type: object
+      x-sensitive: true
+      required: [version, generatedAt, tier, fetchedAt]
+      properties:
+        version: { type: string }
+        generatedAt: { type: [string, "null"], format: date-time }
+        tier: { type: string }
+        fetchedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    RadarCatalogResponse:
+      type: object
+      x-sensitive: true
+      required: [entries, meta]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/RadarCatalogEntry" }
+        meta:
+          oneOf:
+            - { $ref: "#/components/schemas/RadarCatalogMeta" }
+            - { type: "null" }
+      additionalProperties: false
+
+    RadarIntelRanking:
+      type: object
+      x-sensitive: true
+      required: [rank, provider, modelId, category, rating, matches, wins, losses, draws]
+      properties:
+        rank: { type: integer, minimum: 1 }
+        provider: { type: string }
+        modelId: { type: string }
+        category: { type: string }
+        rating: { type: integer }
+        matches: { type: integer, minimum: 0 }
+        wins: { type: integer, minimum: 0 }
+        losses: { type: integer, minimum: 0 }
+        draws: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    RadarIntelDelta:
+      type: object
+      required: [current, added, removed]
+      properties:
+        current: { type: integer, minimum: 0 }
+        added: { type: integer, minimum: 0 }
+        removed: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    RadarIntelCatalog:
+      type: object
+      x-sensitive: true
+      required: [currentVersion, previousVersion, currentGeneratedAt, ageDays, freshness, providers, models, trend]
+      properties:
+        currentVersion: { type: string }
+        previousVersion: { type: [string, "null"] }
+        currentGeneratedAt: { type: string, format: date-time }
+        ageDays: { type: integer, minimum: 0 }
+        freshness: { type: string, enum: [fresh, aging, stale] }
+        providers: { $ref: "#/components/schemas/RadarIntelDelta" }
+        models: { $ref: "#/components/schemas/RadarIntelDelta" }
+        trend: { type: string, enum: [growing, stable, shrinking] }
+      additionalProperties: false
+
+    RadarIntelFeed:
+      type: object
+      x-sensitive: true
+      required: [feed, schemaVersion, version, generatedAt, tier, methodology, rankings, catalog]
+      properties:
+        feed: { type: string, const: omniroute-radar-intel }
+        schemaVersion: { type: integer, const: 1 }
+        version: { type: string }
+        generatedAt: { type: string, format: date-time }
+        tier: { type: string, const: live }
+        methodology:
+          type: object
+          required: [kind, initialRating, kFactor]
+          properties:
+            kind: { type: string, const: elo }
+            initialRating: { type: integer, const: 1000 }
+            kFactor: { type: integer, const: 32 }
+          additionalProperties: false
+        rankings:
+          type: array
+          items: { $ref: "#/components/schemas/RadarIntelRanking" }
+        catalog: { $ref: "#/components/schemas/RadarIntelCatalog" }
+      additionalProperties: false
+
+    RadarIntelMeta:
+      type: object
+      x-sensitive: true
+      required: [version, tier, fetchedAt, supporterVerified]
+      properties:
+        version: { type: string }
+        tier: { type: string, const: live }
+        fetchedAt: { type: string, format: date-time }
+        supporterVerified: { type: boolean, const: true }
+      additionalProperties: false
+
+    RadarIntelResponse:
+      type: object
+      x-sensitive: true
+      required: [intel, meta]
+      properties:
+        intel:
+          oneOf:
+            - { $ref: "#/components/schemas/RadarIntelFeed" }
+            - { type: "null" }
+        meta:
+          oneOf:
+            - { $ref: "#/components/schemas/RadarIntelMeta" }
+            - { type: "null" }
+      additionalProperties: false
+
+    RadarIntelSyncStatus:
+      oneOf:
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: disabled } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: opt_out } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: no_key } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: invalid_signature } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: invalid_schema } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: wrong_tier } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: stale } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: too_large } }
+          additionalProperties: false
+        - type: object
+          required: [status, version]
+          properties:
+            status: { type: string, const: updated }
+            version: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [status, reason]
+          properties:
+            status: { type: string, const: error }
+            reason: { type: string, x-sensitive: true }
+          additionalProperties: false
+      x-sensitive: true
+
+    RadarOfferLocalizedText:
+      type: object
+      required: [en]
+      properties:
+        en: { type: string, minLength: 1 }
+        pt: { type: string, minLength: 1 }
+      additionalProperties: false
+
+    RadarOfferBenefit:
+      oneOf:
+        - type: object
+          required: [kind, basisPoints]
+          properties:
+            kind: { type: string, const: percent_off }
+            basisPoints: { type: integer, minimum: 1, maximum: 10000 }
+          additionalProperties: false
+        - type: object
+          required: [kind, amountMinor, currency]
+          properties:
+            kind: { type: string, const: credit }
+            amountMinor: { type: integer, minimum: 1 }
+            currency: { type: string, pattern: "^[A-Z]{3}$" }
+          additionalProperties: false
+        - type: object
+          required: [kind, days]
+          properties:
+            kind: { type: string, const: trial_days }
+            days: { type: integer, minimum: 1, maximum: 3650 }
+          additionalProperties: false
+
+    RadarOffer:
+      type: object
+      x-sensitive: true
+      required: [id, provider, title, description, benefit, publicBenefit, conditions, validUntil, url, partner]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        title: { $ref: "#/components/schemas/RadarOfferLocalizedText" }
+        description: { $ref: "#/components/schemas/RadarOfferLocalizedText" }
+        benefit: { $ref: "#/components/schemas/RadarOfferBenefit" }
+        publicBenefit:
+          oneOf:
+            - { $ref: "#/components/schemas/RadarOfferBenefit" }
+            - { type: "null" }
+        conditions: { $ref: "#/components/schemas/RadarOfferLocalizedText" }
+        validUntil: { type: [string, "null"] }
+        url: { type: string, format: uri, x-sensitive: true }
+        partner: { type: boolean }
+      additionalProperties: false
+
+    RadarOffersMeta:
+      type: object
+      x-sensitive: true
+      required: [version, tier, fetchedAt]
+      properties:
+        version: { type: string }
+        tier: { type: string, const: live }
+        fetchedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    RadarOffersResponse:
+      type: object
+      x-sensitive: true
+      required: [offers, meta]
+      properties:
+        offers:
+          type: array
+          items: { $ref: "#/components/schemas/RadarOffer" }
+        meta:
+          oneOf:
+            - { $ref: "#/components/schemas/RadarOffersMeta" }
+            - { type: "null" }
+      additionalProperties: false
+
+    RadarOffersSyncStatus:
+      oneOf:
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: disabled } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: opt_out } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: no_key } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: invalid_signature } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: invalid_schema } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: wrong_tier } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: stale } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: too_large } }
+          additionalProperties: false
+        - type: object
+          required: [status, version]
+          properties:
+            status: { type: string, const: updated }
+            version: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [status, reason]
+          properties:
+            status: { type: string, const: error }
+            reason: { type: string, x-sensitive: true }
+          additionalProperties: false
+      x-sensitive: true
+
+    RadarReferral:
+      type: object
+      x-sensitive: true
+      required: [provider, url, kind, validUntil, requiredAction, isDefault]
+      properties:
+        provider: { type: string }
+        url: { type: string, format: uri, x-sensitive: true }
+        kind: { type: string, enum: [fixo, campanha] }
+        validUntil: { type: [string, "null"] }
+        requiredAction: { type: [string, "null"] }
+        isDefault: { type: boolean }
+      additionalProperties: true
+
+    RadarReferralsResponse:
+      type: object
+      x-sensitive: true
+      required: [fixed, campaigns, tier]
+      properties:
+        fixed:
+          type: array
+          items: { $ref: "#/components/schemas/RadarReferral" }
+        campaigns:
+          type: array
+          items: { $ref: "#/components/schemas/RadarReferral" }
+        tier: { type: [string, "null"] }
+      additionalProperties: false
+
+    RadarLocalModelState:
+      type: object
+      x-sensitive: true
+      required: [provider, modelId, displayName, enabled, tombstoned, updatedAt]
+      properties:
+        provider: { type: string }
+        modelId: { type: string }
+        displayName: { type: [string, "null"] }
+        enabled: { type: [boolean, "null"] }
+        tombstoned: { type: boolean }
+        updatedAt: { type: string }
+      additionalProperties: false
+
+    RadarLocalModelStateResponse:
+      type: object
+      x-sensitive: true
+      required: [states]
+      properties:
+        states:
+          type: array
+          items: { $ref: "#/components/schemas/RadarLocalModelState" }
+      additionalProperties: false
+
+    RadarLocalOverridePatchRequest:
+      type: object
+      x-sensitive: true
+      required: [provider, modelId]
+      properties:
+        provider: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$" }
+        modelId: { type: string, minLength: 1, maxLength: 200, pattern: "^[^\\u0000-\\u001f\\u007f]+$" }
+        displayName: { type: [string, "null"], minLength: 1, maxLength: 160 }
+        enabled: { type: [boolean, "null"] }
+      anyOf:
+        - required: [displayName]
+        - required: [enabled]
+      additionalProperties: false
+
+    RadarLocalTombstoneRequest:
+      type: object
+      x-sensitive: true
+      required: [provider, modelId, tombstoned]
+      properties:
+        provider: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$" }
+        modelId: { type: string, minLength: 1, maxLength: 200, pattern: "^[^\\u0000-\\u001f\\u007f]+$" }
+        tombstoned: { type: boolean }
+      additionalProperties: false
+
+    RadarSettingsGetResponse:
+      type: object
+      x-sensitive: true
+      required: [optIn, hasSupporterKey, supporterKeyMasked, contributorClaimUrl, supporterPlansUrl]
+      properties:
+        optIn: { type: boolean }
+        hasSupporterKey: { type: boolean }
+        supporterKeyMasked: { type: [string, "null"], pattern: "^omr_\\*\\*\\*\\*[a-f0-9]{4}$", x-sensitive: true }
+        contributorClaimUrl: { type: string }
+        supporterPlansUrl: { type: string }
+      additionalProperties: false
+
+    RadarSettingsUpdateRequest:
+      type: object
+      x-sensitive: true
+      properties:
+        optIn: { type: boolean }
+        supporterKey: { type: [string, "null"], pattern: "^omr_[a-f0-9]{40}$", x-sensitive: true }
+      additionalProperties: true
+
+    RadarSettingsPostResponse:
+      type: object
+      x-sensitive: true
+      required: [ok]
+      properties:
+        ok: { type: boolean, const: true }
+        optIn: { type: boolean }
+        supporterKey: { type: [string, "null"], pattern: "^omr_\\*\\*\\*\\*[a-f0-9]{4}$", x-sensitive: true }
+      additionalProperties: false
+
+    RadarSyncBodyRequest:
+      type: object
+      description: Empty object only; the body may also be omitted or blank.
+      additionalProperties: false
+
+    RadarSyncStatus:
+      oneOf:
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: disabled } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: opt_out } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: invalid_signature } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: invalid_schema } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: stale } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: too_large } }
+          additionalProperties: false
+        - type: object
+          required: [status, version, tier]
+          properties:
+            status: { type: string, const: updated }
+            version: { type: string }
+            tier: { type: string, enum: [community, live] }
+          additionalProperties: false
+        - type: object
+          required: [status, reason]
+          properties:
+            status: { type: string, const: error }
+            reason: { type: string, x-sensitive: true }
+          additionalProperties: false
+      x-sensitive: true
+
+    RadarStatusCacheMissing:
+      type: object
+      required: [available]
+      properties:
+        available: { type: boolean, const: false }
+      additionalProperties: false
+
+    RadarStatusCacheAvailable:
+      type: object
+      required: [available, version, tier, fetchedAt]
+      properties:
+        available: { type: boolean, const: true }
+        version: { type: string }
+        generatedAt: { type: [string, "null"], format: date-time }
+        tier: { type: string }
+        fetchedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    RadarStatusCache:
+      oneOf:
+        - { $ref: "#/components/schemas/RadarStatusCacheMissing" }
+        - { $ref: "#/components/schemas/RadarStatusCacheAvailable" }
+
+    RadarStatusResponse:
+      type: object
+      x-sensitive: true
+      required: [settings, feeds]
+      properties:
+        settings:
+          type: object
+          required: [optIn, hasSupporterKey]
+          properties:
+            optIn: { type: boolean }
+            hasSupporterKey: { type: boolean }
+          additionalProperties: false
+        feeds:
+          type: object
+          required: [catalog, referrals, offers, intel]
+          properties:
+            catalog: { $ref: "#/components/schemas/RadarStatusCache" }
+            referrals: { $ref: "#/components/schemas/RadarStatusCache" }
+            offers: { $ref: "#/components/schemas/RadarStatusCache" }
+            intel: { $ref: "#/components/schemas/RadarStatusCache" }
+          additionalProperties: false
       additionalProperties: false

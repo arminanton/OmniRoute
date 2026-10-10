@@ -93,11 +93,12 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const postHeaders = { ...CORS_HEADERS, "Cache-Control": "no-store" };
   // Flag gate — MUST run before auth (byte-identical flag-off inertia).
   if (!isFeatureFlagEnabled("RADAR_ENABLED")) {
     return NextResponse.json(buildErrorBody(404, "Not found"), {
       status: 404,
-      headers: CORS_HEADERS,
+      headers: postHeaders,
     });
   }
 
@@ -110,7 +111,7 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json(buildErrorBody(400, "Invalid JSON body"), {
       status: 400,
-      headers: CORS_HEADERS,
+      headers: postHeaders,
     });
   }
 
@@ -118,7 +119,7 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return NextResponse.json(
       buildErrorBody(400, "Invalid request body", parsed.error.flatten().fieldErrors),
-      { status: 400, headers: CORS_HEADERS }
+      { status: 400, headers: postHeaders }
     );
   }
 
@@ -128,7 +129,7 @@ export async function POST(request: Request) {
   if (optIn === undefined && supporterKey === undefined) {
     return NextResponse.json(
       buildErrorBody(400, "At least one of optIn or supporterKey is required"),
-      { status: 400, headers: CORS_HEADERS }
+      { status: 400, headers: postHeaders }
     );
   }
 
@@ -157,13 +158,13 @@ export async function POST(request: Request) {
         optIn: optIn ?? undefined,
         supporterKey: supporterKey !== undefined ? maskKey(supporterKey) : undefined,
       },
-      { headers: CORS_HEADERS }
+      { headers: postHeaders }
     );
   } catch (err: unknown) {
     const { sanitizeErrorMessage } = await import("@omniroute/open-sse/utils/error");
     return NextResponse.json(
       buildErrorBody(500, sanitizeErrorMessage(err) || "Failed to update Radar settings"),
-      { status: 500, headers: CORS_HEADERS }
+      { status: 500, headers: postHeaders }
     );
   }
 }

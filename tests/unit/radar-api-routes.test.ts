@@ -437,6 +437,11 @@ test("POST /api/radar/settings: opt-in+key submitted together => both persist, P
   const postBody = JSON.parse(postText);
 
   assert.equal(postResponse.status, 200);
+  assert.equal(
+    postResponse.headers.get("cache-control"),
+    "no-store",
+    "successful settings writes containing a masked supporter key must not be cached"
+  );
   assert.equal(postBody.ok, true);
   assert.equal(postBody.optIn, true, "opt-in must be persisted in the same call");
   assert.equal(
