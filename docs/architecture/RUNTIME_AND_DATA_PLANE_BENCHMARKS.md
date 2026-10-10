@@ -524,11 +524,57 @@ forwards bounded streams. This is therefore a measured capability-versus-transpo
 proof that the Rust prototype replaces Bifrost or OmniRoute. It does independently reject any
 universal speed or memory claim from these measurements alone.
 
-### Bifrost feature and state parity (2026-10-09)
+### Matched Bifrost v1.3.9 / v2.2.6 repeat on the devvm (2026-10-10)
 
-The measured image above is Bifrost 1.3.9, while the official releases page now lists v2.2.6
-(released 2026-10-06); its authentication defaults changed, so the old image is only a historical
-performance point. The current gateway supports provider/model routing, request/response
+To check the newer release against the historical v1.3.9 row above, both images were rerun on the
+same ARM64 devvm with the same local mock provider, request bodies, and load client. The gateway
+was pinned to CPUs 0–1, the Node mock to 2–3, and Python 3.12's load client to 4–7; rootless Podman
+does not delegate a CPU cgroup controller there. The gateway container had a 2 GiB memory limit.
+Each cell is the median of three trials of 100 persistent sessions, five sequential turns, 100 SSE
+chunks spaced 10 ms apart, and a 64-byte chunk payload. The two turn-context sizes were 16 KiB and
+256 KiB; the largest serialized request at 256 KiB was 1,312,164 bytes. Every trial completed
+500/500 requests with HTTP 200 and no loader-detected failures.
+
+| Bifrost image | Context per turn | Throughput | First-body p95 | Completion p95 | Process VmHWM | Process CPU |
+| ------------- | ---------------: | ---------: | -------------: | -------------: | ------------: | ----------: |
+| v1.3.9-arm64  | 16 KiB           | 93.9 req/s | 32.7 ms        | 1,067 ms       | 183.4 MiB     | 1.72 s      |
+| v2.2.6        | 16 KiB           | 92.6 req/s | 53.7 ms        | 1,079 ms       | 370.0 MiB     | 2.84 s      |
+| v1.3.9-arm64  | 256 KiB          | 87.1 req/s | 112.3 ms       | 1,152 ms       | 1,355 MiB     | 3.79 s      |
+| v2.2.6        | 256 KiB          | 85.8 req/s | 151.3 ms       | 1,165 ms       | 1,845 MiB     | 4.94 s      |
+
+In these matched synthetic gateway/mock trials, v2.2.6 had similar throughput and completion p95
+to v1.3.9, but higher first-body p95 and higher process high-water memory. Its 256 KiB process
+VmHWM reached about 90% of the 2 GiB container limit; it did not hit the limit or use host swap.
+The host retained 8.9–10 GiB available RAM and 849 GiB free disk during the run. VmHWM is a
+process-lifetime high-water mark that includes startup and catalog loading, not load-only memory or
+the cgroup peak. The 100 sequential clients and roughly one-second mock streams bound this workload;
+this is not a fixed-RPS, production-capacity, real-provider-latency, account-policy, or quota test.
+
+The v2.2.6 release changes the default `enforce_auth_on_inference` value for fresh deployments to
+`true` and adds a setup-token gate for non-public management `/api` calls when dashboard auth is
+inactive ([official v2.2.6 release notes](https://github.com/maximhq/bifrost/releases)). To keep the
+transport comparison equivalent, the v2.2.6 benchmark config explicitly sets
+`enforce_auth_on_inference: false`, matching the setting used in the prior v1.3.9 run. The test
+calls only `/health` and the inference `/v1/chat/completions` endpoint; it does not exercise the new
+management setup-token flow. The config disables request logging, uses a dummy provider key, and
+points OpenAI traffic at the loopback mock. No real provider credentials or production endpoints
+were used. The v1.3.9 image was
+`sha256:a5931720a1fb22bcbe73bc2eb59c50e6a9cbdf24754666305f3fd091b541933b`; the v2.2.6 ARM64 image
+was `sha256:e0bee8e569e02329c9bac575c53eb12bfb4f701ec1dbae572dac09b5ecbcd680`.
+
+The v2.2.6 startup logged a model catalog of 4,941 models across 127 providers; the earlier v1.3.9
+run logged 4,962 across 126. The catalog and plugin versions differ, so these measurements do not
+isolate a single code change as the cause of its higher memory or first-body latency. The repeated
+v1.3.9 measurements also differ from the earlier matrix above; treat them as repeat-run variability,
+not as a directly controlled explanation for that difference. The loader checked HTTP status, body
+framing, and byte counts, but did not parse SSE event payloads or validate tool-call translation.
+
+### Bifrost feature and state parity (reviewed 2026-10-10)
+
+The earlier comparison matrix above used Bifrost 1.3.9; the matched repeat tests both v1.3.9 and
+v2.2.6. The official releases page lists v2.2.6 (released 2026-10-06); its authentication defaults
+changed, so the original v1.3.9 row is only a historical performance point. The current gateway
+supports provider/model routing, request/response
 translation, streaming, virtual-key authentication, key rotation/fallback, budgets and rate limits,
 and MCP features. It persists its own gateway configuration and request logs (`config.db` and
 `logs.db`); that is separate from OmniRoute's SQLite-backed provider connections, account rules,
@@ -539,8 +585,9 @@ writer of OmniRoute state. See the [official overview](https://github.com/maximh
 [benchmark harness](https://github.com/maximhq/bifrost-benchmarking).
 
 Bifrost's published approximately 11-microsecond latency at 5,000 RPS is a vendor claim; this
-repository has not reproduced it. Go's `GOMEMLIMIT` is documented as a soft target that may be
-exceeded to avoid GC thrashing, while Rust avoids a tracing garbage collector but still needs
+repository has not reproduced it. The v2.2.6 row above does not test that workload. Go's
+`GOMEMLIMIT` is documented as a soft target that may be exceeded to avoid GC thrashing, while Rust
+avoids a tracing garbage collector but still needs
 explicit bounded queues, cancellation, and admission. See the [Go GC guide](https://go.dev/doc/gc-guide),
 [Rust ownership guide](https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html), and
 [Tokio backpressure tutorial](https://tokio.rs/tokio/tutorial/channels). The useful next comparison is
