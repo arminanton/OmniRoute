@@ -1,0 +1,306 @@
+{
+  "schemaVersion": 1,
+  "supportedStrategy": "available-capacity",
+  "unsupportedStrategies": [
+    "round-robin",
+    "p2c",
+    "random",
+    "least-used",
+    "cost-optimized",
+    "strict-random",
+    "fill-first",
+    "unknown-strategy"
+  ],
+  "vectors": [
+    {
+      "name": "empty-candidate-set",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "empty",
+          "candidates": [],
+          "expected": null
+        }
+      ]
+    },
+    {
+      "name": "missing-capacity-defaults-to-one",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "missing-cap",
+          "candidates": [
+            { "id": "unknown-cap", "priority": 1, "maxConcurrent": null, "inFlight": 1 },
+            { "id": "two-slots", "priority": 99, "maxConcurrent": 2, "inFlight": 1 }
+          ],
+          "expected": "two-slots"
+        }
+      ]
+    },
+    {
+      "name": "zero-capacity-defaults-to-one",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "zero-cap",
+          "candidates": [
+            { "id": "zero-cap", "priority": 1, "maxConcurrent": 0, "inFlight": 1 },
+            { "id": "two-slots", "priority": 99, "maxConcurrent": 2, "inFlight": 1 }
+          ],
+          "expected": "two-slots"
+        }
+      ]
+    },
+    {
+      "name": "negative-capacity-defaults-to-one",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "negative-cap",
+          "candidates": [
+            { "id": "negative-cap", "priority": 1, "maxConcurrent": -3, "inFlight": 1 },
+            { "id": "two-slots", "priority": 99, "maxConcurrent": 2, "inFlight": 1 }
+          ],
+          "expected": "two-slots"
+        }
+      ]
+    },
+    {
+      "name": "positive-sub-one-capacity-has-one-slot-floor",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "sub-one-cap",
+          "candidates": [
+            { "id": "sub-one-cap", "priority": 1, "maxConcurrent": 0.5, "inFlight": 1 },
+            { "id": "two-slots", "priority": 99, "maxConcurrent": 2, "inFlight": 1 }
+          ],
+          "expected": "two-slots"
+        }
+      ]
+    },
+    {
+      "name": "fractional-capacity-is-truncated-with-one-slot-floor",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "fractional-cap",
+          "candidates": [
+            { "id": "fractional-cap", "priority": 1, "maxConcurrent": 1.9, "inFlight": 1 },
+            { "id": "two-slots", "priority": 99, "maxConcurrent": 2, "inFlight": 1 }
+          ],
+          "expected": "two-slots"
+        }
+      ]
+    },
+    {
+      "name": "load-ratio-precedes-priority",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "ratio-first",
+          "candidates": [
+            { "id": "preferred-but-busier", "priority": 1, "maxConcurrent": 4, "inFlight": 2 },
+            { "id": "lower-load", "priority": 99, "maxConcurrent": 4, "inFlight": 1 }
+          ],
+          "expected": "lower-load"
+        }
+      ]
+    },
+    {
+      "name": "priority-breaks-equal-load",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "priority-tie",
+          "candidates": [
+            { "id": "later-priority", "priority": 9, "maxConcurrent": 2, "inFlight": 1 },
+            { "id": "earlier-priority", "priority": 2, "maxConcurrent": 2, "inFlight": 1 }
+          ],
+          "expected": "earlier-priority"
+        }
+      ]
+    },
+    {
+      "name": "missing-priority-sorts-after-numeric-priority",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "missing-priority",
+          "candidates": [
+            { "id": "missing-priority", "priority": null, "maxConcurrent": 2, "inFlight": 1 },
+            { "id": "numeric-priority", "priority": 10, "maxConcurrent": 2, "inFlight": 1 }
+          ],
+          "expected": "numeric-priority"
+        }
+      ]
+    },
+    {
+      "name": "equal-priority-tie-uses-candidate-order-and-rotates",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "rotate",
+          "candidates": [
+            { "id": "a", "priority": 2, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 2, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "c", "priority": 2, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "a"
+        },
+        {
+          "strategy": "available-capacity",
+          "provider": "rotate",
+          "candidates": [
+            { "id": "a", "priority": 2, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 2, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "c", "priority": 2, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "b"
+        },
+        {
+          "strategy": "available-capacity",
+          "provider": "rotate",
+          "candidates": [
+            { "id": "a", "priority": 2, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 2, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "c", "priority": 2, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "c"
+        },
+        {
+          "strategy": "available-capacity",
+          "provider": "rotate",
+          "candidates": [
+            { "id": "a", "priority": 2, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 2, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "c", "priority": 2, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "a"
+        }
+      ]
+    },
+    {
+      "name": "provider-cursors-are-independent",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "provider-a",
+          "candidates": [
+            { "id": "a", "priority": 1, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 1, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "a"
+        },
+        {
+          "strategy": "available-capacity",
+          "provider": "provider-b",
+          "candidates": [
+            { "id": "a", "priority": 1, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 1, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "a"
+        },
+        {
+          "strategy": "available-capacity",
+          "provider": "provider-a",
+          "candidates": [
+            { "id": "a", "priority": 1, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 1, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "b"
+        },
+        {
+          "strategy": "available-capacity",
+          "provider": "provider-b",
+          "candidates": [
+            { "id": "a", "priority": 1, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 1, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "b"
+        }
+      ]
+    },
+    {
+      "name": "cursor-not-in-current-eligible-tie-set-starts-at-first",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "stale-cursor",
+          "candidates": [
+            { "id": "a", "priority": 1, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 1, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "c", "priority": 1, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "a"
+        },
+        {
+          "strategy": "available-capacity",
+          "provider": "stale-cursor",
+          "candidates": [
+            { "id": "a", "priority": 1, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "b", "priority": 1, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "c", "priority": 1, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "b"
+        },
+        {
+          "strategy": "available-capacity",
+          "provider": "stale-cursor",
+          "candidates": [
+            { "id": "a", "priority": 1, "maxConcurrent": null, "inFlight": 0 },
+            { "id": "c", "priority": 1, "maxConcurrent": null, "inFlight": 0 }
+          ],
+          "expected": "a"
+        }
+      ]
+    },
+    {
+      "name": "load-difference-within-epsilon-keeps-first-candidate",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "epsilon-inside",
+          "candidates": [
+            {
+              "id": "slightly-higher-first",
+              "priority": 1,
+              "maxConcurrent": 4000000000,
+              "inFlight": 2
+            },
+            { "id": "slightly-lower-second", "priority": 1, "maxConcurrent": 1, "inFlight": 0 }
+          ],
+          "expected": "slightly-higher-first"
+        }
+      ]
+    },
+    {
+      "name": "load-difference-outside-epsilon-selects-lower-load",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "epsilon-outside",
+          "candidates": [
+            { "id": "higher-first", "priority": 1, "maxConcurrent": 1600000000, "inFlight": 2 },
+            { "id": "lower-second", "priority": 1, "maxConcurrent": 1, "inFlight": 0 }
+          ],
+          "expected": "lower-second"
+        }
+      ]
+    },
+    {
+      "name": "saturated-candidates-remain-a-selection-hint",
+      "steps": [
+        {
+          "strategy": "available-capacity",
+          "provider": "saturated",
+          "candidates": [
+            { "id": "more-saturated", "priority": 1, "maxConcurrent": 1, "inFlight": 5 },
+            { "id": "less-saturated", "priority": 9, "maxConcurrent": 2, "inFlight": 8 }
+          ],
+          "expected": "less-saturated"
+        }
+      ]
+    }
+  ]
+}

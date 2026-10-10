@@ -1,5 +1,7 @@
 //! Isolated benchmark-only protocol/parity probes; not used by the production application.
 
+#[cfg(test)]
+mod account_capacity_selection;
 pub mod account_quota_buckets;
 pub mod api_key_validation_cache;
 #[path = "coordination_sqlite.rs"]

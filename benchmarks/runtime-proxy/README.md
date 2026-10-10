@@ -217,6 +217,25 @@ tmux new-session -d -s omni-account-strategy-100 \
   'systemd-run --user --scope -p MemoryMax=1G -p CPUQuota=100% -- /usr/bin/env CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target /usr/bin/taskset -c 0 /home/ubuntu/.cargo/bin/cargo run --offline --manifest-path /home/ubuntu/_/omni/blue/benchmarks/runtime-proxy/Cargo.toml --bin omniroute-account-scheduler-bench -- 100'
 ```
 
+### Available-capacity selector parity vectors
+
+`src/account_capacity_selection.rs` is a pure Rust mirror compiled only in Cargo's test profile.
+It consumes TypeScript-approved candidate snapshots and returns only the same selection hint as
+`selectAvailableCapacityConnection`; it does not evaluate credentials, eligibility, affinity,
+configured strategy selection, leases, or hard admission. `available-capacity` is the only supported
+strategy in this helper; every other strategy is explicitly rejected. Both runtimes read
+`fixtures/available-capacity-selection-v1.json`, which covers missing/nonpositive/fractional caps,
+load-before-priority ordering, candidate-order ties, provider-scoped cursor rotation, an empty set,
+and the saturated least-loaded hint case. JSON cannot encode JavaScript `NaN` or infinities, and the
+vectors do not prove process-distributed occupancy or semaphore behavior.
+
+Run the parity checks with:
+
+```bash
+node --import tsx/esm --test tests/unit/available-capacity-rust-parity.test.ts
+cargo test --offline --manifest-path benchmarks/runtime-proxy/Cargo.toml --lib account_capacity_selection::tests
+```
+
 ### Composed account and multi-gate lease probe
 
 `src/bin/composed-capacity-bench.rs` checks the composition boundary missing from the separate
