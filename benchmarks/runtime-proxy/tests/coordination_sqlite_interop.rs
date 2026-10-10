@@ -491,8 +491,9 @@ async fn rust_dispatch_facade_cancels_renews_and_reclaims_ts_leases() {
     );
     assert_eq!(accepted_ts["acquired"], true);
 
-    // Lease loss is surfaced to the request owner. As in TypeScript, capacity is not proactively
-    // released by the lost lease; the SQLite TTL is the recovery bound.
+    // Lease loss is surfaced to the request owner. We remove the lease row below to simulate a
+    // fence loss; release() after LOST must not delete a replacement lease. If renewal instead
+    // failed while the original row remained valid, its TTL would bound recovery.
     let loss_lease = service
         .acquire_many(&[gate("loss-probe", 1)], Duration::from_secs(2), 20, None)
         .await
@@ -510,7 +511,7 @@ async fn rust_dispatch_facade_cancels_renews_and_reclaims_ts_leases() {
     loss_lease
         .release()
         .await
-        .expect("lost lease leaves capacity to TTL recovery");
+        .expect("release after lease loss is an idempotent no-op");
 
     // A TypeScript lease with an already-expired wall-clock TTL is pruned by the Rust facade on
     // acquisition. This exercises the same lease expiry semantics through the dispatch wrapper.
