@@ -183,6 +183,42 @@ function readCgroupKeyValues(directory, name) {
   }
 }
 
+function readCgroupIoStats(directory) {
+  if (!directory) return null;
+  try {
+    const devices = {};
+    for (const line of fs.readFileSync(path.join(directory, "io.stat"), "utf8").split("\n")) {
+      const [device, ...counters] = line.trim().split(/\s+/);
+      if (!device) continue;
+      const values = {};
+      for (const counter of counters) {
+        const separator = counter.indexOf("=");
+        if (separator <= 0) continue;
+        const value = Number(counter.slice(separator + 1));
+        if (Number.isFinite(value)) values[counter.slice(0, separator)] = value;
+      }
+      devices[device] = values;
+    }
+    return devices;
+  } catch {
+    return null;
+  }
+}
+
+export function _cgroupIoCountersDeltaForTest(before, after) {
+  const delta = {};
+  for (const [device, counters] of Object.entries(after || {})) {
+    const previous = before?.[device] || {};
+    const deviceDelta = {};
+    for (const [name, value] of Object.entries(counters || {})) {
+      if (!Number.isFinite(value)) continue;
+      deviceDelta[name] = Math.max(0, value - (Number(previous[name]) || 0));
+    }
+    delta[device] = deviceDelta;
+  }
+  return delta;
+}
+
 function readCgroupPressure(directory, name) {
   if (!directory) return null;
   try {
@@ -200,8 +236,10 @@ function snapshotCgroup(directory) {
     memoryHighBytes: readCgroupValue(directory, "memory.high"),
     memoryEvents: readCgroupKeyValues(directory, "memory.events"),
     cpu: readCgroupKeyValues(directory, "cpu.stat"),
+    io: readCgroupIoStats(directory),
     memoryPressure: readCgroupPressure(directory, "memory.pressure"),
     cpuPressure: readCgroupPressure(directory, "cpu.pressure"),
+    ioPressure: readCgroupPressure(directory, "io.pressure"),
   };
 }
 
@@ -693,11 +731,60 @@ async function waitForMockStats(mockUrl) {
   return response.json();
 }
 
-async function readCallLogWriterHealth(baseUrl, managementApiKey) {
+const CALL_LOG_WRITER_HEALTH_COUNTERS = [
+  "activeJobs",
+  "queuedArtifacts",
+  "queuedDiagnosticStubs",
+  "reservedArtifactBytes",
+  "reservedDiagnosticStubBytes",
+  "preparationRefusalsTotal",
+  "preparationRefusalsInvalidEstimateTotal",
+  "preparationRefusalsSingleArtifactBudgetTotal",
+  "preparationRefusalsAggregateReservationBudgetTotal",
+  "detailOmissionsTotal",
+  "workerFailuresTotal",
+  "pointerFallbacksTotal",
+  "pointerFallbackFailuresTotal",
+  "diagnosticStubRefusalsTotal",
+];
+
+function createCallLogWriterHealthSummary() {
+  return {
+    sampleCount: 0,
+    unavailableSamples: 0,
+    peak: Object.fromEntries(CALL_LOG_WRITER_HEALTH_COUNTERS.map((field) => [field, 0])),
+    lastSnapshot: null,
+  };
+}
+
+function recordCallLogWriterHealthSample(summary, snapshot) {
+  if (!snapshot || snapshot.unavailable === true) {
+    summary.unavailableSamples++;
+    return;
+  }
+  summary.sampleCount++;
+  const lastSnapshot = {};
+  if (typeof snapshot.workerState === "string") lastSnapshot.workerState = snapshot.workerState;
+  for (const field of CALL_LOG_WRITER_HEALTH_COUNTERS) {
+    const value = Number(snapshot[field]);
+    if (!Number.isFinite(value)) continue;
+    lastSnapshot[field] = value;
+    summary.peak[field] = Math.max(summary.peak[field] || 0, value);
+  }
+  summary.lastSnapshot = lastSnapshot;
+}
+
+export function _callLogWriterHealthSummaryForTest(samples) {
+  const summary = createCallLogWriterHealthSummary();
+  for (const sample of samples) recordCallLogWriterHealthSample(summary, sample);
+  return summary;
+}
+
+async function readCallLogWriterHealth(baseUrl, managementApiKey, timeoutMs = 5_000) {
   try {
     const response = await harnessFetch(`${baseUrl}/api/monitoring/health`, {
       headers: { authorization: `Bearer ${managementApiKey}` },
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!response.ok) return { unavailable: true, status: response.status };
     const body = await response.json();
@@ -711,6 +798,41 @@ async function readCallLogWriterHealth(baseUrl, managementApiKey) {
       reason: error instanceof Error ? error.message.slice(0, 200) : "health_request_failed",
     };
   }
+}
+
+function startCallLogWriterHealthSampler(baseUrl, managementApiKey, intervalMs = 1_000) {
+  const summary = createCallLogWriterHealthSummary();
+  let pendingSample = null;
+  let stopped = false;
+  const sample = () => {
+    if (stopped) return Promise.resolve();
+    if (pendingSample) return pendingSample;
+    pendingSample = (async () => {
+      const snapshot = await readCallLogWriterHealth(
+        baseUrl,
+        managementApiKey,
+        Math.max(250, intervalMs - 100)
+      );
+      recordCallLogWriterHealthSample(summary, snapshot);
+    })().finally(() => {
+      pendingSample = null;
+    });
+    return pendingSample;
+  };
+  const timer = setInterval(() => {
+    void sample();
+  }, intervalMs);
+  timer.unref?.();
+  void sample();
+  return {
+    async stop() {
+      stopped = true;
+      clearInterval(timer);
+      const pending = pendingSample;
+      if (pending) await pending;
+      return summary;
+    },
+  };
 }
 
 async function waitForMockSession(mockUrl, sessionId, timeoutMs = 5_000) {
@@ -1270,6 +1392,8 @@ async function main() {
   let appJournalTail = "";
   let appCgroupSampledPeakBytes = 0;
   let appCgroupSampleCount = 0;
+  let callLogWriterSampler = null;
+  let callLogWriterHealthSnapshot = null;
   let appStopReason = null;
   let highPressureSamples = 0;
   let apiKey = null;
@@ -1390,6 +1514,7 @@ async function main() {
       signal: AbortSignal.timeout(5_000),
     });
     assert.equal(unauthenticated.status, 401, "missing API key must be rejected");
+    callLogWriterSampler = startCallLogWriterHealthSampler(baseUrl, keys.managementApiKey.key);
 
     const clientEnv = {
       PATH: process.env.PATH,
@@ -1457,10 +1582,6 @@ async function main() {
       assert.equal(stats.providerResponsesAborted, 0);
       assert.equal(stats.providerResponsesActive, 0);
     }
-    const callLogWriterHealth = await readCallLogWriterHealth(baseUrl, keys.managementApiKey.key);
-    console.error(
-      `[standalone-antigravity-e2e] call_log_artifact_writer=${JSON.stringify(callLogWriterHealth)}`
-    );
     if (appStopReason) throw new Error(appStopReason);
 
     let artifactResult = { rows: 0, artifacts: 0, traces: 0 };
@@ -1475,6 +1596,13 @@ async function main() {
       });
     }
     if (appStopReason) throw new Error(appStopReason);
+    if (callLogWriterSampler) {
+      callLogWriterHealthSnapshot = await callLogWriterSampler.stop();
+      callLogWriterSampler = null;
+      console.error(
+        `[standalone-antigravity-e2e] call_log_artifact_writer=${JSON.stringify(callLogWriterHealthSnapshot)}`
+      );
+    }
 
     // Preload writes per-process audit summaries on exit. Stop the standalone
     // before reading them so its global-fetch and undici counts are final.
@@ -1483,6 +1611,10 @@ async function main() {
     appCgroupSnapshotBeforeStop = snapshotCgroup(appCgroupDir);
     appCgroupSnapshotBeforeStop.sampledPeakBytes = appCgroupSampledPeakBytes;
     appCgroupSnapshotBeforeStop.sampleCount = appCgroupSampleCount;
+    appCgroupSnapshotBeforeStop.ioDelta = _cgroupIoCountersDeltaForTest(
+      appCgroupBaseline?.io,
+      appCgroupSnapshotBeforeStop.io
+    );
     stopStandaloneService(server.unit);
     appJournalTail = readStandaloneJournal(server.unit);
     const audit = parseAuditFiles(auditDir);
@@ -1528,6 +1660,7 @@ async function main() {
         callLogRows: artifactResult.rows,
         readyArtifacts: artifactResult.artifacts,
         completePrivateTraces: artifactResult.traces,
+        callLogWriterHealth: callLogWriterHealthSnapshot,
         contextBytesPerUserTurn: contextBytes,
         directDispatcherConnections,
         appCpuQuotaCores: appCpuQuota,
@@ -1567,12 +1700,25 @@ async function main() {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     if (appCgroupSampler) clearInterval(appCgroupSampler);
+    if (callLogWriterSampler) {
+      callLogWriterHealthSnapshot = await callLogWriterSampler.stop();
+      callLogWriterSampler = null;
+      if (resultError) {
+        console.error(
+          `[standalone-antigravity-e2e] call_log_artifact_writer=${JSON.stringify(callLogWriterHealthSnapshot)}`
+        );
+      }
+    }
     await stopChild(client?.child);
     if (server?.unit) {
       if (!appCgroupSnapshotBeforeStop && appCgroupDir) {
         appCgroupSnapshotBeforeStop = snapshotCgroup(appCgroupDir);
         appCgroupSnapshotBeforeStop.sampledPeakBytes = appCgroupSampledPeakBytes;
         appCgroupSnapshotBeforeStop.sampleCount = appCgroupSampleCount;
+        appCgroupSnapshotBeforeStop.ioDelta = _cgroupIoCountersDeltaForTest(
+          appCgroupBaseline?.io,
+          appCgroupSnapshotBeforeStop.io
+        );
       }
       stopStandaloneService(server.unit);
       appJournalTail = appJournalTail || readStandaloneJournal(server.unit);
