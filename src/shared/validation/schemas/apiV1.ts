@@ -498,6 +498,7 @@ export const v1RerankSchema = z
     model: modelIdSchema,
     query: nonEmptyStringSchema,
     documents: z.array(z.unknown()).min(1, "documents must contain at least one item"),
+    top_n: z.number().int().positive().optional(),
   })
   .catchall(z.unknown());
 

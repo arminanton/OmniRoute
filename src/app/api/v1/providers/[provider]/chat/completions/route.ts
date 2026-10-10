@@ -73,6 +73,35 @@ async function postHandler(request, { params }) {
 
   const body = parsed.data as { model?: string; [key: string]: unknown };
 
+  // This route is provider-scoped, so an X-Route-Model override must remain
+  // inside that provider. handleChat normally gives this header precedence
+  // over body.model; passing it through unchecked would let a request to
+  // /providers/openai dispatch to another provider.
+  const headers = new Headers(request.headers);
+  const routeModel = headers.get("x-route-model")?.trim();
+  if (routeModel) {
+    const routeModelParts = routeModel.split("/");
+    const hasRouteProviderPrefix = routeModelParts.length >= 2;
+    const routeModelProvider = hasRouteProviderPrefix ? routeModelParts[0] : null;
+
+    if (
+      routeModelProvider &&
+      routeModelProvider !== providerAlias &&
+      routeModelProvider !== rawProvider &&
+      routeModelProvider !== providerEntry.id
+    ) {
+      return errorResponse(
+        HTTP_STATUS.BAD_REQUEST,
+        `X-Route-Model "${routeModel}" does not belong to provider "${rawProvider}". Expected prefix: ${providerAlias}/`
+      );
+    }
+
+    // Keep unprefixed overrides scoped to this route just like body.model.
+    if (!hasRouteProviderPrefix) {
+      headers.set("x-route-model", `${providerAlias}/${routeModel}`);
+    }
+  }
+
   // Validate model belongs to this provider
   if (body.model) {
     const modelParts = body.model.split("/");
@@ -100,7 +129,7 @@ async function postHandler(request, { params }) {
   // Create a new request with the modified body
   const newRequest = new Request(request.url, {
     method: request.method,
-    headers: request.headers,
+    headers,
     body: JSON.stringify(body),
     signal: request.signal,
   });

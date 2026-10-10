@@ -1,7 +1,17 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 
 const { handleAudioTranslation } = await import("../../open-sse/handlers/audioTranslation.ts");
+const { POST: translationsPost } = await import("../../src/app/api/v1/audio/translations/route.ts");
+
+after(async () => {
+  try {
+    const core = await import("../../src/lib/db/core.ts");
+    core.resetDbInstance();
+  } catch {
+    // best-effort teardown for the route's transitive DB imports
+  }
+});
 
 function buildFile(contents, name, type) {
   return new File([Buffer.from(contents)], name, { type });
@@ -16,6 +26,22 @@ test("handleAudioTranslation requires model", async () => {
 
   assert.equal(response.status, 400);
   assert.equal(payload.error.message, "model is required");
+});
+
+test("audio translations route rejects oversized declared bodies before multipart parsing", async () => {
+  const request = new Request("http://localhost/api/v1/audio/translations", {
+    method: "POST",
+    headers: {
+      "content-type": "multipart/form-data; boundary=unused",
+      "content-length": String(Number.MAX_SAFE_INTEGER),
+    },
+  });
+
+  const response = await translationsPost(request);
+  const payload = (await response.json()) as any;
+
+  assert.equal(response.status, 413);
+  assert.match(payload.error.message, /configured body-size limit/i);
 });
 
 test("handleAudioTranslation requires a file upload", async () => {
@@ -53,7 +79,10 @@ test("handleAudioTranslation rejects unsupported providers", async () => {
   const payload = (await response.json()) as any;
 
   assert.equal(response.status, 400);
-  assert.match(payload.error.message, /No translation provider found for model "unknown\/provider"/);
+  assert.match(
+    payload.error.message,
+    /No translation provider found for model "unknown\/provider"/
+  );
 });
 
 test("handleAudioTranslation dispatches OpenAI-compatible multipart requests and returns { text }", async () => {

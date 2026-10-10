@@ -1,4 +1,4 @@
-// Allow large audio/video file uploads — 5min for processing large files (up to 2GB)
+// Allow up to five minutes for audio translation within the configured API body limit.
 export const maxDuration = 300;
 import { handleAudioTranslation } from "@omniroute/open-sse/handlers/audioTranslation.ts";
 import {
@@ -19,6 +19,12 @@ import {
 } from "@/app/api/v1/_shared/rateLimit";
 import { attachOmniRouteMetaToResponse } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
+import { getCachedSettings } from "@/lib/db/readCache";
+import {
+  getConfiguredBodySizeLimitBytes,
+  readRequestBodyWithLimit,
+  RequestBodyTooLargeError,
+} from "@/shared/middleware/bodySizeGuard";
 import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
 import {
   acquireConfiguredSharedAccountAdmission,
@@ -50,8 +56,19 @@ export async function POST(request) {
 
   let formData;
   try {
-    formData = await request.formData();
-  } catch {
+    const bodySizeSettings = await getCachedSettings().catch(() => undefined);
+    const bytes = await readRequestBodyWithLimit(
+      request,
+      getConfiguredBodySizeLimitBytes(bodySizeSettings)
+    );
+    request.signal.throwIfAborted();
+    formData = await new Response(bytes, {
+      headers: { "Content-Type": request.headers.get("content-type") || "" },
+    }).formData();
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return errorResponse(413, "Audio translation upload exceeds the configured body-size limit");
+    }
     if (request.signal.aborted) {
       return errorResponse(499, "Translation request cancelled");
     }

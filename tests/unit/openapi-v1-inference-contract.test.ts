@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import * as yaml from "js-yaml";
+import { v1ModerationSchema, v1RerankSchema } from "../../src/shared/validation/schemas/apiV1.ts";
 
 type Schema = {
   $ref?: string;
@@ -26,6 +27,7 @@ type Schema = {
 
 type OperationResponse = {
   $ref?: string;
+  description?: string;
   headers?: Record<string, { $ref?: string; schema?: Schema }>;
   content?: Record<string, { schema?: Schema }>;
 };
@@ -344,6 +346,21 @@ test("public inference contracts match route validation and auth error shapes", 
   }
   assert.ok(chat.responses?.["415"], "chat documents its JSON content-type rejection");
   assert.ok(messages.responses?.["415"], "messages documents its JSON content-type rejection");
+  assert.ok(chat.responses?.["413"], "chat documents body/admission byte-limit rejection");
+  assert.ok(
+    responses.responses?.["413"],
+    "responses documents body/admission byte-limit rejection"
+  );
+  const providerChat = openapi.paths["/api/v1/providers/{provider}/chat/completions"]?.post;
+  assert.ok(
+    providerChat?.responses?.["400"],
+    "provider-scoped chat documents provider/model mismatch"
+  );
+  const providerRouteModel = providerChat?.parameters?.find(
+    (parameter) => parameter.name === "X-Route-Model"
+  );
+  assert.equal(providerRouteModel?.in, "header");
+  assert.match(providerRouteModel?.description ?? "", /provider named in the path/i);
   assert.equal(
     openapi.components.responses.InferenceUnauthorized?.content?.["application/json"]?.schema?.$ref,
     "#/components/schemas/ApiErrorResponse"
@@ -367,6 +384,29 @@ test("public inference contracts match route validation and auth error shapes", 
   assert.match(responsesRoute, /Invalid JSON body/);
   assert.match(routingModel, /return headerModel \|\| body\.model/);
   assert.match(authzPipeline, /error:\s*\{\s*code: outcome\.code,\s*message: outcome\.message,/);
+});
+
+test("moderation and rerank schemas match documented non-empty input constraints", () => {
+  const moderationInput = requestSchema("/api/v1/moderations", "post").properties?.input;
+  const moderationString = moderationInput?.oneOf?.find((branch) => branch.type === "string");
+  const moderationArray = moderationInput?.oneOf?.find((branch) => branch.type === "array");
+  assert.equal(moderationString?.minLength, 1);
+  assert.equal(moderationString?.pattern, "\\S");
+  assert.equal(moderationArray?.minItems, 1);
+
+  assert.equal(v1ModerationSchema.safeParse({ input: "" }).success, false);
+  assert.equal(v1ModerationSchema.safeParse({ input: "   " }).success, false);
+  assert.equal(v1ModerationSchema.safeParse({ input: [] }).success, false);
+  assert.equal(v1ModerationSchema.safeParse({ input: "hello" }).success, true);
+  assert.equal(v1ModerationSchema.safeParse({ input: ["hello"] }).success, true);
+
+  const rerankRequest = requestSchema("/api/v1/rerank", "post");
+  assert.equal(rerankRequest.properties?.top_n?.minimum, 1);
+  const validRerank = { model: "cohere/rerank-v3.5", query: "q", documents: ["d"] };
+  assert.equal(v1RerankSchema.safeParse({ ...validRerank, top_n: 1 }).success, true);
+  for (const topN of [0, -1, 1.5, "2"]) {
+    assert.equal(v1RerankSchema.safeParse({ ...validRerank, top_n: topN }).success, false);
+  }
 });
 
 test("embedding OpenAPI input includes the native Jina and Gemini forms accepted by validation", () => {
@@ -646,7 +686,7 @@ test("remaining media contracts describe inputs, auth, failures, catalog fields,
       "/api/v1/audio/transcriptions",
       ["400", "401", "403", "413", "429", "499", "500", "503", "default"],
     ],
-    ["/api/v1/audio/translations", ["400", "401", "403", "429", "500", "503", "default"]],
+    ["/api/v1/audio/translations", ["400", "401", "403", "413", "429", "500", "503", "default"]],
   ] as const;
   for (const [pathname, statuses] of mediaErrorStatuses) {
     const post = openapi.paths[pathname]?.post;
@@ -655,6 +695,14 @@ test("remaining media contracts describe inputs, auth, failures, catalog fields,
       assert.ok(post.responses?.[status], `POST ${pathname} documents ${status}`);
     }
   }
+  assert.match(
+    openapi.paths["/api/v1/audio/transcriptions"]?.post?.responses?.["413"]?.description ?? "",
+    /fixed 100 MiB actual-body limit/i
+  );
+  assert.match(
+    openapi.paths["/api/v1/images/edits"]?.post?.responses?.["413"]?.description ?? "",
+    /does not impose an image-edit request-body size cap/i
+  );
 
   const telemetryNames = [
     "X-OmniRoute-Cache-Hit",

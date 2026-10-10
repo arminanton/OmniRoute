@@ -1762,6 +1762,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+        "413":
+          description: Request body exceeds the applicable chat body or ingest-byte admission limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "415":
           description: Content-Type must be application/json.
           content:
@@ -1843,7 +1848,9 @@ paths:
       tags: [Chat]
       summary: Create chat completion (provider-specific)
       description: >-
-        Routes to a specific provider by name. Authentication is required when
+        Routes to a specific provider by name. If `X-Route-Model` is supplied, it takes
+        precedence over the body `model` and must still resolve to this path's provider;
+        a cross-provider override is rejected. Authentication is required when
         REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
       security:
         - BearerAuth: []
@@ -1855,6 +1862,14 @@ paths:
         - name: provider
           in: path
           required: true
+          schema:
+            type: string
+        - name: X-Route-Model
+          in: header
+          description: >-
+            Optional routing model; takes precedence over body `model` and must belong to the
+            provider named in the path. A model for another provider is rejected with HTTP 400.
+          required: false
           schema:
             type: string
       requestBody:
@@ -1879,6 +1894,11 @@ paths:
               description: Request correlation ID when available.
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "400":
+          description: Unknown path provider, invalid request, or model/header provider mismatch.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
@@ -2043,6 +2063,11 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+        "413":
+          description: Request body exceeds the applicable chat body or ingest-byte admission limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
           $ref: "#/components/responses/InferenceUnauthorized"
         "503":
@@ -2577,7 +2602,7 @@ paths:
         "403":
           $ref: "#/components/responses/InferenceForbidden"
         "413":
-          description: Audio upload exceeds the configured body-size limit.
+          description: Audio upload exceeds the route's fixed 100 MiB actual-body limit.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
@@ -2621,7 +2646,10 @@ paths:
                 input:
                   oneOf:
                     - type: string
+                      minLength: 1
+                      pattern: "\\S"
                     - type: array
+                      minItems: 1
                       items: {}
                     - type: object
                       additionalProperties: true
@@ -17901,6 +17929,11 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "499":
           description: The client cancelled the translation request; any active provider fetch and account admission are released.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Audio upload exceeds the configured request-body size limit.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
@@ -41342,7 +41375,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "413":
-          description: Request body exceeds the configured image-edit body-size limit.
+          description: >-
+            The selected image-edit provider rejected the payload as too large. OmniRoute
+            does not impose an image-edit request-body size cap.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }

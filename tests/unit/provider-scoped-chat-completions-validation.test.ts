@@ -27,10 +27,10 @@ after(async () => {
   }
 });
 
-function makeRequest(body: string) {
+function makeRequest(body: string, extraHeaders: Record<string, string> = {}) {
   return new Request("http://localhost/v1/providers/openai/chat/completions", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...extraHeaders },
     body,
   });
 }
@@ -72,6 +72,27 @@ test("#5907 rejects a non-string model with 400", async () => {
   assert.equal(res.status, 400);
   const body = await res.json();
   assert.match(body.error.message, /model must be a string/i);
+});
+
+test("provider-scoped chat rejects an X-Route-Model override for another provider", async () => {
+  const res = await POST(
+    makeRequest(JSON.stringify({ model: "openai/gpt-4o" }), {
+      "X-Route-Model": "anthropic/claude-sonnet-4-5",
+    }),
+    params("openai")
+  );
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.match(body.error.message, /X-Route-Model.*does not belong to provider/i);
+});
+
+test("provider-scoped chat accepts an unprefixed X-Route-Model for its path provider", async () => {
+  const res = await POST(
+    makeRequest(JSON.stringify({ model: "gpt-4o" }), { "X-Route-Model": "gpt-4o-mini" }),
+    params("openai")
+  );
+  const body = await res.json();
+  assert.doesNotMatch(body.error?.message ?? "", /X-Route-Model.*does not belong to provider/i);
 });
 
 test("#5907 rejects an unknown provider with 400", async () => {

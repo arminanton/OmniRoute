@@ -813,7 +813,7 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/providers/{provider}/chat/completions",
     method: "POST",
     summary: "Create chat completion (provider-specific)",
-    description: "Routes to a specific provider by name. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description: "Routes to a specific provider by name. If `X-Route-Model` is supplied, it takes precedence over the body `model` and must still resolve to this path's provider; a cross-provider override is rejected. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Chat",
     tags: ["Chat"],
     requiresAuth: false,
