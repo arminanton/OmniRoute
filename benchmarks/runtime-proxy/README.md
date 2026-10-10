@@ -302,7 +302,9 @@ Rust fails closed on a denied API-key decision, disabled/unusable connection, ca
 restriction, active cooldown, unknown/blocked/exhausted quota state, expired context, or full
 account cap. Context TTL is capped at 30 seconds; JSON input is limited to 1 MiB and 4,096
 candidates. An affinity hint contains only a candidate handle, cannot outlive its parent context,
-and is retained only while that candidate remains eligible and the hint is unexpired.
+and is retained only while that candidate remains eligible and the hint is unexpired. The
+exploratory `policy_generation` is a synthetic monotonic authority revision; validation requires
+the caller to supply the current revision and rejects snapshots from an older or unexpected one.
 
 TypeScript remains authoritative for key authentication/revocation and key-level endpoint,
 schedule, model, and quota rules; the connection allowlist; active/terminal account state; provider
@@ -334,6 +336,13 @@ internals. The eviction vector touches the oldest key before the trigger insert,
 authoritative state for the first 201 keys: the first 200 must be revalidated, while key 200 must
 still hit its cached positive. This confirms that a read hit does not refresh insertion order.
 
+Additional deterministic-clock tests model a local revoke, a successful shared invalidation event
+clearing a second process's positive entry, and a missed event leaving that process's positive usable
+only until its local 60-second TTL expires. The shared generation/event source is synthetic and
+benchmark-only; it is not wired to TypeScript or Redis. The missed-event test isolates process-local
+cache expiry. It does not model a stale Redis entry, which TypeScript may reuse for up to one hour if
+Redis invalidation fails.
+
 The TypeScript validator checks banned/active/revoked/expiry state; a revoke writes
 `revoked_at` and `is_active = 0` before clearing local caches, then attempts to delete the optional
 Redis auth entry. Redis stores auth snapshots for up to one hour, and Redis read/write/delete
@@ -344,10 +353,12 @@ generation number to express cache invalidation, but TypeScript does not current
 generation. This is a bounded cache-behavior probe, not a Rust key validator, Redis parity
 implementation, or authorization guarantee.
 
-In `PolicyContextV1`, `schema_version` guards the wire shape only; it is not a policy/config
-generation. The 30-second context expiry bounds reuse but cannot actively invalidate a snapshot
-when a key or connection changes. No cross-process invalidation epoch is currently shared with
-the Rust prototype.
+In `PolicyContextV1`, `schema_version` guards the wire shape only; `policy_generation` is a separate
+exploratory field. TypeScript does not currently export or publish a shared policy-generation
+contract. A Rust caller must obtain the current generation from a trusted authority before
+accepting a context; trusting the generation embedded in the JSON alone provides no freshness
+guarantee. The single synthetic counter also over-invalidates unrelated snapshots and is only a
+test model, not the final key/connection revision schema.
 
 The surrounding policy differences remain material. TypeScript connection reads are process-local
 5-second TTL caches invalidated by connection writes; account selection then filters active

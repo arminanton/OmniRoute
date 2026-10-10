@@ -23,6 +23,9 @@ const MAX_POLICY_CONTEXT_TTL_MS: u64 = 30_000;
 #[serde(deny_unknown_fields)]
 pub struct PolicyContextV1 {
     pub schema_version: u16,
+    /// Exploratory monotonic policy epoch. The trusted caller must compare this with its current
+    /// authority epoch before consuming the snapshot; TypeScript does not currently export one.
+    pub policy_generation: u64,
     pub provider: String,
     pub requested_model: String,
     pub issued_at_unix_ms: u64,
@@ -108,6 +111,7 @@ pub enum PolicyContextError {
     InvalidProvider,
     InvalidModel,
     InvalidValidityWindow,
+    StalePolicyGeneration { snapshot: u64, current: u64 },
     InvalidCandidateRef,
     DuplicateCandidateRef,
     InvalidAffinityRef,
@@ -130,6 +134,10 @@ impl std::fmt::Display for PolicyContextError {
             Self::InvalidValidityWindow => {
                 formatter.write_str("policy context is not valid at the supplied time")
             }
+            Self::StalePolicyGeneration { snapshot, current } => write!(
+                formatter,
+                "policy context generation {snapshot} does not match current generation {current}"
+            ),
             Self::InvalidCandidateRef => formatter.write_str("invalid candidate reference"),
             Self::DuplicateCandidateRef => formatter.write_str("duplicate candidate reference"),
             Self::InvalidAffinityRef => formatter.write_str("invalid affinity reference"),
@@ -149,18 +157,29 @@ impl PolicyContextV1 {
     pub fn parse_and_validate(
         json: &str,
         now_unix_ms: u64,
+        current_policy_generation: u64,
     ) -> Result<ValidatedPolicyContext, PolicyContextError> {
         if json.len() > MAX_POLICY_CONTEXT_JSON_BYTES {
             return Err(PolicyContextError::PayloadTooLarge);
         }
         let context: Self =
             serde_json::from_str(json).map_err(|_| PolicyContextError::InvalidJson)?;
-        context.validate(now_unix_ms)
+        context.validate(now_unix_ms, current_policy_generation)
     }
 
-    pub fn validate(self, now_unix_ms: u64) -> Result<ValidatedPolicyContext, PolicyContextError> {
+    pub fn validate(
+        self,
+        now_unix_ms: u64,
+        current_policy_generation: u64,
+    ) -> Result<ValidatedPolicyContext, PolicyContextError> {
         if self.schema_version != POLICY_CONTEXT_SCHEMA_VERSION {
             return Err(PolicyContextError::UnsupportedVersion(self.schema_version));
+        }
+        if self.policy_generation != current_policy_generation {
+            return Err(PolicyContextError::StalePolicyGeneration {
+                snapshot: self.policy_generation,
+                current: current_policy_generation,
+            });
         }
         if self.provider.trim().is_empty() || self.provider.len() > 128 {
             return Err(PolicyContextError::InvalidProvider);
@@ -269,6 +288,7 @@ fn evaluate_candidate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api_key_validation_cache::SharedPolicyGeneration;
 
     const NOW: u64 = 10_000;
 
@@ -289,6 +309,7 @@ mod tests {
     fn context() -> PolicyContextV1 {
         PolicyContextV1 {
             schema_version: POLICY_CONTEXT_SCHEMA_VERSION,
+            policy_generation: 0,
             provider: "antigravity".into(),
             requested_model: "gemini-3.8-flash".into(),
             issued_at_unix_ms: NOW - 1,
@@ -300,7 +321,7 @@ mod tests {
     }
 
     fn validated(context: PolicyContextV1) -> ValidatedPolicyContext {
-        context.validate(NOW).expect("valid context")
+        context.validate(NOW, 0).expect("valid context")
     }
 
     #[test]
@@ -313,7 +334,7 @@ mod tests {
                 "unexpected {forbidden_field}"
             );
         }
-        let result = PolicyContextV1::parse_and_validate(&encoded, NOW).expect("validate");
+        let result = PolicyContextV1::parse_and_validate(&encoded, NOW, 0).expect("validate");
         assert!(result.candidate_results[0].eligible);
     }
 
@@ -322,9 +343,28 @@ mod tests {
         let mut value = context();
         value.schema_version = POLICY_CONTEXT_SCHEMA_VERSION + 1;
         assert_eq!(
-            value.validate(NOW),
+            value.validate(NOW, 0),
             Err(PolicyContextError::UnsupportedVersion(2))
         );
+    }
+
+    #[test]
+    fn rejects_context_from_before_a_policy_revocation_generation() {
+        let mut before_revoke = context();
+        let mut authority = SharedPolicyGeneration::default();
+        before_revoke.policy_generation = authority.current();
+        let current_generation = authority.advance_after_policy_write();
+        assert_eq!(
+            before_revoke.validate(NOW, current_generation),
+            Err(PolicyContextError::StalePolicyGeneration {
+                snapshot: 0,
+                current: 1,
+            })
+        );
+
+        let mut current = context();
+        current.policy_generation = current_generation;
+        assert!(current.validate(NOW, authority.current()).is_ok());
     }
 
     #[test]
@@ -332,13 +372,13 @@ mod tests {
         let encoded = serde_json::to_string(&context()).expect("serialize");
         let missing = encoded.replace("\"api_key_authorized_for_request\":true,", "");
         assert_eq!(
-            PolicyContextV1::parse_and_validate(&missing, NOW),
+            PolicyContextV1::parse_and_validate(&missing, NOW, 0),
             Err(PolicyContextError::InvalidJson)
         );
 
         let unknown = encoded.replacen("{", "{\"access_token\":\"secret\",", 1);
         assert_eq!(
-            PolicyContextV1::parse_and_validate(&unknown, NOW),
+            PolicyContextV1::parse_and_validate(&unknown, NOW, 0),
             Err(PolicyContextError::InvalidJson)
         );
 
@@ -348,7 +388,7 @@ mod tests {
             1,
         );
         assert_eq!(
-            PolicyContextV1::parse_and_validate(&candidate_unknown, NOW),
+            PolicyContextV1::parse_and_validate(&candidate_unknown, NOW, 0),
             Err(PolicyContextError::InvalidJson)
         );
     }
@@ -358,21 +398,21 @@ mod tests {
         let mut expired = context();
         expired.expires_at_unix_ms = NOW;
         assert_eq!(
-            expired.validate(NOW),
+            expired.validate(NOW, 0),
             Err(PolicyContextError::InvalidValidityWindow)
         );
 
         let mut future = context();
         future.issued_at_unix_ms = NOW + 1;
         assert_eq!(
-            future.validate(NOW),
+            future.validate(NOW, 0),
             Err(PolicyContextError::InvalidValidityWindow)
         );
 
         let mut long_lived = context();
         long_lived.expires_at_unix_ms = NOW + MAX_POLICY_CONTEXT_TTL_MS + 1;
         assert_eq!(
-            long_lived.validate(NOW),
+            long_lived.validate(NOW, 0),
             Err(PolicyContextError::InvalidValidityWindow)
         );
     }
@@ -381,7 +421,7 @@ mod tests {
     fn bounds_context_payload_and_candidate_count() {
         let too_large = " ".repeat(MAX_POLICY_CONTEXT_JSON_BYTES + 1);
         assert_eq!(
-            PolicyContextV1::parse_and_validate(&too_large, NOW),
+            PolicyContextV1::parse_and_validate(&too_large, NOW, 0),
             Err(PolicyContextError::PayloadTooLarge)
         );
 
@@ -390,7 +430,7 @@ mod tests {
             .map(|index| candidate(&format!("candidate-{index}")))
             .collect();
         assert_eq!(
-            too_many.validate(NOW),
+            too_many.validate(NOW, 0),
             Err(PolicyContextError::TooManyCandidates)
         );
     }
@@ -459,7 +499,7 @@ mod tests {
         let encoded = serde_json::to_string(&context()).expect("serialize");
         let future_state = encoded.replace("\"allowed\"", "\"future_quota_state\"");
         assert_eq!(
-            PolicyContextV1::parse_and_validate(&future_state, NOW),
+            PolicyContextV1::parse_and_validate(&future_state, NOW, 0),
             Err(PolicyContextError::InvalidJson)
         );
     }
@@ -502,7 +542,7 @@ mod tests {
             expires_at_unix_ms: NOW + 1_001,
         });
         assert_eq!(
-            pin_outlives_context.validate(NOW),
+            pin_outlives_context.validate(NOW, 0),
             Err(PolicyContextError::InvalidAffinityRef)
         );
     }
@@ -512,7 +552,7 @@ mod tests {
         let mut duplicate = context();
         duplicate.candidates.push(candidate("candidate-a"));
         assert_eq!(
-            duplicate.validate(NOW),
+            duplicate.validate(NOW, 0),
             Err(PolicyContextError::DuplicateCandidateRef)
         );
     }

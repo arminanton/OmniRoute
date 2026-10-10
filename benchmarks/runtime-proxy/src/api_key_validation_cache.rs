@@ -13,6 +13,25 @@ pub const API_KEY_VALIDATION_TTL_MS: i64 = 60_000;
 const MAX_CACHE_SIZE: usize = 1_000;
 const EVICT_COUNT: usize = 200;
 
+/// Synthetic shared policy-generation source used only by the benchmark parity probe.
+/// TypeScript does not currently publish this generation or an equivalent event contract.
+#[derive(Debug, Default)]
+pub struct SharedPolicyGeneration {
+    generation: u64,
+}
+
+impl SharedPolicyGeneration {
+    pub fn current(&self) -> u64 {
+        self.generation
+    }
+
+    /// Simulate a committed key/policy mutation advancing the shared generation.
+    pub fn advance_after_policy_write(&mut self) -> u64 {
+        self.generation = self.generation.saturating_add(1);
+        self.generation
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Entry {
     generation: u64,
@@ -24,6 +43,7 @@ struct Entry {
 #[derive(Debug, Default)]
 pub struct ApiKeyValidationCache {
     generation: u64,
+    shared_generation: u64,
     entries: HashMap<String, Entry>,
     insertion_order: VecDeque<String>,
 }
@@ -76,6 +96,19 @@ impl ApiKeyValidationCache {
         self.generation = self.generation.saturating_add(1);
         self.entries.clear();
         self.insertion_order.clear();
+    }
+
+    /// Apply a successfully delivered shared invalidation event. A newer generation clears
+    /// this process's positives; old or duplicate events cannot roll state backward.
+    pub fn apply_shared_generation(&mut self, generation: u64) -> bool {
+        if generation <= self.shared_generation {
+            return false;
+        }
+        self.shared_generation = generation;
+        self.generation = self.generation.saturating_add(1);
+        self.entries.clear();
+        self.insertion_order.clear();
+        true
     }
 
     pub fn generation(&self) -> u64 {
@@ -185,6 +218,75 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn local_revocation_invalidates_the_writer_cache_immediately() {
+        let mut cache = ApiKeyValidationCache::default();
+        let mut authoritative_validity = HashMap::from([("key-a".to_owned(), true)]);
+        cache.cache_validation_result("key-a", true, 1_000);
+        assert_eq!(cache.cached_validation("key-a", 1_001), Some(true));
+
+        authoritative_validity.insert("key-a".to_owned(), false);
+        cache.invalidate_after_key_write();
+
+        assert_eq!(cache.cached_validation("key-a", 1_002), None);
+        let valid = *authoritative_validity.get("key-a").unwrap();
+        cache.cache_validation_result("key-a", valid, 1_002);
+        assert!(!valid);
+        assert_eq!(cache.cached_validation("key-a", 1_003), None);
+    }
+
+    #[test]
+    fn successful_shared_invalidation_clears_a_second_process_cache() {
+        let mut writer = ApiKeyValidationCache::default();
+        let mut reader = ApiKeyValidationCache::default();
+        let mut shared_generation = SharedPolicyGeneration::default();
+        writer.cache_validation_result("key-a", true, 1_000);
+        reader.cache_validation_result("key-a", true, 1_000);
+        assert_eq!(reader.cached_validation("key-a", 1_001), Some(true));
+
+        // The writer commits the revoke, clears its local cache, then publishes the new epoch.
+        writer.invalidate_after_key_write();
+        let event_generation = shared_generation.advance_after_policy_write();
+        assert_eq!(shared_generation.current(), event_generation);
+        // A separate local write advances the cache-local counter independently of the shared
+        // epoch. The shared event must still be recognized as new.
+        reader.invalidate_after_key_write();
+        reader.cache_validation_result("key-a", true, 1_001);
+        assert!(reader.apply_shared_generation(event_generation));
+        assert_eq!(reader.cached_validation("key-a", 1_002), None);
+        assert!(!reader.apply_shared_generation(event_generation));
+        assert!(!reader.apply_shared_generation(event_generation - 1));
+    }
+
+    #[test]
+    fn missed_shared_invalidation_expires_local_positive_at_the_ttl_boundary() {
+        let mut reader = ApiKeyValidationCache::default();
+        let mut shared_generation = SharedPolicyGeneration::default();
+        let authoritative_validity = HashMap::from([("key-a".to_owned(), false)]);
+        reader.cache_validation_result("key-a", true, 1_000);
+        let event_generation = shared_generation.advance_after_policy_write();
+
+        // Simulate failed event delivery: the shared authority advanced, but the reader never
+        // applied the event and can continue using its old positive only until its local TTL.
+        assert_eq!(shared_generation.current(), event_generation);
+        assert_eq!(reader.generation(), 0);
+        assert_eq!(
+            reader.cached_validation("key-a", 1_000 + API_KEY_VALIDATION_TTL_MS - 1),
+            Some(true)
+        );
+        assert_eq!(
+            reader.cached_validation("key-a", 1_000 + API_KEY_VALIDATION_TTL_MS),
+            None
+        );
+        let valid = *authoritative_validity.get("key-a").unwrap();
+        reader.cache_validation_result("key-a", valid, 1_000 + API_KEY_VALIDATION_TTL_MS);
+        assert!(!valid);
+        assert_eq!(
+            reader.cached_validation("key-a", 1_000 + API_KEY_VALIDATION_TTL_MS + 1),
+            None
+        );
     }
 
     fn apply_validation_action(
