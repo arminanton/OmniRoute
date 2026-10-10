@@ -20,7 +20,11 @@ export async function getOrInitSupervisor(): Promise<ServiceSupervisor> {
   const existing = getSupervisor(TOOL);
   if (existing) return existing;
 
-  const apiKey = await getOrCreateApiKey(TOOL).catch(() => "placeholder");
+  // The stored DARIO_ADMIN_TOKEN is the credential for Dario's /admin plane.
+  // If it cannot be read or decrypted, do not launch the child with a known
+  // fallback token; fail supervisor initialization and surface the key recovery
+  // error to the caller instead.
+  const apiKey = await getOrCreateApiKey(TOOL);
 
   const sup = new ServiceSupervisor({
     tool: TOOL,

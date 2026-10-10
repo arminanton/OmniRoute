@@ -9447,10 +9447,25 @@ paths:
       operationId: postApiServicesCliproxyInstall
       x-local-only: true
       tags: [Embedded Services]
-      summary: Install CLIProxyAPI from npm
+      summary: Install CLIProxyAPI from a GitHub release
       description: >-
-        Installs the CLIProxyAPI package under DATA_DIR/services/cliproxy/.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Downloads and installs the selected CLIProxyAPI GitHub release under DATA_DIR. The shared
+        installer accepts an optional constrained version and defaults to `latest`; the success
+        response includes local install metadata. **LOCAL_ONLY** — only loopback and trusted
+        private-LAN peers pass the locality gate; this spawn-capable service prefix has no remote
+        manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous local/LAN
+        access; otherwise management authentication is required. `oma_` Access Tokens need `admin`
+        on `/api/services/*`. Install paths and service state are sensitive. Runtime policy mode
+        `locked` blocks the embedded-service install capability independently of request auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         content:
@@ -9464,6 +9479,7 @@ paths:
       responses:
         "200":
           description: Install succeeded
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9477,6 +9493,13 @@ paths:
           description: Invalid request body
         "500":
           description: npm install failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/cliproxy/start:
     post:
@@ -9485,11 +9508,25 @@ paths:
       tags: [Embedded Services]
       summary: Start CLIProxyAPI
       description: >-
-        Spawns the CLIProxyAPI process. Idempotent if already running.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Starts CLIProxyAPI through the supervisor (or adopts a healthy process on its configured
+        loopback port). **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality
+        gate; this spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Process state is sensitive.
+        Runtime policy mode `locked` can deny the start/provisioning capability even after auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service started
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9497,7 +9534,13 @@ paths:
         "409":
           description: CLIProxyAPI is not installed
         "503":
-          description: Start failed
+          description: Start failed or runtime policy denied the service start capability.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/services/cliproxy/stop:
     post:
@@ -9506,15 +9549,37 @@ paths:
       tags: [Embedded Services]
       summary: Stop CLIProxyAPI
       description: >-
-        Gracefully stops CLIProxyAPI. Idempotent.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Gracefully stops CLIProxyAPI; if no supervisor exists, returns a stopped status. **LOCAL_ONLY** —
+        only loopback and trusted private-LAN peers pass the locality gate; this spawn-capable service
+        prefix has no remote manage-scope bypass. On admitted peers, `requireLogin=false` permits
+        anonymous local/LAN access; otherwise management authentication is required. `oma_` Access
+        Tokens need `admin` on `/api/services/*`. Process state is sensitive. Stopping remains allowed
+        when runtime policy mode is `locked`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service stopped
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatus"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500": { description: Stop failed. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/cliproxy/restart:
     post:
@@ -9523,15 +9588,41 @@ paths:
       tags: [Embedded Services]
       summary: Restart CLIProxyAPI
       description: >-
-        stop() then start() under the operation lock.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Stops and starts CLIProxyAPI under the operation lock, with the same health/adoption behavior
+        as `start`. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality
+        gate; this spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Process state is sensitive.
+        Runtime policy mode `locked` can deny the start/provisioning capability even after auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service restarted
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatus"
+        "409": { description: CLIProxyAPI is not installed. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          description: Restart failed or runtime policy denied the service start capability.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/services/cliproxy/update:
     post:
@@ -9540,8 +9631,23 @@ paths:
       tags: [Embedded Services]
       summary: Update CLIProxyAPI to a newer npm version
       description: >-
-        Stops, installs newer version, restarts.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Compares installed/latest releases; if an update is needed, stops a running process, installs
+        the latest GitHub release, and attempts to restart it. A restart failure is logged while the
+        update result can still report success. **LOCAL_ONLY** — only loopback and trusted private-LAN
+        peers pass the locality gate; this spawn-capable service prefix has no remote manage-scope
+        bypass. On admitted peers, `requireLogin=false` permits anonymous local/LAN access; otherwise
+        management authentication is required. `oma_` Access Tokens need `admin` on
+        `/api/services/*`. Version, install path, and process metadata are sensitive. Runtime policy
+        mode `locked` blocks installation/start capabilities independently of request auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         content:
@@ -9555,6 +9661,7 @@ paths:
       responses:
         "200":
           description: Update succeeded
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9566,6 +9673,13 @@ paths:
                     type: string
         "500":
           description: Update failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/cliproxy/status:
     get:
@@ -9574,16 +9688,41 @@ paths:
       tags: [Embedded Services]
       summary: Get CLIProxyAPI status
       description: >-
-        Returns live supervisor state and DB metadata (no apiKeyMasked — CLIProxyAPI
-        does not use an injected API key).
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Returns live supervisor and DB metadata: PID/port, health/errors, installed/latest version,
+        provider exposure, and adoption flags. The service management password remains server-side
+        and is not returned; there is no reveal query. The latest-release lookup is cached in-process
+        for one hour, but runtime policy mode `locked` denies that install-capability lookup before
+        reading the cache and can make this status route return 500. **LOCAL_ONLY** — only loopback
+        and trusted private-LAN peers pass the locality gate; this spawn-capable service prefix has
+        no remote manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous
+        local/LAN access; otherwise management authentication is required. `oma_` Access Tokens need
+        `admin` on `/api/services/*`. Process and release metadata are sensitive; no explicit HTTP
+        cache directive is set by this handler.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Status response
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatus"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500": { description: Status or latest-release lookup failed. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/cliproxy/auto-start:
     post:
@@ -9592,8 +9731,21 @@ paths:
       tags: [Embedded Services]
       summary: Toggle CLIProxyAPI auto-start
       description: >-
-        When enabled, CLIProxyAPI starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Persists whether CLIProxyAPI should start on the next OmniRoute boot; this does not start it
+        immediately. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality
+        gate; this spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Service lifecycle settings
+        are sensitive; runtime policy mode `locked` may still block the later start.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         content:
@@ -9605,17 +9757,17 @@ paths:
                 enabled:
                   type: boolean
       responses:
-        "200":
-          description: Auto-start flag updated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  autoStart:
-                    type: boolean
+        "204":
+          description: Auto-start flag updated; no response body.
         "400":
           description: Invalid request body
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/cliproxy/auto-restart-adopted:
     post:
@@ -10261,7 +10413,22 @@ paths:
       description: >-
         Installs the `@askalf/dario` npm package (Claude-account-pool proxy) under
         DATA_DIR/services/dario/. Uses execFile (no shell interpolation — hard rule
-        #13). **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        #13). The optional version defaults to `latest`, and the success response includes local
+        install metadata. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the
+        locality gate; this spawn-capable service prefix has no remote manage-scope bypass. On
+        admitted peers, `requireLogin=false` permits anonymous local/LAN access; otherwise management
+        authentication is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Install
+        paths and process state are sensitive. Runtime policy mode `locked` blocks the embedded-service
+        install capability independently of request auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         content:
@@ -10276,6 +10443,7 @@ paths:
       responses:
         "200":
           description: Install succeeded
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -10291,6 +10459,13 @@ paths:
           description: Invalid request body
         "500":
           description: npm install failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/dario/start:
     post:
@@ -10299,11 +10474,26 @@ paths:
       tags: [Embedded Services]
       summary: Start Dario
       description: >-
-        Spawns the Dario process. Idempotent if already running.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Starts Dario through the supervisor or adopts an already-healthy process on its loopback
+        health port. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality
+        gate; this spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Process metadata is
+        sensitive. Runtime policy mode `locked` can deny the start/provisioning capability even after
+        request auth. The Dario admin-token retrieval failure path is fail-closed.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service started (or already running)
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -10311,7 +10501,13 @@ paths:
         "409":
           description: Dario is not installed
         "503":
-          description: Start failed
+          description: Start failed, the runtime capability is disabled, or the stored admin key could not be recovered.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/services/dario/stop:
     post:
@@ -10340,11 +10536,26 @@ paths:
       tags: [Embedded Services]
       summary: Restart Dario
       description: >-
-        Equivalent to stop() then start() under the operation lock.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Stops and starts Dario under the operation lock, with the same health/adoption behavior as
+        `start`. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate;
+        this spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Process metadata is
+        sensitive. Runtime policy mode `locked` can deny the start/provisioning capability even after
+        request auth. The Dario admin-token retrieval failure path is fail-closed.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service restarted
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -10352,7 +10563,16 @@ paths:
         "409":
           description: Dario is not installed
         "503":
-          description: Restart failed
+          description: Restart failed, the runtime capability is disabled, or the stored admin key could not be recovered.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/services/dario/update:
     post:
@@ -10393,18 +10613,42 @@ paths:
       tags: [Embedded Services]
       summary: Get Dario status
       description: >-
-        Returns combined live supervisor state and DB metadata, including the
-        auto-start / auto-restart-adopted flags and whether an update is available.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Returns live process state, PID/port, health/errors, versions, and auto-start/adoption flags.
+        It does not return the stored DARIO_ADMIN_TOKEN and has no reveal query. The latest-version
+        lookup uses a one-hour in-process cache, but runtime policy mode `locked` denies that
+        install-capability lookup before reading the cache and can make status return 500. **LOCAL_ONLY**
+        — only loopback and trusted private-LAN peers pass the locality gate; this spawn-capable
+        service prefix has no remote manage-scope bypass. On admitted peers, `requireLogin=false`
+        permits anonymous local/LAN access; otherwise management authentication is required. `oma_`
+        Access Tokens need `admin` on `/api/services/*`. Status and process metadata are sensitive;
+        the handler sets no explicit HTTP cache directive. A missing/unreadable stored admin key fails
+        supervisor initialization rather than substituting a default credential.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Status response
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatusExtended"
         "500":
           description: Status read failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/dario/auto-start:
     post:
@@ -10413,8 +10657,21 @@ paths:
       tags: [Embedded Services]
       summary: Toggle Dario auto-start
       description: >-
-        When enabled, Dario starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Persists whether Dario should start on the next OmniRoute boot; it does not start the process
+        immediately. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality
+        gate; this spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Lifecycle configuration is
+        sensitive; runtime policy mode `locked` can block the later start.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         content:
@@ -10432,6 +10689,13 @@ paths:
           description: Invalid request body
         "500":
           description: Update failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/dario/auto-restart-adopted:
     post:
@@ -10443,7 +10707,21 @@ paths:
         When enabled, an externally-adopted (not OmniRoute-spawned) Dario process
         is restarted under OmniRoute's own supervisor on the next health-check
         cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. This persisted flag can
+        cause a healthy adopted Dario process to be killed and respawned on a later start; the
+        lifecycle state is sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         content:
@@ -10461,6 +10739,13 @@ paths:
           description: Invalid request body
         "500":
           description: Update failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/dario/admin/login-start:
     post:
@@ -31592,13 +31877,41 @@ paths:
         - Services
       summary: "GET services › 9router › models"
       x-local-only: true
+      description: >-
+        Returns cached 9Router model metadata. With `refresh=true`, reads the supervisor's loopback
+        port (or configured default), obtains the encrypted server-side 9Router key, and requests
+        `/v1/models` over loopback; successful results update the model cache and last-sync timestamp.
+        This does not start the service, and a failed refresh leaves the cached list in place. The
+        key is resolved or generated server-side and is never included in the response.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope
+        bypass. On admitted peers, `requireLogin=false` permits anonymous local/LAN access; otherwise
+        management authentication is required. `oma_` Access Tokens need `admin` on
+        `/api/services/*`. Model availability and service state are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Cached or refreshed embedded 9Router model list.
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceModelsResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/services/9router/provider-expose:
     post:
       operationId: postApiServices9routerProviderExpose
@@ -31682,9 +31995,32 @@ paths:
         - Services
       summary: "POST services › cliproxy › provider expose"
       x-local-only: true
+      description: >-
+        Changes whether CLIProxyAPI's models are exposed as routable `cliproxyapi/...` models; this
+        persists configuration and does not start or restart the process. **LOCAL_ONLY** — only
+        loopback and trusted private-LAN peers pass the locality gate; this spawn-capable service
+        prefix has no remote manage-scope bypass. On admitted peers, `requireLogin=false` permits
+        anonymous local/LAN access; otherwise management authentication is required. `oma_` Access
+        Tokens need `admin` on `/api/services/*`. Provider exposure and service state are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "204":
           description: Provider exposure setting was updated; no response body.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/session-pools:
     get:
       operationId: getApiSessionPools

@@ -130,6 +130,21 @@ const operations = [
   ["post", "/api/services/9router/install"],
   ["post", "/api/services/9router/provider-expose"],
   ["post", "/api/services/9router/restart"],
+  ["get", "/api/services/9router/models"],
+  ["post", "/api/services/cliproxy/auto-start"],
+  ["post", "/api/services/cliproxy/install"],
+  ["post", "/api/services/cliproxy/provider-expose"],
+  ["post", "/api/services/cliproxy/restart"],
+  ["post", "/api/services/cliproxy/start"],
+  ["get", "/api/services/cliproxy/status"],
+  ["post", "/api/services/cliproxy/stop"],
+  ["post", "/api/services/cliproxy/update"],
+  ["post", "/api/services/dario/auto-restart-adopted"],
+  ["post", "/api/services/dario/auto-start"],
+  ["post", "/api/services/dario/install"],
+  ["post", "/api/services/dario/restart"],
+  ["post", "/api/services/dario/start"],
+  ["get", "/api/services/dario/status"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -144,7 +159,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 118 effective OpenAPI operations", () => {
+test("the audited batches declare all 133 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -533,6 +548,21 @@ test("embedded-service endpoints preserve the spawn-capable LOCAL_ONLY gate and 
     ["post", "/api/services/9router/install"],
     ["post", "/api/services/9router/provider-expose"],
     ["post", "/api/services/9router/restart"],
+    ["get", "/api/services/9router/models"],
+    ["post", "/api/services/cliproxy/auto-start"],
+    ["post", "/api/services/cliproxy/install"],
+    ["post", "/api/services/cliproxy/provider-expose"],
+    ["post", "/api/services/cliproxy/restart"],
+    ["post", "/api/services/cliproxy/start"],
+    ["get", "/api/services/cliproxy/status"],
+    ["post", "/api/services/cliproxy/stop"],
+    ["post", "/api/services/cliproxy/update"],
+    ["post", "/api/services/dario/auto-restart-adopted"],
+    ["post", "/api/services/dario/auto-start"],
+    ["post", "/api/services/dario/install"],
+    ["post", "/api/services/dario/restart"],
+    ["post", "/api/services/dario/start"],
+    ["get", "/api/services/dario/status"],
   ] as const) {
     const routeOperation = operation(method, route);
     assert.equal(routeOperation["x-local-only"], true, `${method.toUpperCase()} ${route}`);
@@ -547,6 +577,73 @@ test("embedded-service endpoints preserve the spawn-capable LOCAL_ONLY gate and 
     assert.ok(routeOperation.responses["403"]);
     assert.ok(routeOperation.responses["503"]);
   }
+});
+
+test("service model, lifecycle, and status contracts remain LOCAL_ONLY and mark sensitive state", () => {
+  const nineRouterModels = operation("get", "/api/services/9router/models");
+  assert.match(nineRouterModels.description, /`refresh=true`.*encrypted server-side 9Router key/s);
+  assert.match(nineRouterModels.description, /key is resolved or generated server-side.*never included in the response/i);
+  assert.equal(nineRouterModels.responses["200"]["x-sensitive"], true);
+
+  const cliproxyStatus = operation("get", "/api/services/cliproxy/status");
+  const darioStatus = operation("get", "/api/services/dario/status");
+  for (const status of [cliproxyStatus, darioStatus]) {
+    assert.equal(status["x-sensitive"], true);
+    assert.equal(status.responses["200"]["x-sensitive"], true);
+    assert.match(status.description, /no reveal query/i);
+    assert.match(status.description, /runtime policy mode `locked`.*status (?:route )?return 500/s);
+    assert.equal(status.responses["200"].headers?.["Cache-Control"], undefined);
+  }
+  assert.match(cliproxyStatus.description, /management password remains server-side/i);
+  assert.match(darioStatus.description, /DARIO_ADMIN_TOKEN/);
+
+  for (const [method, route] of [
+    ["post", "/api/services/cliproxy/auto-start"],
+    ["post", "/api/services/cliproxy/install"],
+    ["post", "/api/services/cliproxy/provider-expose"],
+    ["post", "/api/services/cliproxy/restart"],
+    ["post", "/api/services/cliproxy/start"],
+    ["post", "/api/services/cliproxy/stop"],
+    ["post", "/api/services/cliproxy/update"],
+    ["post", "/api/services/dario/auto-restart-adopted"],
+    ["post", "/api/services/dario/auto-start"],
+    ["post", "/api/services/dario/install"],
+    ["post", "/api/services/dario/restart"],
+    ["post", "/api/services/dario/start"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.equal(routeOperation["x-sensitive"], true);
+  }
+  for (const [method, route] of [
+    ["post", "/api/services/cliproxy/install"],
+    ["post", "/api/services/cliproxy/start"],
+    ["post", "/api/services/cliproxy/restart"],
+    ["post", "/api/services/cliproxy/update"],
+    ["post", "/api/services/dario/install"],
+    ["post", "/api/services/dario/start"],
+    ["post", "/api/services/dario/restart"],
+  ] as const) {
+    assert.match(operation(method, route).description, /runtime policy mode `locked`/i);
+  }
+  assert.match(operation("post", "/api/services/cliproxy/stop").description, /stopping remains allowed.*`locked`/i);
+  for (const [method, route] of [
+    ["post", "/api/services/cliproxy/auto-start"],
+    ["post", "/api/services/cliproxy/provider-expose"],
+    ["post", "/api/services/dario/auto-start"],
+    ["post", "/api/services/dario/auto-restart-adopted"],
+  ] as const) {
+    assert.match(operation(method, route).description, /persist|when enabled|changes whether/i);
+  }
+
+  const autoStart = operation("post", "/api/services/cliproxy/auto-start");
+  const successes = Object.keys(autoStart.responses).filter((status) => /^2\d\d$/.test(status));
+  assert.deepEqual(successes, ["204"]);
+  assert.equal(autoStart.responses["204"].content, undefined);
+  assert.match(operation("post", "/api/services/dario/start").description, /admin-token retrieval failure path is fail-closed/i);
+
+  const nineRouterStatus = operation("get", "/api/services/9router/status");
+  assert.match(nineRouterStatus.description, /`reveal=key`.*`X-Reveal-Confirm: yes`/s);
+  assert.equal(nineRouterStatus.responses["200"].headers["Cache-Control"].schema.const, "no-store");
 });
 
 test("service logs and 9Router lifecycle operations are sensitive and auto-start is bodyless 204", () => {
