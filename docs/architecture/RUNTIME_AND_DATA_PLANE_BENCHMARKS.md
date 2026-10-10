@@ -962,6 +962,48 @@ but from 16.67 to 17.41 s with capture. The 128-connection runs passed all 200 t
 and, under capture, all 200 traces. These single trials do not justify raising the production
 connection cap; large-body ingestion and transformation remain the measured high-latency stages.
 
+### Fresh standalone 70/100-session transport and capture sweep (2026-10-10)
+
+The earlier standalone artifact was built at 2026-10-09 15:44 UTC, before the evening source
+changes. A fresh blue-source `npm run build` completed successfully before this sweep. The benchmark
+then exercised the actual standalone Next server with authenticated HTTP clients and only the local
+synthetic TLS bridge/mock provider; no external provider credentials or requests were used. It
+tested 700,000-byte user contexts (about 3.5 MB request bodies), two completion turns per
+conversation, and private overflow capture where noted.
+
+| Conversations | Capture | Direct connections | App MemoryHigh/Max | Result                                                     | App cgroup evidence                                                           |
+| ------------: | ------- | -----------------: | ------------------ | ---------------------------------------------------------- | ----------------------------------------------------------------------------- |
+|            70 | private |                 32 | 3/4 GiB            | 30/100 client requests completed, then 502s                | 1.95 GiB peak; 0 high/max/OOM events; three captured EPIPE transport failures |
+|            70 | private |                 48 | 3/4 GiB            | 60/119 completed, then 502s/header timeouts                | 2.81 GiB peak; 0 high/max/OOM events                                          |
+|            70 | private |                 56 | 3/4 GiB            | 140/140 completed; 140 rows/artifacts/traces               | 3.22 GiB peak; 728 high events; 126 socket-memory throttles; no OOM           |
+|            70 | private |                 64 | 3/4 GiB            | 140/140 completed; 140 rows/artifacts/traces               | 3.22 GiB peak; 804 high events; 20 socket-memory throttles; no OOM            |
+|           100 | none    |                 64 | 3/4 GiB            | 200/200 completed at 200,000-byte contexts                 | 1.72 GiB peak; 0 high/OOM events                                              |
+|           100 | none    |                 64 | 3/4 GiB            | 200/200 completed at 700,000-byte contexts                 | 3.13 GiB peak; 0 high/OOM events                                              |
+|           100 | private |                 64 | 3/4 GiB            | Resource guard returned 503 after 178 successful responses | 3.22 GiB peak; 1,488 high events; 1,585 socket-memory throttles; no OOM       |
+|           100 | private |                100 | 5/6 GiB            | 200/200 completed; 200 rows/artifacts/traces               | 4.85 GiB peak; 0 high/max/OOM/socket-throttle events                          |
+
+The 32- and 48-connection failures were captured as `TypeError: fetch failed`, cause `EPIPE`, on
+large Antigravity request attempts. They occurred after request dispatch began, so the generation
+replay guard correctly avoided blindly resending an ambiguously accepted request. At 56–100 direct
+connections the mock completed every request, although shutdown/audit telemetry still recorded
+`UND_ERR_SOCKET` events (79 at the successful 100-session private-capture run). The bridge reported
+zero upstream errors; treat these as observed socket-close events, not confirmed provider faults.
+
+The 100-session private-capture pass needed a 5 GiB soft / 6 GiB hard app cgroup. Its app cgroup had
+about 155 CPU-seconds of use over the run; CPU PSI peaked at 33% some / 12% full avg10 under the
+three-core app quota, while the host remained below its memory limits. A separate run at the
+benchmark's default 3/4 GiB app limit hit the app's intentional `cgroup_high` guard and returned
+503s, with max/OOM counters still zero. A first 5/6 GiB trial was stopped by the harness's old
+hard-coded 3.6 GiB safety cutoff; that test-only cutoff now tracks 90% of the selected hard limit.
+
+These results establish a local-mock standalone boundary, not Google quota or account fairness. The
+fixture selected two synthetic account connections and explicitly did not verify an account
+concurrency cap. The pool sweep indicates that 32 connections are too restrictive for this
+large-body synthetic burst and that 56–100 can complete it, but a larger global pool can increase
+per-account pressure. Keep transport concurrency, per-account admission, and OmniRoute routing
+strategy as separate controls; do not use this mock result alone to raise a production pool or claim
+real-provider 429 safety.
+
 ### Bun direct-route comparison at 100 sessions
 
 The official [Bun v1.4.2 ARM64 release](https://github.com/oven-sh/bun/releases/tag/bun-v1.4.2)
@@ -1794,6 +1836,25 @@ change the version policy or rebuild the CLI image. The current offline install 
 path depends on that lock. A freshness change should be handled separately and must record the
 resolved CLI versions in the image/build evidence.
 
+### Monitored full source build on Maria (2026-10-09)
+
+The fresh blue-source `npm run build` ran from 23:25:36 to 23:43:05 UTC and exited successfully
+(17m29s). It used a four-CPU user scope with `MemoryHigh=12 GiB` raised to 14 GiB during the run and
+`MemoryMax=18 GiB`. The app build cgroup peaked at 15,034,335,232 bytes (~14.0 GiB); host swap use
+reached about 10 GiB, and host available RAM stayed above roughly 8.5 GiB. The disk fell from 9.4 GiB
+free to 2.5 GiB free at the tightest point. During Turbopack finalization, block I/O peaked around
+127 MiB/s writes, about 5,000 write operations/s, 84% device utilization, and roughly 70% I/O PSI
+full avg10. The build completed; no host restart, cgroup max event, or OOM occurred.
+
+Next 16.3.8 emitted repeated warnings that dynamic filesystem calls in `src/mitm/detection/zed.ts`,
+`src/mitm/inspector/processAttribution.ts`, `src/mitm/manager.ts`, and `src/mitm/tproxy/caTrust.ts`
+cause the whole project (including `public/`) to be traced into server output. The completed output
+was about 2.5 GiB standalone, 1.6 GiB Next server, and 8.6 GiB `.build/next/cache`. The cache is
+ignored and regenerable; it was removed after the build, restoring about 12 GiB free disk. The
+user-slice cgroup exposes CPU, memory and pids controllers but no I/O controller, so a requested
+`IOReadBandwidthMax`/`IOWriteBandwidthMax` property was not enforceable. Best-effort I/O priority was
+applied to this build; actual storage pressure still had to be watched from host PSI and `iostat`.
+
 ## Remaining acceptance checks
 
 - Capture the management-only pressure sample on `GET /api/monitoring/health` with a credential
@@ -1847,8 +1908,9 @@ resolved CLI versions in the image/build evidence.
   2 GiB private-overflow budget left 12/402 Bun traces unpersisted, while the isolated 4 GiB run
   captured 402/402. The default is unchanged; decide whether a temporary 4 GiB diagnostic budget is
   acceptable only after checking image/container free space and retention cleanup.
-- Complete standalone Next/middleware E2E at 70 and 100 active sessions with mock provider
-  credentials, tool-call cycles, authentication, account limits, and verified artifacts. At
+- Account-concurrency and real-provider validation remain open after the synthetic standalone
+  Next/middleware E2E. The prior route-handler runs used mock provider credentials, tool-call cycles,
+  authentication, and verified artifacts. At
   200,000 synthetic context bytes per user turn, 100 conversations completed 200/200 turns with
   200/200 artifacts and private traces. At 700,000 bytes, ordinary artifact capture alone completed
   140/140 turns but omitted 120/140 details at the 128 MiB preparation reservation ceiling. A new
@@ -1877,8 +1939,11 @@ resolved CLI versions in the image/build evidence.
   `MemoryMax` scope hit the resource guard at about 2,995 MiB with 507 cgroup-high events and returned
   503 before completing; `memory.max` and OOM counters stayed zero. The route-handler harness shares
   its cgroup with its synthetic client and mock upstream, so that 503 does not isolate the server's
-  own cgroup use. These are in-process route-handler tests with local mocks, not full standalone
-  Next/middleware, external-provider, or deployed-image acceptance.
+  own cgroup use. These earlier rows are in-process route-handler tests. Fresh standalone Next
+  results are recorded in “Fresh standalone 70/100-session transport and capture sweep”; those runs
+  exercised auth, the real middleware/standalone HTTP server, tool follow-ups, and private artifact
+  readback with a local mock provider. Account concurrency limits and real upstream 429/quota
+  behavior remain unverified, and no OCI image or production deployment was tested.
   The Rust policy prototype remains benchmark-only and has no database-backed policies.
 - A separate 100-session, 700,000-byte run with call-log capture disabled measured the pre-provider
   admission path. The V8-derived ingest budget was 140,509,184 bytes; peak ingress use reached

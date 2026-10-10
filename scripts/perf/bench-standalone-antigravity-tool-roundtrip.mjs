@@ -9,14 +9,18 @@
  *   OMNIROUTE_STANDALONE_CAPTURE=private \
  *   ANTIGRAVITY_CAPTURE_CONTEXT_BYTES=200000 \
  *   ANTIGRAVITY_CAPTURE_REQUEST_TIMEOUT_MS=120000 \
+ *   OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES=3000000 \
  *   systemd-run --user --scope --property=MemoryHigh=2G \
- *     --property=MemoryMax=3G --property=CPUQuota=200% \
+ *     --property=MemoryMax=3G --property=CPUQuota=100% \
  *     node --import tsx/esm scripts/perf/bench-standalone-antigravity-tool-roundtrip.mjs
  *
  * Capture modes: none (default), artifact, private. The default phases are
  * 1,30,70,100 conversations; override with ANTIGRAVITY_CAPTURE_SESSION_COUNTS.
  * Override the direct Undici socket-pool size with --direct-dispatcher-connections=N
  * to compare queueing behavior; the default mirrors production (32).
+ * Override the isolated app CPU quota with --app-cpu-quota=N (1..4 cores; default 2).
+ * Override app memory limits with --app-memory-high-gib=N and --app-memory-max-gib=N
+ * (defaults 3/4 GiB) to test the resource guard at larger concurrency.
  * Set OMNIROUTE_KEEP_STANDALONE_E2E_FAILURES=1 to retain only failed-run scratch
  * for diagnosis. Successful runs always remove their temporary files.
  * This harness intentionally refuses to build the standalone artifact.
@@ -247,7 +251,15 @@ function writeSystemdEnvironmentFile(filename, env) {
   fs.writeFileSync(filename, `${contents}\n`, { mode: 0o600, flag: "wx" });
 }
 
-function startStandaloneService({ unit, standaloneDir, environmentFile, nodePath }) {
+function startStandaloneService({
+  unit,
+  standaloneDir,
+  environmentFile,
+  nodePath,
+  appCpuQuota,
+  appMemoryHighGiB,
+  appMemoryMaxGiB,
+}) {
   const args = [
     "--user",
     `--unit=${unit}`,
@@ -255,9 +267,9 @@ function startStandaloneService({ unit, standaloneDir, environmentFile, nodePath
     "--property=Type=exec",
     `--property=WorkingDirectory=${standaloneDir}`,
     `--property=EnvironmentFile=${environmentFile}`,
-    "--property=MemoryHigh=3G",
-    "--property=MemoryMax=4G",
-    "--property=CPUQuota=200%",
+    `--property=MemoryHigh=${appMemoryHighGiB}G`,
+    `--property=MemoryMax=${appMemoryMaxGiB}G`,
+    `--property=CPUQuota=${appCpuQuota * 100}%`,
     "--property=TasksMax=256",
     "--property=TimeoutStopSec=15s",
     "--property=RuntimeMaxSec=15min",
@@ -276,14 +288,16 @@ function startStandaloneService({ unit, standaloneDir, environmentFile, nodePath
   return String(result.stdout || "").trim();
 }
 
-function standaloneUnitCgroup(unit) {
+function standaloneUnitCgroup(unit, appMemoryHighGiB, appMemoryMaxGiB) {
   const controlGroup = systemctlUser(["show", "--property=ControlGroup", "--value", unit]);
   if (!controlGroup.startsWith("/")) throw new Error("systemd did not expose the app ControlGroup");
   const directory = path.join("/sys/fs/cgroup", controlGroup.replace(/^\/+/, ""));
   const maxBytes = readCgroupValue(directory, "memory.max");
   const highBytes = readCgroupValue(directory, "memory.high");
-  if (maxBytes !== 4 * GIB || highBytes !== 3 * GIB) {
-    throw new Error("standalone service cgroup did not apply the required 3/4 GiB memory bounds");
+  if (maxBytes !== appMemoryMaxGiB * GIB || highBytes !== appMemoryHighGiB * GIB) {
+    throw new Error(
+      `standalone service cgroup did not apply the required ${appMemoryHighGiB}/${appMemoryMaxGiB} GiB memory bounds`
+    );
   }
   return directory;
 }
@@ -1034,6 +1048,9 @@ async function main() {
         "request-timeout-ms",
         "standalone-dir",
         "direct-dispatcher-connections",
+        "app-cpu-quota",
+        "app-memory-high-gib",
+        "app-memory-max-gib",
       ].includes(key)
   );
   if (unknown.length) throw new Error(`Unknown options: ${unknown.join(", ")}`);
@@ -1061,6 +1078,17 @@ async function main() {
     "direct-dispatcher-connections",
     256
   );
+  const appCpuQuota = positiveInt(options["app-cpu-quota"], 2, "app-cpu-quota", 4);
+  const appMemoryHighGiB = positiveInt(
+    options["app-memory-high-gib"],
+    3,
+    "app-memory-high-gib",
+    12
+  );
+  const appMemoryMaxGiB = positiveInt(options["app-memory-max-gib"], 4, "app-memory-max-gib", 16);
+  if (appMemoryMaxGiB <= appMemoryHighGiB) {
+    throw new RangeError("app-memory-max-gib must be greater than app-memory-high-gib");
+  }
   const sessionCount = phases.reduce((total, count) => total + count, 0);
   const expectedRequests = sessionCount * 2;
   if (sessionCount > 202)
@@ -1172,7 +1200,8 @@ async function main() {
     CHAT_LOG_CLIENT_TEXT_LIMIT: "4194304",
     CHAT_LOG_MAX_BODY_KB: "10240",
     OMNI_DIAGNOSTIC_OVERFLOW_ENABLED: captureMode === "private" ? "true" : "false",
-    OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES: "0",
+    OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES:
+      process.env.OMNI_DIAGNOSTIC_OVERFLOW_MIN_CLIENT_BYTES ?? "0",
     OMNI_DIAGNOSTIC_OVERFLOW_FILE_BYTES: "67108864",
     OMNI_DIAGNOSTIC_OVERFLOW_TOTAL_BYTES: String(2 * GIB),
     OMNI_DIAGNOSTIC_OVERFLOW_RETENTION_MS: "3600000",
@@ -1258,8 +1287,11 @@ async function main() {
       standaloneDir,
       environmentFile: serviceEnvironmentFile,
       nodePath: process.execPath,
+      appCpuQuota,
+      appMemoryHighGiB,
+      appMemoryMaxGiB,
     });
-    appCgroupDir = standaloneUnitCgroup(serviceUnit);
+    appCgroupDir = standaloneUnitCgroup(serviceUnit, appMemoryHighGiB, appMemoryMaxGiB);
     appCgroupBaseline = snapshotCgroup(appCgroupDir);
     if (
       appCgroupBaseline.memoryCurrentBytes === null ||
@@ -1284,10 +1316,10 @@ async function main() {
       if (
         (currentEvents.oom ?? 0) > (baseEvents.oom ?? 0) ||
         (currentEvents.oom_kill ?? 0) > (baseEvents.oom_kill ?? 0) ||
-        (sample.memoryCurrentBytes ?? 0) >= 3.6 * GIB
+        (sample.memoryCurrentBytes ?? 0) >= appMemoryMaxGiB * GIB * 0.9
       ) {
         if (!appStopReason) {
-          appStopReason = "app reached 90% of memory.max or observed an OOM event";
+          appStopReason = `app reached 90% of memory.max (${appMemoryMaxGiB} GiB) or observed an OOM event`;
           if (client) client.child.kill("SIGTERM");
           else stopStandaloneService(server?.unit);
         }
@@ -1448,6 +1480,9 @@ async function main() {
         completePrivateTraces: artifactResult.traces,
         contextBytesPerUserTurn: contextBytes,
         directDispatcherConnections,
+        appCpuQuotaCores: appCpuQuota,
+        appMemoryHighGiB,
+        appMemoryMaxGiB,
         availableScratchBytesBefore: availableDiskBefore,
         hostMemoryAvailableBytes,
         fetchAudit: audit,
