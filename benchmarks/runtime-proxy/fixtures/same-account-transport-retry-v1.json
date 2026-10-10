@@ -47,7 +47,11 @@
     },
     {
       "name": "server-error-without-local-provenance",
-      "input": { "status": 503, "attempt": 0, "errorText": "gateway timeout" },
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorText": "gateway timeout"
+      },
       "expected": false
     },
     {
@@ -318,6 +322,144 @@
         "requestStarted": false
       },
       "expected": false
+    },
+    {
+      "name": "proxy-unreachable-uppercase-hint-is-not-retried",
+      "input": {
+        "status": 502,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorCode": "PROXY_UNREACHABLE"
+      },
+      "expected": false
+    },
+    {
+      "name": "temporary-dns-hint-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorCode": "EAI_AGAIN"
+      },
+      "expected": false
+    },
+    {
+      "name": "dns-not-found-hint-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorCode": "ENOTFOUND"
+      },
+      "expected": false
+    },
+    {
+      "name": "ordinary-connect-code-alone-does-not-veto-proven-pre-send-retry",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorCode": "ECONNREFUSED"
+      },
+      "expected": true
+    },
+    {
+      "name": "generic-proxy-wrapper-code-alone-does-not-prove-exhaustion",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorCode": "PROXY_REQUEST_FAILED"
+      },
+      "expected": true
+    },
+    {
+      "name": "uppercase-policy-code-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorCode": "SAFETY_VIOLATION"
+      },
+      "expected": false
+    },
+    {
+      "name": "request-has-been-blocked-near-safety-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "Request has been blocked because of safety review."
+      },
+      "expected": false
+    },
+    {
+      "name": "request-blocked-without-auxiliary-verb-near-safety-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "Request blocked because of safety review."
+      },
+      "expected": false
+    },
+    {
+      "name": "safety-after-more-than-40-characters-does-not-veto",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "Request was blocked for maintenance; this includes a long unrelated administrative explanation before safety is mentioned."
+      },
+      "expected": true
+    },
+    {
+      "name": "context-slash-length-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "context/length exceeded"
+      },
+      "expected": false
+    },
+    {
+      "name": "mixed-case-context-separator-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "ConTeXt/Length exceeded"
+      },
+      "expected": false
+    },
+    {
+      "name": "context-two-separators-do-not-match-production-pattern",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "context--length exceeded"
+      },
+      "expected": true
+    }
+  ],
+  "uncoveredCases": [
+    {
+      "name": "verified-proxy-fetch-exhaustion-object-identity",
+      "reason": "Uncovered by shared JSON vectors: production uses a private WeakSet object-identity brand for terminal proxyFetch exhaustion. A JSON boolean/string cannot prove that provenance. Current branded errors also expose the legacy proxy_unreachable hint, which is covered separately; a brand-only wrapper with that hint removed needs an integration-level test that obtains the real branded object."
     }
   ]
 }

@@ -98,17 +98,14 @@ fn should_retry_same_account(input: &RetryInput) -> bool {
         || text.contains("blocked by our safety systems")
         || text.contains("blocked by the safety systems")
         || text.contains("potentially unintended activity")
-        || (text.contains("request was blocked") && text.contains("safety"));
+        || request_blocked_near_safety(&text);
     if policy_rejection
         || text.contains("quota threshold")
         || text.contains("quota exhausted")
         || text.contains("credits exhausted")
         || text.contains("invalid_request")
         || text.contains("prompt is too long")
-        || text.contains("context length")
-        || text.contains("context-length")
-        || text.contains("context_length")
-        || text.contains("contextlength")
+        || contains_context_length(&text)
         || text.contains("unsupported model")
     {
         return false;
@@ -117,6 +114,63 @@ fn should_retry_same_account(input: &RetryInput) -> bool {
     matches!(input.status, 502 | 503 | 504 | 507)
         && input.dispatch_phase.as_deref() == Some("transport_queue")
         && input.request_started == Some(false)
+}
+
+/// Mirrors the production `request (was |has been )?blocked.{0,40}safety` arm.
+/// This only sees normalized lowercase text; the production policy parser remains
+/// authoritative and Rust does not parse provider envelopes or claim provenance.
+fn request_blocked_near_safety(text: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(relative) = text[search_from..].find("request ") {
+        let start = search_from + relative + "request ".len();
+        let tail = &text[start..];
+        let after_auxiliary = tail
+            .strip_prefix("was ")
+            .or_else(|| tail.strip_prefix("has been "))
+            .unwrap_or(tail);
+        if let Some(after_blocked) = after_auxiliary.strip_prefix("blocked") {
+            if let Some(safety) = after_blocked.find("safety") {
+                let gap = &after_blocked[..safety];
+                let is_single_line = !gap
+                    .chars()
+                    .any(|c| matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}'));
+                if gap.encode_utf16().count() <= 40 && is_single_line {
+                    return true;
+                }
+            }
+        }
+        search_from = start;
+        if search_from >= text.len() {
+            break;
+        }
+    }
+    false
+}
+
+/// Mirrors the production `context.?length` rejection pattern: zero or one
+/// non-line-terminator character may separate the two words.
+fn contains_context_length(text: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(relative) = text[search_from..].find("context") {
+        let start = search_from + relative + "context".len();
+        let tail = &text[start..];
+        if tail.starts_with("length") {
+            return true;
+        }
+        if let Some(separator) = tail.chars().next() {
+            let rest = &tail[separator.len_utf8()..];
+            if !matches!(separator, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+                && rest.starts_with("length")
+            {
+                return true;
+            }
+        }
+        search_from = start;
+        if search_from >= text.len() {
+            break;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -128,6 +182,15 @@ mod tests {
     struct Fixture {
         schema_version: u64,
         vectors: Vec<RetryVector>,
+        #[serde(default)]
+        uncovered_cases: Vec<UncoveredCase>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct UncoveredCase {
+        name: String,
+        reason: String,
     }
 
     #[test]
@@ -139,7 +202,7 @@ mod tests {
         assert_eq!(fixture.schema_version, 1);
         assert!(fixture.vectors.len() >= 20);
 
-        for vector in fixture.vectors {
+        for vector in &fixture.vectors {
             assert_eq!(
                 should_retry_same_account(&vector.input),
                 vector.expected,
@@ -148,5 +211,10 @@ mod tests {
                 vector.input
             );
         }
+
+        assert!(fixture.uncovered_cases.iter().any(|case| {
+            case.name == "verified-proxy-fetch-exhaustion-object-identity"
+                && case.reason.contains("object-identity")
+        }));
     }
 }

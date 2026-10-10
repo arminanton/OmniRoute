@@ -34,7 +34,11 @@ test("production same-account retry gate matches the Rust parity vectors", () =>
       ),
       "utf8"
     )
-  ) as { schemaVersion: number; vectors: RetryVector[] };
+  ) as {
+    schemaVersion: number;
+    vectors: RetryVector[];
+    uncoveredCases: Array<{ name: string; reason: string }>;
+  };
   assert.equal(fixture.schemaVersion, 1);
   assert.ok(fixture.vectors.length >= 20);
 
@@ -67,4 +71,13 @@ test("production same-account retry gate matches the Rust parity vectors", () =>
       name
     );
   }
+
+  assert.ok(
+    fixture.uncoveredCases.some(
+      (entry) =>
+        entry.name === "verified-proxy-fetch-exhaustion-object-identity" &&
+        entry.reason.includes("private WeakSet object-identity brand")
+    ),
+    "the fixture must not claim synthetic JSON can represent the verified proxyFetch brand"
+  );
 });
