@@ -210,7 +210,9 @@ import {
 import { isExhaustedNetworkFailure } from "../services/networkFailure";
 import {
   isExhaustedNetworkResponse,
+  isUnsafeToReplayResponse,
   markExhaustedNetworkResponse,
+  markUnsafeToReplayResponse,
 } from "@omniroute/open-sse/services/exhaustedNetworkResponse.ts";
 import { constrainConnectionsToQuota, resolveQuotaKeyScope } from "../../lib/quota/quotaKey";
 import { checkConnectionCapacity } from "../utils/backpressure";
@@ -1255,6 +1257,7 @@ async function handleChatImplementation(
       !response.ok &&
       !isRuntimePolicyResponse(response) &&
       !isExhaustedNetworkResponse(response) &&
+      !isUnsafeToReplayResponse(response) &&
       [502, 503].includes(response.status) &&
       typeof (settings as any)?.globalFallbackModel === "string" &&
       (settings as any).globalFallbackModel.trim()
@@ -2157,9 +2160,9 @@ async function handleSingleModelChatImplementation(
         return withSelectedConnectionHeader(result.response, credentials.connectionId);
       }
 
-      // These readiness results happen only after the upstream returned HTTP 200.
-      // It may still be processing the generation, so preserve the diagnostic
-      // response without same-account retry, account rotation, or breaker updates.
+      // An accepted stream may still be processing, and an ambiguous transport
+      // may have reached the provider. Preserve either diagnostic without
+      // same-account retry, account rotation, or breaker updates.
       const isAcceptedStreamReadinessFailure =
         result.errorType === "upstream_acceptance_uncertain" ||
         result.errorType === "local_stream_buffer_limit" ||
@@ -2167,9 +2170,10 @@ async function handleSingleModelChatImplementation(
       if (isAcceptedStreamReadinessFailure) {
         log.warn(
           "STREAM",
-          `${provider}/${model} readiness failed after HTTP 200; returning without replay`
+          `${provider}/${model} reached an accepted or ambiguous terminal failure; returning without replay`
         );
-        return withSelectedConnectionHeader(result.response, credentials.connectionId);
+        const response = withSelectedConnectionHeader(result.response, credentials.connectionId);
+        return markUnsafeToReplayResponse(response);
       }
 
       const isAntigravityStreamReadinessFailure =
@@ -2329,9 +2333,6 @@ async function handleSingleModelChatImplementation(
           type: result.errorType,
         })
       )
-        return withSelectedConnectionHeader(result.response, credentials?.connectionId);
-
-      if (result.errorType === "upstream_acceptance_uncertain")
         return withSelectedConnectionHeader(result.response, credentials?.connectionId);
 
       if (result.errorType === "logical_retry_budget")

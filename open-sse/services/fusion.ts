@@ -20,7 +20,11 @@
  */
 import { errorResponse, runtimePolicyErrorResponse, sanitizeErrorMessage } from "../utils/error.ts";
 import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
-import { isExhaustedNetworkResponse } from "./exhaustedNetworkResponse.ts";
+import {
+  isAcceptedTaskTimeoutResponse,
+  isExhaustedNetworkResponse,
+  isUnsafeToReplayResponse,
+} from "./exhaustedNetworkResponse.ts";
 import { extractTextContent } from "../translator/helpers/geminiHelper.ts";
 import type { PerTargetAdmissionHook } from "./admission/types.ts";
 import type { ComboLogger, HandleSingleModel, ResolvedComboTarget } from "./combo/types.ts";
@@ -396,6 +400,8 @@ export async function handleFusionChat({
     }
     if (isRuntimePolicyResponse(res)) return res as Response;
     if (isExhaustedNetworkResponse(res)) return res;
+    if (isAcceptedTaskTimeoutResponse(res)) return res;
+    if (res instanceof Response && isUnsafeToReplayResponse(res)) return res;
     const sentinel = res as Sentinel;
     if (sentinel.__timeout) {
       log.warn("FUSION", `Panel ${model} timed out`);

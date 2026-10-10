@@ -17,7 +17,11 @@ import {
 } from "../../utils/error.ts";
 import { buildRecoveryHint } from "./pinRecovery.ts";
 import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
-import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
+import {
+  isAcceptedTaskTimeoutResponse,
+  isExhaustedNetworkResponse,
+  isUnsafeToReplayResponse,
+} from "../exhaustedNetworkResponse.ts";
 import { formatExhaustedConnectionKey } from "./comboDiagFormat.ts";
 import { recordComboRequest } from "../comboMetrics.ts";
 import {
@@ -659,7 +663,13 @@ export async function handleRoundRobinCombo({
 
           // Local network exhaustion is request-terminal. Preserve the exact response
           // before quota, breaker, cooldown, lockout, retry, or target rotation work.
-          if (isRuntimePolicyResponse(result) || isExhaustedNetworkResponse(result)) return result;
+          if (
+            isRuntimePolicyResponse(result) ||
+            isExhaustedNetworkResponse(result) ||
+            isAcceptedTaskTimeoutResponse(result) ||
+            isUnsafeToReplayResponse(result)
+          )
+            return result;
 
           // Quota-aware scheduling: reserve the estimated budget for this
           // dispatch (opt-in, same env gate as the pre-request check). Best-effort

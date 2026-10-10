@@ -15,6 +15,10 @@ const {
 const { handleComboChat } = await import("../../open-sse/services/combo.ts");
 const { isExhaustedNetworkResponse, markExhaustedNetworkResponse } =
   await import("../../open-sse/services/exhaustedNetworkResponse.ts");
+const { isAcceptedTaskTimeoutResponse, markAcceptedTaskTimeoutResponse } =
+  await import("../../open-sse/services/exhaustedNetworkResponse.ts");
+const { isUnsafeToReplayResponse, markUnsafeToReplayResponse } =
+  await import("../../open-sse/services/exhaustedNetworkResponse.ts");
 const { proxyFetch } = await import("../../open-sse/utils/proxyFetch.ts");
 const { isFallbackDecision, resetEmergencyFallbackEnvCache, shouldUseFallback } =
   await import("../../open-sse/services/emergencyFallback.ts");
@@ -82,10 +86,112 @@ for (const strategy of ["priority", "round-robin"]) {
   });
 }
 
-// Only proxyFetch's final transport failure is trusted: provider text and error
-// codes alone cannot mint this marker. Exercise the handler instead of looking
-// for a specific predicate name or statement order in its source.
-function installExhaustedTransport() {
+for (const strategy of ["priority", "round-robin"]) {
+  test(`${strategy} stops on an unsafe-to-replay 502 while preserving its public response`, async () => {
+    const terminal = markUnsafeToReplayResponse(
+      new Response(JSON.stringify({ error: { type: "upstream_acceptance_uncertain" } }), {
+        status: 502,
+        headers: { "content-type": "application/json" },
+      })
+    );
+    const calls: string[] = [];
+    const result = await handleComboChat({
+      body: { messages: [{ role: "user", content: "do not duplicate uncertain work" }] },
+      combo: {
+        name: `unsafe-replay-${strategy}`,
+        strategy,
+        models: ["openai/first", "anthropic/second"],
+        config: { maxRetries: 0, retryDelayMs: 0, concurrencyPerModel: 1, queueTimeoutMs: 100 },
+      },
+      handleSingleModel: async (_body: unknown, modelStr: string) => {
+        calls.push(modelStr);
+        return terminal;
+      },
+      isModelAvailable: async () => true,
+      log,
+      settings: null,
+      allCombos: null,
+      relayOptions: null,
+    });
+
+    assert.equal(result, terminal);
+    assert.equal(result.status, 502);
+    assert.equal(isUnsafeToReplayResponse(result), true);
+    assert.deepEqual(calls, ["openai/first"]);
+  });
+
+  test(`${strategy} stops on accepted-task timeout without changing its external 504`, async () => {
+    const terminal = markAcceptedTaskTimeoutResponse(
+      new Response(JSON.stringify({ error: { message: "Transcription timed out", code: 504 } }), {
+        status: 504,
+        headers: { "content-type": "application/json" },
+      })
+    );
+    const calls: string[] = [];
+    const result = await handleComboChat({
+      body: { messages: [{ role: "user", content: "transcribe once" }] },
+      combo: {
+        name: `accepted-task-timeout-${strategy}`,
+        strategy,
+        models: ["openai/first", "anthropic/second"],
+        config: { maxRetries: 0, retryDelayMs: 0, concurrencyPerModel: 1, queueTimeoutMs: 100 },
+      },
+      handleSingleModel: async (_body: unknown, modelStr: string) => {
+        calls.push(modelStr);
+        return terminal;
+      },
+      isModelAvailable: async () => true,
+      log,
+      settings: null,
+      allCombos: null,
+      relayOptions: null,
+    });
+
+    assert.equal(result, terminal);
+    assert.equal(result.status, 504);
+    assert.equal(isAcceptedTaskTimeoutResponse(result), true);
+    assert.deepEqual(calls, ["openai/first"], "do not dispatch another provider after timeout");
+  });
+}
+
+for (const strategy of ["priority", "round-robin"]) {
+  test(`${strategy} still falls back after an ordinary unmarked provider 504`, async () => {
+    const ordinaryTimeout = new Response(
+      JSON.stringify({ error: { message: "provider gateway timeout", code: 504 } }),
+      { status: 504, headers: { "content-type": "application/json" } }
+    );
+    const calls: string[] = [];
+    const result = await handleComboChat({
+      body: { messages: [{ role: "user", content: "ordinary provider timeout" }] },
+      combo: {
+        name: `ordinary-504-fallback-${strategy}`,
+        strategy,
+        models: ["openai/first", "anthropic/second"],
+        config: { maxRetries: 0, retryDelayMs: 0, concurrencyPerModel: 1, queueTimeoutMs: 100 },
+      },
+      handleSingleModel: async (_body: unknown, modelStr: string) => {
+        calls.push(modelStr);
+        return modelStr === "openai/first"
+          ? ordinaryTimeout
+          : Response.json({ ok: true, text: "fallback succeeded" });
+      },
+      isModelAvailable: async () => true,
+      log,
+      settings: null,
+      allCombos: null,
+      relayOptions: null,
+    });
+
+    assert.equal(result.status, 200);
+    assert.equal(isAcceptedTaskTimeoutResponse(ordinaryTimeout), false);
+    assert.deepEqual(calls, ["openai/first", "anthropic/second"]);
+  });
+}
+
+// The fake throws without dispatching through its observed dispatcher, so an
+// unsafe POST has no proof it was still queued. It must remain terminally
+// ambiguous instead of being replayed on another account, model, or transport.
+function installAmbiguousTransport() {
   const calls: string[] = [];
   let dispatcherAttempts = 0;
   let nativeAttempts = 0;
@@ -117,7 +223,7 @@ function installExhaustedTransport() {
 }
 
 for (const stream of [false, true]) {
-  test(`direct ${stream ? "SSE" : "JSON"} exhaustion stops before account and emergency fallback`, async () => {
+  test(`direct ${stream ? "SSE" : "JSON"} ambiguous dispatch stops before account and emergency fallback`, async () => {
     await seedConnection("openai", { apiKey: "sk-first-terminal", priority: 1 });
     await seedConnection("openai", { apiKey: "sk-second-unused", priority: 2 });
     await seedConnection("nvidia", { apiKey: "sk-emergency-unused" });
@@ -127,7 +233,7 @@ for (const stream of [false, true]) {
       true,
       "this failure would trigger emergency fallback if the terminal guard were late"
     );
-    const transport = installExhaustedTransport();
+    const transport = installAmbiguousTransport();
 
     const response = await handleChat(
       buildRequest({
@@ -140,20 +246,27 @@ for (const stream of [false, true]) {
     );
 
     assert.equal(response.status, 502);
-    // The public SSE admission wrapper rebuilds the Response after routing, so
-    // its final object need not retain the in-process marker.
-    if (!stream) assert.equal(isExhaustedNetworkResponse(response), true);
+    // Public handlers may rebuild the Response, so assert the error envelope
+    // and the observed absence of retries/fallbacks rather than its private marker.
     assert.equal(transport.calls.length, 1, "no second account or emergency model dispatch");
     assert.ok(
       ["Bearer sk-first-terminal", "Bearer sk-second-unused"].includes(transport.calls[0]),
       "the only upstream dispatch must use one of the original provider accounts"
     );
-    assert.equal(transport.dispatcherAttempts, 2, "proxyFetch retries with a fresh dispatcher");
-    assert.equal(transport.nativeAttempts, 1, "proxyFetch tries native fetch before marking");
-    assert.match(await response.text(), /fetch failed: billing limit exceeded/);
+    assert.equal(
+      transport.dispatcherAttempts,
+      1,
+      "the fake transport supplied no proof that this unsafe POST was still queued"
+    );
+    assert.equal(
+      transport.nativeAttempts,
+      0,
+      "ambiguous dispatch must not replay through native fetch"
+    );
+    assert.match(await response.text(), /upstream_acceptance_uncertain/);
   });
 
-  test(`combo ${stream ? "SSE" : "JSON"} exhaustion stops before other targets and global fallback`, async () => {
+  test(`combo ${stream ? "SSE" : "JSON"} ambiguous dispatch stops before other targets and global fallback`, async () => {
     await seedConnection("openai", { apiKey: "sk-first-terminal" });
     await seedConnection("claude", { apiKey: "sk-next-unused" });
     await seedConnection("nvidia", { apiKey: "sk-global-unused" });
@@ -168,7 +281,7 @@ for (const stream of [false, true]) {
       requestRetry: 0,
       maxRetryIntervalSec: 0,
     });
-    const transport = installExhaustedTransport();
+    const transport = installAmbiguousTransport();
 
     const response = await handleChat(
       buildRequest({
@@ -181,11 +294,10 @@ for (const stream of [false, true]) {
     );
 
     assert.equal(response.status, 502);
-    if (!stream) assert.equal(isExhaustedNetworkResponse(response), true);
     assert.deepEqual(transport.calls, ["Bearer sk-first-terminal"]);
-    assert.equal(transport.dispatcherAttempts, 2);
-    assert.equal(transport.nativeAttempts, 1);
-    assert.match(await response.text(), /fetch failed: billing limit exceeded/);
+    assert.equal(transport.dispatcherAttempts, 1);
+    assert.equal(transport.nativeAttempts, 0);
+    assert.match(await response.text(), /upstream_acceptance_uncertain/);
   });
 }
 

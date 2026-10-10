@@ -41,7 +41,11 @@
  */
 import { errorResponse } from "../utils/error.ts";
 import { isRuntimePolicyResponse } from "@/shared/runtimePolicy";
-import { isExhaustedNetworkResponse } from "./exhaustedNetworkResponse.ts";
+import {
+  isAcceptedTaskTimeoutResponse,
+  isExhaustedNetworkResponse,
+  isUnsafeToReplayResponse,
+} from "./exhaustedNetworkResponse.ts";
 import type { ComboLogger, HandleSingleModel, ResolvedComboTarget } from "./combo/types.ts";
 // extractPanelText is a generic assistant-text extractor (OpenAI chat / Claude /
 // Gemini / Responses) — reused here to read each step's output, not fusion-specific.
@@ -202,7 +206,13 @@ export async function handlePipelineChat({
 
     const t0 = Date.now();
     let res = await handleSingleModel(stepBody, stepModel, stepTarget);
-    if (isRuntimePolicyResponse(res) || isExhaustedNetworkResponse(res)) return res;
+    if (
+      isRuntimePolicyResponse(res) ||
+      isExhaustedNetworkResponse(res) ||
+      isAcceptedTaskTimeoutResponse(res) ||
+      isUnsafeToReplayResponse(res)
+    )
+      return res;
 
     if (isFinal) {
       log.info("PIPELINE", `Final step ${stepModel} responded (${Date.now() - t0}ms)`);
@@ -223,7 +233,13 @@ export async function handlePipelineChat({
       );
       await sleep(retryDelayMs);
       res = await handleSingleModel(stepBody, stepModel, stepTarget);
-      if (isRuntimePolicyResponse(res) || isExhaustedNetworkResponse(res)) return res;
+      if (
+        isRuntimePolicyResponse(res) ||
+        isExhaustedNetworkResponse(res) ||
+        isAcceptedTaskTimeoutResponse(res) ||
+        isUnsafeToReplayResponse(res)
+      )
+        return res;
     }
 
     // An intermediate step must succeed with usable text — otherwise fail the whole

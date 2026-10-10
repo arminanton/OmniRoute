@@ -5,7 +5,11 @@ import type {
   ResolvedComboTarget,
 } from "./types";
 import { isRuntimePolicyResponse } from "@/shared/runtimePolicy";
-import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
+import {
+  isAcceptedTaskTimeoutResponse,
+  isExhaustedNetworkResponse,
+  isUnsafeToReplayResponse,
+} from "../exhaustedNetworkResponse.ts";
 
 /**
  * Last-resort fallback tier for combo routing (#6238).
@@ -75,7 +79,13 @@ export async function attemptCompatRejectedFallback(
       ...target,
       effectiveComboStrategy: ctx.strategy,
     });
-    if (isRuntimePolicyResponse(result) || isExhaustedNetworkResponse(result)) return result;
+    if (
+      isRuntimePolicyResponse(result) ||
+      isExhaustedNetworkResponse(result) ||
+      isAcceptedTaskTimeoutResponse(result) ||
+      isUnsafeToReplayResponse(result)
+    )
+      return result;
     if (result.ok) {
       ctx.log.info("COMBO", `Last-resort compat fallback succeeded via ${target.modelStr}`);
       return result;

@@ -23,7 +23,11 @@ import {
 } from "../../utils/error.ts";
 import { parseModel } from "../model.ts";
 import { isRuntimePolicyError, isRuntimePolicyResponse } from "@/shared/runtimePolicy";
-import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
+import {
+  isAcceptedTaskTimeoutResponse,
+  isExhaustedNetworkResponse,
+  isUnsafeToReplayResponse,
+} from "../exhaustedNetworkResponse.ts";
 import { handlePipelineChat, type PipelineStep } from "../pipeline.ts";
 import type { resolveComboSetupConfig } from "../comboConfig.ts";
 import { clampComboDepth, clampGlobalAttempts, resolveDelayMs } from "./comboPredicates.ts";
@@ -354,7 +358,12 @@ export async function tryPinnedModelDispatch(args: {
       );
     }
     if (pinnedResult) {
-      if (isRuntimePolicyResponse(pinnedResult) || isExhaustedNetworkResponse(pinnedResult))
+      if (
+        isRuntimePolicyResponse(pinnedResult) ||
+        isExhaustedNetworkResponse(pinnedResult) ||
+        isAcceptedTaskTimeoutResponse(pinnedResult) ||
+        isUnsafeToReplayResponse(pinnedResult)
+      )
         return pinnedResult;
       const accepted = await evaluatePinnedResponse({
         pinnedResult,

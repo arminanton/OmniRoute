@@ -22,7 +22,11 @@ import {
 } from "../accountFallback.ts";
 import { errorResponse, errorResponseWithComboDiagnostics } from "../../utils/error.ts";
 import { isRuntimePolicyResponse } from "@/shared/runtimePolicy";
-import { isExhaustedNetworkResponse } from "../exhaustedNetworkResponse.ts";
+import {
+  isAcceptedTaskTimeoutResponse,
+  isExhaustedNetworkResponse,
+  isUnsafeToReplayResponse,
+} from "../exhaustedNetworkResponse.ts";
 import { recordComboFailure, clearComboFailureTracking } from "./failureTracker.ts";
 import { buildRecoveryHint } from "./pinRecovery.ts";
 import { formatExhaustedConnectionKey } from "./comboDiagFormat.ts";
@@ -373,7 +377,12 @@ export async function executeTargetAttempt(opts: {
 
     // Local network exhaustion is request-terminal. Preserve the exact response
     // before body parsing, health accounting, retry, target advance, or compression.
-    if (isRuntimePolicyResponse(result) || isExhaustedNetworkResponse(result)) {
+    if (
+      isRuntimePolicyResponse(result) ||
+      isExhaustedNetworkResponse(result) ||
+      isAcceptedTaskTimeoutResponse(result) ||
+      isUnsafeToReplayResponse(result)
+    ) {
       return { ok: false, response: result };
     }
 

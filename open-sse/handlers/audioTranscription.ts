@@ -24,6 +24,10 @@ import { buildAuthHeaders } from "../config/registryUtils.ts";
 import { kieExecutor } from "../executors/kie.ts";
 import { vertexTranscribe } from "../executors/vertexMedia.ts";
 import { errorResponse } from "../utils/error.ts";
+import {
+  isAcceptedTaskTimeoutResponse,
+  markAcceptedTaskTimeoutResponse,
+} from "../services/exhaustedNetworkResponse.ts";
 import { isJsonObject } from "../utils/kieTask.ts";
 import { handleOpenRouterTranscription } from "./openrouterTranscription.ts";
 import { transcribeMaxaiAudio } from "../executors/maxai/transcription.ts";
@@ -91,18 +95,22 @@ function sleepWithSignal(ms: number, signal?: AbortSignal | null): Promise<void>
   if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
   signal.throwIfAborted();
   return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = () => {
       signal.removeEventListener("abort", abort);
       resolve();
     };
-    const timer = setTimeout(finish, ms);
     const abort = () => {
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
       signal.removeEventListener("abort", abort);
       reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
     };
     signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) abort();
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    timer = setTimeout(finish, ms);
   });
 }
 
@@ -162,6 +170,105 @@ export function supportsSharedAudioTranscriptionAdmission(
   provider: AudioProvider | null | undefined
 ): boolean {
   return Boolean(provider && provider.async !== true && provider.format !== "kie-audio");
+}
+
+const ASYNC_TRANSCRIPTION_MAX_WAIT_MS = 120_000;
+const RETRYABLE_AUDIO_TASK_POLL_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function acceptedTaskTimeoutResponse(message: string): Response {
+  return markAcceptedTaskTimeoutResponse(errorResponse(504, message));
+}
+
+type AcceptedAudioTaskStatusResult =
+  | { kind: "retry" }
+  | { kind: "result"; data: Record<string, any> }
+  | { kind: "error"; response: Response };
+
+/** Retry only transient status reads, never create POSTs, for an accepted task. */
+async function fetchAcceptedAudioTaskStatus(
+  url: string,
+  headers: HeadersInit,
+  deadlineSignal: AbortSignal
+): Promise<AcceptedAudioTaskStatusResult> {
+  let response: Response;
+  try {
+    response = await fetch(url, { headers, signal: deadlineSignal });
+  } catch (error) {
+    if (deadlineSignal.aborted) throw error;
+    return { kind: "retry" };
+  }
+
+  if (!response.ok) {
+    if (RETRYABLE_AUDIO_TASK_POLL_STATUSES.has(response.status)) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        // Best-effort release of a transient error response body.
+      }
+      return { kind: "retry" };
+    }
+    return {
+      kind: "error",
+      response: upstreamErrorResponse(response, await response.text()),
+    };
+  }
+
+  try {
+    const result: unknown = await response.json();
+    return result && typeof result === "object" && !Array.isArray(result)
+      ? { kind: "result", data: result as Record<string, any> }
+      : { kind: "retry" };
+  } catch (error) {
+    if (deadlineSignal.aborted) throw error;
+    return { kind: "retry" };
+  }
+}
+
+/**
+ * Keep an accepted remote transcription job's route/account reservation alive
+ * until the provider reaches a terminal result or the one absolute lifecycle
+ * deadline. Caller disconnects are observed only after that work settles;
+ * they must not abort polling or transcript retrieval because these providers
+ * do not expose a cancellation operation.
+ */
+async function finishAcceptedAudioTranscription(
+  callerSignal: AbortSignal | null | undefined,
+  timeoutMessage: string,
+  operation: (deadlineSignal: AbortSignal) => Promise<Response>
+): Promise<Response> {
+  const deadlineAt = Date.now() + ASYNC_TRANSCRIPTION_MAX_WAIT_MS;
+  const deadlineController = new AbortController();
+  const deadlineError = Object.assign(new Error(timeoutMessage), { status: 504 });
+  const deadlineTimer = setTimeout(
+    () => deadlineController.abort(deadlineError),
+    ASYNC_TRANSCRIPTION_MAX_WAIT_MS
+  );
+
+  try {
+    try {
+      const response = await operation(deadlineController.signal);
+      if (callerSignal?.aborted) {
+        return errorResponse(499, "Transcription request cancelled");
+      }
+      if (isAcceptedTaskTimeoutResponse(response)) return response;
+      // Provider rejections and terminal job failures keep their original status.
+      if (!response.ok) return response;
+      if (deadlineController.signal.aborted || Date.now() >= deadlineAt) {
+        return acceptedTaskTimeoutResponse(timeoutMessage);
+      }
+      return response;
+    } catch (err) {
+      if (callerSignal?.aborted) {
+        return errorResponse(499, "Transcription request cancelled");
+      }
+      if (deadlineController.signal.aborted || Date.now() >= deadlineAt) {
+        return acceptedTaskTimeoutResponse(timeoutMessage);
+      }
+      throw err;
+    }
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
 }
 
 /**
@@ -286,48 +393,52 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
   // dispatch, then finish the bounded poll while the route keeps its local
   // account reservation held.
   signal?.throwIfAborted();
-  const submitRes = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: {
-      ...authHeaders,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      audio_url: upload_url,
-      speech_models: [modelId],
-      language_detection: true,
-    }),
-  });
+  return finishAcceptedAudioTranscription(
+    signal,
+    "AssemblyAI transcription timed out after 120s",
+    async (deadlineSignal) => {
+      const submitRes = await fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          audio_url: upload_url,
+          speech_models: [modelId],
+          language_detection: true,
+        }),
+        signal: deadlineSignal,
+      });
 
-  if (!submitRes.ok) {
-    return upstreamErrorResponse(submitRes, await submitRes.text());
-  }
+      if (!submitRes.ok) {
+        return upstreamErrorResponse(submitRes, await submitRes.text());
+      }
 
-  const { id: transcriptId } = await submitRes.json();
+      const { id: transcriptId } = await submitRes.json();
+      const pollUrl = `${providerConfig.baseUrl}/${transcriptId}`;
 
-  // Step 3: Poll for completion (max 120s)
-  const pollUrl = `${providerConfig.baseUrl}/${transcriptId}`;
-  const maxWait = 120_000;
-  const start = Date.now();
+      // Step 3: Poll for completion under the same deadline as job submission.
+      while (!deadlineSignal.aborted) {
+        await sleepWithSignal(2000, deadlineSignal);
 
-  while (Date.now() - start < maxWait) {
-    await sleepWithSignal(2000);
+        const poll = await fetchAcceptedAudioTaskStatus(pollUrl, authHeaders, deadlineSignal);
+        if (poll.kind === "retry") continue;
+        if (poll.kind === "error") return poll.response;
+        const result = poll.data;
 
-    const pollRes = await fetch(pollUrl, { headers: authHeaders });
-    if (!pollRes.ok) continue;
+        if (result.status === "completed") {
+          return Response.json({ text: result.text || "" }, { headers: { ...CORS_HEADERS } });
+        }
 
-    const result = await pollRes.json();
+        if (result.status === "error") {
+          return errorResponse(500, result.error || "AssemblyAI transcription failed");
+        }
+      }
 
-    if (result.status === "completed") {
-      return Response.json({ text: result.text || "" }, { headers: { ...CORS_HEADERS } });
+      return acceptedTaskTimeoutResponse("AssemblyAI transcription timed out after 120s");
     }
-
-    if (result.status === "error") {
-      return errorResponse(500, result.error || "AssemblyAI transcription failed");
-    }
-  }
-
-  return errorResponse(504, "AssemblyAI transcription timed out after 120s");
+  );
 }
 
 /**
@@ -353,44 +464,51 @@ async function handleGladiaTranscription(providerConfig, file, modelId, token, s
 
   // Step 2: Submit the pre-recorded transcription job
   signal?.throwIfAborted();
-  const submitRes = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: { ...authHeaders, "Content-Type": "application/json" },
-    body: JSON.stringify({ audio_url, model: modelId }),
-  });
+  return finishAcceptedAudioTranscription(
+    signal,
+    "Gladia transcription timed out after 120s",
+    async (deadlineSignal) => {
+      const submitRes = await fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ audio_url, model: modelId }),
+        signal: deadlineSignal,
+      });
 
-  if (!submitRes.ok) {
-    return upstreamErrorResponse(submitRes, await submitRes.text());
-  }
+      if (!submitRes.ok) {
+        return upstreamErrorResponse(submitRes, await submitRes.text());
+      }
 
-  const { result_url: resultUrl } = await submitRes.json();
-  if (!resultUrl) {
-    return errorResponse(502, "Gladia did not return a result_url");
-  }
+      const { result_url: resultUrl } = await submitRes.json();
+      if (!resultUrl) {
+        return errorResponse(502, "Gladia did not return a result_url");
+      }
 
-  // Step 3: Poll for completion (max 120s)
-  const maxWait = 120_000;
-  const start = Date.now();
+      // Step 3: Poll under the same deadline as job submission.
+      while (!deadlineSignal.aborted) {
+        await sleepWithSignal(2000, deadlineSignal);
 
-  while (Date.now() - start < maxWait) {
-    await sleepWithSignal(2000);
+        const poll = await fetchAcceptedAudioTaskStatus(resultUrl, authHeaders, deadlineSignal);
+        if (poll.kind === "retry") continue;
+        if (poll.kind === "error") return poll.response;
+        const result = poll.data;
 
-    const pollRes = await fetch(resultUrl, { headers: authHeaders });
-    if (!pollRes.ok) continue;
+        if (result.status === "done") {
+          const text = result.result?.transcription?.full_transcript || "";
+          return Response.json({ text }, { headers: { ...CORS_HEADERS } });
+        }
 
-    const result = await pollRes.json();
+        if (result.status === "error") {
+          return errorResponse(
+            500,
+            result.error_code || result.error || "Gladia transcription failed"
+          );
+        }
+      }
 
-    if (result.status === "done") {
-      const text = result.result?.transcription?.full_transcript || "";
-      return Response.json({ text }, { headers: { ...CORS_HEADERS } });
+      return acceptedTaskTimeoutResponse("Gladia transcription timed out after 120s");
     }
-
-    if (result.status === "error") {
-      return errorResponse(500, result.error_code || result.error || "Gladia transcription failed");
-    }
-  }
-
-  return errorResponse(504, "Gladia transcription timed out after 120s");
+  );
 }
 
 /**
@@ -412,59 +530,66 @@ async function handleSonioxTranscription(providerConfig, file, modelId, token, s
   const fileId = (await uploadRes.json()).id;
 
   signal?.throwIfAborted();
-  const createRes = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: { ...authHeaders, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: modelId,
-      file_id: fileId,
-      enable_language_identification: true,
-    }),
-  });
-  if (!createRes.ok) {
-    return upstreamErrorResponse(createRes, await createRes.text());
-  }
-  const { id: transcriptionId } = await createRes.json();
+  return finishAcceptedAudioTranscription(
+    signal,
+    "Soniox transcription timed out after 120s",
+    async (deadlineSignal) => {
+      const createRes = await fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: modelId,
+          file_id: fileId,
+          enable_language_identification: true,
+        }),
+        signal: deadlineSignal,
+      });
+      if (!createRes.ok) {
+        return upstreamErrorResponse(createRes, await createRes.text());
+      }
+      const { id: transcriptionId } = await createRes.json();
 
-  const statusUrl = `${providerConfig.baseUrl}/${transcriptionId}`;
-  const maxWait = 120_000;
-  const start = Date.now();
-  let completed = false;
-  while (Date.now() - start < maxWait) {
-    await sleepWithSignal(2000);
-    const pollRes = await fetch(statusUrl, { headers: authHeaders });
-    if (!pollRes.ok) {
-      continue;
-    }
-    const result = await pollRes.json();
-    if (result.status === "completed") {
-      completed = true;
-      break;
-    }
-    if (result.status === "error") {
-      return errorResponse(
-        500,
-        result.error_message || result.error || "Soniox transcription failed"
-      );
-    }
-  }
-  if (!completed) {
-    return errorResponse(504, "Soniox transcription timed out after 120s");
-  }
+      const statusUrl = `${providerConfig.baseUrl}/${transcriptionId}`;
+      let completed = false;
+      while (!deadlineSignal.aborted) {
+        await sleepWithSignal(2000, deadlineSignal);
+        const poll = await fetchAcceptedAudioTaskStatus(statusUrl, authHeaders, deadlineSignal);
+        if (poll.kind === "retry") continue;
+        if (poll.kind === "error") return poll.response;
+        const result = poll.data;
+        if (result.status === "completed") {
+          completed = true;
+          break;
+        }
+        if (result.status === "error") {
+          return errorResponse(
+            500,
+            result.error_message || result.error || "Soniox transcription failed"
+          );
+        }
+      }
+      if (!completed) {
+        return acceptedTaskTimeoutResponse("Soniox transcription timed out after 120s");
+      }
 
-  const transcriptRes = await fetch(`${statusUrl}/transcript`, { headers: authHeaders });
-  if (!transcriptRes.ok) {
-    return upstreamErrorResponse(transcriptRes, await transcriptRes.text());
-  }
-  const transcript = await transcriptRes.json();
-  const text =
-    typeof transcript.text === "string" && transcript.text.length > 0
-      ? transcript.text
-      : Array.isArray(transcript.tokens)
-        ? transcript.tokens.map((t: { text?: string }) => t.text ?? "").join("")
-        : "";
+      const transcriptRes = await fetch(`${statusUrl}/transcript`, {
+        headers: authHeaders,
+        signal: deadlineSignal,
+      });
+      if (!transcriptRes.ok) {
+        return upstreamErrorResponse(transcriptRes, await transcriptRes.text());
+      }
+      const transcript = await transcriptRes.json();
+      const text =
+        typeof transcript.text === "string" && transcript.text.length > 0
+          ? transcript.text
+          : Array.isArray(transcript.tokens)
+            ? transcript.tokens.map((t: { text?: string }) => t.text ?? "").join("")
+            : "";
 
-  return Response.json({ text }, { headers: { ...CORS_HEADERS } });
+      return Response.json({ text }, { headers: { ...CORS_HEADERS } });
+    }
+  );
 }
 
 /**
@@ -540,81 +665,144 @@ function normalizeKieTranscriptionText(recordData: unknown): string {
 }
 
 async function handleKieAudioTranscription(providerConfig, file, modelId, token, signal) {
+  const pollTimeoutMs = 120_000;
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
   const fileBuffer = await file.arrayBuffer();
   const fileBase64 = Buffer.from(fileBuffer).toString("base64");
-  let data;
+  signal?.throwIfAborted();
+  const deadlineAt = Date.now() + pollTimeoutMs;
+  const deadlineController = new AbortController();
+  const deadlineError = Object.assign(new Error("Kie task timed out"), { status: 504 });
+  const deadlineTimer = setTimeout(() => deadlineController.abort(deadlineError), pollTimeoutMs);
   try {
-    // Kie jobs outlive this HTTP request and the adapter has no remote cancel
-    // operation. Check abort before dispatch, then retain local occupancy while
-    // polling the accepted task to a terminal state.
-    signal?.throwIfAborted();
-    data = await kieExecutor.createTask({
-      baseUrl,
-      token,
-      payload: {
-        model: modelId,
-        input: {
-          file_name: getUploadedFileName(file),
-          file_base64: fileBase64,
+    let data;
+    try {
+      // KIE jobs outlive this HTTP request and the adapter has no remote cancel
+      // operation. Check abort before dispatch, then use only the server-owned
+      // deadline for create + polling so a caller disconnect cannot cancel an
+      // ambiguous/accepted create request.
+      data = await kieExecutor.createTask({
+        baseUrl,
+        token,
+        signal: deadlineController.signal,
+        payload: {
+          model: modelId,
+          input: {
+            file_name: getUploadedFileName(file),
+            file_base64: fileBase64,
+          },
         },
-      },
-    });
-  } catch (err: unknown) {
-    if (signal?.aborted) return errorResponse(499, "Transcription request cancelled");
-    const status =
-      typeof err === "object" && err !== null && "status" in err
-        ? Number((err as { status?: unknown }).status) || 502
-        : 502;
-    return Response.json(
-      {
-        error: {
-          message: err instanceof Error ? err.message : "Kie transcription createTask failed",
-          code: status,
-        },
-      },
-      {
-        status,
-        headers: { ...CORS_HEADERS },
+      });
+    } catch (err: unknown) {
+      if (signal?.aborted) return errorResponse(499, "Transcription request cancelled");
+      if (deadlineController.signal.aborted || Date.now() >= deadlineAt) {
+        return acceptedTaskTimeoutResponse("Kie task timed out");
       }
+      const status =
+        typeof err === "object" && err !== null && "status" in err
+          ? Number((err as { status?: unknown }).status) || 502
+          : 502;
+      return Response.json(
+        {
+          error: {
+            message: err instanceof Error ? err.message : "Kie transcription createTask failed",
+            code: status,
+          },
+        },
+        {
+          status,
+          headers: { ...CORS_HEADERS },
+        }
+      );
+    }
+    const taskId = data?.data?.taskId || data?.taskId;
+
+    if (taskId) {
+      return pollKieTranscriptionResult(
+        baseUrl,
+        modelId,
+        taskId,
+        token,
+        signal,
+        deadlineAt,
+        deadlineController.signal
+      );
+    }
+
+    if (deadlineController.signal.aborted || Date.now() >= deadlineAt) {
+      return acceptedTaskTimeoutResponse("Kie task timed out");
+    }
+
+    // A createTask response without a task id is not a pollable accepted job.
+    // If the caller disconnected while KIE was responding, report cancellation
+    // instead of turning that ambiguous response into a successful empty result.
+    if (signal?.aborted) return errorResponse(499, "Transcription request cancelled");
+
+    return Response.json(
+      { text: data?.data?.text || data?.text || "" },
+      { headers: { ...CORS_HEADERS } }
     );
+  } finally {
+    clearTimeout(deadlineTimer);
   }
-  const taskId = data?.data?.taskId || data?.taskId;
-
-  if (taskId) {
-    return pollKieTranscriptionResult(baseUrl, modelId, taskId, token);
-  }
-
-  return Response.json(
-    { text: data?.data?.text || data?.text || "" },
-    { headers: { ...CORS_HEADERS } }
-  );
 }
 
 /**
  * Internal polling for Kie.ai async transcription tasks
  */
-async function pollKieTranscriptionResult(baseUrl, modelId, taskId, token) {
+async function pollKieTranscriptionResult(
+  baseUrl,
+  modelId,
+  taskId,
+  token,
+  callerSignal,
+  deadlineAt,
+  deadlineSignal
+) {
   void modelId;
   const statusUrl = kieExecutor.getTaskStatusUrl(baseUrl);
+  // The remote KIE job cannot be cancelled once accepted. The handler-owned
+  // deadline is shared with createTask and aborts an in-flight status fetch;
+  // the caller signal is deliberately used only to choose the final response.
+  const timeoutMs = Math.max(0, deadlineAt - Date.now());
   try {
     const { data, state } = await kieExecutor.pollTask({
       statusUrl,
       taskId: String(taskId),
       token,
-      timeoutMs: 120000,
+      timeoutMs,
       pollIntervalMs: 2000,
+      signal: deadlineSignal,
     });
+
+    if (callerSignal?.aborted) {
+      return errorResponse(499, "Transcription request cancelled");
+    }
+    if (deadlineSignal.aborted || Date.now() >= deadlineAt) {
+      return acceptedTaskTimeoutResponse("Kie task timed out");
+    }
 
     if (state === "success") {
       const text = normalizeKieTranscriptionText(data);
       return Response.json({ text }, { headers: { ...CORS_HEADERS } });
     }
   } catch (err: unknown) {
+    if (callerSignal?.aborted) {
+      return errorResponse(499, "Transcription request cancelled");
+    }
     const status =
       typeof err === "object" && err !== null && "status" in err
         ? Number((err as { status?: unknown }).status) || 504
         : 504;
+    if (
+      deadlineSignal.aborted ||
+      (status === 504 && err instanceof Error && err.message === "Kie task timed out") ||
+      Date.now() >= deadlineAt
+    ) {
+      return acceptedTaskTimeoutResponse(
+        err instanceof Error ? err.message : "Kie transcription generation timed out or failed"
+      );
+    }
     return errorResponse(
       status,
       err instanceof Error ? err.message : "Kie transcription generation timed out or failed"
@@ -640,48 +828,53 @@ async function handleRevAiTranscription(providerConfig, file, modelId, token, si
   const { body, contentType } = await buildMultipartBody(file, { options }, "media");
 
   signal?.throwIfAborted();
-  const submitRes = await fetch(`${baseUrl}/jobs`, {
-    method: "POST",
-    headers: { ...authHeaders, "Content-Type": contentType },
-    body,
-  });
-
-  if (!submitRes.ok) {
-    return upstreamErrorResponse(submitRes, await submitRes.text());
-  }
-
-  const { id: jobId } = await submitRes.json();
-
-  // Step 2: poll for completion (max 120s)
-  const jobUrl = `${baseUrl}/jobs/${jobId}`;
-  const maxWait = 120_000;
-  const start = Date.now();
-
-  while (Date.now() - start < maxWait) {
-    await sleepWithSignal(2000);
-
-    const pollRes = await fetch(jobUrl, { headers: authHeaders });
-    if (!pollRes.ok) continue;
-
-    const result = await pollRes.json();
-
-    if (result.status === "transcribed") {
-      const transcriptRes = await fetch(`${jobUrl}/transcript`, {
-        headers: { ...authHeaders, Accept: "text/plain" },
+  return finishAcceptedAudioTranscription(
+    signal,
+    "Rev AI transcription timed out after 120s",
+    async (deadlineSignal) => {
+      const submitRes = await fetch(`${baseUrl}/jobs`, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": contentType },
+        body,
+        signal: deadlineSignal,
       });
-      if (!transcriptRes.ok) {
-        return upstreamErrorResponse(transcriptRes, await transcriptRes.text());
+
+      if (!submitRes.ok) {
+        return upstreamErrorResponse(submitRes, await submitRes.text());
       }
-      const text = await transcriptRes.text();
-      return Response.json({ text: text || "" }, { headers: { ...CORS_HEADERS } });
-    }
 
-    if (result.status === "failed") {
-      return errorResponse(500, result.failure_detail || "Rev AI transcription failed");
-    }
-  }
+      const { id: jobId } = await submitRes.json();
+      const jobUrl = `${baseUrl}/jobs/${jobId}`;
 
-  return errorResponse(504, "Rev AI transcription timed out after 120s");
+      // Step 2: poll under the same deadline as job submission.
+      while (!deadlineSignal.aborted) {
+        await sleepWithSignal(2000, deadlineSignal);
+
+        const poll = await fetchAcceptedAudioTaskStatus(jobUrl, authHeaders, deadlineSignal);
+        if (poll.kind === "retry") continue;
+        if (poll.kind === "error") return poll.response;
+        const result = poll.data;
+
+        if (result.status === "transcribed") {
+          const transcriptRes = await fetch(`${jobUrl}/transcript`, {
+            headers: { ...authHeaders, Accept: "text/plain" },
+            signal: deadlineSignal,
+          });
+          if (!transcriptRes.ok) {
+            return upstreamErrorResponse(transcriptRes, await transcriptRes.text());
+          }
+          const text = await transcriptRes.text();
+          return Response.json({ text: text || "" }, { headers: { ...CORS_HEADERS } });
+        }
+
+        if (result.status === "failed") {
+          return errorResponse(500, result.failure_detail || "Rev AI transcription failed");
+        }
+      }
+
+      return acceptedTaskTimeoutResponse("Rev AI transcription timed out after 120s");
+    }
+  );
 }
 
 /**
@@ -698,9 +891,10 @@ function speechmaticsOperatingPoint(modelId: string): string {
  * Fetch and return the finished Speechmatics transcript once a job reaches
  * the "done" state.
  */
-async function fetchSpeechmaticsTranscript(jobUrl, authHeaders) {
+async function fetchSpeechmaticsTranscript(jobUrl, authHeaders, signal) {
   const transcriptRes = await fetch(`${jobUrl}/transcript?format=txt`, {
     headers: { ...authHeaders, Accept: "text/plain" },
+    signal,
   });
   if (!transcriptRes.ok) {
     return upstreamErrorResponse(transcriptRes, await transcriptRes.text());
@@ -719,21 +913,18 @@ function speechmaticsJobErrorMessage(result): string {
  * Poll a submitted Speechmatics job until it reaches a terminal state
  * (max 120s), then fetch its transcript.
  */
-async function pollSpeechmaticsJob(jobUrl, authHeaders) {
-  const maxWait = 120_000;
-  const start = Date.now();
+async function pollSpeechmaticsJob(jobUrl, authHeaders, deadlineSignal) {
+  while (!deadlineSignal.aborted) {
+    await sleepWithSignal(2000, deadlineSignal);
 
-  while (Date.now() - start < maxWait) {
-    await sleepWithSignal(2000);
-
-    const pollRes = await fetch(jobUrl, { headers: authHeaders });
-    if (!pollRes.ok) continue;
-
-    const result = await pollRes.json();
+    const poll = await fetchAcceptedAudioTaskStatus(jobUrl, authHeaders, deadlineSignal);
+    if (poll.kind === "retry") continue;
+    if (poll.kind === "error") return poll.response;
+    const result = poll.data;
     const status = result?.job?.status;
 
     if (status === "done") {
-      return fetchSpeechmaticsTranscript(jobUrl, authHeaders);
+      return fetchSpeechmaticsTranscript(jobUrl, authHeaders, deadlineSignal);
     }
 
     if (status === "rejected") {
@@ -741,7 +932,7 @@ async function pollSpeechmaticsJob(jobUrl, authHeaders) {
     }
   }
 
-  return errorResponse(504, "Speechmatics transcription timed out after 120s");
+  return acceptedTaskTimeoutResponse("Speechmatics transcription timed out after 120s");
 }
 
 /**
@@ -764,23 +955,29 @@ async function handleSpeechmaticsTranscription(providerConfig, file, modelId, to
   const { body, contentType } = await buildMultipartBody(file, { config }, "data_file");
 
   signal?.throwIfAborted();
-  const submitRes = await fetch(baseUrl, {
-    method: "POST",
-    headers: { ...authHeaders, "Content-Type": contentType },
-    body,
-  });
+  return finishAcceptedAudioTranscription(
+    signal,
+    "Speechmatics transcription timed out after 120s",
+    async (deadlineSignal) => {
+      const submitRes = await fetch(baseUrl, {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": contentType },
+        body,
+        signal: deadlineSignal,
+      });
 
-  if (!submitRes.ok) {
-    return upstreamErrorResponse(submitRes, await submitRes.text());
-  }
+      if (!submitRes.ok) {
+        return upstreamErrorResponse(submitRes, await submitRes.text());
+      }
 
-  const { id: jobId } = await submitRes.json();
-  if (!jobId) {
-    return errorResponse(502, "Speechmatics did not return a job id");
-  }
+      const { id: jobId } = await submitRes.json();
+      if (!jobId) {
+        return errorResponse(502, "Speechmatics did not return a job id");
+      }
 
-  // Step 2: poll for completion (max 120s)
-  return pollSpeechmaticsJob(`${baseUrl}/${jobId}`, authHeaders);
+      return pollSpeechmaticsJob(`${baseUrl}/${jobId}`, authHeaders, deadlineSignal);
+    }
+  );
 }
 
 /**

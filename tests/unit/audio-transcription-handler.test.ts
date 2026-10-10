@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 
 const { handleAudioTranscription, supportsSharedAudioTranscriptionAdmission } =
   await import("../../open-sse/handlers/audioTranscription.ts");
+const { isAcceptedTaskTimeoutResponse } =
+  await import("../../open-sse/services/exhaustedNetworkResponse.ts");
 
 test("shared transcription admission excludes remote-job providers that cannot be cancelled", () => {
   assert.equal(supportsSharedAudioTranscriptionAdmission({ id: "openai" } as any), true);
@@ -24,7 +26,10 @@ function buildFile(contents, name, type) {
   return new File([Buffer.from(contents)], name, { type });
 }
 
-function immediateTimeout(callback, _ms, ...args) {
+function immediateTimeout(callback, ms, ...args) {
+  // Accepted-job lifecycle timers must stay armed until the provider reaches a
+  // terminal state. Fast-forward only the short polling sleeps in unit tests.
+  if (typeof ms === "number" && ms >= 100_000) return 0;
   if (typeof callback === "function") callback(...args);
   return 0;
 }
@@ -370,6 +375,72 @@ test("handleAudioTranscription returns an error when AssemblyAI reports a termin
 
     assert.equal(response.status, 500);
     assert.equal(payload.error.message, "corrupt audio payload");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+test("accepted-task polling retries transient statuses but surfaces terminal auth/not-found errors", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+
+  globalThis.setTimeout = immediateTimeout;
+  try {
+    for (const status of [401, 404]) {
+      let pollCalls = 0;
+      globalThis.fetch = async (url) => {
+        const stringUrl = String(url);
+        if (stringUrl === "https://api.assemblyai.com/v2/upload") {
+          return Response.json({ upload_url: "https://upload.example.com/audio.wav" });
+        }
+        if (stringUrl === "https://api.assemblyai.com/v2/transcript") {
+          return Response.json({ id: `terminal-${status}` });
+        }
+        pollCalls += 1;
+        return Response.json({ error: `poll rejected with ${status}` }, { status });
+      };
+
+      const formData = new FormData();
+      formData.append("model", "assemblyai/universal-2");
+      formData.append("file", buildFile("abc", "clip.wav", "audio/wav"));
+      const response = await handleAudioTranscription({
+        formData,
+        credentials: { apiKey: "assembly-key" },
+      });
+      const payload = (await response.json()) as { error: { message: string } };
+
+      assert.equal(response.status, status);
+      assert.equal(payload.error.message, `poll rejected with ${status}`);
+      assert.equal(pollCalls, 1, `${status} is surfaced instead of being retried to timeout`);
+    }
+
+    let transientPollCalls = 0;
+    globalThis.fetch = async (url) => {
+      const stringUrl = String(url);
+      if (stringUrl === "https://api.assemblyai.com/v2/upload") {
+        return Response.json({ upload_url: "https://upload.example.com/audio.wav" });
+      }
+      if (stringUrl === "https://api.assemblyai.com/v2/transcript") {
+        return Response.json({ id: "transient-503" });
+      }
+      transientPollCalls += 1;
+      return transientPollCalls === 1
+        ? Response.json({ error: "temporary unavailable" }, { status: 503 })
+        : Response.json({ status: "completed", text: "recovered" });
+    };
+
+    const formData = new FormData();
+    formData.append("model", "assemblyai/universal-2");
+    formData.append("file", buildFile("abc", "clip.wav", "audio/wav"));
+    const response = await handleAudioTranscription({
+      formData,
+      credentials: { apiKey: "assembly-key" },
+    });
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { text: "recovered" });
+    assert.equal(transientPollCalls, 2, "503 is retried inside the same accepted job");
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
@@ -836,5 +907,232 @@ test("handleAudioTranscription rejects Gladia jobs missing a result_url", async 
     assert.equal(payload.error.message, "Gladia did not return a result_url");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("accepted AssemblyAI jobs keep polling after caller abort, then return 499", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const caller = new AbortController();
+  let submitCalls = 0;
+  let pollCalls = 0;
+  let pollSignal: AbortSignal | null = null;
+
+  globalThis.setTimeout = immediateTimeout;
+  globalThis.fetch = async (url, options = {}) => {
+    const stringUrl = String(url);
+    if (stringUrl === "https://api.assemblyai.com/v2/upload") {
+      return Response.json({ upload_url: "https://upload.example.com/audio.wav" });
+    }
+    if (stringUrl === "https://api.assemblyai.com/v2/transcript") {
+      submitCalls += 1;
+      return Response.json({ id: "accepted-after-abort" });
+    }
+
+    assert.equal(stringUrl, "https://api.assemblyai.com/v2/transcript/accepted-after-abort");
+    pollCalls += 1;
+    const signal = options.signal as AbortSignal;
+    if (!pollSignal) pollSignal = signal;
+    assert.equal(signal, pollSignal, "poll attempts share the server-side lifecycle deadline");
+    assert.notEqual(signal, caller.signal, "caller abort must not cancel an accepted remote job");
+    assert.equal(signal.aborted, false);
+    if (pollCalls === 1) {
+      caller.abort();
+      return Response.json({ status: "processing" });
+    }
+    return Response.json({ status: "completed", text: "finished" });
+  };
+
+  try {
+    const formData = new FormData();
+    formData.append("model", "assemblyai/universal-2");
+    formData.append("file", buildFile("abc", "clip.wav", "audio/wav"));
+    const response = await handleAudioTranscription({
+      formData,
+      credentials: { apiKey: "assembly-key" },
+      signal: caller.signal,
+    });
+
+    assert.equal(response.status, 499);
+    assert.equal(submitCalls, 1, "the create request is not replayed");
+    assert.equal(pollCalls, 2, "the handler waits for a terminal state after caller abort");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+test("accepted AssemblyAI poll fetch is interrupted by the absolute lifecycle deadline", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  let deadlineCallback: (() => void) | null = null;
+  let deadlineMs = 0;
+  let pollCalls = 0;
+
+  globalThis.setTimeout = ((callback: (...args: unknown[]) => void, ms?: number, ...args) => {
+    if (typeof ms === "number" && ms > 10_000) {
+      deadlineMs = ms;
+      deadlineCallback = () => callback(...args);
+      return originalSetTimeout(() => {}, ms, ...args);
+    }
+    queueMicrotask(() => callback(...args));
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.fetch = async (url, options = {}) => {
+    const stringUrl = String(url);
+    if (stringUrl === "https://api.assemblyai.com/v2/upload") {
+      return Response.json({ upload_url: "https://upload.example.com/audio.wav" });
+    }
+    if (stringUrl === "https://api.assemblyai.com/v2/transcript") {
+      return Response.json({ id: "deadline-task" });
+    }
+
+    pollCalls += 1;
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = options.signal as AbortSignal;
+      assert.ok(signal, "the status request must receive a server deadline signal");
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      if (!deadlineCallback) throw new Error("absolute deadline timer was not armed");
+      deadlineCallback();
+    });
+  };
+
+  try {
+    const formData = new FormData();
+    formData.append("model", "assemblyai/universal-2");
+    formData.append("file", buildFile("abc", "clip.wav", "audio/wav"));
+    const response = await handleAudioTranscription({
+      formData,
+      credentials: { apiKey: "assembly-key" },
+    });
+
+    assert.ok(deadlineMs > 10_000 && deadlineMs <= 120_000);
+    assert.equal(
+      pollCalls,
+      1,
+      "a stalled status fetch is aborted instead of outliving the deadline"
+    );
+    assert.equal(response.status, 504);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+test("a hanging accepted-task create POST is server-deadline bounded and marked terminal", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const caller = new AbortController();
+  let fireDeadline: (() => void) | null = null;
+  let createCalls = 0;
+
+  globalThis.setTimeout = ((callback: (...args: unknown[]) => void, ms?: number, ...args) => {
+    if (typeof ms === "number" && ms >= 100_000) {
+      fireDeadline = () => callback(...args);
+      return originalSetTimeout(() => {}, ms, ...args);
+    }
+    queueMicrotask(() => callback(...args));
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.fetch = async (url, options = {}) => {
+    const stringUrl = String(url);
+    if (stringUrl === "https://api.assemblyai.com/v2/upload") {
+      return Response.json({ upload_url: "https://upload.example.com/audio.wav" });
+    }
+
+    assert.equal(stringUrl, "https://api.assemblyai.com/v2/transcript");
+    createCalls += 1;
+    assert.notEqual(
+      options.signal,
+      caller.signal,
+      "caller abort must not abort an ambiguous create"
+    );
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = options.signal as AbortSignal;
+      assert.ok(signal, "create must have a server-owned deadline signal");
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      if (signal.aborted) reject(signal.reason);
+      if (!fireDeadline) throw new Error("server deadline was not armed before create dispatch");
+      fireDeadline();
+    });
+  };
+
+  try {
+    const formData = new FormData();
+    formData.append("model", "assemblyai/universal-2");
+    formData.append("file", buildFile("abc", "clip.wav", "audio/wav"));
+    const response = await handleAudioTranscription({
+      formData,
+      credentials: { apiKey: "assembly-key" },
+      signal: caller.signal,
+    });
+
+    assert.equal(response.status, 504);
+    assert.equal(isAcceptedTaskTimeoutResponse(response), true);
+    assert.equal(createCalls, 1, "an ambiguous create is never resubmitted");
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+test("accepted Soniox transcript retrieval remains inside the job deadline after caller abort", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const caller = new AbortController();
+  let createCalls = 0;
+  let pollCalls = 0;
+  let transcriptCalls = 0;
+
+  globalThis.setTimeout = immediateTimeout;
+  globalThis.fetch = async (url, options = {}) => {
+    const stringUrl = String(url);
+    if (stringUrl === "https://api.soniox.com/v1/files") {
+      return Response.json({ id: "file-1" });
+    }
+    if (stringUrl === "https://api.soniox.com/v1/transcriptions") {
+      createCalls += 1;
+      return Response.json({ id: "accepted-soniox-task" });
+    }
+    if (stringUrl === "https://api.soniox.com/v1/transcriptions/accepted-soniox-task") {
+      pollCalls += 1;
+      assert.notEqual(options.signal, caller.signal);
+      assert.equal((options.signal as AbortSignal).aborted, false);
+      if (pollCalls === 1) {
+        caller.abort();
+        return Response.json({ status: "processing" });
+      }
+      return Response.json({ status: "completed" });
+    }
+    if (stringUrl === "https://api.soniox.com/v1/transcriptions/accepted-soniox-task/transcript") {
+      transcriptCalls += 1;
+      assert.notEqual(options.signal, caller.signal);
+      assert.equal((options.signal as AbortSignal).aborted, false);
+      return Response.json({ text: "transcript collected" });
+    }
+    throw new Error(`Unexpected URL: ${stringUrl}`);
+  };
+
+  try {
+    const formData = new FormData();
+    formData.append("model", "soniox/stt-async-v5");
+    formData.append("file", buildFile("abc", "clip.wav", "audio/wav"));
+    const response = await handleAudioTranscription({
+      formData,
+      credentials: { apiKey: "soniox-key" },
+      signal: caller.signal,
+    });
+
+    assert.equal(response.status, 499);
+    assert.equal(createCalls, 1);
+    assert.equal(pollCalls, 2, "polling continues to terminal state after disconnect");
+    assert.equal(
+      transcriptCalls,
+      1,
+      "terminal transcript retrieval completes before releasing occupancy"
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
   }
 });
