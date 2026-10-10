@@ -3,7 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import * as yaml from "js-yaml";
-import { v1ModerationSchema, v1RerankSchema } from "../../src/shared/validation/schemas/apiV1.ts";
+import {
+  v1ClassifySchema,
+  v1ModerationSchema,
+  v1OcrSchema,
+  v1RerankSchema,
+  v1SegmentSchema,
+} from "../../src/shared/validation/schemas/apiV1.ts";
 
 type Schema = {
   $ref?: string;
@@ -433,6 +439,137 @@ test("public inference contracts match route validation and auth error shapes", 
   assert.match(responsesRoute, /Invalid JSON body/);
   assert.match(routingModel, /return headerModel \|\| body\.model/);
   assert.match(authzPipeline, /error:\s*\{\s*code: outcome\.code,\s*message: outcome\.message,/);
+});
+
+test("shared model-catalog routes document their auth and catalog-readiness outcomes", () => {
+  const rootCatalog = openapi.paths["/api/v1"]?.get;
+  assert.ok(rootCatalog);
+  const rootSchemes = new Set(
+    rootCatalog.security?.flatMap((requirement) => Object.keys(requirement))
+  );
+  assert.ok(rootSchemes.has("ClientApiKeyAuth"));
+  assert.ok(rootSchemes.has("GoogleApiKeyAuth"));
+  assert.equal(rootCatalog.responses?.["500"]?.$ref, "#/components/responses/InternalError");
+  assert.equal(rootCatalog.responses?.["503"]?.$ref, "#/components/responses/ServiceUnavailable");
+
+  const catalogPaths = [
+    "/api/v1/models",
+    "/api/v1/embeddings",
+    "/api/v1/multimodal-embeddings",
+    "/api/v1/images/generations",
+    "/api/v1/music/generations",
+    "/api/v1/videos/generations",
+    "/api/v1/vscode/{token}/models",
+  ];
+  for (const pathTemplate of catalogPaths) {
+    const operation = openapi.paths[pathTemplate]?.get;
+    assert.ok(operation, `GET ${pathTemplate} exists`);
+    assert.equal(
+      operation.responses?.["500"]?.$ref,
+      "#/components/responses/InternalError",
+      `GET ${pathTemplate} documents unexpected catalog failures`
+    );
+    assert.equal(
+      operation.responses?.["503"]?.$ref,
+      "#/components/responses/ServiceUnavailable",
+      `GET ${pathTemplate} documents catalog readiness timeouts`
+    );
+  }
+
+  assert.equal(
+    openapi.paths["/api/v1/models/{model}"]?.get?.responses?.["500"]?.$ref,
+    "#/components/responses/InternalError"
+  );
+  assert.equal(
+    openapi.paths["/api/v1/models/{model}"]?.get?.responses?.["503"]?.$ref,
+    "#/components/responses/ServiceUnavailable"
+  );
+});
+
+test("chat-admission routes document payload limits and shared provider failures", () => {
+  const admissionPaths = [
+    "/api/v1/messages",
+    "/api/v1/completions",
+    "/api/v1/api/chat",
+    "/api/v1/providers/{provider}/chat/completions",
+    "/api/v1/responses/{path}",
+  ];
+  for (const pathTemplate of admissionPaths) {
+    const operation = openapi.paths[pathTemplate]?.post;
+    assert.ok(operation, `POST ${pathTemplate} exists`);
+    assert.equal(
+      operation.responses?.["413"]?.content?.["application/json"]?.schema?.$ref,
+      "#/components/schemas/ApiErrorResponse",
+      `POST ${pathTemplate} documents the shared chat body-limit rejection`
+    );
+  }
+
+  const providerErrorPaths = [
+    "/api/v1/providers/{provider}/chat/completions",
+    "/api/v1/messages",
+    "/api/v1/completions",
+    "/api/v1/responses/{path}",
+  ];
+  for (const pathTemplate of providerErrorPaths) {
+    const operation = openapi.paths[pathTemplate]?.post;
+    for (const status of ["502", "504"]) {
+      assert.equal(
+        operation?.responses?.[status]?.$ref,
+        "#/components/responses/InferenceProviderError",
+        `POST ${pathTemplate} documents shared chat HTTP ${status}`
+      );
+    }
+  }
+  assert.equal(
+    openapi.paths["/api/v1/chat/completions"]?.post?.responses?.["504"]?.$ref,
+    "#/components/responses/InferenceProviderError"
+  );
+});
+
+test("count-tokens documents both source error-envelope forms", () => {
+  const schema =
+    openapi.paths["/api/v1/messages/count_tokens"]?.post?.responses?.["400"]?.content?.[
+      "application/json"
+    ]?.schema;
+  assert.deepEqual(
+    schema?.oneOf?.map((alternative) => alternative.$ref),
+    ["#/components/schemas/StringErrorResponse", "#/components/schemas/ValidationErrorResponse"]
+  );
+});
+
+test("OCR, classify, and segment schemas reject blank text like their validators", () => {
+  const ocr = requestSchema("/api/v1/ocr", "post");
+  const document = ocr.properties?.document;
+  const documentString = document?.oneOf?.find((branch) => branch.type === "string");
+  const documentObject = document?.oneOf?.find((branch) => branch.type === "object");
+  assert.equal(documentString?.pattern, "\\S");
+  assert.equal(documentObject?.properties?.type?.pattern, "\\S");
+  assert.equal(documentObject?.properties?.document_url?.pattern, "\\S");
+  assert.equal(
+    documentObject?.properties?.image_url?.oneOf?.find((branch) => branch.type === "string")
+      ?.pattern,
+    "\\S"
+  );
+  assert.equal(ocr.properties?.model?.pattern, "\\S");
+  assert.equal(v1OcrSchema.safeParse({ document: "   " }).success, false);
+  assert.equal(v1OcrSchema.safeParse({ document: { document_url: "   " } }).success, false);
+
+  const classify = requestSchema("/api/v1/classify", "post");
+  assert.equal(classify.properties?.model?.pattern, "\\S");
+  assert.equal(classify.properties?.classifier_id?.pattern, "\\S");
+  assert.equal(
+    classify.properties?.input?.oneOf?.find((branch) => branch.type === "string")?.pattern,
+    "\\S"
+  );
+  assert.equal(classify.properties?.labels?.items?.pattern, "\\S");
+  assert.equal(v1ClassifySchema.safeParse({ input: "   " }).success, false);
+  assert.equal(v1ClassifySchema.safeParse({ input: "text", labels: ["   "] }).success, false);
+
+  const segment = requestSchema("/api/v1/segment", "post");
+  assert.equal(segment.properties?.content?.pattern, "\\S");
+  assert.equal(segment.properties?.tokenizer?.pattern, "\\S");
+  assert.equal(v1SegmentSchema.safeParse({ content: "   " }).success, false);
+  assert.equal(v1SegmentSchema.safeParse({ content: "text", tokenizer: "   " }).success, false);
 });
 
 test("provider-scoped model catalog documents supported credentials and catalog failures", () => {

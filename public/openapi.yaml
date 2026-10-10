@@ -1777,6 +1777,8 @@ paths:
           $ref: "#/components/responses/InferenceUnauthorized"
         "502":
           $ref: "#/components/responses/InferenceProviderError"
+        "504":
+          $ref: "#/components/responses/InferenceProviderError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
@@ -1899,6 +1901,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the chat hard-size or ingest-byte admission limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "502":
+          $ref: "#/components/responses/InferenceProviderError"
+        "504":
+          $ref: "#/components/responses/InferenceProviderError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
@@ -1939,6 +1950,11 @@ paths:
             application/x-ndjson:
               schema:
                 $ref: "#/components/schemas/OllamaChatResponse"
+        "413":
+          description: Request body exceeds the chat hard-size or ingest-byte admission limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
@@ -1989,8 +2005,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+        "413":
+          description: Request body exceeds the chat hard-size or ingest-byte admission limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
           $ref: "#/components/responses/InferenceUnauthorized"
+        "502":
+          $ref: "#/components/responses/InferenceProviderError"
+        "504":
+          $ref: "#/components/responses/InferenceProviderError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
@@ -2022,6 +2047,14 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CountTokensResponse"
+        "400":
+          description: Invalid JSON or a body that fails count-token validation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/StringErrorResponse"
+                  - $ref: "#/components/schemas/ValidationErrorResponse"
 
   /api/v1/responses:
     post:
@@ -2110,6 +2143,8 @@ paths:
           $ref: "#/components/responses/InferenceUnauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
     post:
       operationId: postApiV1Embeddings
       tags: [Embeddings]
@@ -2242,6 +2277,8 @@ paths:
           $ref: "#/components/responses/InferenceUnauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /api/v1/providers/{provider}/embeddings:
     post:
@@ -2327,6 +2364,8 @@ paths:
           $ref: "#/components/responses/InferenceUnauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
     post:
       operationId: postApiV1ImagesGenerations
       tags: [Images]
@@ -2789,6 +2828,8 @@ paths:
       description: OpenAI-compatible model catalog served by the shared v1 catalog builder.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       responses:
@@ -2804,6 +2845,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/v1/models:
     head:
@@ -2872,6 +2917,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/v1/providers/{provider}/models:
     get:
@@ -17806,6 +17855,7 @@ paths:
                   type: string
                   minLength: 1
                   maxLength: 200
+                  pattern: "\\S"
                   description: >-
                     Trimmed, non-empty `provider/model` id or bare model id,
                     up to 200 characters. Registered ids:
@@ -17816,13 +17866,21 @@ paths:
                 document:
                   oneOf:
                     - type: string
+                      minLength: 1
+                      pattern: "\\S"
                     - type: object
                       properties:
-                        type: { type: string }
-                        document_url: { type: string, format: uri-reference }
+                        type: { type: string, minLength: 1, pattern: "\\S" }
+                        document_url:
+                          type: string
+                          minLength: 1
+                          pattern: "\\S"
+                          format: uri-reference
                         image_url:
                           oneOf:
                             - type: string
+                              minLength: 1
+                              pattern: "\\S"
                               format: uri-reference
                             - type: object
                               additionalProperties: true
@@ -41012,18 +41070,20 @@ paths:
               type: object
               required: [input]
               properties:
-                model: { type: string }
-                classifier_id: { type: string }
+                model: { type: string, minLength: 1, maxLength: 200, pattern: "\\S" }
+                classifier_id: { type: string, minLength: 1, pattern: "\\S" }
                 input:
                   oneOf:
                     - type: string
+                      minLength: 1
+                      pattern: "\\S"
                     - type: array
                       minItems: 1
                       items: {}
                 labels:
                   type: array
                   minItems: 1
-                  items: { type: string }
+                  items: { type: string, minLength: 1, pattern: "\\S" }
               additionalProperties: true
       responses:
         "200":
@@ -41112,6 +41172,15 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "413":
+          description: Request body exceeds the chat hard-size or ingest-byte admission limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "502":
+          $ref: "#/components/responses/InferenceProviderError"
+        "504":
+          $ref: "#/components/responses/InferenceProviderError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/files:
@@ -42081,6 +42150,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
     head:
       operationId: headApiV1ModelsByModel
@@ -42159,6 +42229,8 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
     post:
       operationId: postApiV1MusicGenerations
       tags:
@@ -42826,6 +42898,15 @@ paths:
             text/event-stream:
               schema:
                 type: string
+        "413":
+          description: Request body exceeds the chat hard-size or ingest-byte admission limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "502":
+          $ref: "#/components/responses/InferenceProviderError"
+        "504":
+          $ref: "#/components/responses/InferenceProviderError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
   /api/v1/search/analytics:
@@ -42891,8 +42972,8 @@ paths:
               type: object
               required: [content]
               properties:
-                content: { type: string, minLength: 1 }
-                tokenizer: { type: string }
+                content: { type: string, minLength: 1, pattern: "\\S" }
+                tokenizer: { type: string, minLength: 1, pattern: "\\S" }
                 return_tokens: { type: boolean }
                 return_chunks: { type: boolean }
                 max_chunk_length: { type: number, exclusiveMinimum: 0 }
@@ -43056,6 +43137,8 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
     post:
       operationId: postApiV1VideosGenerations
       tags:
@@ -43520,6 +43603,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /api/v1/vscode/{token}/responses:
     parameters:
       - name: token
