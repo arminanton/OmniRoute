@@ -1626,7 +1626,9 @@ The same harness was run once per cell against the same blue source tree under N
 Bun 1.4.2, using the official [Linux aarch64 release archive](https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-aarch64.zip)
 with SHA-256 `54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7`. Each run used a
 2 GiB `MemoryMax`, one CPU, 70 concurrent 1 MiB requests, 9,610 response bytes per client, a local
-fake upstream, and the 128 MiB aggregate artifact reservation cap.
+fake upstream, and the 128 MiB aggregate artifact reservation cap. The checkout HEAD was
+`17cbbf15ab`; the call-log implementation under test was unchanged from `cc6c04289c`. Only the
+benchmark's runtime-label expression was an uncommitted edit during these measurements.
 
 | Runtime | Stream chunks | Details ready | Elapsed | Sampled RSS / heap | Kernel `VmHWM` | Process write bytes | SQLite driver |
 | ------- | ------------: | ------------: | ------: | -----------------: | -------------: | ------------------: | ------------- |
