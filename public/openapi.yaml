@@ -3921,10 +3921,17 @@ paths:
       summary: List models for a provider
       description: >-
         Discovers or returns cached/local models for a provider connection. Results identify the
-        source and may include a warning when a fallback catalog is used.
+        source and may include a warning when a fallback catalog is used. In addition to Bearer
+        API keys and dashboard sessions, trusted loopback CLI/internal-service credentials and
+        qualified Google or Anthropic API-key headers are accepted. Scoped `oma_live_` tokens need
+        read scope for this GET operation; ordinary management API keys need `manage` or `admin`.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
         - {}
       parameters:
         - $ref: "#/components/parameters/ResourceId"
@@ -3994,6 +4001,18 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
         "500":
           description: Provider model discovery failed unexpectedly
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "502":
+          description: Provider discovery failed without a cached or local fallback catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "504":
+          description: Provider discovery exceeded its outbound request deadline
           content:
             application/json:
               schema:
@@ -9694,6 +9713,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/KiloSettingsStatusResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     post:
       operationId: postApiCliToolsKiloSettings
       tags: [CLI Tools]
@@ -9719,7 +9743,7 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -9728,6 +9752,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/KiloSettingsAppliedResponse" }
+        "400":
+          description: Invalid or malformed request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     delete:
       operationId: deleteApiCliToolsKiloSettings
       tags: [CLI Tools]
@@ -9747,7 +9786,7 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -9756,6 +9795,16 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/KiloSettingsRemovedResponse" }
 
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
   /api/cli-tools/openclaw-settings:
     get:
       operationId: getApiCliToolsOpenclawSettings
@@ -18830,6 +18879,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolJsonSettingsStatusResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     post:
       operationId: postApiCliToolsCrushSettings
       tags:
@@ -18849,7 +18903,7 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -18858,6 +18912,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CrushSettingsAppliedResponse" }
+        "400":
+          description: Invalid or malformed request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     delete:
       operationId: deleteApiCliToolsCrushSettings
       tags:
@@ -18877,7 +18946,7 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -18885,6 +18954,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CrushSettingsRemovedResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
   /api/cli-tools/codewhale-settings:
     get:
       operationId: getApiCliToolsCodewhaleSettings
@@ -18896,6 +18975,8 @@ paths:
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
       x-always-protected: true
       description: >-
         Reads the OmniRoute config block from `~/.codewhale/config.toml` (with `~/.deepseek/config.toml`
@@ -18907,7 +18988,7 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -18916,6 +18997,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolTextSettingsStatusResponse" }
+        "500":
+          description: Reading runtime state or the CodeWhale configuration failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     post:
       operationId: postApiCliToolsCodewhaleSettings
       tags:
@@ -18926,6 +19012,8 @@ paths:
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
       x-always-protected: true
       description: >-
         Writes the OmniRoute config block in CodeWhale TOML format. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this
@@ -18935,7 +19023,7 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -18944,6 +19032,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CodeWhaleSettingsAppliedResponse" }
+        "400":
+          description: Invalid JSON or an invalid CodeWhale configuration request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Writing the CodeWhale configuration failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     delete:
       operationId: deleteApiCliToolsCodewhaleSettings
       tags:
@@ -18954,6 +19057,8 @@ paths:
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
       x-always-protected: true
       description: >-
         Removes the OmniRoute config block from CodeWhale's config. This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this
@@ -18963,7 +19068,7 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -18971,6 +19076,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CodeWhaleSettingsRemovedResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Removing the CodeWhale configuration failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
 
   # --- Generated route coverage (docs audit 2026-08-31) -----------------------
   # Minimal entries for every implemented route not documented above. Methods
@@ -20419,17 +20534,20 @@ paths:
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
       x-always-protected: true
       description: >-
         POST cli tools › apply This operation is always-protected, including when requireLogin=false. An
-        oma_live_ Access Token requires admin scope for this operation. Bearer API keys require manage or
-        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
-        anonymous access is not.
+        oma_live_ Access Token requires admin scope for this operation. Bearer API keys, including
+        supported Google and qualified Anthropic API-key headers, require manage or admin. Dashboard
+        sessions and trusted loopback CLI/internal-service credentials are accepted; anonymous access
+        is not.
       responses:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -20440,6 +20558,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolsApplyResponse" }
+        "400":
+          description: Invalid JSON, invalid fields, or an unsupported CLI tool.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Applying or generating the CLI configuration failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/cli-tools/config:
     get:
       operationId: getApiCliToolsConfig
@@ -20463,7 +20596,7 @@ paths:
           schema: { type: string }
         - name: apiKey
           in: query
-          required: false
+          required: true
           x-sensitive: true
           description: API key used to generate the returned configs.
           schema: { type: string, writeOnly: true, x-sensitive: true }
@@ -20475,6 +20608,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolsGeneratedConfigListResponse" }
+        "400":
+          description: The required API-key query parameter is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "500":
+          description: Generating the CLI configurations failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCliToolsConfig
       tags:
@@ -20511,6 +20660,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolsGeneratedConfigResponse" }
+        "400":
+          description: Invalid JSON, invalid fields, or an unsupported CLI tool.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Generating the CLI configuration failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cli-tools/deepseek-tui-settings:
     delete:
       operationId: deleteApiCliToolsDeepseekTuiSettings
@@ -20531,7 +20701,7 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -20539,6 +20709,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeepseekTuiSettingsRemovedResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     get:
       operationId: getApiCliToolsDeepseekTuiSettings
       tags:
@@ -20567,6 +20747,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolTextSettingsStatusResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     post:
       operationId: postApiCliToolsDeepseekTuiSettings
       tags:
@@ -20586,7 +20771,7 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
@@ -20595,6 +20780,21 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DeepseekTuiSettingsAppliedResponse" }
+        "400":
+          description: Invalid or malformed request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
   /api/cli-tools/detect:
     get:
       operationId: getApiCliToolsDetect
@@ -20669,6 +20869,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ForgeSettingsRemovedResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     get:
       operationId: getApiCliToolsForgeSettings
       tags:
@@ -20693,6 +20905,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolTextSettingsStatusResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     post:
       operationId: postApiCliToolsForgeSettings
       tags:
@@ -20716,6 +20933,23 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ForgeSettingsAppliedResponse" }
+        "400":
+          description: Invalid or malformed request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
   /api/cli-tools/grok-build-settings:
     delete:
       operationId: deleteApiCliToolsGrokBuildSettings
@@ -20739,6 +20973,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GrokBuildSettingsRemovedResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     get:
       operationId: getApiCliToolsGrokBuildSettings
       tags:
@@ -20763,6 +21007,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GrokBuildSettingsStatusResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     post:
       operationId: postApiCliToolsGrokBuildSettings
       tags:
@@ -20786,6 +21035,26 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GrokBuildSettingsAppliedResponse" }
+        "400":
+          description: Invalid or malformed request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "409":
+          description: The request conflicts with the current CLI configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
   /api/cli-tools/hermes-agent-settings:
     get:
       operationId: getApiCliToolsHermesAgentSettings
@@ -20814,6 +21083,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HermesAgentSettingsStatusResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     post:
       operationId: postApiCliToolsHermesAgentSettings
       tags:
@@ -20850,6 +21124,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HermesAgentSettingsApplyResponse" }
+        "400":
+          description: Invalid or malformed request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/cli-tools/jcode-settings:
     delete:
       operationId: deleteApiCliToolsJcodeSettings
@@ -20873,6 +21157,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JcodeSettingsRemovedResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     get:
       operationId: getApiCliToolsJcodeSettings
       tags:
@@ -20897,6 +21193,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolTextSettingsStatusResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     post:
       operationId: postApiCliToolsJcodeSettings
       tags:
@@ -20926,6 +21227,28 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JcodeSettingsAppliedResponse" }
+        "400":
+          description: Invalid or malformed request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "409":
+          description: The request conflicts with the current CLI configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The CLI configuration operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
   /api/cli-tools/keys:
     get:
       operationId: getApiCliToolsKeys
@@ -20999,6 +21322,11 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     get:
       operationId: getApiCliToolsLettaSettings
       tags:
@@ -21037,6 +21365,11 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "409":
+          description: The request conflicts with the current CLI configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolErrorResponse" }
     post:
       operationId: postApiCliToolsLettaSettings
       tags:
@@ -21083,6 +21416,11 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/cli-tools/logs:
     get:
       operationId: getApiCliToolsLogs
@@ -30325,6 +30663,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/bulk-web-session:
@@ -63929,6 +64272,17 @@ components:
       properties:
         error: { type: string }
       additionalProperties: false
+
+    CliToolErrorResponse:
+      type: object
+      description: CLI-tools error envelope; error may be a message string or a structured validation/runtime object.
+      required: [error]
+      properties:
+        error:
+          oneOf:
+            - { type: string }
+            - { type: object, additionalProperties: true }
+      additionalProperties: true
 
     SystemVersionResponse:
       type: object

@@ -124,6 +124,129 @@ test("CLI tool settings operations expose their source-backed JSON 200 response 
   assert.deepEqual(publicSpec, spec, "public OpenAPI artifact must mirror the canonical document");
 });
 
+test("CLI config/apply operations document their source-backed errors and shared body cap", () => {
+  const expectedSchemas: Array<[string, string, string, string]> = [
+    ["/api/cli-tools/apply", "post", "400", "StringErrorResponse"],
+    ["/api/cli-tools/apply", "post", "413", "ApiErrorResponse"],
+    ["/api/cli-tools/apply", "post", "500", "StringErrorResponse"],
+    ["/api/cli-tools/config", "get", "400", "StringErrorResponse"],
+    ["/api/cli-tools/config", "get", "500", "StringErrorResponse"],
+    ["/api/cli-tools/config", "post", "400", "StringErrorResponse"],
+    ["/api/cli-tools/config", "post", "413", "ApiErrorResponse"],
+    ["/api/cli-tools/config", "post", "500", "StringErrorResponse"],
+  ];
+
+  for (const [route, method, status, schemaName] of expectedSchemas) {
+    assert.equal(
+      spec.paths[route]?.[method]?.responses?.[status]?.content?.["application/json"]?.schema?.$ref,
+      `#/components/schemas/${schemaName}`,
+      `${method.toUpperCase()} ${route} ${status} response schema`
+    );
+  }
+
+  const getConfig = spec.paths["/api/cli-tools/config"].get;
+  assert.equal(
+    getConfig.parameters.find((parameter: any) => parameter.name === "apiKey")?.required,
+    true,
+    "GET /api/cli-tools/config requires the API key that its handler rejects when missing"
+  );
+});
+
+test("provider discovery and CodeWhale operations describe auth and source error variants", () => {
+  const providerModels = spec.paths["/api/providers/{id}/models"].get;
+  for (const scheme of [
+    "LocalCliTokenAuth",
+    "InternalServiceTokenAuth",
+    "ManagementGoogleApiKeyAuth",
+    "ManagementAnthropicApiKeyAuth",
+  ]) {
+    assert.ok(
+      providerModels.security.some((alternative: Record<string, unknown>) => scheme in alternative),
+      `provider model discovery must list ${scheme}`
+    );
+  }
+  for (const status of ["502", "504"]) {
+    assert.equal(
+      providerModels.responses[status]?.content?.["application/json"]?.schema?.$ref,
+      "#/components/schemas/ProviderConnectionErrorResponse",
+      `provider model discovery ${status} error schema`
+    );
+  }
+
+  const codewhale = spec.paths["/api/cli-tools/codewhale-settings"];
+  for (const method of ["get", "post", "delete"]) {
+    const operation = codewhale[method];
+    assert.ok(
+      operation.responses["500"],
+      `${method.toUpperCase()} CodeWhale documents its handler error`
+    );
+    assert.equal(
+      operation.responses["403"]?.$ref,
+      "#/components/responses/ManagementOrRuntimePolicyForbidden",
+      `${method.toUpperCase()} CodeWhale includes its string write-guard denial envelope`
+    );
+  }
+  for (const [method, status] of [
+    ["post", "400"],
+    ["post", "413"],
+    ["delete", "413"],
+  ]) {
+    assert.ok(codewhale[method].responses[status], `${method.toUpperCase()} CodeWhale ${status}`);
+  }
+  assert.ok(
+    spec.paths["/api/providers/bulk"].post.responses["413"],
+    "provider bulk documents the shared body-size guard rejection"
+  );
+});
+
+test("CLI settings error responses cover status codes returned by their source handlers", () => {
+  const routes = [
+    "crush-settings",
+    "deepseek-tui-settings",
+    "forge-settings",
+    "grok-build-settings",
+    "hermes-agent-settings",
+    "jcode-settings",
+    "kilo-settings",
+    "letta-settings",
+  ];
+
+  for (const routeName of routes) {
+    const route = `/api/cli-tools/${routeName}`;
+    const relativeSource = `src/app/api/cli-tools/${routeName}/route.ts`;
+    const handlerSource = source(relativeSource);
+    const methodMatches = [
+      ...handlerSource.matchAll(/export\s+async\s+function\s+(GET|POST|DELETE)\s*\(/g),
+    ];
+
+    for (let index = 0; index < methodMatches.length; index += 1) {
+      const method = methodMatches[index][1].toLowerCase();
+      const start = methodMatches[index].index;
+      const end = methodMatches[index + 1]?.index ?? handlerSource.length;
+      const methodSource = handlerSource.slice(start, end);
+      const operation = spec.paths[route]?.[method];
+      assert.ok(operation, `${method.toUpperCase()} ${route} must be documented`);
+
+      const sourceStatuses = new Set(
+        [...methodSource.matchAll(/status:\s*([45]\d\d)/g)].map((match) => match[1])
+      );
+      if (method !== "get") sourceStatuses.add("413");
+
+      for (const status of sourceStatuses) {
+        const response = operation.responses?.[status];
+        assert.ok(response, `${method.toUpperCase()} ${route} source status ${status}`);
+        if (status === "403") {
+          assert.equal(
+            response.$ref,
+            "#/components/responses/ManagementOrRuntimePolicyForbidden",
+            `${method.toUpperCase()} ${route} combines auth and local write-guard error envelopes`
+          );
+        }
+      }
+    }
+  }
+});
+
 test("settings GET contracts distinguish unavailable, raw text, raw JSON, and redacted Grok Build states", () => {
   const unavailable = schema("CliToolSettingsUnavailableResponse");
   assertRequired(
