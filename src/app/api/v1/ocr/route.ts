@@ -19,6 +19,7 @@ import {
   isAllRateLimitedCredentials,
   rateLimitedProviderResponse,
 } from "@/app/api/v1/_shared/rateLimit";
+import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
 
 export { resolveVertexOcrAccessToken };
 
@@ -91,25 +92,36 @@ async function postHandler(request, context) {
 
   // Default to mistral if no provider prefix
   const resolvedProvider = provider || "mistral";
-  const credentials = await getProviderCredentialsWithQuotaPreflight(resolvedProvider);
-  if (!credentials) {
-    return errorResponse(
-      HTTP_STATUS.BAD_REQUEST,
-      `No credentials for provider: ${resolvedProvider}`
-    );
-  }
-  if (isAllRateLimitedCredentials(credentials)) {
-    return rateLimitedProviderResponse(resolvedProvider, credentials);
-  }
+  const credentials = await getProviderCredentialsWithQuotaPreflight(
+    resolvedProvider,
+    null,
+    null,
+    null,
+    { reserveAccountRequest: true }
+  );
+  const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  try {
+    if (!credentials) {
+      return errorResponse(
+        HTTP_STATUS.BAD_REQUEST,
+        `No credentials for provider: ${resolvedProvider}`
+      );
+    }
+    if (isAllRateLimitedCredentials(credentials)) {
+      return rateLimitedProviderResponse(resolvedProvider, credentials);
+    }
 
-  const tokenReadyCredentials = await resolveVertexOcrAccessToken(resolvedProvider, credentials);
-  const ocrCredentials = resolveOcrCredentials(tokenReadyCredentials, resolvedProvider);
+    const tokenReadyCredentials = await resolveVertexOcrAccessToken(resolvedProvider, credentials);
+    const ocrCredentials = resolveOcrCredentials(tokenReadyCredentials, resolvedProvider);
 
-  const response = await handleOcr({ body: { ...body, model }, credentials: ocrCredentials });
-  if (response?.ok) {
-    await clearRecoveredProviderState(credentials);
+    const response = await handleOcr({ body: { ...body, model }, credentials: ocrCredentials });
+    if (response?.ok) {
+      await clearRecoveredProviderState(credentials);
+    }
+    return response;
+  } finally {
+    releaseAccountRequest();
   }
-  return response;
 }
 
 export const POST = withInjectionGuard(postHandler);
