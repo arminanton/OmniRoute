@@ -19361,6 +19361,9 @@ paths:
         "200":
           description: Fidelity-verification results for the submitted samples.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionFidelityBatchResult" }
         "400":
           description: Invalid JSON, request validation failure, or provider credentials are missing.
           content:
@@ -19417,6 +19420,9 @@ paths:
       responses:
         "200":
           description: Registered engines and their configuration metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionEnginesResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -19465,6 +19471,9 @@ paths:
         "200":
           description: Cache lookup result; a successful `block` contains sensitive prompt-derived text.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionRetrieveResponse" }
         "400":
           description: Invalid JSON body or retrieval parameters failed validation.
           content:
@@ -19773,6 +19782,9 @@ paths:
       responses:
         "200":
           description: Per-engine compression analytics for the requested time range.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionEngineAnalyticsResponse" }
         "400":
           description: The required engineId query parameter is missing.
           content:
@@ -19783,7 +19795,10 @@ paths:
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          $ref: "#/components/responses/InternalError"
+          description: Per-engine analytics query failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/context/caveman/config:
@@ -19805,6 +19820,10 @@ paths:
       responses:
         "200":
           description: Global compression and Caveman configuration.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionSettingsResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -19828,14 +19847,27 @@ paths:
         - ManagementApiKeyBearerAuth: []
         - ManagementSessionAuth: []
         - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompressionSettingsUpdate" }
       responses:
         "200":
           description: Updated global compression and Caveman configuration.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionSettingsResponse" }
         "400":
           description: Invalid JSON body or compression configuration update failed validation.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -19928,6 +19960,9 @@ paths:
       responses:
         "200":
           description: Combo deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextCompressionComboDeleteResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -19960,6 +19995,10 @@ paths:
       responses:
         "200":
           description: Compression combo configuration.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextCompressionComboRecord" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -19990,14 +20029,27 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContextCompressionComboUpdateRequest" }
       responses:
         "200":
           description: Updated compression combo configuration.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextCompressionComboRecord" }
         "400":
           description: Invalid JSON body or combo update failed validation.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -20037,6 +20089,9 @@ paths:
       responses:
         "200":
           description: Routing-combo assignments for this compression combo.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextCompressionComboAssignmentsResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -20066,14 +20121,25 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContextCompressionComboAssignmentsUpdateRequest" }
       responses:
         "200":
           description: Updated routing-combo assignments.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextCompressionComboAssignmentsResponse" }
         "400":
           description: Invalid JSON body or assignments failed validation.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -20107,6 +20173,9 @@ paths:
       responses:
         "200":
           description: Derived default compression mode and ordered pipeline.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContextCompressionDerivedPlanResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -20434,23 +20503,34 @@ paths:
         "200":
           description: Cursor upstream response; response content is passed through and may be sensitive.
           x-sensitive: true
+          content:
+            "*/*":
+              schema: { $ref: "#/components/schemas/CursorCliPassthroughBody" }
         "401":
           description: Missing, expired, or revoked Cursor CLI session JWT.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/CursorCliProxyErrorResponse" }
+        "405":
+          description: GET to the API-key exchange path is not supported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CursorCliProxyErrorResponse" }
         "502":
           description: Cursor upstream request failed.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/CursorCliProxyErrorResponse" }
         "503":
           description: No usable Cursor API connection or Cursor credentials are available.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/CursorCliProxyErrorResponse" }
         default:
           description: Other Cursor upstream status and response are forwarded.
+          content:
+            "*/*":
+              schema: { $ref: "#/components/schemas/CursorCliPassthroughBody" }
     post:
       operationId: postApiCursorCliByPath
       tags:
@@ -20479,39 +20559,66 @@ paths:
           pathSuffix: all other paths
           security:
             - CursorCliSessionBearerAuth: []
+      requestBody:
+        required: false
+        x-sensitive: true
+        description: >-
+          Bootstrap JSON or Cursor CLI RPC/tool payload. Forwarded request bodies can contain user
+          prompts, code, or tool traffic.
+        content:
+          "*/*":
+            schema: { $ref: "#/components/schemas/CursorCliPassthroughBody" }
       responses:
         "200":
           description: >-
             Bootstrap branch returns the one-hour session JWT in accessToken and refreshToken;
             other branches pass through Cursor upstream content.
           x-sensitive: true
+          headers:
+            Cache-Control:
+              description: >-
+                Set to no-store only for the `/auth/exchange_user_api_key` branch that returns the
+                minted accessToken and refreshToken. Other POST responses preserve Cursor's
+                upstream cache headers without an OmniRoute override.
+              schema: { type: string, example: no-store }
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/CursorCliSessionTokenExchangeResponse" }
+                  - { $ref: "#/components/schemas/CursorCliPassthroughBody" }
+            "*/*":
+              schema: { $ref: "#/components/schemas/CursorCliPassthroughBody" }
         "400":
           description: Bootstrap request body is not a valid JSON object.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/CursorCliProxyErrorResponse" }
         "401":
           description: Bootstrap API key is invalid when required, or Cursor session JWT is missing/invalid.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/CursorCliProxyErrorResponse" }
         "405":
           description: The API-key exchange path accepts POST only.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/CursorCliProxyErrorResponse" }
         "502":
           description: Cursor upstream request failed.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/CursorCliProxyErrorResponse" }
         "503":
           description: JWT secret or usable Cursor API connection/credentials are unavailable.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/CursorCliProxyErrorResponse" }
         default:
           description: Other Cursor upstream status and response are forwarded.
+          content:
+            "*/*":
+              schema: { $ref: "#/components/schemas/CursorCliPassthroughBody" }
   /api/dahl/tokens:
     post:
       operationId: postApiDahlTokens
@@ -20850,6 +20957,9 @@ paths:
         "200":
           description: Persisted provider-discovery findings.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryResultsResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -65961,4 +66071,257 @@ components:
         rows:
           type: array
           items: { $ref: "#/components/schemas/CompressionEngineSummaryRow" }
+      additionalProperties: false
+
+    CompressionFidelityVerdict:
+      oneOf:
+        - type: string
+          enum: [same, materially-differs, unparseable]
+        - type: "null"
+
+    CompressionFidelityBatchItemResult:
+      type: object
+      required: [id, verdict, usdCost, skippedCapped]
+      properties:
+        id: { type: string }
+        verdict: { $ref: "#/components/schemas/CompressionFidelityVerdict" }
+        usdCost: { type: number, minimum: 0 }
+        skippedCapped: { type: boolean }
+      additionalProperties: false
+
+    CompressionFidelityBatchResult:
+      type: object
+      x-sensitive: true
+      required: [results, totalUsd, capped]
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionFidelityBatchItemResult" }
+        totalUsd: { type: number, minimum: 0 }
+        capped: { type: boolean }
+      additionalProperties: false
+
+    CompressionEngineConfigField:
+      type: object
+      required: [key, type, label, defaultValue]
+      properties:
+        key: { type: string }
+        type: { type: string, enum: [boolean, number, string, select, multiselect] }
+        label: { type: string }
+        i18nKey: { type: string }
+        description: { type: string }
+        defaultValue: {}
+        options:
+          type: array
+          items:
+            type: object
+            required: [value, label]
+            properties:
+              value: { type: string }
+              label: { type: string }
+            additionalProperties: false
+        min: { type: number }
+        max: { type: number }
+      additionalProperties: false
+
+    CompressionEngineMetadata:
+      type: object
+      required: [id, name, description, inputScope, targetLatencyMs, supportsPreview, stable]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        inputScope: { type: string, enum: [messages, tool-results, mixed] }
+        targetLatencyMs: { type: number }
+        supportsPreview: { type: boolean }
+        stable: { type: boolean }
+        executionStages:
+          type: array
+          items: { type: string, enum: [pre-translation, post-translation] }
+      additionalProperties: false
+
+    CompressionEngineDescriptor:
+      type: object
+      required: [id, name, description, icon, stackable, stackPriority, metadata, configSchema]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        icon: { type: string }
+        stackable: { type: boolean }
+        stackPriority: { type: number }
+        metadata: { $ref: "#/components/schemas/CompressionEngineMetadata" }
+        configSchema:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionEngineConfigField" }
+      additionalProperties: false
+
+    CompressionEnginesResponse:
+      type: object
+      required: [engines]
+      properties:
+        engines:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionEngineDescriptor" }
+      additionalProperties: false
+
+    CompressionCcrRetrieveMissResponse:
+      type: object
+      required: [found]
+      properties:
+        found: { type: boolean, const: false }
+      additionalProperties: false
+
+    CompressionCcrRetrieveBlockResponse:
+      type: object
+      x-sensitive: true
+      required: [found, block]
+      properties:
+        found: { type: boolean, const: true }
+        block: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    CompressionCcrRetrieveQueryErrorResponse:
+      type: object
+      required: [found, error]
+      properties:
+        found: { type: boolean, const: true }
+        error: { type: string }
+      additionalProperties: false
+
+    CompressionRetrieveResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/CompressionCcrRetrieveMissResponse" }
+        - { $ref: "#/components/schemas/CompressionCcrRetrieveBlockResponse" }
+        - { $ref: "#/components/schemas/CompressionCcrRetrieveQueryErrorResponse" }
+      x-sensitive: true
+
+    CompressionEngineAnalyticsResponse:
+      type: object
+      required: [engineId, runs, tokensSaved, avgSavingsPercent, days]
+      properties:
+        engineId: { type: string }
+        runs: { type: integer, minimum: 0 }
+        tokensSaved: { type: integer, minimum: 0 }
+        avgSavingsPercent: { type: number }
+        days: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    ContextCompressionComboDeleteResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean, const: true }
+      additionalProperties: false
+
+    ContextCompressionComboUpdateRequest:
+      type: object
+      x-sensitive: true
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        description: { type: string, maxLength: 1000 }
+        pipeline:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/CompressionEngineStep" }
+        languagePacks:
+          type: array
+          items: { type: string, minLength: 1 }
+        outputMode: { type: boolean }
+        outputModeIntensity: { type: string, enum: [lite, full, ultra] }
+        isDefault: { type: boolean }
+      additionalProperties: false
+
+    ContextCompressionComboAssignment:
+      type: object
+      required: [id, compressionComboId, routingComboId, createdAt]
+      properties:
+        id: { type: string }
+        compressionComboId: { type: string }
+        routingComboId: { type: string }
+        createdAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    ContextCompressionComboAssignmentsResponse:
+      type: object
+      required: [assignments]
+      properties:
+        assignments:
+          type: array
+          items: { $ref: "#/components/schemas/ContextCompressionComboAssignment" }
+      additionalProperties: false
+
+    ContextCompressionComboAssignmentsUpdateRequest:
+      type: object
+      required: [routingComboIds]
+      properties:
+        routingComboIds:
+          type: array
+          items: { type: string, minLength: 1 }
+      additionalProperties: false
+
+    ContextCompressionDerivedPlanResponse:
+      type: object
+      required: [mode, pipeline, derived]
+      properties:
+        mode: { $ref: "#/components/schemas/CompressionMode" }
+        pipeline:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionEngineStep" }
+        derived: { type: boolean, const: true }
+      additionalProperties: false
+
+    CursorCliPassthroughBody:
+      description: >-
+        Opaque Cursor upstream body. Content type, payload structure, and stream framing are
+        controlled by Cursor and are forwarded by OmniRoute.
+      x-sensitive: true
+
+    CursorCliSessionTokenExchangeResponse:
+      type: object
+      x-sensitive: true
+      required: [accessToken, refreshToken]
+      properties:
+        accessToken: { type: string, x-sensitive: true }
+        refreshToken: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    CursorCliProxyErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+      additionalProperties: false
+
+    DiscoveryResult:
+      type: object
+      x-sensitive: true
+      required: [id, providerId, method, endpoint, authType, rateLimit, feasibility, riskLevel, status, notes, discoveredAt, verifiedAt]
+      properties:
+        id: { type: integer, minimum: 1 }
+        providerId: { type: string, x-sensitive: true }
+        method: { type: string, enum: [free_tier, web_cookie, auto_register, trial, public_api] }
+        endpoint: { type: [string, "null"], x-sensitive: true }
+        authType: { type: string, enum: [none, cookie, api_key, oauth] }
+        models:
+          type: array
+          items: { type: string }
+        rateLimit: { type: [string, "null"] }
+        feasibility: { type: number }
+        riskLevel: { type: string, enum: [none, low, medium, high, critical] }
+        status: { type: string, enum: [pending, testing, verified, rejected] }
+        notes: { type: [string, "null"], x-sensitive: true }
+        discoveredAt: { type: string }
+        verifiedAt: { type: [string, "null"] }
+      additionalProperties: false
+
+    DiscoveryResultsResponse:
+      type: object
+      x-sensitive: true
+      required: [results]
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/DiscoveryResult" }
       additionalProperties: false

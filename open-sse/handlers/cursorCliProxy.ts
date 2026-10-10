@@ -424,7 +424,13 @@ async function handleExchange(
     principal,
     connectionId: null,
   });
-  return jsonResponse(200, { accessToken: token, refreshToken: token });
+  // This JSON body contains a bearer session JWT. Keep the cache directive on
+  // the bootstrap response only; forwarded Cursor responses preserve upstream
+  // cache headers unchanged.
+  return new Response(JSON.stringify({ accessToken: token, refreshToken: token }), {
+    status: 200,
+    headers: { "content-type": "application/json", "Cache-Control": "no-store" },
+  });
 }
 
 async function handleForward(

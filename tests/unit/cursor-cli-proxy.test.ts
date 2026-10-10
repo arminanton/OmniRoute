@@ -131,6 +131,7 @@ describe("cursorCliProxy: /auth/exchange_user_api_key", () => {
       deps
     );
     assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "no-store");
     const body = (await res.json()) as { accessToken: string; refreshToken: string };
     assert.equal(body.refreshToken, body.accessToken);
     const claims = decodeJwt(body.accessToken);
@@ -201,6 +202,26 @@ describe("cursorCliProxy: /auth/exchange_user_api_key", () => {
 });
 
 describe("cursorCliProxy: forwarded RPCs", () => {
+  it("preserves upstream cache headers instead of forcing no-store on streamed responses", async () => {
+    const { deps } = makeDeps({
+      fetchImpl: (async () =>
+        new Response("upstream-ok", {
+          status: 200,
+          headers: {
+            "content-type": "application/proto",
+            "cache-control": "private, max-age=45",
+          },
+        })) as unknown as typeof fetch,
+    });
+    const res = await handleCursorCliProxy(
+      rpcRequest(await mintedToken()),
+      ["aiserver.v1.DashboardService", "GetMe"],
+      deps,
+    );
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("cache-control"), "private, max-age=45");
+  });
+
   it("swaps the OmniRoute session token for the Cursor bearer and strips hop headers", async () => {
     const { deps, upstreamCalls, logs } = makeDeps();
     const res = await handleCursorCliProxy(
