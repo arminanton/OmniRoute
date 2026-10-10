@@ -2026,19 +2026,21 @@ slot, then honors lower numeric priority and rotates equal-priority ties in memo
 acquired synchronously before credential hydration yields and released when the attempt is abandoned,
 the response is consumed/cancelled, or the request errors. This is a load-balancing hint; the existing
 account semaphore remains the hard concurrency gate, and its full-account fallback path is unchanged.
-Reservations are wired into the main chat/SSE inference path. Other direct credential-helper routes
-currently use the strategy's in-memory tie rotation without holding a live-request reservation, so
-their selections are not load-aware yet. The hint is process-local and does not read cross-process
-SQLite lease counts, so multiple app workers can make independent choices. Shared admission continues
-to protect configured limits where it is enabled; extending reservations to all generation routes and
-cross-worker least-loaded selection remain open.
+Reservations are wired into the main chat/SSE path, image generation/edit/upscale/combo, embedding,
+and rerank inference routes. Image retries release the failed account before fallback selection and
+hold each replacement account only for its own attempt. Reservations remain process-local and do not
+read cross-process SQLite lease counts, so multiple app workers can make independent choices. Other
+direct credential-helper inference routes (audio, speech, transcription, music, video, moderation,
+classification, segmentation, OCR, web search/fetch, and provider judges) still need route-by-route
+audit and reservation coverage. Shared admission continues to protect configured limits where it is
+enabled; cross-worker least-loaded selection remains open.
 
-Evidence is bounded to selector behavior: 100 concurrent `getProviderCredentials` selections over four
-equal-priority accounts were distributed 25/25/25/25, and reservation release returned every count to
-zero. The serial auth suite passed 72/72, including existing priority, round-robin, quota, OAuth
-occupancy, and affinity cases; focused account-occupancy tests passed 3/3; core typecheck passed. The
-test held credentials only and did not dispatch provider calls or exercise the executor admission
-semaphore, so it does not establish real-provider or 70–100 active request capacity.
+Evidence is bounded to synthetic in-process requests: 100 concurrent `getProviderCredentials`
+selections over four equal-priority accounts were distributed 25/25/25/25, and reservation release
+returned every count to zero. Focused reservation lifecycle tests for chat, image, embeddings and
+rerank passed; core and open-sse typechecks passed. Tests used fake providers and did not exercise
+cross-worker state or establish real-provider quota behavior or 70–100 active upstream request
+capacity.
 
 ## Remaining acceptance checks
 
