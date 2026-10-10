@@ -2013,6 +2013,33 @@ plus one complete synthetic standalone conversation (two mocked Antigravity turn
 `SMOKE_EXIT=0`). The harness contacted only its local mock; no real provider credentials, canary
 image, or production deployment were involved.
 
+## Account available-capacity selection (2026-10-10)
+
+The global account-routing fallback now uses `available-capacity` when no persisted global strategy or
+per-provider override exists. Existing explicit strategies remain selectable; healthy session affinity
+still wins before account load selection. The provider account-routing card exposes the new strategy,
+and `/api/settings` documents it alongside its accepted enum values.
+
+Selection uses process-local active request reservations. It chooses the lowest
+`activeRequests / maxConcurrent` ratio, treating an unset/non-positive account cap as one estimated
+slot, then honors lower numeric priority and rotates equal-priority ties in memory. The reservation is
+acquired synchronously before credential hydration yields and released when the attempt is abandoned,
+the response is consumed/cancelled, or the request errors. This is a load-balancing hint; the existing
+account semaphore remains the hard concurrency gate, and its full-account fallback path is unchanged.
+Reservations are wired into the main chat/SSE inference path. Other direct credential-helper routes
+currently use the strategy's in-memory tie rotation without holding a live-request reservation, so
+their selections are not load-aware yet. The hint is process-local and does not read cross-process
+SQLite lease counts, so multiple app workers can make independent choices. Shared admission continues
+to protect configured limits where it is enabled; extending reservations to all generation routes and
+cross-worker least-loaded selection remain open.
+
+Evidence is bounded to selector behavior: 100 concurrent `getProviderCredentials` selections over four
+equal-priority accounts were distributed 25/25/25/25, and reservation release returned every count to
+zero. The serial auth suite passed 72/72, including existing priority, round-robin, quota, OAuth
+occupancy, and affinity cases; focused account-occupancy tests passed 3/3; core typecheck passed. The
+test held credentials only and did not dispatch provider calls or exercise the executor admission
+semaphore, so it does not establish real-provider or 70–100 active request capacity.
+
 ## Remaining acceptance checks
 
 - Capture the management-only pressure sample on `GET /api/monitoring/health` with a credential
@@ -2068,7 +2095,11 @@ image, or production deployment were involved.
   acceptable only after checking image/container free space and retention cleanup.
 - Account-concurrency and real-provider validation remain open after the synthetic standalone
   Next/middleware E2E. The prior route-handler runs used mock provider credentials, tool-call cycles,
-  authentication, and verified artifacts. At
+  authentication, and verified artifacts. The new available-capacity selector balances 100 held
+  selections across four accounts, but request reservations are not yet wired into direct media,
+  embedding, search, and utility credential-helper paths. Extend coverage there before claiming
+  whole-API capacity routing. Actual account admission at 70–100 active requests, real upstream
+  429/quota behavior, and production OCI image behavior remain unverified. At
   200,000 synthetic context bytes per user turn, 100 conversations completed 200/200 turns with
   200/200 artifacts and private traces. At 700,000 bytes, ordinary artifact capture alone completed
   140/140 turns but omitted 120/140 details at the 128 MiB preparation reservation ceiling. A new

@@ -42,7 +42,7 @@ function numericLimit(value: number | string | undefined, fallback: number): num
  * function under the complexity/size gate. */
 function useRoutingStrategySettings() {
   const [settings, setSettings] = useState<RoutingSettings>({
-    fallbackStrategy: "fill-first",
+    fallbackStrategy: "available-capacity",
     stickyRoundRobinLimit: 3,
     comboStrategy: "fallback",
     comboStickyRoundRobinLimit: 1,
@@ -59,7 +59,7 @@ function useRoutingStrategySettings() {
         const data = await res.json();
         if (cancelled) return;
         setSettings({
-          fallbackStrategy: data?.fallbackStrategy || "fill-first",
+          fallbackStrategy: data?.fallbackStrategy || "available-capacity",
           stickyRoundRobinLimit: data?.stickyRoundRobinLimit ?? 3,
           comboStrategy: data?.comboStrategy || "fallback",
           comboStickyRoundRobinLimit: data?.comboStickyRoundRobinLimit ?? 1,
@@ -111,7 +111,7 @@ function AccountRoundRobinSection({ t, busy, settings, setSettings, run }: Secti
           disabled={busy}
           onChange={() =>
             run(async () => {
-              const next = accountRoundRobin ? "fill-first" : "round-robin";
+              const next = accountRoundRobin ? "available-capacity" : "round-robin";
               const updated = await patchSettings({ fallbackStrategy: next });
               setSettings((prev) => ({
                 ...prev,
@@ -221,12 +221,14 @@ function ComboRoundRobinSection({ t, busy, settings, setSettings, run }: Section
 function RoutingSummaryFooter({
   t,
   accountRoundRobin,
+  fallbackStrategy,
   comboRoundRobin,
   accountStickyDisplay,
   comboStickyDisplay,
 }: {
   t: Translate;
   accountRoundRobin: boolean;
+  fallbackStrategy: string;
   comboRoundRobin: boolean;
   accountStickyDisplay: number;
   comboStickyDisplay: number;
@@ -235,7 +237,9 @@ function RoutingSummaryFooter({
     <p className="text-xs text-text-muted italic pt-2 border-t border-border/50">
       {accountRoundRobin
         ? t("routingStrategyAccountSummary", { limit: accountStickyDisplay })
-        : t("routingStrategyFillFirstSummary")}
+        : fallbackStrategy === "available-capacity"
+          ? `${t("providerRoutingStrategy")}: available-capacity.`
+          : t("routingStrategyFillFirstSummary")}
       {comboRoundRobin
         ? t("routingStrategyComboSummary", { limit: comboStickyDisplay })
         : t("routingStrategyComboFallbackSummary")}
@@ -292,6 +296,7 @@ export default function RoutingStrategyCard() {
           <RoutingSummaryFooter
             t={t}
             accountRoundRobin={accountRoundRobin}
+            fallbackStrategy={settings.fallbackStrategy}
             comboRoundRobin={comboRoundRobin}
             accountStickyDisplay={accountStickyDisplay}
             comboStickyDisplay={comboStickyDisplay}

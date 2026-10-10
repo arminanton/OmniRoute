@@ -23,6 +23,12 @@ const LEGACY_COMBO_RESILIENCE_KEYS = new Set([
 const ACCOUNT_FALLBACK_STRATEGIES = new Set<string>(SETTINGS_FALLBACK_STRATEGY_VALUES);
 const MS_PER_SECOND = 1000;
 
+function isComboRoutingStrategy(value: unknown): value is string {
+  return (
+    typeof value === "string" && ROUTING_STRATEGIES.some((strategy) => strategy.value === value)
+  );
+}
+
 function msToSeconds(value: unknown): number {
   const ms = Number(value);
   if (!Number.isFinite(ms) || ms <= 0) return 0;
@@ -166,7 +172,11 @@ export default function ComboDefaultsTab() {
           ...prev,
           ...sanitizeComboRuntimeConfig(comboData.comboDefaults),
           strategy:
-            comboData.comboDefaults?.strategy ?? settingsData.fallbackStrategy ?? prev.strategy,
+            (isComboRoutingStrategy(comboData.comboDefaults?.strategy) &&
+              comboData.comboDefaults.strategy) ||
+            (isComboRoutingStrategy(settingsData.fallbackStrategy) &&
+              settingsData.fallbackStrategy) ||
+            prev.strategy,
           stickyRoundRobinLimit:
             settingsData.stickyRoundRobinLimit ??
             comboData.comboDefaults?.stickyRoundRobinLimit ??

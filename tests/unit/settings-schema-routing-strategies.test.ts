@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { SETTINGS_FALLBACK_STRATEGY_VALUES } from "@/shared/constants/routingStrategies";
+import {
+  ROUTING_STRATEGY_VALUES,
+  SETTINGS_FALLBACK_STRATEGY_VALUES,
+} from "@/shared/constants/routingStrategies";
 import { updateSettingsSchema as settingsRouteSchema } from "@/shared/validation/settingsSchemas";
 import * as sharedSchemaModule from "@/shared/validation/schemas";
 import { updateSettingsSchema as sharedSettingsSchema } from "@/shared/validation/schemas";
@@ -22,6 +25,14 @@ test("settings schemas reject combo-only strategies as account fallback strategi
     assert.equal(settingsRouteSchema.safeParse({ fallbackStrategy: strategy }).success, false);
     assert.equal(sharedSettingsSchema.safeParse({ fallbackStrategy: strategy }).success, false);
   }
+});
+
+test("available-capacity stays in account routing and out of combo dispatch strategies", () => {
+  assert.ok(SETTINGS_FALLBACK_STRATEGY_VALUES.includes("available-capacity"));
+  assert.equal(
+    (ROUTING_STRATEGY_VALUES as readonly string[]).includes("available-capacity"),
+    false
+  );
 });
 
 test("shared settings schema module omits the unused fallback strategy sub-schema export", () => {

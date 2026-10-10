@@ -184,6 +184,10 @@ import {
   getOAuthSessionAvailability,
   reserveOAuthSession,
 } from "@omniroute/open-sse/services/oauthSessionOccupancy.ts";
+import {
+  reserveAccountRequest,
+  selectAvailableCapacityConnection,
+} from "@omniroute/open-sse/services/accountRequestOccupancy.ts";
 
 type JsonRecord = Record<string, unknown>;
 interface RecoverableConnectionState {
@@ -204,6 +208,7 @@ export interface CredentialSelectionOptions {
   sessionKey?: string | null;
   sessionAffinityTtlMs?: number | null;
   reserveOAuthSession?: boolean;
+  reserveAccountRequest?: boolean;
   lease?: CredentialLeaseSelectionContext;
   materializeCredentials?: boolean;
   deferLeaseClaim?: boolean;
@@ -1064,53 +1069,65 @@ async function materializeConnection(
   options: CredentialSelectionOptions,
   extra: DeferredLeaseSelection & { exclusiveLease?: ExclusiveConnectionLease } = {}
 ) {
-  const providerSpecificData = await hydrateCompatibleNodeBaseUrl(
-    connection.provider,
-    bindRuntimeProviderData(await hydrateAccountProxyReferences(connection.providerSpecificData), {
-      kind: "connection",
-      providerId: connection.provider,
+  const releaseAccountRequest = options.reserveAccountRequest
+    ? reserveAccountRequest(connection.id)
+    : undefined;
+  try {
+    const providerSpecificData = await hydrateCompatibleNodeBaseUrl(
+      connection.provider,
+      bindRuntimeProviderData(
+        await hydrateAccountProxyReferences(connection.providerSpecificData),
+        {
+          kind: "connection",
+          providerId: connection.provider,
+          connectionId: connection.id,
+        }
+      )
+    );
+    validateProviderConnectionCandidate({
+      id: connection.id,
+      provider: connection.provider,
+      providerSpecificData,
+    });
+    const apiKeyHealth = providerSpecificData.apiKeyHealth as Record<string, KeyHealth> | undefined;
+    if (apiKeyHealth) syncHealthFromDB(connection.id, apiKeyHealth);
+    const releaseOAuthSession =
+      options.reserveOAuthSession === true && connection.authType === "oauth" && options.sessionKey
+        ? reserveOAuthSession(connection.id, options.sessionKey)
+        : undefined;
+    return {
+      apiKey: connection.apiKey,
+      accessToken: connection.accessToken,
+      refreshToken: connection.refreshToken,
+      expiresAt: connection.tokenExpiresAt || connection.expiresAt || null,
+      projectId: connection.projectId,
+      defaultModel: connection.defaultModel || null,
+      copilotToken:
+        typeof providerSpecificData.copilotToken === "string"
+          ? providerSpecificData.copilotToken
+          : null,
+      providerSpecificData,
+      id: connection.id,
+      provider: connection.provider,
+      authType: connection.authType,
+      email: connection.email,
       connectionId: connection.id,
-    })
-  );
-  validateProviderConnectionCandidate({
-    id: connection.id,
-    provider: connection.provider,
-    providerSpecificData,
-  });
-  const apiKeyHealth = providerSpecificData.apiKeyHealth as Record<string, KeyHealth> | undefined;
-  if (apiKeyHealth) syncHealthFromDB(connection.id, apiKeyHealth);
-  const releaseOAuthSession =
-    options.reserveOAuthSession === true && connection.authType === "oauth" && options.sessionKey
-      ? reserveOAuthSession(connection.id, options.sessionKey)
-      : undefined;
-  return {
-    apiKey: connection.apiKey,
-    accessToken: connection.accessToken,
-    refreshToken: connection.refreshToken,
-    expiresAt: connection.tokenExpiresAt || connection.expiresAt || null,
-    projectId: connection.projectId,
-    defaultModel: connection.defaultModel || null,
-    copilotToken:
-      typeof providerSpecificData.copilotToken === "string"
-        ? providerSpecificData.copilotToken
-        : null,
-    providerSpecificData,
-    id: connection.id,
-    provider: connection.provider,
-    authType: connection.authType,
-    email: connection.email,
-    connectionId: connection.id,
-    testStatus: connection.testStatus,
-    lastError: connection.lastError,
-    lastErrorType: connection.lastErrorType,
-    lastErrorSource: connection.lastErrorSource,
-    errorCode: connection.errorCode,
-    rateLimitedUntil: connection.rateLimitedUntil,
-    maxConcurrent: connection.maxConcurrent,
-    quotaWindowThresholds: connection.quotaWindowThresholds ?? null,
-    ...(releaseOAuthSession ? { releaseOAuthSession } : {}),
-    ...extra,
-  };
+      testStatus: connection.testStatus,
+      lastError: connection.lastError,
+      lastErrorType: connection.lastErrorType,
+      lastErrorSource: connection.lastErrorSource,
+      errorCode: connection.errorCode,
+      rateLimitedUntil: connection.rateLimitedUntil,
+      maxConcurrent: connection.maxConcurrent,
+      quotaWindowThresholds: connection.quotaWindowThresholds ?? null,
+      ...(releaseOAuthSession ? { releaseOAuthSession } : {}),
+      ...(releaseAccountRequest ? { releaseAccountRequest } : {}),
+      ...extra,
+    };
+  } catch (error) {
+    releaseAccountRequest?.();
+    throw error;
+  }
 }
 
 /**
@@ -1903,7 +1920,8 @@ export async function getProviderCredentials(
       { fallbackStrategy?: string; stickyRoundRobinLimit?: number }
     >;
     const providerOverride = providerStrategyOverrides[resolvedId] || {};
-    const strategy = providerOverride.fallbackStrategy || settings.fallbackStrategy || "fill-first";
+    const strategy =
+      providerOverride.fallbackStrategy || settings.fallbackStrategy || "available-capacity";
 
     let commitSelectionSideEffects: (() => Promise<void> | void) | undefined;
     let connection = leasePolicy.activeLease
@@ -1943,6 +1961,8 @@ export async function getProviderCredentials(
 
     if (connection) {
       // Session affinity selected a connection before global sticky routing.
+    } else if (strategy === "available-capacity") {
+      connection = selectAvailableCapacityConnection(provider, orderedConnections)!;
     } else if (strategy === "round-robin") {
       const stickyLimit = toNumber(
         providerOverride.stickyRoundRobinLimit ??
@@ -2105,7 +2125,8 @@ export async function getProviderCredentials(
     if (
       options.reserveOAuthSession === true &&
       connection?.authType === "oauth" &&
-      !affinityConnection
+      !affinityConnection &&
+      strategy !== "available-capacity"
     ) {
       const selectedPriority = connection.priority || 999;
       const selectedAvailability = getOAuthSessionAvailability(connection.id, options.sessionKey);
@@ -2264,6 +2285,11 @@ export async function getProviderCredentialsWithQuotaPreflight(
       commitSelectionSideEffects?: () => Promise<void> | void;
       selectNextLeaseCandidate?: (excludedConnectionId: string) => Promise<typeof credentials>;
       releaseOAuthSession?: () => void;
+      releaseAccountRequest?: () => void;
+    };
+    const releaseSelectionOccupancy = () => {
+      selectedCredentials.releaseOAuthSession?.();
+      selectedCredentials.releaseAccountRequest?.();
     };
     const connectionId = selectedCredentials.connectionId;
     if (!connectionId) {
@@ -2278,16 +2304,24 @@ export async function getProviderCredentialsWithQuotaPreflight(
         options.lease
       );
       if (claim.kind === "LOST") {
-        selectedCredentials.releaseOAuthSession?.();
+        releaseSelectionOccupancy();
         excludedConnectionIds.add(connectionId);
         pendingCredentialSelection =
           await selectedCredentials.selectNextLeaseCandidate?.(connectionId);
         return null;
       }
-      if (claim.kind === "STALE") return { leaseFenceStale: true };
-      await selectedCredentials.commitSelectionSideEffects?.();
+      if (claim.kind === "STALE") {
+        releaseSelectionOccupancy();
+        return { leaseFenceStale: true };
+      }
+      try {
+        await selectedCredentials.commitSelectionSideEffects?.();
+      } catch (error) {
+        releaseSelectionOccupancy();
+        throw error;
+      }
       if (options.materializeCredentials === false) {
-        selectedCredentials.releaseOAuthSession?.();
+        releaseSelectionOccupancy();
         return { exclusiveLease: claim.lease, connectionId, provider };
       }
       return { ...credentials, exclusiveLease: claim.lease };
@@ -2385,7 +2419,7 @@ export async function getProviderCredentialsWithQuotaPreflight(
         }
       );
     } catch (error) {
-      selectedCredentials.releaseOAuthSession?.();
+      releaseSelectionOccupancy();
       throw error;
     }
     if (preflight.proceed) {
@@ -2394,7 +2428,7 @@ export async function getProviderCredentialsWithQuotaPreflight(
       return committed;
     }
 
-    selectedCredentials.releaseOAuthSession?.();
+    releaseSelectionOccupancy();
 
     const unavailableUntil = await markQuotaPreflightAccountUnavailable(
       provider,

@@ -4929,8 +4929,7 @@ paths:
         description: May contain secret settings such as OIDC, SkillsMP, or CLIProxyAPI credentials.
         content:
           application/json:
-            schema:
-              type: object
+            schema: { $ref: "#/components/schemas/ApplicationSettingsUpdateRequest" }
       responses:
         "200":
           description: >-
@@ -4984,9 +4983,7 @@ paths:
         description: May contain secret settings such as OIDC, SkillsMP, or CLIProxyAPI credentials.
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: true
+            schema: { $ref: "#/components/schemas/ApplicationSettingsUpdateRequest" }
       responses:
         "200":
           description: >-
@@ -46044,6 +46041,43 @@ components:
         domainCostHistory: { type: integer, minimum: 0 }
         domainBudgets: { type: integer, minimum: 0 }
       additionalProperties: true
+    AccountFallbackStrategy:
+      type: string
+      description: >-
+        Account selection strategy. On request paths that hold in-process reservations,
+        available-capacity chooses the eligible account with the lowest observed
+        in-flight-to-configured-capacity ratio; ties honor account priority and rotate equal-priority
+        peers in process memory. This selection hint does not replace the account concurrency
+        admission gate. When no persisted global or provider override is present, the runtime
+        defaults to available-capacity.
+      enum:
+        [available-capacity, priority, weighted, fill-first, round-robin, p2c, random, least-used, cost-optimized, strict-random]
+    ProviderAccountRoutingOverride:
+      type: object
+      properties:
+        fallbackStrategy: { $ref: "#/components/schemas/AccountFallbackStrategy" }
+        stickyRoundRobinLimit: { type: integer, minimum: 1, maximum: 1000 }
+      additionalProperties: false
+    ApplicationSettingsUpdateRequest:
+      type: object
+      description: >-
+        Partial global-settings update. Account-routing properties are documented here; other
+        settings use their route-specific source validators. Raw OIDC and other credential values
+        may be included. Unknown fields are accepted by the outer object but stripped by source
+        validation. `expectedRevision` enables optimistic concurrency against settingsRevision/ETag.
+      x-sensitive: true
+      properties:
+        expectedRevision: { type: integer, minimum: 0 }
+        fallbackStrategy:
+          allOf:
+            - $ref: "#/components/schemas/AccountFallbackStrategy"
+          description: Global account-selection strategy; per-provider overrides take precedence.
+        stickyRoundRobinLimit: { type: integer, minimum: 0, maximum: 1000 }
+        providerStrategies:
+          type: object
+          description: Provider-id to account-routing override map.
+          additionalProperties: { $ref: "#/components/schemas/ProviderAccountRoutingOverride" }
+      additionalProperties: true
     ApplicationSettingsPersistedValues:
       type: object
       description: >-
@@ -46057,6 +46091,12 @@ components:
         hasOidcClientSecret: { type: boolean }
         hasSkillsmpApiKey: { type: boolean }
         hasCliproxyapiApiKey: { type: boolean }
+        fallbackStrategy: { $ref: "#/components/schemas/AccountFallbackStrategy" }
+        stickyRoundRobinLimit: { type: integer, minimum: 0, maximum: 1000 }
+        providerStrategies:
+          type: object
+          description: Provider-id to account-routing override map.
+          additionalProperties: { $ref: "#/components/schemas/ProviderAccountRoutingOverride" }
       additionalProperties: true
       not:
         anyOf:

@@ -19,6 +19,7 @@ const auth = await import("../../src/sse/services/auth.ts");
 const quotaCache = await import("../../src/domain/quotaCache.ts");
 const fallback = await import("../../open-sse/services/accountFallback.ts");
 const oauthOccupancy = await import("../../open-sse/services/oauthSessionOccupancy.ts");
+const accountRequestOccupancy = await import("../../open-sse/services/accountRequestOccupancy.ts");
 
 // Source-only fixture for the persistence boundary. The full auth module runs
 // with synthetic dependencies; no additional app/DB/provider/helper is loaded.
@@ -253,6 +254,7 @@ async function seedConnection(provider: string, overrides: any = {}) {
     providerSpecificData: overrides.providerSpecificData || {},
     lastUsedAt: overrides.lastUsedAt,
     consecutiveUseCount: overrides.consecutiveUseCount,
+    maxConcurrent: overrides.maxConcurrent,
   });
 }
 
@@ -266,6 +268,7 @@ async function flushWrites() {
 
 test.beforeEach(async () => {
   oauthOccupancy._clearOAuthSessionOccupancyForTest();
+  accountRequestOccupancy._clearAccountRequestOccupancyForTest();
   await resetStorage();
 });
 
@@ -771,6 +774,48 @@ test("concurrent OAuth selections reserve different available accounts atomicall
   assert.notEqual(sessionA.connectionId, sessionB.connectionId);
   sessionA.releaseOAuthSession?.();
   sessionB.releaseOAuthSession?.();
+});
+
+test("default available-capacity selection balances 100 held requests across equal accounts", async () => {
+  await settingsDb.updateSettings({ sessionAffinityTtlMs: 0 });
+  const accounts = await Promise.all(
+    Array.from({ length: 4 }, (_, index) =>
+      seedConnection("openai", {
+        name: `available-capacity-${index}`,
+        priority: 1,
+        maxConcurrent: 100,
+      })
+    )
+  );
+
+  const selected = await Promise.all(
+    Array.from({ length: 100 }, (_, index) =>
+      auth.getProviderCredentials("openai", null, null, "gpt-4o", {
+        sessionKey: `available-capacity-session-${index}`,
+        reserveAccountRequest: true,
+      })
+    )
+  );
+
+  try {
+    assert.equal(selected.length, 100);
+    assert.deepEqual(
+      accounts.map(
+        (account) =>
+          selected.filter((credentials) => credentials.connectionId === account.id).length
+      ),
+      [25, 25, 25, 25]
+    );
+    for (const account of accounts) {
+      assert.equal(accountRequestOccupancy.getAccountRequestInFlightCount(account.id), 25);
+    }
+  } finally {
+    for (const credentials of selected) credentials.releaseAccountRequest?.();
+  }
+
+  for (const account of accounts) {
+    assert.equal(accountRequestOccupancy.getAccountRequestInFlightCount(account.id), 0);
+  }
 });
 
 test("getProviderCredentials rebinds codex session when affinity connection is excluded", async () => {

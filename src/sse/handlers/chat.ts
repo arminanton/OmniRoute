@@ -121,7 +121,11 @@ import {
 } from "./chatPredicates";
 import { markAntigravityMissingCloudCodeProject } from "@omniroute/open-sse/services/antigravityProjectPersistence.ts";
 import { connectionHasExtraKeys } from "@omniroute/open-sse/services/apiKeyRotator.ts";
-import { wrapResponseWithOAuthSessionRelease } from "@omniroute/open-sse/services/oauthSessionOccupancy.ts";
+import {
+  reserveOAuthSession,
+  wrapResponseWithOAuthSessionRelease,
+} from "@omniroute/open-sse/services/oauthSessionOccupancy.ts";
+import { reserveAccountRequest } from "@omniroute/open-sse/services/accountRequestOccupancy.ts";
 import {
   extractReasoningIntent,
   type ExtractedReasoningIntent,
@@ -1238,6 +1242,7 @@ async function handleChatImplementation(
 
     for (const credentials of comboPreselectedCredentials.values()) {
       credentials.releaseOAuthSession?.();
+      credentials.releaseAccountRequest?.();
     }
     comboPreselectedCredentials.clear();
 
@@ -1712,6 +1717,7 @@ async function handleSingleModelChatImplementation(
               {
                 sessionKey: occupancySessionKey,
                 reserveOAuthSession: true,
+                reserveAccountRequest: true,
                 excludeConnectionIds: Array.from(excludedConnectionIds),
                 ...(runtimeOptions.allowRateLimitedConnection
                   ? { allowRateLimitedConnections: true }
@@ -1747,7 +1753,11 @@ async function handleSingleModelChatImplementation(
 
       if (runtimeOptions.managedLease && credentials) {
         const leaseError = buildManagedLeaseSelectionErrorResponse(credentials);
-        if (leaseError) return leaseError;
+        if (leaseError) {
+          credentials.releaseOAuthSession?.();
+          credentials.releaseAccountRequest?.();
+          return leaseError;
+        }
       }
 
       // #9467: also treat the auth layer's allExpired verdict as a no-credentials
@@ -1759,6 +1769,8 @@ async function handleSingleModelChatImplementation(
         "allExpired" in credentials ||
         !credentials.connectionId
       ) {
+        credentials?.releaseOAuthSession?.();
+        credentials?.releaseAccountRequest?.();
         const retryFailureCode = lastErrorCode ?? credentials?.lastErrorCode;
         const retryFailureText = lastError ?? credentials?.lastError;
         if (credentials?.allRateLimited) {
@@ -1850,6 +1862,12 @@ async function handleSingleModelChatImplementation(
 
       const accountId = credentials.connectionId.slice(0, 8);
       const releaseOAuthSession = credentials.releaseOAuthSession ?? (() => {});
+      const releaseAccountOccupancy =
+        credentials.releaseAccountRequest ?? reserveAccountRequest(credentials.connectionId);
+      const releaseSelectedAccount = () => {
+        releaseOAuthSession();
+        releaseAccountOccupancy();
+      };
       // #10348: redact the account prefix by default. Gated on the narrow
       // AUTH_LOG_INCLUDE_ACCOUNT_ID flag (default off) rather than the broad
       // `debugMode` setting — `debugMode` is a general dashboard-visibility
@@ -1893,9 +1911,12 @@ async function handleSingleModelChatImplementation(
           reasoningIntent: runtimeOptions.reasoningIntent,
           reasoningDecision: runtimeOptions.reasoningDecision,
           requestRoutingTags: runtimeOptions.reasoningRequestTags,
+        }).catch((error: unknown) => {
+          releaseSelectedAccount();
+          throw error;
         });
         if (connectionRouting.response) {
-          releaseOAuthSession();
+          releaseSelectedAccount();
           return connectionRouting.response;
         }
         requestBody = connectionRouting.body;
@@ -1926,7 +1947,7 @@ async function handleSingleModelChatImplementation(
       try {
         refreshedCredentials = await checkAndRefreshToken(provider, credentials);
       } catch (error) {
-        releaseOAuthSession();
+        releaseSelectedAccount();
         throw error;
       }
       const storeEnabled = isOpenAIResponsesStoreEnabled(
@@ -1962,7 +1983,7 @@ async function handleSingleModelChatImplementation(
       try {
         proxyInfo = await safeResolveProxy(credentials.connectionId, apiKeyInfo?.id, provider);
       } catch (error) {
-        releaseOAuthSession();
+        releaseSelectedAccount();
         throw error;
       }
       // #5217: sink for the proxy the executor pins internally (e.g. OpencodeExecutor
@@ -2017,23 +2038,24 @@ async function handleSingleModelChatImplementation(
           runtimeOptions
         );
       } catch (error) {
-        releaseOAuthSession();
+        releaseSelectedAccount();
         throw error;
       }
       if (telemetry) telemetry.endPhase();
       if ("localResourcePressureResult" in execution) {
+        releaseSelectedAccount();
         return execution.localResourcePressureResult.response;
       }
       const { result, tlsFingerprintUsed } = execution;
       // Policy denial is terminal, not provider health or exhausted network state.
       if (isRuntimePolicyResponse(result.response) || isRuntimePolicyError(result.originalError)) {
-        releaseOAuthSession();
+        releaseSelectedAccount();
         return withSelectedConnectionHeader(
           isRuntimePolicyResponse(result.response) ? result.response : runtimePolicyErrorResponse(),
           credentials.connectionId
         );
       }
-      if (!result.success) releaseOAuthSession();
+      if (!result.success) releaseSelectedAccount();
 
       const proxyLatency = Date.now() - proxyStartTime;
       const providerAlias = PROVIDER_ID_TO_ALIAS[provider] || provider;
@@ -2075,9 +2097,9 @@ async function handleSingleModelChatImplementation(
           credentials?.connectionId
         );
         if (requestBody.stream === true) {
-          return wrapResponseWithOAuthSessionRelease(successResponse, releaseOAuthSession);
+          return wrapResponseWithOAuthSessionRelease(successResponse, releaseSelectedAccount);
         }
-        releaseOAuthSession();
+        releaseSelectedAccount();
         return successResponse;
       }
 
@@ -2475,10 +2497,17 @@ async function handleSingleModelChatImplementation(
         );
         const completed = await waitForCooldownAwareRetry(waitMs, requestSignal);
         if (!completed) {
-          releaseOAuthSession();
+          releaseSelectedAccount();
           return errorResponse(499, "Request aborted");
         }
-        preselectedCredentials = credentials;
+        preselectedCredentials = {
+          ...credentials,
+          releaseOAuthSession:
+            credentials.authType === "oauth"
+              ? reserveOAuthSession(credentials.connectionId, occupancySessionKey)
+              : undefined,
+          releaseAccountRequest: reserveAccountRequest(credentials.connectionId),
+        };
         continue;
       }
 
