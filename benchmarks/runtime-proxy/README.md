@@ -343,6 +343,15 @@ benchmark-only; it is not wired to TypeScript or Redis. The missed-event test is
 cache expiry. It does not model a stale Redis entry, which TypeScript may reuse for up to one hour if
 Redis invalidation fails.
 
+A separate Rust test now places two independent cache instances in front of one in-memory SQLite
+`api_keys` table. It applies the same `revoked_at = COALESCE(...)` / `is_active = 0` mutation used by
+`revokeApiKey()` in `src/lib/db/apiKeys.ts`, clears only the writer's cache, and checks that the
+writer rejects immediately while the other cache can remain positive only until its own 60-second
+TTL expires and it rereads the revoked row. This is a deterministic storage-backed prototype test,
+not execution of the TypeScript validator and not proof of cross-process invalidation or Redis
+behavior. The real TypeScript validator is exercised separately by
+`tests/unit/api-key-validation-cache-vectors.test.ts`, which consumes the same shared cache vectors.
+
 The TypeScript validator checks banned/active/revoked/expiry state; a revoke writes
 `revoked_at` and `is_active = 0` before clearing local caches, then attempts to delete the optional
 Redis auth entry. Redis stores auth snapshots for up to one hour, and Redis read/write/delete

@@ -119,7 +119,68 @@ impl ApiKeyValidationCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::{Connection, OptionalExtension, params};
     use serde_json::Value;
+
+    /// Run the positive cache in front of a SQLite `api_keys` row shaped like the authority
+    /// queried by `validateApiKey()` in `src/lib/db/apiKeys.ts`. Kept test-only: this prototype
+    /// does not own production credentials or a production database connection.
+    fn validate_from_sqlite(
+        cache: &mut ApiKeyValidationCache,
+        db: &Connection,
+        opaque_key_hash: &str,
+        presented_key: &str,
+        now_ms: i64,
+    ) -> rusqlite::Result<bool> {
+        if cache
+            .cached_validation(opaque_key_hash, now_ms)
+            .is_some_and(|valid| valid)
+        {
+            return Ok(true);
+        }
+
+        let row = db
+            .query_row(
+                "SELECT is_active, is_banned, revoked_at FROM api_keys
+                 WHERE key = ?1 OR key_hash = ?2",
+                params![presented_key, opaque_key_hash],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let valid = row.is_some_and(|(is_active, is_banned, revoked_at)| {
+            is_active != 0
+                && is_banned == 0
+                && !revoked_at.is_some_and(|value| !value.trim().is_empty())
+        });
+        cache.cache_validation_result(opaque_key_hash, valid, now_ms);
+        Ok(valid)
+    }
+
+    fn sqlite_api_key_authority() -> Connection {
+        let db = Connection::open_in_memory().expect("open in-memory API-key database");
+        db.execute_batch(
+            "CREATE TABLE api_keys (
+                id TEXT PRIMARY KEY,
+                key TEXT NOT NULL UNIQUE,
+                key_hash TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                is_banned INTEGER NOT NULL DEFAULT 0,
+                revoked_at TEXT,
+                expires_at TEXT
+             );
+             INSERT INTO api_keys (id, key, key_hash, is_active, is_banned)
+             VALUES ('fixture-id', 'fixture-presented-key', 'opaque-hash-1', 1, 0);",
+        )
+        .expect("create source-shaped API-key row");
+        db
+    }
 
     #[test]
     fn shared_typescript_action_vectors_define_local_cache_parity() {
@@ -235,6 +296,56 @@ mod tests {
         cache.cache_validation_result("key-a", valid, 1_002);
         assert!(!valid);
         assert_eq!(cache.cached_validation("key-a", 1_003), None);
+    }
+
+    #[test]
+    fn sqlite_revoke_clears_writer_but_other_worker_positive_expires_at_ttl() {
+        let db = sqlite_api_key_authority();
+        let mut writer_cache = ApiKeyValidationCache::default();
+        let mut other_worker_cache = ApiKeyValidationCache::default();
+        let key_hash = "opaque-hash-1";
+        let presented_key = "fixture-presented-key";
+
+        assert!(
+            validate_from_sqlite(&mut writer_cache, &db, key_hash, presented_key, 1_000,)
+                .expect("writer validates active key")
+        );
+        assert!(
+            validate_from_sqlite(&mut other_worker_cache, &db, key_hash, presented_key, 1_000,)
+                .expect("second worker validates active key")
+        );
+
+        // Match revokeApiKey(): commit the SQLite lifecycle fields first, then clear the
+        // process-local cache in the worker which performed the write.
+        db.execute(
+            "UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?1), is_active = 0 WHERE id = ?2",
+            params!["2026-10-10T00:00:00.000Z", "fixture-id"],
+        )
+        .expect("persist key revocation");
+        writer_cache.invalidate_after_key_write();
+
+        assert!(
+            !validate_from_sqlite(&mut writer_cache, &db, key_hash, presented_key, 1_001,)
+                .expect("writer sees revoke after local invalidation")
+        );
+
+        // A second process has an independent positive cache. With no delivered invalidation
+        // event, it can use that snapshot only until its remaining local 60-second TTL ends.
+        assert!(
+            validate_from_sqlite(&mut other_worker_cache, &db, key_hash, presented_key, 1_001,)
+                .expect("other worker still has its cached positive")
+        );
+        assert!(
+            !validate_from_sqlite(
+                &mut other_worker_cache,
+                &db,
+                key_hash,
+                presented_key,
+                61_000,
+            )
+            .expect("other worker reloads revoked SQLite row at TTL boundary")
+        );
+        assert_eq!(other_worker_cache.cached_validation(key_hash, 61_001), None);
     }
 
     #[test]
