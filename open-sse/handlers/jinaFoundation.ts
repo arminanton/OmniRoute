@@ -24,6 +24,7 @@ export interface JinaFoundationProxyOptions {
   credentials: JinaFoundationCredentials | null;
   provider?: string;
   model?: string | null;
+  signal?: AbortSignal | null;
 }
 
 export async function handleJinaFoundationProxy(
@@ -39,6 +40,7 @@ export async function handleJinaFoundationProxy(
   }
 
   try {
+    options.signal?.throwIfAborted();
     const res = await fetch(options.upstreamUrl, {
       method: "POST",
       headers: {
@@ -47,6 +49,7 @@ export async function handleJinaFoundationProxy(
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(options.body),
+      signal: options.signal ?? undefined,
     });
 
     const text = await res.text();
@@ -95,6 +98,9 @@ export async function handleJinaFoundationProxy(
     });
     return new Response(JSON.stringify(parsed), { status: 200, headers });
   } catch (err) {
+    if (options.signal?.aborted) {
+      return errorResponse(499, "Jina request cancelled");
+    }
     const message = err instanceof Error ? err.message : String(err);
     return errorResponse(500, `Jina request failed: ${message}`);
   }

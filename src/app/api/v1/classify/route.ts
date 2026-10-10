@@ -14,6 +14,7 @@ import {
   rateLimitedProviderResponse,
 } from "@/app/api/v1/_shared/rateLimit";
 import { JINA_FOUNDATION_BASE_URL, JINA_FOUNDATION_PROVIDER_ID } from "@/lib/providers/jina";
+import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
 
 /**
  * Handle CORS preflight
@@ -51,29 +52,50 @@ async function postHandler(request: Request) {
   const policy = await enforceApiKeyPolicy(request, model || "jina-ai/classify");
   if (policy.rejection) return policy.rejection;
 
-  const credentials = await getProviderCredentialsWithQuotaPreflight(JINA_FOUNDATION_PROVIDER_ID);
-  if (!credentials) {
-    return errorResponse(
-      HTTP_STATUS.BAD_REQUEST,
-      `No credentials for provider: ${JINA_FOUNDATION_PROVIDER_ID}`
-    );
-  }
-  if (isAllRateLimitedCredentials(credentials)) {
-    return rateLimitedProviderResponse(JINA_FOUNDATION_PROVIDER_ID, credentials);
-  }
+  const credentials = await getProviderCredentialsWithQuotaPreflight(
+    JINA_FOUNDATION_PROVIDER_ID,
+    null,
+    null,
+    null,
+    { reserveAccountRequest: true }
+  );
+  const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  try {
+    if (!credentials) {
+      return errorResponse(
+        HTTP_STATUS.BAD_REQUEST,
+        `No credentials for provider: ${JINA_FOUNDATION_PROVIDER_ID}`
+      );
+    }
+    if (request.signal.aborted) {
+      return errorResponse(499, "Classification request cancelled");
+    }
+    if (isAllRateLimitedCredentials(credentials)) {
+      return rateLimitedProviderResponse(JINA_FOUNDATION_PROVIDER_ID, credentials);
+    }
 
-  const response = await handleJinaFoundationProxy({
-    path: "/v1/classify",
-    upstreamUrl: `${JINA_FOUNDATION_BASE_URL}/v1/classify`,
-    body,
-    credentials,
-    provider: JINA_FOUNDATION_PROVIDER_ID,
-    model: model || null,
-  });
-  if (response?.ok) {
-    await clearRecoveredProviderState(credentials);
+    const response = await handleJinaFoundationProxy({
+      path: "/v1/classify",
+      upstreamUrl: `${JINA_FOUNDATION_BASE_URL}/v1/classify`,
+      body,
+      credentials,
+      provider: JINA_FOUNDATION_PROVIDER_ID,
+      model: model || null,
+      signal: request.signal,
+    });
+    if (request.signal.aborted) {
+      return errorResponse(499, "Classification request cancelled");
+    }
+    if (response?.ok) {
+      await clearRecoveredProviderState(credentials);
+    }
+    if (request.signal.aborted) {
+      return errorResponse(499, "Classification request cancelled");
+    }
+    return response;
+  } finally {
+    releaseAccountRequest();
   }
-  return response;
 }
 
 export const POST = withInjectionGuard(postHandler);
