@@ -31,8 +31,8 @@ const requestBytes = parsePositiveInt(requestBytesArg, 131_072);
 const responseBytes = parsePositiveInt(responseBytesArg, 32_768);
 const captureStreamChunks = streamChunksArg !== "false";
 const finalizerDedupEnabled = finalizerDedupArg !== "false";
-if (clients > 70 || requestBytes > 1024 * 1024 || responseBytes > 256 * 1024) {
-  throw new RangeError("limits are 70 clients, 1 MiB request, and 256 KiB response");
+if (clients > 70 || requestBytes > 4 * 1024 * 1024 || responseBytes > 256 * 1024) {
+  throw new RangeError("limits are 70 clients, 4 MiB request, and 256 KiB response");
 }
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omni-call-log-capture-path-"));

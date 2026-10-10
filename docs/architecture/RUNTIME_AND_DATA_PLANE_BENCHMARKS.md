@@ -1631,6 +1631,22 @@ does not include Omni startup memory, cgroup pressure, other concurrent work, re
 responses, or requests larger than 1 MiB. Keep the default unchanged pending a controlled
 high-context app/cgroup measurement.
 
+A separate 70-client high-context-shape run used 3,670,016-byte serialized requests (about 3.5
+MiB each) and the same small fake response, with `node --max-old-space-size=2048`. Under the
+restored 128 MiB default it stored 1/70 details and refused 69; under a temporary 6 GiB reservation
+ceiling all 70 completed. The temporary source cap was restored immediately after the run.
+
+| Reservation ceiling | Details ready | Reservation high-water | Artifacts written | Process write bytes | Sampled RSS / heap | Kernel `VmHWM` |
+| ------------------- | ------------: | --------------------: | ----------------: | ------------------: | ----------------: | -------------: |
+| default 128 MiB     |          1/70 |            73,487,148 B |       3,671,310 B |        10,969,088 B | 945.2 / 790.0 MiB |      957.4 MiB |
+| temporary 6 GiB     |         70/70 |         5,144,101,580 B |     256,991,761 B |       264,699,904 B | 1,197.5 / 808.5 MiB |    1,212.9 MiB |
+
+This points to a conservative admission estimate for this synthetic workload: about 5.1 GiB is
+reserved to write about 257 MB of artifacts, while the observed kernel high-water is about 1.2
+GiB. It does **not** prove that a 6 GiB production budget, or any larger default, is safe with the
+real app's startup heap, provider traffic, cgroup limit, or other workers. The default remains
+128 MiB pending an in-process high-context/cgroup test.
+
 An exact-capture allocation audit also found two avoidable operations. `captureCurrentProviderBody`
 now checks whether the same URL and serialized body are already prepared before parsing JSON, and
 ChatCore's post-executor log checks the prepared URL, body identity, and normalized header values
