@@ -1,0 +1,323 @@
+{
+  "schemaVersion": 1,
+  "vectors": [
+    {
+      "name": "502-with-proven-pre-send-transport-queue",
+      "input": {
+        "status": 502,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "remote connection failure"
+      },
+      "expected": true
+    },
+    {
+      "name": "503-with-proven-pre-send-transport-queue",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "remote connection failure"
+      },
+      "expected": true
+    },
+    {
+      "name": "504-with-proven-pre-send-transport-queue",
+      "input": {
+        "status": 504,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "remote connection failure"
+      },
+      "expected": true
+    },
+    {
+      "name": "507-with-proven-pre-send-transport-queue",
+      "input": {
+        "status": 507,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "remote connection failure"
+      },
+      "expected": true
+    },
+    {
+      "name": "server-error-without-local-provenance",
+      "input": { "status": 503, "attempt": 0, "errorText": "gateway timeout" },
+      "expected": false
+    },
+    {
+      "name": "ordinary-error-type-does-not-veto-local-queue-proof",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false,
+        "errorText": "ECONNRESET",
+        "errorType": "upstream_error"
+      },
+      "expected": true
+    },
+    {
+      "name": "transport-queue-request-started",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": true
+      },
+      "expected": false
+    },
+    {
+      "name": "transport-queue-start-state-unknown",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": null
+      },
+      "expected": false
+    },
+    {
+      "name": "wrong-dispatch-phase",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "dispatchPhase": "response_headers",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "429-is-not-same-account-retryable",
+      "input": {
+        "status": 429,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "401-is-not-same-account-retryable",
+      "input": {
+        "status": 401,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "400-is-not-same-account-retryable",
+      "input": {
+        "status": 400,
+        "attempt": 0,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "retry-is-bounded-to-one-retry",
+      "input": {
+        "status": 503,
+        "attempt": 1,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "forced-connection-is-not-replayed",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "hasForcedConnection": true,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "output-already-emitted-is-not-replayed",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "hasEmittedOutput": true,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "uncertain-acceptance-is-terminal",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "uncertainAcceptance": true,
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "lease-error-type-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorType": "lease_error",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "semaphore-capacity-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorType": "account_semaphore_capacity",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "logical-budget-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorType": "logical_retry_budget",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "accepted-generation-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorType": "upstream_acceptance_uncertain",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "local-buffer-guard-is-not-retried",
+      "input": {
+        "status": 507,
+        "attempt": 0,
+        "errorType": "local_stream_buffer_limit",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "lease-code-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorCode": "LEASE_OWNER_LOST",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "already-exhausted-proxy-network-code",
+      "input": {
+        "status": 502,
+        "attempt": 0,
+        "errorCode": "proxy_unreachable",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "quota-threshold-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorText": "All accounts reached quota threshold",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "credits-exhausted-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorText": "provider credits exhausted",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "invalid-request-is-not-retried",
+      "input": {
+        "status": 502,
+        "attempt": 0,
+        "errorText": "invalid_request_error",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "context-length-is-not-retried",
+      "input": {
+        "status": 502,
+        "attempt": 0,
+        "errorText": "context length exceeded",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "unsupported-model-is-not-retried",
+      "input": {
+        "status": 502,
+        "attempt": 0,
+        "errorText": "unsupported model",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "safety-policy-code-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorCode": "safety_violation",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    },
+    {
+      "name": "safety-policy-text-is-not-retried",
+      "input": {
+        "status": 503,
+        "attempt": 0,
+        "errorText": "This request was blocked by our safety systems: potentially unintended activity",
+        "dispatchPhase": "transport_queue",
+        "requestStarted": false
+      },
+      "expected": false
+    }
+  ]
+}

@@ -409,6 +409,29 @@ systemd-run --user --scope --property=CPUQuota=100% --property=MemoryMax=2G \
 These are deterministic tests of the process-local cache only. The fixture does not test Redis
 availability/deletion, multiple OmniRoute processes, or cross-process revocation freshness.
 
+### Same-account transport retry decision parity
+
+`src/same_account_transport_retry.rs` is a benchmark-only decision mirror of
+`src/sse/services/sameAccountTransportRetry.ts`. Its shared vectors are consumed by the real
+TypeScript helper test and the Rust unit test. They focus on the replay-safety boundary: only a
+502/503/504/507 with local `transport_queue` evidence and `requestStarted == false` can take the
+single same-account retry, while ambiguous/started dispatch, emitted output, forced connections,
+quota/auth/policy errors, exhausted local-network hints, and terminal local error types do not.
+This slice does not dispatch requests, wait, select another account, or join the production
+router; production remains TypeScript. Run only the bounded, offline parity tests with:
+
+```bash
+. "$HOME/.cargo/env"
+OMNI_NODE_BIN="$(command -v node)"
+systemd-run --user --scope -p MemoryMax=1G -p CPUQuota=100% -- \
+  env CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target CARGO_BUILD_JOBS=1 \
+  cargo test --offline --manifest-path benchmarks/runtime-proxy/Cargo.toml \
+    --lib same_account_transport_retry
+systemd-run --user --scope -p MemoryMax=1G -p CPUQuota=100% -- \
+  env DISABLE_SQLITE_AUTO_BACKUP=true "$OMNI_NODE_BIN" --import tsx/esm --test \
+    tests/unit/same-account-transport-retry-parity.test.ts
+```
+
 ### Synthetic multi-level admission contention
 
 Run the independent atomic global/provider/account gate model with:
