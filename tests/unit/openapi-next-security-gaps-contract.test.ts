@@ -145,6 +145,21 @@ const operations = [
   ["post", "/api/services/dario/restart"],
   ["post", "/api/services/dario/start"],
   ["get", "/api/services/dario/status"],
+  ["post", "/api/services/dario/stop"],
+  ["post", "/api/services/dario/update"],
+  ["post", "/api/services/mux/auto-restart-adopted"],
+  ["post", "/api/services/mux/auto-start"],
+  ["post", "/api/services/mux/install"],
+  ["post", "/api/services/mux/restart"],
+  ["post", "/api/services/mux/start"],
+  ["post", "/api/services/mux/stop"],
+  ["post", "/api/services/mux/update"],
+  ["get", "/api/services/mux/status"],
+  ["get", "/api/session-pools"],
+  ["get", "/api/session-pools/{provider}"],
+  ["get", "/api/sessions"],
+  ["get", "/api/storage/health"],
+  ["get", "/api/synced-available-models"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -159,7 +174,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 133 effective OpenAPI operations", () => {
+test("the audited batches declare all 148 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -563,6 +578,16 @@ test("embedded-service endpoints preserve the spawn-capable LOCAL_ONLY gate and 
     ["post", "/api/services/dario/restart"],
     ["post", "/api/services/dario/start"],
     ["get", "/api/services/dario/status"],
+    ["post", "/api/services/dario/stop"],
+    ["post", "/api/services/dario/update"],
+    ["post", "/api/services/mux/auto-restart-adopted"],
+    ["post", "/api/services/mux/auto-start"],
+    ["post", "/api/services/mux/install"],
+    ["post", "/api/services/mux/restart"],
+    ["post", "/api/services/mux/start"],
+    ["post", "/api/services/mux/stop"],
+    ["post", "/api/services/mux/update"],
+    ["get", "/api/services/mux/status"],
   ] as const) {
     const routeOperation = operation(method, route);
     assert.equal(routeOperation["x-local-only"], true, `${method.toUpperCase()} ${route}`);
@@ -577,6 +602,91 @@ test("embedded-service endpoints preserve the spawn-capable LOCAL_ONLY gate and 
     assert.ok(routeOperation.responses["403"]);
     assert.ok(routeOperation.responses["503"]);
   }
+});
+
+test("session-pool, session, storage, and synced-model reads keep their distinct management auth chains", () => {
+  for (const route of ["/api/session-pools", "/api/session-pools/{provider}"]) {
+    const routeOperation = operation("get", route);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.equal(routeOperation["x-local-only"], undefined);
+    assert.match(routeOperation.description, /handler's `requireManagementAuth` check/i);
+    assert.match(routeOperation.description, /method-derived `read` scope/i);
+    assert.match(routeOperation.description, /requireLogin=false.*including remotely/s);
+    assert.match(routeOperation.description, /not explicitly public or LOCAL_ONLY/i);
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+  assert.ok(operation("get", "/api/session-pools/{provider}").responses["404"]);
+
+  for (const route of ["/api/sessions", "/api/storage/health"]) {
+    const routeOperation = operation("get", route);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.equal(routeOperation["x-local-only"], undefined);
+    assert.match(routeOperation.description, /no route-level auth check and relies on the central MANAGEMENT policy/i);
+    assert.match(routeOperation.description, /method-derived `read` scope/i);
+    assert.match(routeOperation.description, /requireLogin=false.*including remotely/s);
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+  assert.match(operation("get", "/api/sessions").description, /per-API-key session counts/i);
+  assert.match(operation("get", "/api/storage/health").description, /host filesystem layout/i);
+
+  const synced = operation("get", "/api/synced-available-models");
+  assert.ok(hasScheme(synced.security, "ManagementApiKeyBearerAuth"));
+  assert.ok(hasScheme(synced.security, "ManagementSessionAuth"));
+  assert.ok(synced.security.some((alternative: object) => Object.keys(alternative).length === 0));
+  assert.equal(hasScheme(synced.security, "BearerAuth"), false);
+  assert.equal(hasScheme(synced.security, "LocalCliTokenAuth"), false);
+  assert.equal(hasScheme(synced.security, "InternalServiceTokenAuth"), false);
+  assert.equal(synced["x-local-only"], undefined);
+  assert.match(synced.description, /central MANAGEMENT auth.*narrower `isAuthenticated\(\)` check/is);
+  assert.match(synced.description, /does not accept central-only.*`oma_`.*loopback CLI tokens.*internal-service tokens/s);
+  assert.match(synced.description, /requireLogin=false.*including remotely/s);
+  assert.equal(synced.responses["200"]["x-sensitive"], true);
+  assert.ok(synced.responses["401"]);
+  assert.ok(synced.responses["403"]);
+  assert.ok(synced.responses["503"]);
+});
+
+test("Mux and Dario service documentation covers locked capabilities and sensitive status data", () => {
+  for (const [method, route] of [
+    ["post", "/api/services/mux/install"],
+    ["post", "/api/services/mux/start"],
+    ["post", "/api/services/mux/restart"],
+    ["post", "/api/services/mux/update"],
+    ["get", "/api/services/mux/status"],
+    ["post", "/api/services/dario/install"],
+    ["post", "/api/services/dario/start"],
+    ["post", "/api/services/dario/restart"],
+    ["get", "/api/services/dario/status"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.equal(routeOperation["x-sensitive"], true);
+    assert.match(routeOperation.description, /runtime policy mode `locked`/i);
+  }
+  assert.match(operation("get", "/api/services/mux/status").description, /Mux server token.*not returned/i);
+  assert.match(operation("get", "/api/services/dario/status").description, /DARIO_ADMIN_TOKEN/);
+  assert.match(operation("get", "/api/services/dario/status").description, /admin key.*fails closed/i);
+  assert.match(operation("post", "/api/services/dario/update").description, /restart failure.*still report success/i);
+  assert.match(operation("post", "/api/services/mux/stop").description, /stop remains allowed.*`locked`/i);
+  assert.match(operation("post", "/api/services/dario/stop").description, /stop remains (?:available|allowed).*`locked`/i);
+
+  const muxAutoStart = operation("post", "/api/services/mux/auto-start");
+  const successes = Object.keys(muxAutoStart.responses).filter((status) => /^2\d\d$/.test(status));
+  assert.deepEqual(successes, ["204"]);
+  assert.equal(muxAutoStart.responses["204"].content, undefined);
+
+  const darioStop = operation("post", "/api/services/dario/stop");
+  const muxStop = operation("post", "/api/services/mux/stop");
+  assert.match(darioStop.description, /without probing.*unmanaged process/i);
+  assert.match(muxStop.description, /without probing.*unmanaged process/i);
 });
 
 test("service model, lifecycle, and status contracts remain LOCAL_ONLY and mark sensitive state", () => {

@@ -9807,8 +9807,23 @@ paths:
       tags: [Embedded Services]
       summary: Install Mux from npm
       description: >-
-        Installs the `mux` npm package (coder/mux — local agent-orchestration
-        daemon) under DATA_DIR/services/mux/. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Installs the `mux` npm package (coder/mux), a local agent-orchestration daemon, under
+        DATA_DIR/services/mux/. Mux can orchestrate agents that execute host commands, so its
+        installation and process metadata are sensitive. **LOCAL_ONLY** — only loopback and trusted
+        private-LAN peers pass the locality gate; this spawn-capable service prefix has no remote
+        manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous local/LAN
+        access; otherwise management authentication is required. `oma_` Access Tokens need `admin`
+        on `/api/services/*`. Runtime policy mode `locked` blocks the embedded-service install
+        capability independently of request auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         content:
@@ -9822,6 +9837,7 @@ paths:
       responses:
         "200":
           description: Install succeeded
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9835,6 +9851,13 @@ paths:
           description: Invalid request body
         "500":
           description: npm install failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/mux/start:
     post:
@@ -9843,11 +9866,27 @@ paths:
       tags: [Embedded Services]
       summary: Start Mux
       description: >-
-        Spawns `mux server --host 127.0.0.1 --port <port>`. Idempotent if
-        already running. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Starts `mux server --host 127.0.0.1 --port <port>` through the supervisor or adopts an
+        already-healthy process on that loopback port. Mux orchestrates local agents that can execute
+        host commands, so process state is sensitive. **LOCAL_ONLY** — only loopback and trusted
+        private-LAN peers pass the locality gate; this spawn-capable service prefix has no remote
+        manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous local/LAN
+        access; otherwise management authentication is required. `oma_` Access Tokens need `admin`
+        on `/api/services/*`. Runtime policy mode `locked` can deny start/provisioning even after auth.
+        The Mux server token is passed in its environment, not command-line arguments.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service started
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9855,7 +9894,16 @@ paths:
         "409":
           description: Mux is not installed
         "503":
-          description: Start failed
+          description: Start failed or runtime policy denied the service start capability.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/services/mux/stop:
     post:
@@ -9864,15 +9912,39 @@ paths:
       tags: [Embedded Services]
       summary: Stop Mux
       description: >-
-        Gracefully stops Mux. Idempotent.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Stops the tracked Mux supervisor and returns its state; if no supervisor is registered, it
+        returns `stopped` without probing for or terminating a separate unmanaged process. Mux can
+        orchestrate host-command execution, so process metadata is sensitive. **LOCAL_ONLY** — only
+        loopback and trusted private-LAN peers pass the locality gate; this spawn-capable service
+        prefix has no remote manage-scope bypass. On admitted peers, `requireLogin=false` permits
+        anonymous local/LAN access; otherwise management authentication is required. `oma_` Access
+        Tokens need `admin` on `/api/services/*`. Stop remains allowed when runtime policy mode is
+        `locked`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service stopped
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatus"
+        "500": { description: Stop failed. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/mux/restart:
     post:
@@ -9881,15 +9953,42 @@ paths:
       tags: [Embedded Services]
       summary: Restart Mux
       description: >-
-        stop() then start() under the operation lock.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Stops and starts Mux under the operation lock, with the same health/adoption behavior as
+        `start`. Mux can orchestrate host-command execution, so process metadata is sensitive.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Runtime policy mode
+        `locked` can deny start/provisioning even after auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service restarted
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatus"
+        "409": { description: Mux is not installed. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          description: Restart failed or runtime policy denied the service start capability.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/services/mux/update:
     post:
@@ -9898,8 +9997,23 @@ paths:
       tags: [Embedded Services]
       summary: Update Mux to a newer npm version
       description: >-
-        Stops, installs newer version, restarts.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Compares installed/latest npm versions; when different, stops a tracked running process, installs
+        the latest package, and attempts to restart. A restart failure is logged but the update response
+        can still report success. Mux can orchestrate host-command execution, so version/process data
+        are sensitive. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality
+        gate; this spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Runtime policy mode
+        `locked` can block latest lookup, install, and later start independently of request auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         content:
@@ -9913,6 +10027,7 @@ paths:
       responses:
         "200":
           description: Update succeeded
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9924,6 +10039,13 @@ paths:
                     type: string
         "500":
           description: Update failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/mux/status:
     get:
@@ -9932,15 +10054,41 @@ paths:
       tags: [Embedded Services]
       summary: Get Mux status
       description: >-
-        Returns live supervisor state and DB metadata.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Returns live supervisor/DB metadata including process state, PID/port, health, errors,
+        installed/latest version, and auto-start/adoption flags. The Mux server token is kept in the
+        server environment and is not returned; there is no key-reveal query. The latest-version
+        lookup has an in-process one-hour cache, but runtime policy mode `locked` denies the install
+        capability before reading it and can make this status route return 500. **LOCAL_ONLY** — only
+        loopback and trusted private-LAN peers pass the locality gate; this spawn-capable service prefix
+        has no remote manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous
+        local/LAN access; otherwise management authentication is required. `oma_` Access Tokens need
+        `admin` on `/api/services/*`. Mux process and version metadata are sensitive; no explicit HTTP
+        cache directive is set by this handler.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Status response
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatus"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500": { description: Status or latest-version lookup failed. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/mux/auto-start:
     post:
@@ -9949,8 +10097,21 @@ paths:
       tags: [Embedded Services]
       summary: Toggle Mux auto-start
       description: >-
-        When enabled, Mux starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Persists whether Mux should start on the next OmniRoute boot; this does not start the process
+        immediately. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality
+        gate; this spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. Mux lifecycle settings are
+        sensitive; runtime policy mode `locked` can block the later start.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         content:
@@ -9962,17 +10123,17 @@ paths:
                 enabled:
                   type: boolean
       responses:
-        "200":
-          description: Auto-start flag updated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  autoStart:
-                    type: boolean
+        "204":
+          description: Auto-start flag updated; no response body.
         "400":
           description: Invalid request body
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/mux/auto-restart-adopted:
     post:
@@ -9984,7 +10145,21 @@ paths:
         When enabled, an externally-adopted (not OmniRoute-spawned) Mux
         process is restarted under OmniRoute's own supervisor on the next
         health-check cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous local/LAN access; otherwise management authentication
+        is required. `oma_` Access Tokens need `admin` on `/api/services/*`. This persisted setting
+        can cause a healthy adopted Mux process to be killed and respawned on a later start; lifecycle
+        state is sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         content:
@@ -10002,6 +10177,13 @@ paths:
           description: Invalid request body
         "500":
           description: Update failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/bifrost/install:
     post:
@@ -10487,18 +10669,39 @@ paths:
       tags: [Embedded Services]
       summary: Stop Dario
       description: >-
-        Gracefully stops Dario. Idempotent — returns a stopped status even if no
-        supervisor is currently tracking the process.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Stops the tracked Dario supervisor and returns its state; if no supervisor is registered, it
+        returns `stopped` without probing for or terminating a separate unmanaged process. **LOCAL_ONLY**
+        — only loopback and trusted private-LAN peers pass the locality gate; this spawn-capable service
+        prefix has no remote manage-scope bypass. On admitted peers, `requireLogin=false` permits
+        anonymous local/LAN access; otherwise management authentication is required. `oma_` Access
+        Tokens need `admin` on `/api/services/*`. Process state is sensitive. Stop remains available
+        when runtime policy mode is `locked`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service stopped
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatus"
         "500":
           description: Stop failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/dario/restart:
     post:
@@ -10552,9 +10755,24 @@ paths:
       tags: [Embedded Services]
       summary: Update Dario to a newer npm version
       description: >-
-        Stops the service (if running), installs the newer npm version, then
-        restarts it if it was running before the update. **LOCAL_ONLY** — loopback
-        only.
+        Compares installed/latest versions; when different, stops a tracked running service, installs
+        the latest npm version, and attempts to restart it. A restart failure is logged but the update
+        response can still report success. **LOCAL_ONLY** — only loopback and trusted private-LAN peers
+        pass the locality gate; this spawn-capable service prefix has no remote manage-scope bypass.
+        On admitted peers, `requireLogin=false` permits anonymous local/LAN access; otherwise
+        management authentication is required. `oma_` Access Tokens need `admin` on
+        `/api/services/*`. Version, installation, and process metadata are sensitive. Runtime policy
+        mode `locked` can block the version lookup, install, or later start independently of request
+        auth. The stored Dario admin token is never returned and key recovery fails closed.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Update result (no-op if already on the latest version)
@@ -10576,6 +10794,14 @@ paths:
                     type: string
         "500":
           description: Update failed
+          x-sensitive: true
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/dario/status:
     get:
@@ -10593,7 +10819,7 @@ paths:
         permits anonymous local/LAN access; otherwise management authentication is required. `oma_`
         Access Tokens need `admin` on `/api/services/*`. Status and process metadata are sensitive;
         the handler sets no explicit HTTP cache directive. A missing/unreadable stored admin key fails
-        supervisor initialization rather than substituting a default credential.
+        closed: supervisor initialization aborts instead of substituting a default credential.
       security:
         - BearerAuth: []
         - ManagementGoogleApiKeyAuth: []
@@ -12402,9 +12628,25 @@ paths:
       operationId: getApiStorageHealth
       tags: [System]
       summary: Check storage health
+      description: >-
+        Reads database/data-directory paths, database size, backup timestamp/count, retention windows,
+        table limits, and backup-retention settings. The handler has no route-level auth check and relies
+        on the central MANAGEMENT policy. Scoped `oma_` Access Tokens need method-derived `read` scope;
+        on an unlocked profile, `requireLogin=false` permits anonymous access, including remotely. This
+        route is not explicitly public or LOCAL_ONLY. Host filesystem layout and storage/backup metadata
+        are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Storage health status
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StorageHealthResponse" }
@@ -12413,6 +12655,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/sync/cloud:
     get:
@@ -13564,9 +13809,25 @@ paths:
       operationId: getApiSessions
       tags: [System]
       summary: Get active sessions
+      description: >-
+        Returns in-memory active-session identifiers, connection IDs, request counts/timing, per-API-key
+        session counts, and the dashboard's exclusive-lease occupancy/account-name projection. The handler
+        has no route-level auth check and relies on the central MANAGEMENT policy. Scoped `oma_` Access
+        Tokens need method-derived `read` scope; on an unlocked profile, `requireLogin=false` permits
+        anonymous access, including remotely. This route is not explicitly public or LOCAL_ONLY. Session,
+        connection, API-key-ID, and account activity data are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Active session list
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/DashboardSessionsResponse" }
@@ -13575,6 +13836,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/cache:
     get:
@@ -31998,9 +32262,25 @@ paths:
       tags:
         - Session pools
       summary: "GET session pools"
+      description: >-
+        The central MANAGEMENT policy and this handler's `requireManagementAuth` check both apply.
+        Scoped `oma_` Access Tokens need method-derived `read` scope; on an unlocked profile,
+        `requireLogin=false` permits anonymous access, including remotely. This route is not explicitly
+        public or LOCAL_ONLY. The report includes provider pool/breaker metrics and per-session IDs,
+        fingerprints, request counts, inflight state, cooldowns, and age; these operational identifiers
+        and usage details are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Health information for all registered web-session pools.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/WebSessionPoolHealthReport" }
@@ -32027,9 +32307,25 @@ paths:
       tags:
         - Session pools
       summary: "GET session pools › <provider>"
+      description: >-
+        Returns the requested provider's pool and breaker health plus per-session IDs, fingerprints,
+        request counts, inflight state, cooldowns, and age. The central MANAGEMENT policy and this
+        handler's `requireManagementAuth` check both apply. Scoped `oma_` Access Tokens need
+        method-derived `read` scope; on an unlocked profile, `requireLogin=false` permits anonymous
+        access, including remotely. This route is not explicitly public or LOCAL_ONLY. Provider and
+        session operational metadata are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Health information for the requested web-session pool.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/WebSessionPoolProviderResponse" }
@@ -36452,6 +36748,20 @@ paths:
       tags:
         - Synced available models
       summary: "GET synced available models"
+      description: >-
+        Returns synchronized model metadata for one provider or all providers. Central MANAGEMENT auth
+        and the handler's narrower `isAuthenticated()` check both apply when auth is required. The
+        handler accepts a dashboard session or a management-scoped API key, but does not accept central-only
+        `oma_` Access Tokens, loopback CLI tokens, or internal-service tokens in that mode. On an unlocked
+        profile, `requireLogin=false` admits anonymous access, including remotely; first-run bootstrap
+        without credentials admits anonymous access only from loopback. The model catalog and provider
+        inventory are sensitive. This route is not explicitly public or LOCAL_ONLY.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: provider
           in: query
@@ -36470,11 +36780,13 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SyncedModelsErrorResponse" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500":
           description: Synchronized model catalog could not be read.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SyncedModelsErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/system/env/repair:
     get:
       operationId: getApiSystemEnvRepair

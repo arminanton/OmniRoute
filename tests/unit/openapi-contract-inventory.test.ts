@@ -127,21 +127,21 @@ test("canonical OpenAPI inventory reconciles the checked-in report counts", () =
   assert.equal(inventory.pathCount, Object.keys(document.paths).length);
   assert.equal(inventory.pathCount, 705);
   assert.equal(inventory.operationCount, 1029);
-  assert.equal(inventory.responseContent.candidateOperations, 979);
-  assert.equal(inventory.responseContent.fullyTypedOperations, 979);
+  assert.equal(inventory.responseContent.candidateOperations, 978);
+  assert.equal(inventory.responseContent.fullyTypedOperations, 978);
   assert.equal(inventory.responseContent.untypedOperations, 0);
   assert.deepEqual(inventory.responseContent.gapStateCounts, {
     "content-without-schema": 0,
     "no-content": 0,
     "unresolved-response": 0,
   });
-  assert.equal(inventory.responseContent.bodyless204Operations.length, 18);
+  assert.equal(inventory.responseContent.bodyless204Operations.length, 19);
   assert.equal(inventory.responseContent.no2xxOperations.length, 30);
   assert.equal(inventory.responseContent.headOperationCount, 8);
   assert.equal(inventory.responseContent.headWithSuccessStatusCount, 2);
   assert.equal(inventory.responseContent.headWithoutSuccessStatusCount, 6);
   assert.deepEqual(inventory.responseContent.exemptions, {
-    "204-only": 18,
+    "204-only": 19,
     "catch-all-error-response": 10,
     "cors-options": 0,
     "error-only-or-no-success-status": 5,
@@ -151,13 +151,13 @@ test("canonical OpenAPI inventory reconciles the checked-in report counts", () =
     "redirect-only": 8,
     "websocket-upgrade": 1,
   });
-  assert.equal(inventory.security.operationDeclared, 960);
-  assert.equal(inventory.security.missing, 69);
+  assert.equal(inventory.security.operationDeclared, 975);
+  assert.equal(inventory.security.missing, 54);
   assert.equal(inventory.security.invalidDeclaration, 0);
   assert.equal(inventory.security.explicitPublic, 17);
   assert.equal(inventory.security.requiresDeclaredScheme, 156);
-  assert.equal(inventory.security.includesAnonymousAlternative, 787);
-  assert.equal(inventory.security.conditionalAuthText, 430);
+  assert.equal(inventory.security.includesAnonymousAlternative, 802);
+  assert.equal(inventory.security.conditionalAuthText, 445);
   assert.equal(inventory.security.conditionalAuthWithMissingSecurity, 0);
   assert.equal(
     fs.readFileSync(INVENTORY_REPORT, "utf8"),
