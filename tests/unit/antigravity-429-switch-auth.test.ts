@@ -113,7 +113,7 @@ test("THE FIX: 429 rate_limited with no hint -> no sleep, falls through to fallb
     const result = await executor.handleAntigravityRateLimit(ctx);
 
     assert.equal(setTimeoutCalled, false, "must not sleep when switchAuth=true");
-    assert.equal(result.action, "retryNextUrl", "must fall through to next URL");
+    assert.equal(result.action, "fallthrough", "must return429 to outer account fallback");
   } finally {
     globalThis.setTimeout = originalSetTimeout;
   }

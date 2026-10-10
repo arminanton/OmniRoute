@@ -991,23 +991,33 @@ export class AntigravityExecutor extends BaseExecutor {
 
   parseRetryHeaders(headers: Headers | null | undefined): number | null {
     if (!headers?.get) return null;
+    const decimalDelay = (raw: string): number | null => {
+      const value = raw.trim();
+      if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value)) return null;
+      const milliseconds = Number(value) * 1000;
+      return Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : null;
+    };
 
     const retryAfter = headers.get("retry-after");
     if (retryAfter) {
-      const seconds = parseInt(retryAfter, 10);
-      if (!isNaN(seconds) && seconds > 0) return seconds * 1000;
-
-      const date = new Date(retryAfter);
-      if (!isNaN(date.getTime())) {
-        const diff = date.getTime() - Date.now();
-        return diff > 0 ? diff : null;
+      const milliseconds = decimalDelay(retryAfter);
+      if (milliseconds !== null) return milliseconds;
+      // Numeric-looking malformed values must not become permissively parsed dates.
+      // HTTP-date representations begin with a weekday; epoch reset headers below
+      // retain their existing timestamp semantics.
+      if (!/^[+\-.\d]/.test(retryAfter.trim())) {
+        const date = new Date(retryAfter);
+        if (!isNaN(date.getTime())) {
+          const diff = date.getTime() - Date.now();
+          return diff > 0 ? diff : null;
+        }
       }
     }
 
     const resetAfter = headers.get("x-ratelimit-reset-after");
     if (resetAfter) {
-      const seconds = parseInt(resetAfter, 10);
-      if (!isNaN(seconds) && seconds > 0) return seconds * 1000;
+      const milliseconds = decimalDelay(resetAfter);
+      if (milliseconds !== null) return milliseconds;
     }
 
     const resetTimestamp = headers.get("x-ratelimit-reset");
@@ -1371,12 +1381,17 @@ export class AntigravityExecutor extends BaseExecutor {
       if (rateLimitOutcome.action === "retryNextUrl") {
         return { action: "retry", sameUrl: false, lastStatus: rateLimitOutcome.lastStatus };
       }
-      // Only "fallthrough" remains: last url, no more retries — proceed below with
+      // Only "fallthrough" remains: no permitted retries — proceed below with
       // the resolved retryMs so a long Retry-After can still be embedded in the body.
       retryMs = rateLimitOutcome.retryMs;
     }
 
-    if (this.shouldRetry(response.status, urlIndex)) {
+    // A handled429 belongs to this account/model quota, even across regions.
+    // Exhausted/disabled same-URL retries must reach account orchestration.
+    if (
+      response.status !== HTTP_STATUS.RATE_LIMITED &&
+      this.shouldRetry(response.status, urlIndex)
+    ) {
       await disposeAntigravityResponse(response);
       log.debug("RETRY", `${response.status} on ${url}, trying fallback ${urlIndex + 1}`);
       return { action: "retry", sameUrl: false, lastStatus: response.status };
@@ -1531,6 +1546,11 @@ export class AntigravityExecutor extends BaseExecutor {
         await waitForAntigravityRetry(backoffMs, ctx.signal);
         return { action: "retrySameUrl" };
       }
+    }
+
+    if (response.status === HTTP_STATUS.RATE_LIMITED) {
+      log.debug("RETRY", "429 same-account retry policy ended; returning to account fallback");
+      return { action: "fallthrough", retryMs, lastStatus: response.status };
     }
 
     log.debug(

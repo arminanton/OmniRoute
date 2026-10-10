@@ -29,6 +29,6 @@ test("configured failover-before-retry avoids Antigravity's same-account Retry-A
     finalHeaders: {},
     skipUpstreamRetry: true,
   } as Parameters<AntigravityExecutor["handleAntigravityRateLimit"]>[0]);
-  assert.equal(outcome.action, "retryNextUrl");
+  assert.equal(outcome.action, "fallthrough");
   assert.equal(attempts[0], 0);
 });
