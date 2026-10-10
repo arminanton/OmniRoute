@@ -73,6 +73,7 @@ export interface EmbeddingHandlerOptions {
   connectionId?: string | null;
   resolvedProvider?: EmbeddingProvider | null;
   resolvedModel?: string | null;
+  signal?: AbortSignal | null;
 }
 
 export async function createEmbeddingResponse(
@@ -81,6 +82,9 @@ export async function createEmbeddingResponse(
 ): Promise<Response> {
   const modelStr = body.model;
   const startTime = Date.now();
+  if (options.signal?.aborted) {
+    return errorResponse(499, "Embedding request cancelled");
+  }
 
   if (!modelStr.includes("/")) {
     try {
@@ -140,7 +144,7 @@ export async function createEmbeddingResponse(
           settings,
           allCombos: allCombos as any,
           relayOptions: undefined,
-          signal: undefined,
+          signal: options.signal,
         });
       }
     } catch (err) {
@@ -447,6 +451,7 @@ export async function createEmbeddingResponse(
         options.connectionId ||
         connectionIdForProxy ||
         null,
+      signal: options.signal,
     });
 
   let result: Awaited<ReturnType<typeof runEmbedding>>;

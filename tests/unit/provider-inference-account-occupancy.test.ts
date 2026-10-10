@@ -14,11 +14,13 @@ const readCache = await import("../../src/lib/db/readCache.ts");
 const callLogs = await import("../../src/lib/usage/callLogs.ts");
 const accountOccupancy = await import("../../open-sse/services/accountRequestOccupancy.ts");
 const { createEmbeddingResponse } = await import("../../src/lib/embeddings/service.ts");
+const baseEmbeddingsRoute = await import("../../src/app/api/v1/embeddings/route.ts");
 const providerEmbeddingsRoute =
   await import("../../src/app/api/v1/providers/[provider]/embeddings/route.ts");
 const rerankRoute = await import("../../src/app/api/v1/rerank/route.ts");
 
 const originalFetch = globalThis.fetch;
+const seededConnectionIdsByProvider = new Map<string, string[]>();
 
 async function seedConnection(provider: string, name: string) {
   const connection = await providersDb.createProviderConnection({
@@ -31,7 +33,17 @@ async function seedConnection(provider: string, name: string) {
     providerSpecificData: { quotaPreflightEnabled: false },
   });
   readCache.invalidateDbCache("connections");
-  return (connection as { id: string }).id;
+  const id = (connection as { id: string }).id;
+  const ids = seededConnectionIdsByProvider.get(provider) ?? [];
+  ids.push(id);
+  seededConnectionIdsByProvider.set(provider, ids);
+  return id;
+}
+
+function inFlightConnectionIds(provider: string): string[] {
+  return (seededConnectionIdsByProvider.get(provider) ?? []).filter(
+    (id) => accountOccupancy.getAccountRequestInFlightCount(id) > 0
+  );
 }
 
 function embeddingPayload() {
@@ -45,11 +57,12 @@ function rerankPayload() {
   return { results: [{ index: 0, relevance_score: 0.9 }] };
 }
 
-function postJson(url: string, body: unknown): Request {
+function postJson(url: string, body: unknown, signal?: AbortSignal): Request {
   return new Request(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
 }
 
@@ -155,6 +168,117 @@ test("provider-specific embeddings route releases its selected account after the
   );
   assert.equal(cancelledResponse.status, 502);
   assert.equal(accountOccupancy.getAccountRequestInFlightCount(connectionId), 0);
+});
+
+test("both embedding routes forward caller aborts and release account occupancy without cooldown", async () => {
+  const cases = [
+    {
+      provider: "mistral",
+      name: "cancel-base-embeddings",
+      model: "mistral/mistral-embed",
+      call: (request: Request) => baseEmbeddingsRoute.POST(request),
+    },
+    {
+      provider: "openai",
+      name: "cancel-provider-embeddings",
+      model: "openai/text-embedding-3-small",
+      call: (request: Request) =>
+        providerEmbeddingsRoute.POST(request, {
+          params: Promise.resolve({ provider: "openai" }),
+        }),
+    },
+  ] as const;
+
+  for (const current of cases) {
+    await seedConnection(current.provider, current.name);
+    const controller = new AbortController();
+    let fetchStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      fetchStarted = resolve;
+    });
+    let observedSignal: AbortSignal | null | undefined;
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal;
+      assert.equal(inFlightConnectionIds(current.provider).length, 1);
+      fetchStarted();
+      return await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(signal.reason ?? new DOMException("Request aborted", "AbortError"));
+          return;
+        }
+        signal?.addEventListener(
+          "abort",
+          () => reject(signal.reason ?? new DOMException("Request aborted", "AbortError")),
+          { once: true }
+        );
+      });
+    }) as typeof fetch;
+
+    const pending = current.call(
+      postJson(
+        `http://localhost/v1/${current.provider === "mistral" ? "embeddings" : "providers/openai/embeddings"}`,
+        { model: current.model, input: "abort me" },
+        controller.signal
+      )
+    );
+    await started;
+    const selectedConnectionIds = inFlightConnectionIds(current.provider);
+    controller.abort();
+
+    const response = await pending;
+    assert.ok(observedSignal, "upstream fetch receives a signal");
+    assert.equal(observedSignal?.aborted, true, "caller abort must reach upstream fetch");
+    assert.equal(selectedConnectionIds.length, 1);
+    assert.equal(response.status, 499, `${current.name} should report caller cancellation`);
+    assert.equal(inFlightConnectionIds(current.provider).length, 0);
+    const connection = await providersDb.getProviderConnectionById(selectedConnectionIds[0]);
+    assert.equal(connection.testStatus, "active", "caller cancellation must not cool the account");
+  }
+});
+
+test("embedding combo forwards caller signal to its selected child request", async () => {
+  await seedConnection("mistral", "cancel-combo-embedding-child");
+  const { createCombo } = await import("../../src/lib/db/combos.ts");
+  await createCombo({
+    name: "cancel-embedding-child-combo",
+    strategy: "priority",
+    models: ["mistral/mistral-embed"],
+  });
+  const controller = new AbortController();
+  let fetchStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    fetchStarted = resolve;
+  });
+  let observedSignal: AbortSignal | null | undefined;
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    observedSignal = init?.signal;
+    assert.equal(inFlightConnectionIds("mistral").length, 1);
+    fetchStarted();
+    return await new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener(
+        "abort",
+        () => reject(init.signal?.reason ?? new DOMException("Request aborted", "AbortError")),
+        { once: true }
+      );
+    });
+  }) as typeof fetch;
+
+  const pending = createEmbeddingResponse(
+    { model: "cancel-embedding-child-combo", input: "abort combo child" },
+    { signal: controller.signal }
+  );
+  await started;
+  assert.equal(observedSignal, controller.signal);
+  const selectedConnectionIds = inFlightConnectionIds("mistral");
+  assert.equal(selectedConnectionIds.length, 1);
+  controller.abort();
+
+  const response = await pending;
+  assert.equal(response.status, 499);
+  assert.equal(inFlightConnectionIds("mistral").length, 0);
+  const connection = await providersDb.getProviderConnectionById(selectedConnectionIds[0]);
+  assert.equal(connection.testStatus, "active", "aborted child must not cool its account");
 });
 
 test("cloud rerank route releases its account after a fake upstream response", async () => {

@@ -70,6 +70,12 @@ interface HandleEmbeddingParams {
   apiKeyId?: string | null;
   apiKeyName?: string | null;
   connectionId?: string | null;
+  signal?: AbortSignal | null;
+  /** @testonly Fake guarded-media transport for cancellation tests. */
+  fetchMediaForTest?: (
+    url: string,
+    signal?: AbortSignal | null
+  ) => Promise<{ buffer: Buffer; contentType: string | null }>;
 }
 
 interface EmbeddingFailure {
@@ -323,28 +329,32 @@ function buildAuth(
 }
 
 async function fetchEmbeddingMedia(
-  url: string
+  url: string,
+  signal?: AbortSignal | null
 ): Promise<{ buffer: Buffer; contentType: string | null }> {
   const result = await fetchRemoteImage(url, {
     guard: "public-only",
     maxBytes: MAX_EMBEDDING_INLINE_ITEM_BYTES,
     pinDns: true,
+    signal: signal ?? undefined,
   });
   return { buffer: result.buffer, contentType: result.contentType || null };
 }
 
 async function prepareMixedJinaInput(
   runtime: EmbeddingRuntime,
-  prepared: PreparedEmbeddingRequest
+  prepared: PreparedEmbeddingRequest,
+  fetchMedia: (url: string) => Promise<{ buffer: Buffer; contentType: string | null }>
 ): Promise<void> {
   const mixed = Array.isArray(runtime.body.input) ? runtime.body.input : [runtime.body.input];
-  prepared.upstreamBody.input = await prepareJinaMixedEmbeddingInput(mixed, fetchEmbeddingMedia);
+  prepared.upstreamBody.input = await prepareJinaMixedEmbeddingInput(mixed, fetchMedia);
 }
 
 async function prepareNativeTransport(
   runtime: EmbeddingRuntime,
   prepared: PreparedEmbeddingRequest,
-  token: string | null
+  token: string | null,
+  fetchMedia: (url: string) => Promise<{ buffer: Buffer; contentType: string | null }>
 ): Promise<void> {
   if (!runtime.model) {
     throw new Error(`Invalid embedding model: ${runtime.body.model}. Use format: provider/model`);
@@ -354,7 +364,7 @@ async function prepareNativeTransport(
     runtime.model,
     runtime.body,
     token ?? "",
-    { fetchMedia: fetchEmbeddingMedia }
+    { fetchMedia }
   );
   prepared.upstreamBody = native.body;
   prepared.upstreamUrl = native.url;
@@ -371,6 +381,10 @@ async function applyStructuredTransport(
   prepared: PreparedEmbeddingRequest,
   token: string | null
 ): Promise<void> {
+  const fetchMedia = (url: string) =>
+    runtime.fetchMediaForTest
+      ? runtime.fetchMediaForTest(url, runtime.signal)
+      : fetchEmbeddingMedia(url, runtime.signal);
   const jinaNative = isJinaNativeEmbeddingInput(runtime.body.input);
   const geminiNative = isGeminiNativeEmbeddingInput(runtime.body.input);
   const canonical = hasStructuredEmbeddingInput(runtime.body.input);
@@ -381,9 +395,9 @@ async function applyStructuredTransport(
     (isGeminiEmbedding2Family(runtime.model) || canonical || geminiNative || jinaNative);
 
   if (isJinaProtocol && jinaNative && canonical) {
-    await prepareMixedJinaInput(runtime, prepared);
+    await prepareMixedJinaInput(runtime, prepared, fetchMedia);
   } else if (useGeminiNative || (!passThroughJina && canonical)) {
-    await prepareNativeTransport(runtime, prepared, token);
+    await prepareNativeTransport(runtime, prepared, token, fetchMedia);
   }
 }
 
@@ -402,7 +416,9 @@ async function prepareEmbeddingRequest(
     await applyStructuredTransport(runtime, prepared, auth.token);
     return prepared;
   } catch (error) {
-    return failure(400, sanitizeErrorMessage(error));
+    return runtime.signal?.aborted
+      ? failure(499, "Embedding request cancelled")
+      : failure(400, sanitizeErrorMessage(error));
   }
 }
 
@@ -465,18 +481,21 @@ function appendClovaEmbedding(
 async function fetchClovaEmbeddingBatch(
   prepared: PreparedEmbeddingRequest,
   texts: string[],
-  reqLogger: RequestLogger
+  reqLogger: RequestLogger,
+  signal?: AbortSignal | null
 ): Promise<Response> {
   const embeddings: Array<Record<string, unknown>> = [];
   const usage = { prompt_tokens: 0, total_tokens: 0 };
   let lastHeaders = new Headers();
   for (const text of texts) {
+    if (signal?.aborted) throw signal.reason ?? new DOMException("Request aborted", "AbortError");
     const requestBody = { text };
     reqLogger.logTargetRequest(prepared.upstreamUrl, prepared.headers, requestBody);
     const response = await fetch(prepared.upstreamUrl, {
       method: "POST",
       headers: prepared.headers,
       body: JSON.stringify(requestBody),
+      signal: signal ?? undefined,
     });
     lastHeaders = response.headers;
     if (!response.ok) return response;
@@ -492,14 +511,17 @@ async function fetchClovaEmbeddingBatch(
 async function dispatchEmbeddingRequest(
   prepared: PreparedEmbeddingRequest,
   singleTexts: string[] | null,
-  reqLogger: RequestLogger
+  reqLogger: RequestLogger,
+  signal?: AbortSignal | null
 ): Promise<Response> {
-  if (singleTexts) return fetchClovaEmbeddingBatch(prepared, singleTexts, reqLogger);
+  if (signal?.aborted) throw signal.reason ?? new DOMException("Request aborted", "AbortError");
+  if (singleTexts) return fetchClovaEmbeddingBatch(prepared, singleTexts, reqLogger, signal);
   reqLogger.logTargetRequest(prepared.upstreamUrl, prepared.headers, prepared.upstreamBody);
   return fetch(prepared.upstreamUrl, {
     method: "POST",
     headers: prepared.headers,
     body: JSON.stringify(prepared.upstreamBody),
+    signal: signal ?? undefined,
   });
 }
 
@@ -658,13 +680,18 @@ function handleEmbeddingException(
   prepared: PreparedEmbeddingRequest,
   error: unknown
 ): EmbeddingFailure {
-  const message = error instanceof Error ? error.message : String(error);
-  runtime.log?.error("EMBED", `${runtime.provider} fetch error: ${message}`);
+  const callerAborted = runtime.signal?.aborted === true;
+  const message = callerAborted
+    ? "Embedding request cancelled"
+    : error instanceof Error
+      ? error.message
+      : String(error);
+  if (!callerAborted) runtime.log?.error("EMBED", `${runtime.provider} fetch error: ${message}`);
   runtime.reqLogger.logError(error, prepared.upstreamBody);
   saveCallLog({
     method: "POST",
     path: "/v1/embeddings",
-    status: 502,
+    status: callerAborted ? 499 : 502,
     model: `${runtime.provider}/${runtime.model}`,
     provider: runtime.provider,
     duration: Date.now() - runtime.startTime,
@@ -675,20 +702,42 @@ function handleEmbeddingException(
     apiKeyName: runtime.apiKeyName,
     connectionId: runtime.connectionId,
   }).catch(() => {});
-  return failure(502, `Embedding provider error: ${sanitizeErrorMessage(message)}`);
+  return callerAborted
+    ? failure(499, message)
+    : failure(502, `Embedding provider error: ${sanitizeErrorMessage(message)}`);
 }
 
 async function executeEmbedding(
   runtime: EmbeddingRuntime,
   prepared: PreparedEmbeddingRequest
 ): Promise<EmbeddingResult> {
+  if (runtime.signal?.aborted) return failure(499, "Embedding request cancelled");
   const quotaFailure = await enforceEmbeddingQuota(runtime);
   if (quotaFailure) return quotaFailure;
+  if (runtime.signal?.aborted) {
+    return handleEmbeddingException(
+      runtime,
+      prepared,
+      runtime.signal.reason ?? new DOMException("Request aborted", "AbortError")
+    );
+  }
   const singleTextsOrFailure = resolveSingleTexts(runtime);
   if (singleTextsOrFailure && !Array.isArray(singleTextsOrFailure)) return singleTextsOrFailure;
   const singleTexts = Array.isArray(singleTextsOrFailure) ? singleTextsOrFailure : null;
   try {
-    const response = await dispatchEmbeddingRequest(prepared, singleTexts, runtime.reqLogger);
+    const response = await dispatchEmbeddingRequest(
+      prepared,
+      singleTexts,
+      runtime.reqLogger,
+      runtime.signal
+    );
+    if (runtime.signal?.aborted) {
+      return handleEmbeddingException(
+        runtime,
+        prepared,
+        runtime.signal.reason ?? new DOMException("Request aborted", "AbortError")
+      );
+    }
     return response.ok
       ? handleUpstreamSuccess(runtime, prepared, response, singleTexts?.length ?? 1)
       : handleUpstreamFailure(runtime, response);
@@ -699,6 +748,7 @@ async function executeEmbedding(
 
 /** Handle one OpenAI-compatible embedding request. */
 export async function handleEmbedding(params: HandleEmbeddingParams): Promise<EmbeddingResult> {
+  if (params.signal?.aborted) return failure(499, "Embedding request cancelled");
   const resolved = resolveEmbedding(params);
   const runtime = await createEmbeddingRuntime(params, resolved);
   if ("success" in runtime) return runtime;

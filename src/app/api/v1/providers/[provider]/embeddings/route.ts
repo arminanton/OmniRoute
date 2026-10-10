@@ -29,7 +29,10 @@ export async function OPTIONS() {
 /**
  * POST /v1/providers/{provider}/embeddings
  */
-export async function POST(request, { params }) {
+export async function POST(request: Request, { params }) {
+  if (request.signal.aborted) {
+    return errorResponse(499, "Embedding request cancelled");
+  }
   const { provider: rawProvider } = await params;
 
   const providerEntry = getRegistryEntry(rawProvider);
@@ -44,6 +47,9 @@ export async function POST(request, { params }) {
   try {
     rawBody = await request.json();
   } catch {
+    if (request.signal.aborted) {
+      return errorResponse(499, "Embedding request cancelled");
+    }
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body");
   }
   const validation = validateBody(v1EmbeddingsSchema, rawBody);
@@ -106,6 +112,7 @@ export async function POST(request, { params }) {
       // #10347 — thread the selected connection id so a hard upstream failure cools
       // the account instead of re-hitting it on every request.
       connectionId: selected.connectionId ?? null,
+      signal: request.signal,
     });
   } finally {
     releaseAccountRequest();

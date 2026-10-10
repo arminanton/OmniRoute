@@ -39,11 +39,17 @@ export async function handleValidatedEmbeddingRequestBody(
   return createEmbeddingResponse(body, options);
 }
 
-async function postHandler(request, context) {
+async function postHandler(request: Request, context) {
+  if (request.signal.aborted) {
+    return errorResponse(499, "Embedding request cancelled");
+  }
   let rawBody;
   try {
     rawBody = await request.json();
   } catch {
+    if (request.signal.aborted) {
+      return errorResponse(499, "Embedding request cancelled");
+    }
     log.warn("EMBED", "Invalid JSON body");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body");
   }
@@ -83,6 +89,7 @@ async function postHandler(request, context) {
     apiKeyId: apiKeyMeta?.id || null,
     apiKeyName: apiKeyMeta?.name || null,
     connectionId: null,
+    signal: request.signal,
   });
 }
 

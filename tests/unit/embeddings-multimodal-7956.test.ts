@@ -255,10 +255,7 @@ test("translates one fused Gemini Content to embedContent (one vector)", async (
     "gemini-embedding-2",
     {
       input: {
-        parts: [
-          { text: "caption" },
-          { inline_data: { mime_type: "image/png", data: "aQ==" } },
-        ],
+        parts: [{ text: "caption" }, { inline_data: { mime_type: "image/png", data: "aQ==" } }],
       },
       dimensions: 1536,
       task: "retrieval.query",
@@ -276,10 +273,7 @@ test("translates one fused Gemini Content to embedContent (one vector)", async (
   );
   assert.deepEqual(prepared.body, {
     content: {
-      parts: [
-        { text: "caption" },
-        { inline_data: { mime_type: "image/png", data: "aQ==" } },
-      ],
+      parts: [{ text: "caption" }, { inline_data: { mime_type: "image/png", data: "aQ==" } }],
     },
     output_dimensionality: 1536,
     task_type: "RETRIEVAL_QUERY",
@@ -387,6 +381,101 @@ test("handleEmbedding clearly rejects modalities not advertised by the resolved 
     assert.equal(unknown.status, 400);
     assert.match(unknown.error, /does not advertise structured embedding input/i);
     assert.equal(fetched, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("structured remote-image fetch receives caller signal and abort maps to 499", async () => {
+  const controller = new AbortController();
+  let mediaFetchStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    mediaFetchStarted = resolve;
+  });
+  let observedSignal: AbortSignal | null | undefined;
+  const originalFetch = globalThis.fetch;
+  let upstreamFetches = 0;
+  globalThis.fetch = (async () => {
+    upstreamFetches++;
+    return vectorResponse();
+  }) as typeof fetch;
+
+  try {
+    const pending = handleEmbedding({
+      body: {
+        model: "jina-ai/jina-embeddings-v5-omni-small",
+        input: [
+          {
+            type: "image",
+            source: { type: "url", url: "https://images.example.test/image.png" },
+          },
+        ],
+      },
+      credentials: { apiKey: "test-key" },
+      signal: controller.signal,
+      fetchMediaForTest: async (_url, signal) => {
+        observedSignal = signal;
+        mediaFetchStarted();
+        return await new Promise((_, reject) => {
+          signal?.addEventListener(
+            "abort",
+            () => reject(signal.reason ?? new DOMException("Request aborted", "AbortError")),
+            { once: true }
+          );
+        });
+      },
+      log: null,
+    });
+
+    await started;
+    assert.equal(observedSignal, controller.signal);
+    controller.abort();
+    const result = await pending;
+    assert.equal(result.success, false);
+    if (!result.success) assert.equal(result.status, 499);
+    assert.equal(upstreamFetches, 0, "cancelled media preparation must not dispatch upstream");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("CLOVA sequential embedding fanout stops before starting the next text after caller abort", async () => {
+  const controller = new AbortController();
+  const originalFetch = globalThis.fetch;
+  let fetchCalls = 0;
+  globalThis.fetch = (async (_input, init) => {
+    fetchCalls++;
+    assert.equal(init?.signal, controller.signal);
+    const response = new Response(
+      JSON.stringify({
+        status: { code: "20000", message: "OK" },
+        result: { embedding: [0.1, 0.2], inputTokens: 2 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+    const json = response.json.bind(response);
+    response.json = async () => {
+      const data = await json();
+      controller.abort();
+      return data;
+    };
+    return response;
+  }) as typeof fetch;
+
+  try {
+    const result = await handleEmbedding({
+      body: {
+        model: "clova-studio/clova-embedding-v2",
+        input: ["first", "second", "third"],
+      },
+      credentials: { apiKey: "test-key" },
+      signal: controller.signal,
+      log: null,
+    });
+
+    assert.equal(result.success, false);
+    if (!result.success) assert.equal(result.status, 499);
+    assert.equal(fetchCalls, 1, "no subsequent single-text request should start after abort");
   } finally {
     globalThis.fetch = originalFetch;
   }
