@@ -123,6 +123,48 @@ export function touchSessionAccountAffinity(
   upsertSessionAccountAffinity(sessionKey, provider, existing.connectionId, now, normalizedTtlMs);
 }
 
+/**
+ * Extend a session pin after a successful request has finished. A request may
+ * legitimately run longer than the configured TTL; without this completion
+ * refresh, the next tool/assistant turn can select another account mid-thread.
+ * Compare the stored value before writing so a late completion cannot replace
+ * a pin created by a newer request on a different connection.
+ */
+export function refreshSessionAccountAffinityForConnection(
+  sessionKey: string,
+  provider: string,
+  connectionId: string,
+  now: number = Date.now(),
+  ttlMs = 0
+): boolean {
+  const normalizedTtlMs = normalizePositiveTtl(ttlMs);
+  if (!sessionKey || !provider || !connectionId || normalizedTtlMs <= 0) return false;
+
+  const key = affinityKey(sessionKey, provider);
+  try {
+    const db = getDbInstance();
+    const row = db
+      .prepare("SELECT value FROM key_value WHERE namespace = ? AND key = ?")
+      .get(NAMESPACE, key) as { value?: unknown } | undefined;
+    const record = parseRecord(row?.value);
+    if (!record || record.connectionId !== connectionId || typeof row?.value !== "string") {
+      return false;
+    }
+
+    const refreshed = {
+      ...record,
+      lastUsedAt: isoFromMs(now),
+      expiresAt: isoFromMs(now + normalizedTtlMs),
+    };
+    const result = db
+      .prepare("UPDATE key_value SET value = ? WHERE namespace = ? AND key = ? AND value = ?")
+      .run(JSON.stringify(refreshed), NAMESPACE, key, row.value);
+    return result.changes > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function deleteSessionAccountAffinity(sessionKey: string, provider: string): void {
   if (!sessionKey || !provider) return;
   deleteAffinityKey(affinityKey(sessionKey, provider));

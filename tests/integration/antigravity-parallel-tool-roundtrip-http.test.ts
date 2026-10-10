@@ -34,6 +34,10 @@ const capturePrivateOverflow =
 const captureAdmissionBench = process.env.ANTIGRAVITY_CAPTURE_ADMISSION_BENCH === "1";
 const captureOverflowMinClientBytes = process.env.ANTIGRAVITY_CAPTURE_OVERFLOW_MIN_CLIENT_BYTES;
 const captureContextBytes = Math.max(0, Number(process.env.ANTIGRAVITY_CAPTURE_CONTEXT_BYTES || 0));
+const sessionAffinityTtlMs = Math.max(
+  0,
+  Number(process.env.ANTIGRAVITY_SESSION_AFFINITY_TTL_MS) || 60_000
+);
 const requestedSessionCounts = (process.env.ANTIGRAVITY_CAPTURE_SESSION_COUNTS || "")
   .split(",")
   .map(Number)
@@ -565,7 +569,7 @@ test(
       await settings.updateSettings({
         requireLogin: false,
         call_log_pipeline_enabled: captureCallLogs,
-        sessionAffinityTtlMs: 60000,
+        sessionAffinityTtlMs,
         compression: { enabled: false },
         resilienceSettings: {
           quotaPreflight: { enabled: false },

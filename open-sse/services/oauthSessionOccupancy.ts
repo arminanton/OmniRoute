@@ -71,9 +71,15 @@ export function reserveOAuthSession(
 
 export function wrapResponseWithOAuthSessionRelease(
   response: Response,
-  release: () => void
+  release: () => void,
+  onComplete?: () => void
 ): Response {
   if (!response.body) {
+    try {
+      onComplete?.();
+    } catch {
+      // Session-affinity refresh is best-effort and must not break a response.
+    }
     release();
     return response;
   }
@@ -83,6 +89,11 @@ export function wrapResponseWithOAuthSessionRelease(
       try {
         const { done, value } = await reader.read();
         if (done) {
+          try {
+            onComplete?.();
+          } catch {
+            // Session-affinity refresh is best-effort and must not break a response.
+          }
           release();
           controller.close();
           return;

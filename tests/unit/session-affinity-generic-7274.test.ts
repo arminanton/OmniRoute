@@ -62,7 +62,7 @@ const settingsDb = await import("../../src/lib/db/settings.ts");
 const apiKeysDb = await import("../../src/lib/db/apiKeys.ts");
 const affinityDb = await import("../../src/lib/db/sessionAccountAffinity.ts");
 const auth = await import("../../src/sse/services/auth.ts");
-const { resolveSessionAffinityTtlMs } =
+const { refreshSuccessfulSessionAffinity, resolveSessionAffinityTtlMs } =
   await import("../../src/sse/services/sessionAffinityPin.ts");
 const { DefaultExecutor } = await import("../../open-sse/executors/default.ts");
 
@@ -153,6 +153,55 @@ test("#7274 a non-Codex provider stays unpinned when sessionAffinityTtlMs is 0 (
     request2?.connectionId,
     connectionB.id,
     "with the TTL at 0, every request must honor the fresh forcedConnectionId"
+  );
+});
+
+test("a successful long request renews only its still-current expired session pin", () => {
+  affinityDb.upsertSessionAccountAffinity(
+    "long-session",
+    "antigravity",
+    "connection-a",
+    1_000,
+    100
+  );
+
+  assert.equal(
+    refreshSuccessfulSessionAffinity({
+      provider: "antigravity",
+      sessionKey: "long-session",
+      connectionId: "connection-a",
+      settings: { sessionAffinityTtlMs: 100 },
+      now: 1_150,
+    }),
+    true,
+    "successful completion should renew an expired pin when no newer account has replaced it"
+  );
+  assert.equal(
+    affinityDb.getSessionAccountAffinity("long-session", "antigravity", 100, 1_200)?.connectionId,
+    "connection-a"
+  );
+
+  affinityDb.upsertSessionAccountAffinity(
+    "long-session",
+    "antigravity",
+    "connection-b",
+    1_250,
+    100
+  );
+  assert.equal(
+    refreshSuccessfulSessionAffinity({
+      provider: "antigravity",
+      sessionKey: "long-session",
+      connectionId: "connection-a",
+      settings: { sessionAffinityTtlMs: 100 },
+      now: 1_300,
+    }),
+    false,
+    "a late response from the old account must not overwrite a newer pin"
+  );
+  assert.equal(
+    affinityDb.getSessionAccountAffinity("long-session", "antigravity", 100, 1_300)?.connectionId,
+    "connection-b"
   );
 });
 

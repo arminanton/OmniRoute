@@ -147,7 +147,10 @@ import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { shouldIsolateProbeFailures } from "@/shared/utils/probeOrigin";
 import { getCircuitBreaker, isLocalStreamLifecycleError } from "../../shared/utils/circuitBreaker";
 import { markAccountExhaustedFrom429 } from "../../domain/quotaCache";
-import { resolveForcedConnectionForCredentialPool } from "../services/sessionAffinityPin.ts";
+import {
+  refreshSuccessfulSessionAffinity,
+  resolveForcedConnectionForCredentialPool,
+} from "../services/sessionAffinityPin.ts";
 import { RequestTelemetry, recordTelemetry } from "../../shared/utils/requestTelemetry";
 import { generateRequestId } from "../../shared/utils/requestId";
 import { logAuditEvent } from "../../lib/compliance/index";
@@ -1868,6 +1871,13 @@ async function handleSingleModelChatImplementation(
         releaseOAuthSession();
         releaseAccountOccupancy();
       };
+      const refreshSuccessfulSessionPin = () =>
+        refreshSuccessfulSessionAffinity({
+          provider,
+          sessionKey: runtimeOptions.sessionAffinityKey,
+          connectionId: credentials.connectionId,
+          settings: runtimeOptions.cachedSettings ?? {},
+        });
       // #10348: redact the account prefix by default. Gated on the narrow
       // AUTH_LOG_INCLUDE_ACCOUNT_ID flag (default off) rather than the broad
       // `debugMode` setting — `debugMode` is a general dashboard-visibility
@@ -2097,8 +2107,13 @@ async function handleSingleModelChatImplementation(
           credentials?.connectionId
         );
         if (requestBody.stream === true) {
-          return wrapResponseWithOAuthSessionRelease(successResponse, releaseSelectedAccount);
+          return wrapResponseWithOAuthSessionRelease(
+            successResponse,
+            releaseSelectedAccount,
+            refreshSuccessfulSessionPin
+          );
         }
+        refreshSuccessfulSessionPin();
         releaseSelectedAccount();
         return successResponse;
       }

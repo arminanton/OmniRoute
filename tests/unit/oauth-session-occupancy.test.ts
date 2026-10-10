@@ -33,6 +33,7 @@ test("expired leases fail open", () => {
 
 test("response wrapper releases only after streaming completes", async () => {
   const release = reserveOAuthSession("account-a", "session-a", 60_000);
+  let completionCalls = 0;
   const wrapped = wrapResponseWithOAuthSessionRelease(
     new Response(
       new ReadableStream<Uint8Array>({
@@ -42,20 +43,29 @@ test("response wrapper releases only after streaming completes", async () => {
         },
       })
     ),
-    release
+    release,
+    () => {
+      completionCalls++;
+    }
   );
 
   assert.equal(getForeignOAuthSessionCount("account-a", "session-b"), 1);
   assert.equal(await wrapped.text(), "data");
   assert.equal(getForeignOAuthSessionCount("account-a", "session-b"), 0);
+  assert.equal(completionCalls, 1);
 });
 
 test("response wrapper releases on cancellation", async () => {
   const release = reserveOAuthSession("account-a", "session-a", 60_000);
+  let completionCalls = 0;
   const wrapped = wrapResponseWithOAuthSessionRelease(
     new Response(new ReadableStream<Uint8Array>({ pull() {} })),
-    release
+    release,
+    () => {
+      completionCalls++;
+    }
   );
   await wrapped.body?.cancel("client disconnected");
   assert.equal(getForeignOAuthSessionCount("account-a", "session-b"), 0);
+  assert.equal(completionCalls, 0);
 });

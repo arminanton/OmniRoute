@@ -31,6 +31,7 @@ import {
   getSessionAccountAffinity,
   upsertSessionAccountAffinity,
   touchSessionAccountAffinity,
+  refreshSessionAccountAffinityForConnection,
   deleteSessionAccountAffinity,
   evictSessionAccountAffinityForConnection,
 } from "@/lib/db/sessionAccountAffinity";
@@ -450,6 +451,26 @@ export function resolveSessionAffinityTtlMs(
   const configured = Number(settings.sessionAffinityTtlMs ?? settings.codexSessionAffinityTtlMs);
   if (Number.isFinite(configured) && configured > 0) return configured;
   return 0;
+}
+
+/**
+ * Treat the configured affinity TTL as idle time after a successful request
+ * finishes. A slow live stream may outlast its pin's original expiry; refresh
+ * only the account that actually completed the request, using a compare-and-set
+ * so an older concurrent response cannot replace a newer account choice.
+ */
+export function refreshSuccessfulSessionAffinity(params: {
+  provider: string;
+  sessionKey: string | null | undefined;
+  connectionId: string | null | undefined;
+  settings: AffinityPinSettings;
+  now?: number;
+}): boolean {
+  const { provider, sessionKey, connectionId, settings, now = Date.now() } = params;
+  if (!sessionKey || !connectionId) return false;
+  const ttlMs = resolveSessionAffinityTtlMs(provider, {}, settings);
+  if (ttlMs <= 0) return false;
+  return refreshSessionAccountAffinityForConnection(sessionKey, provider, connectionId, now, ttlMs);
 }
 
 /**
