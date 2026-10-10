@@ -63,6 +63,8 @@ export interface WebFetchResult {
 export interface WebFetchCredentials {
   apiKey?: string;
   baseUrl?: string;
+  /** Canonical credential-owner provider when a search/fetch alias reused its connection. */
+  provider?: string;
   providerSpecificData?: Record<string, unknown> | null;
   /** Selected account identity used by the route's shared-capacity lease. */
   connectionId?: string | null;

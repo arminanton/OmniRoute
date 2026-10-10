@@ -137,6 +137,7 @@ export async function interceptToolCalls(
                   sessionId: context.sessionId,
                   provider: context.provider,
                   model: context.model,
+                  signal: context.signal,
                 }
               );
 
@@ -185,6 +186,9 @@ export async function interceptToolCalls(
           result,
         };
       } catch (err) {
+        if (context.signal?.aborted) {
+          throw context.signal.reason ?? err;
+        }
         const safeError = toSafeSkillErrorMessage(err);
         log.error("skills.interception.execution_failed", {
           toolName: call.name,
@@ -514,9 +518,14 @@ export async function executeServerOwned(
   const results: ExecutedToolResult[] = [];
 
   for (const call of calls) {
+    context.signal?.throwIfAborted();
     const builtinHandlerName = resolveBuiltinHandlerName(call.name, context);
     const isMemoryBuiltin = builtinHandlerName && MEMORY_TOOL_NAMES.has(builtinHandlerName);
     const isOrdinaryBuiltin = builtinHandlerName && builtinHandlerName in builtinSkills;
+    const retryFenceOnAbort = Boolean(
+      isOrdinaryBuiltin &&
+        (builtinHandlerName === "web_search" || builtinHandlerName === "web_fetch")
+    );
     const isCustomSkill =
       !builtinHandlerName &&
       context.customSkillExecutionEnabled &&
@@ -537,6 +546,7 @@ export async function executeServerOwned(
           sessionId: context.sessionId,
           provider: context.provider,
           model: context.model,
+          signal: context.signal,
         });
       }
       if (isCustomSkill) {
@@ -566,15 +576,23 @@ export async function executeServerOwned(
 
     if (context.executionFenceEnabled && context.requestIdentity) {
       const activeFenceFn = fenceFn ?? _fenceFn ?? runWithServerToolFence;
-      const fenceResult = await activeFenceFn({
-        apiKeyId: context.apiKeyId,
-        requestIdentity: context.requestIdentity,
-        toolCallId: call.id,
-        toolName: call.name,
-        arguments: call.arguments,
-        leaseDurationMs: LEASE_DURATION_MS,
-        execute: executeFn,
-      });
+      let fenceResult: Awaited<ReturnType<typeof activeFenceFn>>;
+      try {
+        fenceResult = await activeFenceFn({
+          apiKeyId: context.apiKeyId,
+          requestIdentity: context.requestIdentity,
+          toolCallId: call.id,
+          toolName: call.name,
+          arguments: call.arguments,
+          leaseDurationMs: LEASE_DURATION_MS,
+          signal: context.signal,
+          retryOnAbort: retryFenceOnAbort,
+          execute: executeFn,
+        });
+      } catch (err) {
+        if (context.signal?.aborted) throw context.signal.reason ?? err;
+        throw err;
+      }
 
       switch (fenceResult.kind) {
         case "executed":
@@ -638,6 +656,7 @@ export async function executeServerOwned(
           replayed: false,
         });
       } catch (err) {
+        if (context.signal?.aborted) throw context.signal.reason ?? err;
         results.push({
           id: call.id,
           name: call.name,

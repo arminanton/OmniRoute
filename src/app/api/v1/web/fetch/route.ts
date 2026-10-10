@@ -38,6 +38,7 @@ import {
 } from "@/app/api/v1/_shared/rateLimit";
 import { reserveAccountRequest } from "@omniroute/open-sse/services/accountRequestOccupancy.ts";
 import { acquireConfiguredSharedAccountAdmission } from "@omniroute/open-sse/services/accountRequestAdmission.ts";
+import { resolveProviderId } from "@/shared/constants/providers";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -65,6 +66,14 @@ const QUOTA_STATUS_PROVIDERS = new Set<WebFetchProviderId>([
 ]);
 
 type CredentialsLookup = WebFetchCredentials | RateLimitedCredentials | null;
+
+export function resolveWebFetchAdmissionProvider(
+  provider: WebFetchProviderId,
+  credentials: WebFetchCredentials
+): string {
+  const credentialProvider = credentials.provider?.trim();
+  return credentialProvider ? resolveProviderId(credentialProvider) : provider;
+}
 
 export async function OPTIONS() {
   return new Response(null, { headers: CORS_HEADERS });
@@ -179,6 +188,7 @@ async function executeWebFetchAttempt(
   const selected = credentials as WebFetchCredentials & {
     connectionId?: string | null;
     maxConcurrent?: number | null;
+    provider?: string | null;
     providerSpecificData?: Record<string, unknown> | null;
   };
   const releaseAccountRequest = reserveAccountRequest(selected.connectionId);
@@ -202,7 +212,7 @@ async function executeWebFetchAttempt(
     }
     try {
       sharedAdmission = await acquireConfiguredSharedAccountAdmission({
-        provider,
+        provider: resolveWebFetchAdmissionProvider(provider, selected),
         credentials: selected,
         signal: callerSignal,
       });

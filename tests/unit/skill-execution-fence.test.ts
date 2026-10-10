@@ -412,6 +412,126 @@ test("finalize: duration_ms persisted exactly via fence wrapper (error)", async 
   cleanup(raw, dir);
 });
 
+test("fence: opted-in read abort abandons only the running claim and same identity can retry", async () => {
+  const { adapter, dir, raw } = makeTempDb();
+  const caller = new AbortController();
+  let startedResolve!: () => void;
+  const started = new Promise<void>((resolve) => {
+    startedResolve = resolve;
+  });
+  let executions = 0;
+  const input = {
+    apiKeyId: "key-1",
+    requestIdentity: "key-1:retryable-read:body",
+    toolCallId: "call-read",
+    toolName: "web_search",
+    arguments: { query: "cancellable read" },
+    leaseDurationMs: 60_000,
+    retryOnAbort: true,
+    signal: caller.signal,
+  };
+
+  try {
+    const first = runWithServerToolFence({
+      ...input,
+      execute: async () => {
+        executions++;
+        startedResolve();
+        return new Promise<string>((_resolve, reject) => {
+          const rejectAbort = () => reject(caller.signal.reason);
+          if (caller.signal.aborted) rejectAbort();
+          else caller.signal.addEventListener("abort", rejectAbort, { once: true });
+        });
+      },
+      db: adapter,
+    });
+
+    await started;
+    const abortReason = new Error("client disconnected during web search");
+    caller.abort(abortReason);
+    await assert.rejects(first, (error) => error === abortReason);
+
+    const remainingClaims = raw
+      .prepare("SELECT COUNT(*) as count FROM server_tool_executions")
+      .get() as { count: number };
+    assert.equal(remainingClaims.count, 0, "the still-running read claim must be abandoned");
+
+    const retry = await runWithServerToolFence({
+      ...input,
+      signal: new AbortController().signal,
+      execute: async () => {
+        executions++;
+        return "retried read result";
+      },
+      db: adapter,
+    });
+    assert.equal(retry.kind, "executed");
+    if (retry.kind === "executed") assert.equal(retry.value, "retried read result");
+    assert.equal(executions, 2, "the second same-identity read should be executed");
+
+    const stored = raw
+      .prepare("SELECT status, output FROM server_tool_executions")
+      .get() as { status: string; output: string | null };
+    assert.equal(stored.status, "success");
+    assert.equal(stored.output, "retried read result");
+  } finally {
+    cleanup(raw, dir);
+  }
+});
+
+test("fence: non-retryable tool abort is still finalized and replayed as an error", async () => {
+  const { adapter, dir, raw } = makeTempDb();
+  const caller = new AbortController();
+  let executions = 0;
+  const input = {
+    apiKeyId: "key-1",
+    requestIdentity: "key-1:nonretryable-write:body",
+    toolCallId: "call-write",
+    toolName: "file_write",
+    arguments: { path: "notes.txt", content: "write once" },
+    leaseDurationMs: 60_000,
+    signal: caller.signal,
+    retryOnAbort: false,
+  };
+
+  try {
+    const abortReason = new Error("client disconnected during write");
+    await assert.rejects(
+      runWithServerToolFence({
+        ...input,
+        execute: async () => {
+          executions++;
+          caller.abort(abortReason);
+          throw abortReason;
+        },
+        db: adapter,
+      }),
+      /client disconnected during write/
+    );
+
+    const replay = await runWithServerToolFence({
+      ...input,
+      signal: new AbortController().signal,
+      execute: async () => {
+        executions++;
+        return "must not execute again";
+      },
+      db: adapter,
+    });
+    assert.equal(replay.kind, "replayed");
+    if (replay.kind === "replayed") assert.equal(replay.status, "error");
+    assert.equal(executions, 1, "a mutating tool must keep the existing fenced error replay");
+
+    const stored = raw
+      .prepare("SELECT status, error_message FROM server_tool_executions")
+      .get() as { status: string; error_message: string | null };
+    assert.equal(stored.status, "error");
+    assert.match(stored.error_message ?? "", /client disconnected during write/);
+  } finally {
+    cleanup(raw, dir);
+  }
+});
+
 // ── Defect 4: Rejected in-process active Promise → joiner gets replayed ──
 
 test("fence: rejected in-process promise — joiner gets replayed with error status", async () => {

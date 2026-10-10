@@ -139,6 +139,8 @@ export interface ExecutionContext {
   apiKeyId: string;
   sessionId: string;
   requestId: string;
+  /** Original client request signal for cancellation-aware built-in tools. */
+  signal?: AbortSignal;
   requestIdentity?: string;
   builtinToolNames?: string[];
   injectedCustomSkillNames?: string[];

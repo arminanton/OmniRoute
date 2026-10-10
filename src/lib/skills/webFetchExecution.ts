@@ -42,6 +42,8 @@ export interface ExecuteWebFetchInput {
   /** Provider/model that owns the interception rule row, used to resolve a pinned backend. */
   ruleProvider?: string | null;
   ruleModel?: string | null;
+  /** Caller-owned signal from the server-owned tool loop. */
+  signal?: AbortSignal;
 }
 
 export class WebFetchExecutionError extends Error {
@@ -136,6 +138,7 @@ async function resolveProviderAndCredentials(
 }
 
 export async function executeWebFetch(input: ExecuteWebFetchInput): Promise<WebFetchResponse> {
+  input.signal?.throwIfAborted();
   if (!input.url || typeof input.url !== "string") {
     throw new WebFetchExecutionError("Missing required field: url", 400);
   }
@@ -151,7 +154,8 @@ export async function executeWebFetch(input: ExecuteWebFetchInput): Promise<WebF
       include_metadata: input.include_metadata,
     },
     credentials,
-    provider
+    provider,
+    input.signal
   );
 
   if (!result.success || !result.data) {

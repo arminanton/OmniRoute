@@ -1,5 +1,6 @@
 import { canonicalJsonSha256 } from "./stableJson";
 import {
+  abandonRunningServerToolExecution,
   claimServerToolExecution,
   finalizeServerToolExecution,
   readRow,
@@ -46,6 +47,10 @@ export interface RunWithServerToolFenceOptions<T> {
   arguments: Record<string, unknown>;
   leaseDurationMs: number;
   execute: (executionId: string) => Promise<T>;
+  /** Caller request signal; only used to abandon an explicitly retryable read. */
+  signal?: AbortSignal;
+  /** Set only for idempotent read-only tools such as web_search and web_fetch. */
+  retryOnAbort?: boolean;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   db?: SqliteAdapter;
@@ -54,6 +59,10 @@ export interface RunWithServerToolFenceOptions<T> {
 export async function runWithServerToolFence<T>(
   input: RunWithServerToolFenceOptions<T>
 ): Promise<RunWithServerToolFenceResult<T>> {
+  if (input.retryOnAbort && input.signal?.aborted) {
+    throw input.signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+  }
+
   const db = input.db ?? getDbInstance();
   const now = input.now ?? (() => Date.now());
   const sleep = input.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
@@ -93,6 +102,18 @@ export async function runWithServerToolFence<T>(
           );
           return { kind: "success" as const, value, errorMessage: null };
         } catch (err: unknown) {
+          if (input.retryOnAbort && input.signal?.aborted) {
+            let abandoned = false;
+            try {
+              abandoned = abandonRunningServerToolExecution(claim.executionId, db);
+            } catch {
+              // If claim abandonment is unavailable, persist the existing error
+              // result below so the fence does not leave an unbounded running row.
+            }
+            if (abandoned) {
+              throw input.signal.reason ?? err;
+            }
+          }
           const message = err instanceof Error ? err.message : String(err);
           const safeMessage = message.replace(/\bat\s+\/[^\s"']+/g, "[stack-redacted]");
           const durationMs = now() - claimStartTime;

@@ -312,6 +312,17 @@ test("web-fetch returns 499 when the request body read fails after caller cancel
   }
 });
 
+test("web-fetch shared admission uses the credential owner when provider credentials alias", () => {
+  assert.equal(
+    webFetchRoute.resolveWebFetchAdmissionProvider("jina-reader", { provider: "jina-ai" }),
+    "jina-ai"
+  );
+  assert.equal(
+    webFetchRoute.resolveWebFetchAdmissionProvider("firecrawl", { apiKey: "firecrawl-key" }),
+    "firecrawl"
+  );
+});
+
 test("caller cancellation aborts upstream, skips fallback, and releases account occupancy", async () => {
   const firecrawl = await seedConnection("firecrawl", { apiKey: "fc-key" });
   await seedConnection("jina-reader", { apiKey: "jina-key" });

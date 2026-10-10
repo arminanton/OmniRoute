@@ -239,3 +239,20 @@ export function finalizeServerToolExecution(
 
   return result.changes > 0;
 }
+
+/**
+ * Remove a claim only while it is still running. This lets an explicitly
+ * retryable read-only tool reclaim the same idempotency key after its caller
+ * disconnects, without deleting a result another path already finalized.
+ */
+export function abandonRunningServerToolExecution(
+  executionId: string,
+  db: SqliteAdapter = getDbInstance()
+): boolean {
+  const result = db.transaction(() =>
+    db
+      .prepare("DELETE FROM server_tool_executions WHERE id = ? AND status = 'running'")
+      .run(executionId)
+  )();
+  return result.changes > 0;
+}

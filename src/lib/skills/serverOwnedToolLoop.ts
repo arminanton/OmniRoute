@@ -111,6 +111,12 @@ export async function runServerOwnedToolLoop(
   const now = options.now ?? performance.now.bind(performance);
   const loopStartedAtMs = now();
   const loopDeadlineAtMs = Math.min(options.deadlineAtMs, loopStartedAtMs + LOOP_BUDGET_MS);
+  // Keep the original request signal available to the built-in handlers. In a
+  // coalesced search this remains a waiter signal; the search cache owns and
+  // controls its separate producer signal.
+  const executionContext = options.abortSignal
+    ? { ...options.executionContext, signal: options.abortSignal }
+    : options.executionContext;
 
   const maxFollowUps = options.maxFollowUps ?? MAX_FOLLOW_UPS;
   const maxResultBytes = options.maxResultBytes ?? MAX_RESULT_BYTES_PER_TOOL;
@@ -155,7 +161,7 @@ export async function runServerOwnedToolLoop(
     // Classify ownership
     const { serverOwned, clientNative } = await classifyServerOwnedCalls(
       toolCalls,
-      options.executionContext
+      executionContext
     );
 
     // No server-owned calls → done
@@ -198,7 +204,46 @@ export async function runServerOwnedToolLoop(
       }
 
       // Execute server calls, then format with bounded serialization
-      const execResults = await options.executeServerOwned(serverOwned, options.executionContext);
+      let execResults: ExecutedToolResult[];
+      try {
+        execResults = await options.executeServerOwned(serverOwned, executionContext);
+      } catch (err: unknown) {
+        if (options.abortSignal?.aborted) {
+          return {
+            kind: "error",
+            errorResult: createErrorResult(
+              499,
+              "Client closed request",
+              null,
+              "client_closed_request",
+              "invalid_request_error"
+            ) as unknown as ChatCoreErrorResult,
+            cumulativeUsage: aggregateUsageOrNull(usages),
+            totalCostUsd,
+            receipts,
+            followUps,
+            termination: "client_abort",
+          };
+        }
+        throw err;
+      }
+      if (options.abortSignal?.aborted) {
+        return {
+          kind: "error",
+          errorResult: createErrorResult(
+            499,
+            "Client closed request",
+            null,
+            "client_closed_request",
+            "invalid_request_error"
+          ) as unknown as ChatCoreErrorResult,
+          cumulativeUsage: aggregateUsageOrNull(usages),
+          totalCostUsd,
+          receipts,
+          followUps,
+          termination: "client_abort",
+        };
+      }
 
       // Build serialized text map using bounded serialization
       const serMap = new Map<string, string>();
@@ -256,8 +301,25 @@ export async function runServerOwnedToolLoop(
     // Execute server-owned calls
     let execResults: ExecutedToolResult[];
     try {
-      execResults = await options.executeServerOwned(serverOwned, options.executionContext);
+      execResults = await options.executeServerOwned(serverOwned, executionContext);
     } catch (err: unknown) {
+      if (options.abortSignal?.aborted) {
+        return {
+          kind: "error",
+          errorResult: createErrorResult(
+            499,
+            "Client closed request",
+            null,
+            "client_closed_request",
+            "invalid_request_error"
+          ) as unknown as ChatCoreErrorResult,
+          cumulativeUsage: aggregateUsageOrNull(usages),
+          totalCostUsd,
+          receipts,
+          followUps,
+          termination: "client_abort",
+        };
+      }
       if (err instanceof ServerOwnedExecutionError) {
         const termMap: Record<string, ServerOwnedToolLoopResult["termination"]> = {
           TOOL_IN_PROGRESS: "execution_in_progress",
@@ -278,6 +340,23 @@ export async function runServerOwnedToolLoop(
         };
       }
       throw err;
+    }
+    if (options.abortSignal?.aborted) {
+      return {
+        kind: "error",
+        errorResult: createErrorResult(
+          499,
+          "Client closed request",
+          null,
+          "client_closed_request",
+          "invalid_request_error"
+        ) as unknown as ChatCoreErrorResult,
+        cumulativeUsage: aggregateUsageOrNull(usages),
+        totalCostUsd,
+        receipts,
+        followUps,
+        termination: "client_abort",
+      };
     }
 
     // Serialize results with cumulative UTF-8 budget
