@@ -487,6 +487,38 @@ test("sanitizes upstream error bodies by status while preserving successful resp
   assert.deepEqual(protectedSuccess?.providerResponse?.body, successBody);
 });
 
+test("pipeline error request body shares the protected request snapshot", () => {
+  const requestBody = {
+    input: "request content",
+    api_key: "private-request-key",
+  };
+  const pipeline = protectPipelinePayloads({
+    error: { error: "upstream failed", requestBody },
+    clientRawRequest: { body: requestBody },
+  });
+
+  const protectedRequest = pipeline?.clientRawRequest?.body;
+  const protectedErrorRequest = pipeline?.error?.requestBody;
+  assert.strictEqual(protectedErrorRequest, protectedRequest);
+  assert.deepEqual(protectedErrorRequest, {
+    input: "request content",
+    api_key: "[REDACTED]",
+  });
+});
+
+test("pipeline error request body keeps distinct content and the same redaction", () => {
+  const pipeline = protectPipelinePayloads({
+    clientRawRequest: { body: { input: "stage request" } },
+    error: { requestBody: { input: "error request", authorization: "Bearer secret" } },
+  });
+
+  assert.deepEqual(pipeline?.clientRawRequest?.body, { input: "stage request" });
+  assert.deepEqual(pipeline?.error?.requestBody, {
+    input: "error request",
+    authorization: "[REDACTED]",
+  });
+});
+
 test("omits encrypted reasoning values from structured log payloads", () => {
   const encryptedContent = "encrypted".repeat(128);
   const payload = {

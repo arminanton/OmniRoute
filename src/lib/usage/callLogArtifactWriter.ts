@@ -239,6 +239,23 @@ function compactArtifactForFootprint(value: unknown): unknown {
       compacted = true;
     }
   }
+  const pipelineError = pipeline.error;
+  if (
+    request &&
+    pipelineError &&
+    typeof pipelineError === "object" &&
+    !Array.isArray(pipelineError)
+  ) {
+    const errorRecord = pipelineError as Record<string, unknown>;
+    if (Object.hasOwn(errorRecord, "requestBody") && errorRecord.requestBody === request.value) {
+      pipeline.error = {
+        ...errorRecord,
+        requestBody: undefined,
+        requestBodyRef: `pipeline.${request.name}.body`,
+      };
+      compacted = true;
+    }
+  }
   return compactCallLogStreamChunkText((compacted ? estimate : value) as CallLogArtifact);
 }
 

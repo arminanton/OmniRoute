@@ -150,6 +150,56 @@ test("identical client, OpenAI, provider, and response payloads share one stored
   assert.ok(savedBytes > 300_000, `expected at least 300 KB saved, got ${savedBytes} bytes`);
 });
 
+test("pipeline error request body is stored by reference and expanded for readers", () => {
+  const requestBody = { model: "codex/gpt-6.1-sol", input: "large request ".repeat(12_000) };
+  const input = artifact(requestBody, { output: "ok" });
+  Object.assign(input.pipeline, {
+    error: {
+      error: "upstream rejected the request",
+      requestBody: structuredClone(requestBody),
+    },
+  });
+
+  const { storedJson, artifact: roundTripped, sizeBytes } = writeAndRead(input);
+  const storedPipeline = storedJson.pipeline as Record<string, Record<string, unknown>>;
+  const storedError = storedPipeline.error;
+
+  assert.equal(storedJson.schemaVersion, 10);
+  assert.equal(storedError.requestBodyRef, "pipeline.clientRawRequest.body");
+  assert.equal(Object.hasOwn(storedError, "requestBody"), false);
+  assert.deepEqual(
+    (roundTripped.pipeline?.error as Record<string, unknown>).requestBody,
+    requestBody
+  );
+  assert.equal(
+    Object.hasOwn(roundTripped.pipeline?.error as Record<string, unknown>, "requestBodyRef"),
+    false
+  );
+  assert.ok(sizeBytes < Buffer.byteLength(JSON.stringify(input)) - 100_000);
+});
+
+test("distinct and legacy pipeline error request bodies keep their stored shape", () => {
+  const requestBody = { input: "stage request" };
+  const differentErrorBody = { input: "error snapshot" };
+  const current = artifact(requestBody, { output: "ok" });
+  Object.assign(current.pipeline, { error: { requestBody: differentErrorBody } });
+  const currentResult = writeAndRead(current);
+  const currentError = (
+    currentResult.storedJson.pipeline as Record<string, Record<string, unknown>>
+  ).error;
+  assert.equal(Object.hasOwn(currentError, "requestBodyRef"), false);
+  assert.deepEqual(currentError.requestBody, differentErrorBody);
+
+  const legacy = artifact(requestBody, { output: "ok" }, { schemaVersion: 5 });
+  Object.assign(legacy.pipeline, { error: { requestBody } });
+  const legacyResult = writeAndRead(legacy);
+  const legacyError = (legacyResult.storedJson.pipeline as Record<string, Record<string, unknown>>)
+    .error;
+  assert.equal(legacyResult.storedJson.schemaVersion, 5);
+  assert.equal(Object.hasOwn(legacyError, "requestBodyRef"), false);
+  assert.deepEqual(legacyError.requestBody, requestBody);
+});
+
 test("repeated exact stream chunk text is stored once and expanded for log consumers", () => {
   const chunkText = `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "x".repeat(8_000) })}\n\n`;
   const input = artifact({ input: "request" }, { output: "response" });
@@ -506,6 +556,10 @@ test("saveCallLog reserves and protects a shared client request body only once",
         headers: {},
         body: structuredClone(requestBody),
       },
+      error: {
+        error: "upstream failed after request dispatch",
+        requestBody: structuredClone(requestBody),
+      },
       clientResponse: {
         timestamp: new Date().toISOString(),
         body: structuredClone(responseBody),
@@ -526,6 +580,15 @@ test("saveCallLog reserves and protects a shared client request body only once",
   assert.equal(diskArtifact.responseBodyRef, "pipeline.clientResponse.body");
   assert.equal(Object.hasOwn(diskArtifact, "requestBody"), false);
   assert.equal(Object.hasOwn(diskArtifact, "responseBody"), false);
+  const storedPipeline = diskArtifact.pipeline as Record<string, Record<string, unknown>>;
+  assert.equal(storedPipeline.error.requestBodyRef, "pipeline.clientRawRequest.body");
+  assert.equal(Object.hasOwn(storedPipeline.error, "requestBody"), false);
+  const expanded = readCallArtifact(detail.artifactRelPath).artifact;
+  assert.ok(expanded);
+  assert.deepEqual(
+    (expanded.pipeline?.error as Record<string, unknown>).requestBody,
+    (expanded.pipeline?.clientRawRequest as Record<string, unknown>).body
+  );
 });
 
 test("saveCallLog skips payload traversal when the artifact worker is missing", async () => {

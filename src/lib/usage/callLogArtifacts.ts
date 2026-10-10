@@ -63,7 +63,7 @@ function preserveErrorForSizeLimit(error: unknown): unknown {
 export type CallLogDetailState = "none" | "ready" | "missing" | "corrupt" | "legacy-inline";
 
 export type CallLogArtifact = {
-  schemaVersion: 5 | 6 | 7 | 8 | 9;
+  schemaVersion: 5 | 6 | 7 | 8 | 9 | 10;
   summary: {
     id: string;
     timestamp: string;
@@ -431,6 +431,15 @@ function compactDuplicatePayloadReferences(artifact: CallLogArtifact): CallLogAr
     artifact.requestBody !== undefined &&
     isDeepStrictEqual(artifact.requestBody, canonicalRequest.entry.body)
   );
+  const pipelineError = artifact.pipeline.error as Record<string, unknown> | undefined;
+  const pipelineErrorRequestMatches = Boolean(
+    canonicalRequest &&
+    pipelineError &&
+    Object.hasOwn(pipelineError, "requestBody") &&
+    pipelineError.requestBody !== null &&
+    pipelineError.requestBody !== undefined &&
+    isDeepStrictEqual(pipelineError.requestBody, canonicalRequest.entry.body)
+  );
   const responseMatches = Boolean(
     canonicalResponse &&
     artifact.responseBody !== null &&
@@ -441,7 +450,8 @@ function compactDuplicatePayloadReferences(artifact: CallLogArtifact): CallLogAr
     duplicateRequestBodies.length === 0 &&
     duplicateResponseBodies.length === 0 &&
     !requestMatches &&
-    !responseMatches
+    !responseMatches &&
+    !pipelineErrorRequestMatches
   )
     return artifact;
 
@@ -460,12 +470,20 @@ function compactDuplicatePayloadReferences(artifact: CallLogArtifact): CallLogAr
       bodyRef: canonicalResponse?.reference,
     };
   }
+  if (pipelineErrorRequestMatches && pipelineError) {
+    pipeline.error = {
+      ...pipelineError,
+      requestBody: undefined,
+      requestBodyRef: canonicalRequest?.reference,
+    };
+  }
 
   return {
     ...artifact,
-    schemaVersion:
-      duplicateRequestBodies.length > 0 || duplicateResponseBodies.length > 0
-        ? 7
+    schemaVersion: pipelineErrorRequestMatches
+      ? 10
+      : duplicateRequestBodies.length > 0 || duplicateResponseBodies.length > 0
+        ? (Math.max(artifact.schemaVersion, 7) as CallLogArtifact["schemaVersion"])
         : artifact.schemaVersion,
     pipeline: pipeline as unknown as RequestPipelinePayloads,
     ...(requestMatches
@@ -483,6 +501,11 @@ const CALL_LOG_BODY_REFERENCES = new Set([
   "pipeline.providerRequest.body",
   "pipeline.clientResponse.body",
   "pipeline.providerResponse.body",
+]);
+const CALL_LOG_REQUEST_BODY_REFERENCES = new Set([
+  "pipeline.clientRawRequest.body",
+  "pipeline.openaiRequest.body",
+  "pipeline.providerRequest.body",
 ]);
 
 const STREAM_CHUNK_TEXT_ENCODING = "omni-stream-chunk-text-table/v1";
@@ -597,7 +620,7 @@ export function compactCallLogStreamChunkText(artifact: CallLogArtifact): CallLo
 
   return {
     ...artifact,
-    schemaVersion: 8,
+    schemaVersion: Math.max(artifact.schemaVersion, 8) as CallLogArtifact["schemaVersion"],
     pipeline: {
       ...artifact.pipeline,
       streamChunks: encoded as unknown as RequestPipelinePayloads["streamChunks"],
@@ -858,7 +881,7 @@ export function compactCallLogRepeatedText(artifact: CallLogArtifact): CallLogAr
 
     return {
       ...artifact,
-      schemaVersion: 9,
+      schemaVersion: Math.max(artifact.schemaVersion, 9) as CallLogArtifact["schemaVersion"],
       requestBody: transform(requestBody, 0),
       responseBody: transform(responseBody, 0),
       ...(pipeline
@@ -1039,6 +1062,18 @@ function expandDuplicatePayloadReferences(artifact: CallLogArtifact): CallLogArt
     }
     artifact.responseBody = resolveArtifactBodyReference(artifact, artifact.responseBodyRef);
     delete artifact.responseBodyRef;
+  }
+
+  const pipelineError = artifact.pipeline?.error as Record<string, unknown> | undefined;
+  if (pipelineError && Object.hasOwn(pipelineError, "requestBodyRef")) {
+    if (!CALL_LOG_REQUEST_BODY_REFERENCES.has(String(pipelineError.requestBodyRef))) {
+      throw new Error("Unsupported call-log error request body reference");
+    }
+    pipelineError.requestBody = resolveArtifactBodyReference(
+      artifact,
+      pipelineError.requestBodyRef
+    );
+    delete pipelineError.requestBodyRef;
   }
   return artifact;
 }

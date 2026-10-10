@@ -81,6 +81,40 @@ test("generic request-logger callers still receive a defensive bounded clone", a
   assert.equal(original.input[0].content.length, 70_015, "the source body stays unmodified");
 });
 
+test("error capture reuses bounded source snapshots without cloning request bodies again", async () => {
+  let clientInputReads = 0;
+  const clientBody = {
+    model: "gpt-5.6",
+    get input() {
+      clientInputReads++;
+      return [{ role: "user", content: "client input" }];
+    },
+  };
+  const logger = await createLogger();
+
+  logger.logClientRawRequest("/v1/responses", clientBody);
+  const clientReadsAfterCapture = clientInputReads;
+  logger.logError(new Error("upstream failed"), clientBody);
+  assert.equal(clientInputReads, clientReadsAfterCapture);
+  const clientPipeline = logger.getPipelinePayloads();
+  assert.strictEqual(clientPipeline?.error?.requestBody, clientPipeline?.clientRawRequest?.body);
+
+  let providerInputReads = 0;
+  const providerBody = {
+    model: "gpt-5.6",
+    get input() {
+      providerInputReads++;
+      return [{ role: "user", content: "provider input" }];
+    },
+  };
+  logger.logTargetRequest("https://synthetic.invalid/responses", {}, providerBody);
+  const providerReadsAfterCapture = providerInputReads;
+  logger.logError(new Error("provider rejected request"), providerBody);
+  assert.equal(providerInputReads, providerReadsAfterCapture);
+  const providerPipeline = logger.getPipelinePayloads();
+  assert.strictEqual(providerPipeline?.error?.requestBody, providerPipeline?.providerRequest?.body);
+});
+
 test("prebounded and generic paths produce byte-identical request-stage payloads", async () => {
   const original = {
     model: "gpt-5.6",

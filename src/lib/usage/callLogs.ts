@@ -292,6 +292,7 @@ function shareDuplicatePipelineBodyReferences(payloads: unknown): unknown {
     ["clientRawRequest", "openaiRequest", "providerRequest"],
     ["clientResponse", "providerResponse"],
   ] as const;
+  const canonicalRequestBodies: Array<{ name: string; body: unknown }> = [];
 
   for (const names of groups) {
     const canonical: Array<{ name: (typeof names)[number]; body: unknown }> = [];
@@ -312,7 +313,36 @@ function shareDuplicatePipelineBodyReferences(payloads: unknown): unknown {
         }
       }
       if (duplicate) shared[name] = { ...record, body: duplicate.body };
-      else canonical.push({ name, body: record.body });
+      else {
+        canonical.push({ name, body: record.body });
+        if (names[0] === "clientRawRequest") {
+          canonicalRequestBodies.push({ name, body: record.body });
+        }
+      }
+    }
+  }
+
+  // RequestLogger already shares this object when possible. Normalize equal
+  // snapshots from other callers too, so protection, reservation, and the
+  // artifact writer can reuse the one sanitized request-body snapshot.
+  const error = source.error;
+  if (error && typeof error === "object" && !Array.isArray(error)) {
+    const errorRecord = error as Record<string, unknown>;
+    if (Object.hasOwn(errorRecord, "requestBody") && errorRecord.requestBody !== undefined) {
+      for (const candidate of canonicalRequestBodies) {
+        try {
+          if (
+            candidate.body === errorRecord.requestBody ||
+            isDeepStrictEqual(candidate.body, errorRecord.requestBody)
+          ) {
+            shared.error = { ...errorRecord, requestBody: candidate.body };
+            break;
+          }
+        } catch {
+          // Preserve unusual/non-JSON error bodies; the bounded estimator will
+          // fail closed if it cannot safely inspect them.
+        }
+      }
     }
   }
 

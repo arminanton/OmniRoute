@@ -330,6 +330,9 @@ test("high-context Antigravity stage bodies use exact shared and aggregate reser
     },
   });
   const sharedPayload = payload([clientBody, clientBody, clientBody]);
+  Object.assign(sharedPayload.pipeline, {
+    error: { message: "upstream failed", requestBody: clientBody },
+  });
 
   // Mirror the exact reference projection made by compactArtifactForFootprint:
   // one canonical body plus two bounded stage references.
@@ -344,6 +347,11 @@ test("high-context Antigravity stage bodies use exact shared and aggregate reser
       providerRequest: {
         ...stage(undefined),
         bodyRef: "pipeline.clientRawRequest.body",
+      },
+      error: {
+        message: "upstream failed",
+        requestBody: undefined,
+        requestBodyRef: "pipeline.clientRawRequest.body",
       },
     },
   };

@@ -96,6 +96,23 @@ export function protectPipelinePayloads(
 
   const protectedPayloads: RequestPipelinePayloads = {};
   const protectedBodySnapshots = new Map<unknown, Map<"payload" | "error", unknown>>();
+  const protectErrorWithRequestBody = (value: unknown): unknown => {
+    const source = asRecord(value);
+    if (!Object.hasOwn(source, "requestBody")) return protectPayloadForLog(value);
+
+    const metadata = { ...source };
+    delete metadata.requestBody;
+    const protectedMetadata = asRecord(protectPayloadForLog(metadata));
+    let modes = protectedBodySnapshots.get(source.requestBody);
+    if (!modes) {
+      modes = new Map();
+      protectedBodySnapshots.set(source.requestBody, modes);
+    }
+    if (!modes.has("payload")) {
+      modes.set("payload", protectPayloadForLog(source.requestBody));
+    }
+    return { ...protectedMetadata, requestBody: modes.get("payload") };
+  };
   const protectStageWithBody = (value: unknown, errorBody: boolean): unknown => {
     const source = asRecord(value);
     if (!Object.hasOwn(source, "body") || (source.body === undefined && !errorBody)) {
@@ -167,6 +184,11 @@ export function protectPipelinePayloads(
         }
         continue;
       }
+    }
+
+    if (key === "error") {
+      protectedPayloads.error = protectErrorWithRequestBody(value) as never;
+      continue;
     }
 
     if (key === "clientRawRequest" || key === "openaiRequest" || key === "providerRequest") {

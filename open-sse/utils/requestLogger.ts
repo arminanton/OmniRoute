@@ -669,6 +669,16 @@ export async function createRequestLogger(
     ...(diagnosticOverflowOnly ? { diagnosticOverflowOnly: true } : {}),
     ...(captureStreamChunks ? { streamChunks: chunkMethods.streamChunks } : {}),
   };
+  const sourceBodySnapshots = new WeakMap<object, unknown>();
+  const rememberSourceBodySnapshot = (source: unknown, snapshot: unknown) => {
+    if (source && typeof source === "object") sourceBodySnapshots.set(source, snapshot);
+  };
+  const cloneOrReuseSourceBodySnapshot = (source: unknown) => {
+    if (source && typeof source === "object" && sourceBodySnapshots.has(source)) {
+      return sourceBodySnapshots.get(source);
+    }
+    return cloneBoundedForLog(source);
+  };
   let providerAttemptDiagnosticsDropped = 0;
 
   return {
@@ -690,6 +700,7 @@ export async function createRequestLogger(
         bodySnapshot(payloads.openaiRequest),
         bodySnapshot(payloads.providerRequest),
       ]);
+      rememberSourceBodySnapshot(body, cloned.body);
       payloads.clientRawRequest = {
         timestamp: new Date().toISOString(),
         endpoint,
@@ -708,12 +719,14 @@ export async function createRequestLogger(
         return;
       }
       const clonedBody = cloneBoundedForLog(body);
+      const sharedBody = reuseEqualBodySnapshot(clonedBody, [
+        bodySnapshot(payloads.clientRawRequest),
+        bodySnapshot(payloads.providerRequest),
+      ]);
+      rememberSourceBodySnapshot(body, sharedBody);
       payloads.openaiRequest = {
         timestamp: new Date().toISOString(),
-        body: reuseEqualBodySnapshot(clonedBody, [
-          bodySnapshot(payloads.clientRawRequest),
-          bodySnapshot(payloads.providerRequest),
-        ]),
+        body: sharedBody,
       };
     },
 
@@ -726,14 +739,16 @@ export async function createRequestLogger(
         return;
       }
       const clonedBody = cloneBoundedForLog(body);
+      const sharedBody = reuseEqualBodySnapshot(clonedBody, [
+        bodySnapshot(payloads.clientRawRequest),
+        bodySnapshot(payloads.openaiRequest),
+      ]);
+      rememberSourceBodySnapshot(body, sharedBody);
       payloads.providerRequest = {
         timestamp: new Date().toISOString(),
         url,
         headers: maskSensitiveHeaders(headers),
-        body: reuseEqualBodySnapshot(clonedBody, [
-          bodySnapshot(payloads.clientRawRequest),
-          bodySnapshot(payloads.openaiRequest),
-        ]),
+        body: sharedBody,
       };
     },
 
@@ -791,19 +806,19 @@ export async function createRequestLogger(
         error && typeof error === "object" && "nativeError" in error
           ? (error as { nativeError: unknown }).nativeError
           : classifyUpstreamPolicyRejection(error);
+      const requestBodySnapshot = diagnosticOverflowOnly
+        ? undefined
+        : reuseEqualBodySnapshot(cloneOrReuseSourceBodySnapshot(requestBody), [
+            bodySnapshot(payloads.clientRawRequest),
+            bodySnapshot(payloads.openaiRequest),
+            bodySnapshot(payloads.providerRequest),
+          ]);
+      if (!diagnosticOverflowOnly) rememberSourceBodySnapshot(requestBody, requestBodySnapshot);
       payloads.error = {
         ...(nativeError ? { nativeError: cloneBoundedForLog(nativeError) } : {}),
         timestamp: new Date().toISOString(),
         error: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-        ...(!diagnosticOverflowOnly
-          ? {
-              requestBody: reuseEqualBodySnapshot(cloneBoundedForLog(requestBody), [
-                bodySnapshot(payloads.clientRawRequest),
-                bodySnapshot(payloads.openaiRequest),
-                bodySnapshot(payloads.providerRequest),
-              ]),
-            }
-          : {}),
+        ...(!diagnosticOverflowOnly ? { requestBody: requestBodySnapshot } : {}),
       };
     },
 
