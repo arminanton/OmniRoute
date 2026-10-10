@@ -12,6 +12,17 @@ import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { acquireConfiguredSharedAccountAdmission } from "../services/accountRequestAdmission.ts";
 
+function cancellationResponse(
+  callerSignal: AbortSignal | undefined,
+  admissionSignal: AbortSignal | undefined
+): Response | null {
+  if (callerSignal?.aborted) return errorResponse(499, "Moderation request cancelled");
+  if (admissionSignal?.aborted) {
+    return errorResponse(503, "Provider account capacity lease was lost during moderation");
+  }
+  return null;
+}
+
 /**
  * Handle moderation request
  *
@@ -64,6 +75,8 @@ export async function handleModeration({ body, credentials, signal }) {
       throw error;
     }
     const requestSignal = sharedAdmission?.signal ?? signal;
+    const cancelledBeforeFetch = cancellationResponse(signal, sharedAdmission?.signal);
+    if (cancelledBeforeFetch) return cancelledBeforeFetch;
     requestSignal?.throwIfAborted();
     const res = await fetch(providerConfig.baseUrl, {
       method: "POST",
@@ -77,9 +90,13 @@ export async function handleModeration({ body, credentials, signal }) {
       }),
       signal: requestSignal,
     });
+    const cancelledAfterHeaders = cancellationResponse(signal, sharedAdmission?.signal);
+    if (cancelledAfterHeaders) return cancelledAfterHeaders;
 
     if (!res.ok) {
       const errText = await res.text();
+      const cancelledAfterErrorBody = cancellationResponse(signal, sharedAdmission?.signal);
+      if (cancelledAfterErrorBody) return cancelledAfterErrorBody;
       return buildSanitizedUpstreamErrorResponse({
         status: res.status,
         rawBody: errText,
@@ -89,6 +106,8 @@ export async function handleModeration({ body, credentials, signal }) {
     }
 
     const data = await res.json();
+    const cancelledAfterBody = cancellationResponse(signal, sharedAdmission?.signal);
+    if (cancelledAfterBody) return cancelledAfterBody;
     const headers = new Headers({ ...CORS_HEADERS, "Content-Type": "application/json" });
     attachOmniRouteMetaHeaders(headers, {
       provider: providerId,
@@ -99,9 +118,8 @@ export async function handleModeration({ body, credentials, signal }) {
     });
     return new Response(JSON.stringify(data), { status: 200, headers });
   } catch (err) {
-    if (signal?.aborted || sharedAdmission?.signal.aborted) {
-      return errorResponse(499, "Moderation request cancelled");
-    }
+    const cancelled = cancellationResponse(signal, sharedAdmission?.signal);
+    if (cancelled) return cancelled;
     const safeDetail =
       sanitizeErrorMessage(err)
         .replace(/^[A-Za-z]*Error:\s*/, "")

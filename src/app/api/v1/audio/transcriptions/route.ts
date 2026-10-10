@@ -37,6 +37,7 @@ import { runtimePolicyErrorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
 import {
   acquireConfiguredSharedAccountAdmission,
+  getAccountAdmissionAbortStatus,
   markAccountAdmissionFailureResponse,
 } from "@omniroute/open-sse/services/accountRequestAdmission.ts";
 import { runMaxaiConnectionTransport } from "@omniroute/open-sse/services/maxaiTransport.ts";
@@ -48,6 +49,14 @@ import {
 
 function accountAdmissionUnavailableResponse(status: number, message: string): Response {
   return markAccountAdmissionFailureResponse(errorResponse(status, message));
+}
+
+function admissionAbortResponse(status: 499 | 503): Response {
+  const response = errorResponse(
+    status,
+    status === 499 ? "Transcription request cancelled" : "Provider account capacity lease lost"
+  );
+  return status === 503 ? markAccountAdmissionFailureResponse(response) : response;
 }
 
 function releaseCredentialSelection(credentials: unknown): void {
@@ -256,21 +265,28 @@ async function transcribeWithModel(
             )
           : await transcribe();
     } catch (error) {
-      if (request.signal.aborted || sharedAdmission?.signal.aborted) {
-        return errorResponse(499, "Transcription request cancelled");
+      const abortStatus = getAccountAdmissionAbortStatus(request.signal, sharedAdmission?.signal);
+      if (abortStatus) {
+        return admissionAbortResponse(abortStatus);
       }
       throw error;
     }
-    if (request.signal.aborted || sharedAdmission?.signal.aborted) {
+    const abortStatus = getAccountAdmissionAbortStatus(request.signal, sharedAdmission?.signal);
+    if (abortStatus) {
       try {
         await response?.body?.cancel(request.signal.reason ?? sharedAdmission?.signal.reason);
       } catch {
         // A consumed/locked response body is already on its terminal path.
       }
-      return errorResponse(499, "Transcription request cancelled");
+      return admissionAbortResponse(abortStatus);
     }
     if (response?.ok) {
       await clearRecoveredProviderState(credentials);
+      const postRecoveryAbortStatus = getAccountAdmissionAbortStatus(
+        request.signal,
+        sharedAdmission?.signal
+      );
+      if (postRecoveryAbortStatus) return admissionAbortResponse(postRecoveryAbortStatus);
       // No text body / playback duration available from the multipart upload, so
       // per-second pricing cannot be applied → cost 0 (ADD-only headers, body intact).
       response = attachOmniRouteMetaToResponse(response, {

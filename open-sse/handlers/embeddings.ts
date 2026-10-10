@@ -34,6 +34,11 @@ import {
 import { MAX_EMBEDDING_INLINE_ITEM_BYTES } from "@/shared/validation/schemas/apiV1";
 import { markAccountUnavailable } from "../../src/sse/services/auth.ts";
 import {
+  acquireConfiguredSharedAccountAdmission,
+  getAccountAdmissionAbortStatus,
+} from "../services/accountRequestAdmission.ts";
+import { resolveProviderId } from "@/shared/constants/providers";
+import {
   collectJinaNativeModalities,
   isJinaNativeEmbeddingInput,
 } from "@/shared/validation/jinaNativeEmbeddingInput";
@@ -52,6 +57,10 @@ interface ClientRawRequest {
 interface EmbeddingCredentials {
   apiKey?: string | null;
   accessToken?: string | null;
+  id?: string | null;
+  connectionId?: string | null;
+  provider?: string | null;
+  maxConcurrent?: number | null;
   providerSpecificData?: Record<string, unknown> | null;
 }
 
@@ -82,12 +91,14 @@ interface EmbeddingFailure {
   success: false;
   status: number;
   error: string;
+  admissionFailure?: true;
   headers?: Headers;
   data?: never;
 }
 
 interface EmbeddingSuccess {
   success: true;
+  admissionFailure?: false;
   data: Record<string, unknown>;
   headers: Headers;
   status?: never;
@@ -114,6 +125,7 @@ interface EmbeddingRuntime extends HandleEmbeddingParams {
   detailedLoggingEnabled: boolean;
   reqLogger: RequestLogger;
   logRequestBody: Record<string, unknown>;
+  callerSignal?: AbortSignal | null;
 }
 
 interface PreparedEmbeddingRequest {
@@ -147,6 +159,19 @@ function flattenSingleRowEmbedding(item: unknown): void {
 
 function failure(status: number, error: string, headers?: Headers): EmbeddingFailure {
   return { success: false, status, error, ...(headers ? { headers } : {}) };
+}
+
+function admissionFailure(status: 499 | 503, error: string): EmbeddingFailure {
+  return { ...failure(status, error), admissionFailure: true };
+}
+
+function abortFailure(runtime: EmbeddingRuntime): EmbeddingFailure | null {
+  const status = getAccountAdmissionAbortStatus(runtime.callerSignal, runtime.signal);
+  if (status === 499) return admissionFailure(499, "Embedding request cancelled");
+  if (status === 503) {
+    return admissionFailure(503, "Provider account capacity admission was lost");
+  }
+  return null;
 }
 
 function resolveEmbedding(params: HandleEmbeddingParams): ResolvedEmbedding {
@@ -536,6 +561,8 @@ async function handleUpstreamFailure(
   response: Response
 ): Promise<EmbeddingFailure> {
   const errorText = await response.text();
+  const aborted = abortFailure(runtime);
+  if (aborted) return aborted;
   runtime.log?.error(
     "EMBED",
     `${runtime.provider} error ${response.status}: ${errorText.slice(0, 200)}`
@@ -658,8 +685,10 @@ async function handleUpstreamSuccess(
   prepared: PreparedEmbeddingRequest,
   response: Response,
   requestCount: number
-): Promise<EmbeddingSuccess> {
+): Promise<EmbeddingResult> {
   const rawData = (await response.json()) as Record<string, unknown>;
+  const aborted = abortFailure(runtime);
+  if (aborted) return aborted;
   const { data, normalizedResponse } = normalizeEmbeddingData(
     runtime,
     response,
@@ -680,18 +709,15 @@ function handleEmbeddingException(
   prepared: PreparedEmbeddingRequest,
   error: unknown
 ): EmbeddingFailure {
-  const callerAborted = runtime.signal?.aborted === true;
-  const message = callerAborted
-    ? "Embedding request cancelled"
-    : error instanceof Error
-      ? error.message
-      : String(error);
-  if (!callerAborted) runtime.log?.error("EMBED", `${runtime.provider} fetch error: ${message}`);
+  const aborted = abortFailure(runtime);
+  if (aborted) return aborted;
+  const message = error instanceof Error ? error.message : String(error);
+  runtime.log?.error("EMBED", `${runtime.provider} fetch error: ${message}`);
   runtime.reqLogger.logError(error, prepared.upstreamBody);
   saveCallLog({
     method: "POST",
     path: "/v1/embeddings",
-    status: callerAborted ? 499 : 502,
+    status: 502,
     model: `${runtime.provider}/${runtime.model}`,
     provider: runtime.provider,
     duration: Date.now() - runtime.startTime,
@@ -702,25 +728,19 @@ function handleEmbeddingException(
     apiKeyName: runtime.apiKeyName,
     connectionId: runtime.connectionId,
   }).catch(() => {});
-  return callerAborted
-    ? failure(499, message)
-    : failure(502, `Embedding provider error: ${sanitizeErrorMessage(message)}`);
+  return failure(502, `Embedding provider error: ${sanitizeErrorMessage(message)}`);
 }
 
 async function executeEmbedding(
   runtime: EmbeddingRuntime,
   prepared: PreparedEmbeddingRequest
 ): Promise<EmbeddingResult> {
-  if (runtime.signal?.aborted) return failure(499, "Embedding request cancelled");
+  const initialAbort = abortFailure(runtime);
+  if (initialAbort) return initialAbort;
   const quotaFailure = await enforceEmbeddingQuota(runtime);
   if (quotaFailure) return quotaFailure;
-  if (runtime.signal?.aborted) {
-    return handleEmbeddingException(
-      runtime,
-      prepared,
-      runtime.signal.reason ?? new DOMException("Request aborted", "AbortError")
-    );
-  }
+  const quotaAbort = abortFailure(runtime);
+  if (quotaAbort) return quotaAbort;
   const singleTextsOrFailure = resolveSingleTexts(runtime);
   if (singleTextsOrFailure && !Array.isArray(singleTextsOrFailure)) return singleTextsOrFailure;
   const singleTexts = Array.isArray(singleTextsOrFailure) ? singleTextsOrFailure : null;
@@ -731,13 +751,8 @@ async function executeEmbedding(
       runtime.reqLogger,
       runtime.signal
     );
-    if (runtime.signal?.aborted) {
-      return handleEmbeddingException(
-        runtime,
-        prepared,
-        runtime.signal.reason ?? new DOMException("Request aborted", "AbortError")
-      );
-    }
+    const dispatchAbort = abortFailure(runtime);
+    if (dispatchAbort) return dispatchAbort;
     return response.ok
       ? handleUpstreamSuccess(runtime, prepared, response, singleTexts?.length ?? 1)
       : handleUpstreamFailure(runtime, response);
@@ -762,5 +777,44 @@ export async function handleEmbedding(params: HandleEmbeddingParams): Promise<Em
       Array.isArray(runtime.body.input) ? `${runtime.body.input.length} items` : "1 item"
     }`
   );
-  return executeEmbedding(runtime, prepared);
+
+  let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
+  const selectedProvider =
+    typeof runtime.credentials?.provider === "string" && runtime.credentials.provider.trim()
+      ? resolveProviderId(runtime.credentials.provider.trim())
+      : resolveProviderId(runtime.provider);
+  try {
+    try {
+      sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+        provider: selectedProvider,
+        credentials: runtime.credentials,
+        signal: params.signal ?? undefined,
+      });
+    } catch (error) {
+      const abortStatus = getAccountAdmissionAbortStatus(params.signal);
+      if (abortStatus === 499) {
+        return admissionFailure(499, "Embedding request cancelled");
+      }
+      const admissionError = error as { code?: string; statusCode?: number; message?: string };
+      if (admissionError.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+        return {
+          ...failure(
+            503,
+            admissionError.message || "Provider account capacity admission is unavailable"
+          ),
+          admissionFailure: true,
+        };
+      }
+      throw error;
+    }
+
+    const admittedRuntime: EmbeddingRuntime = {
+      ...runtime,
+      callerSignal: params.signal,
+      signal: sharedAdmission?.signal ?? params.signal ?? undefined,
+    };
+    return await executeEmbedding(admittedRuntime, prepared);
+  } finally {
+    sharedAdmission?.release();
+  }
 }

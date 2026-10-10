@@ -21,6 +21,11 @@ import { generateRequestId } from "@/shared/utils/requestId";
 import { CORS_HEADERS } from "@omniroute/open-sse/utils/cors.ts";
 import { deriveRerankProviderForChatProvider } from "@omniroute/open-sse/config/rerankRegistry.ts";
 import { reserveAccountRequest } from "@omniroute/open-sse/services/accountRequestOccupancy.ts";
+import {
+  acquireConfiguredSharedAccountAdmission,
+  getAccountAdmissionAbortStatus,
+} from "@omniroute/open-sse/services/accountRequestAdmission.ts";
+import { resolveProviderId } from "@/shared/constants/providers";
 
 /**
  * Handle CORS preflight
@@ -59,6 +64,126 @@ function reserveSelectedAccountRequest(credentials: unknown): () => void {
   } | null;
   if (typeof selected?.releaseAccountRequest === "function") return selected.releaseAccountRequest;
   return reserveAccountRequest(selected?.connectionId);
+}
+
+function selectedCredentialProvider(credentials: unknown, fallbackProvider: string): string {
+  const selected = credentials as { provider?: unknown } | null;
+  return typeof selected?.provider === "string" && selected.provider.trim()
+    ? resolveProviderId(selected.provider.trim())
+    : resolveProviderId(fallbackProvider);
+}
+
+function admissionFailureResponse(
+  callerSignal: AbortSignal,
+  error?: unknown,
+  admissionSignal?: AbortSignal
+): Response | null {
+  const status = getAccountAdmissionAbortStatus(callerSignal, admissionSignal);
+  if (status === 499) return errorResponse(499, "Rerank request cancelled");
+  if (status === 503) {
+    return errorResponse(
+      HTTP_STATUS.SERVICE_UNAVAILABLE,
+      "Provider account capacity admission was lost"
+    );
+  }
+  const admissionError = error as { code?: string; statusCode?: number; message?: string } | null;
+  if (admissionError?.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+    if (admissionError.statusCode === 499 && callerSignal.aborted) {
+      return errorResponse(499, "Rerank request cancelled");
+    }
+    return errorResponse(
+      HTTP_STATUS.SERVICE_UNAVAILABLE,
+      admissionError.message || "Provider account capacity admission is unavailable"
+    );
+  }
+  return null;
+}
+
+type LocalRerankAttempt = { response: Response } | { terminal: Response };
+
+/**
+ * Run and fully consume one local provider attempt under its own shared lease.
+ * Buffering the JSON response here keeps account capacity reserved until the
+ * provider has finished writing the response, and a lease-loss abort cannot be
+ * mistaken for a provider failure or trigger the local /rerank fallback.
+ */
+async function fetchLocalRerankAttempt(options: {
+  url: string;
+  providerId: string;
+  credentials: unknown;
+  token: unknown;
+  body: Record<string, unknown>;
+  callerSignal: AbortSignal;
+}): Promise<LocalRerankAttempt> {
+  if (options.callerSignal.aborted) {
+    return { terminal: errorResponse(499, "Rerank request cancelled") };
+  }
+
+  let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
+  try {
+    sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+      provider: selectedCredentialProvider(options.credentials, options.providerId),
+      credentials: options.credentials as any,
+      signal: options.callerSignal,
+    });
+  } catch (error) {
+    const failureResponse = admissionFailureResponse(options.callerSignal, error);
+    if (failureResponse) return { terminal: failureResponse };
+    throw error;
+  }
+
+  try {
+    const upstreamSignal = sharedAdmission?.signal ?? options.callerSignal;
+    upstreamSignal.throwIfAborted();
+    const res = await fetch(options.url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${String(options.token)}`,
+      },
+      body: JSON.stringify(options.body),
+      signal: upstreamSignal,
+    });
+
+    let failureResponse = admissionFailureResponse(
+      options.callerSignal,
+      undefined,
+      sharedAdmission?.signal
+    );
+    if (failureResponse) {
+      await res.body
+        ?.cancel(options.callerSignal.reason ?? sharedAdmission?.signal.reason)
+        .catch(() => {});
+      return { terminal: failureResponse };
+    }
+
+    const noBodyStatus = res.status === 204 || res.status === 205 || res.status === 304;
+    const responseBody = noBodyStatus ? null : await res.arrayBuffer();
+    failureResponse = admissionFailureResponse(
+      options.callerSignal,
+      undefined,
+      sharedAdmission?.signal
+    );
+    if (failureResponse) return { terminal: failureResponse };
+
+    return {
+      response: new Response(responseBody, {
+        status: res.status,
+        statusText: res.statusText,
+        headers: new Headers(res.headers),
+      }),
+    };
+  } catch (error) {
+    const failureResponse = admissionFailureResponse(
+      options.callerSignal,
+      undefined,
+      sharedAdmission?.signal
+    );
+    if (failureResponse) return { terminal: failureResponse };
+    throw error;
+  } finally {
+    sharedAdmission?.release();
+  }
 }
 
 /**
@@ -163,7 +288,19 @@ async function postHandler(request, context) {
     }
 
     const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+    let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
     try {
+      try {
+        sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+          provider: selectedCredentialProvider(credentials, effectiveProviderId),
+          credentials: credentials as any,
+          signal: request.signal,
+        });
+      } catch (error) {
+        const failureResponse = admissionFailureResponse(request.signal, error);
+        if (failureResponse) return failureResponse;
+        throw error;
+      }
       const response = await handleRerank({
         model: body.model,
         query: body.query,
@@ -175,16 +312,20 @@ async function postHandler(request, context) {
         connectionId: (credentials as { connectionId?: string } | null)?.connectionId || null,
         apiKeyId: policy.apiKeyInfo?.id || null,
         apiKeyName: policy.apiKeyInfo?.name || null,
-        signal: request.signal,
+        signal: sharedAdmission?.signal ?? request.signal,
       });
+      const failureResponse = admissionFailureResponse(
+        request.signal,
+        undefined,
+        sharedAdmission?.signal
+      );
+      if (failureResponse) return failureResponse;
       if (response?.ok) {
         await clearRecoveredProviderState(credentials);
       }
-      if (request.signal.aborted) {
-        return errorResponse(499, "Rerank request cancelled");
-      }
       return response;
     } finally {
+      sharedAdmission?.release();
       releaseAccountRequest();
     }
   }
@@ -218,49 +359,42 @@ async function postHandler(request, context) {
       const token = credentials?.apiKey || credentials?.accessToken;
       const startTime = Date.now();
       try {
-        request.signal.throwIfAborted();
-        let res = await fetch(localProvider.baseUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            model: localModel,
-            query: body.query,
-            documents: body.documents,
-            top_n: body.top_n || body.documents.length,
-            return_documents: body.return_documents !== false,
-          }),
-          signal: request.signal,
+        const requestBody = {
+          model: localModel,
+          query: body.query,
+          documents: body.documents,
+          top_n: body.top_n || body.documents.length,
+          return_documents: body.return_documents !== false,
+        };
+        const primaryAttempt = await fetchLocalRerankAttempt({
+          url: localProvider.baseUrl,
+          providerId: localProvider.providerId,
+          credentials,
+          token,
+          body: requestBody,
+          callerSignal: request.signal,
         });
+        if ("terminal" in primaryAttempt) return primaryAttempt.terminal;
+        let res = primaryAttempt.response;
+
         if (request.signal.aborted) {
           return errorResponse(499, "Rerank request cancelled");
         }
 
         // Some local providers (e.g. Infinity, TEI) mount at /rerank rather than /v1/rerank
         if (res.status === 404 && localProvider.baseUrl.endsWith("/v1/rerank")) {
-          request.signal.throwIfAborted();
           const fallbackUrl = localProvider.baseUrl.replace(/\/v1\/rerank$/, "/rerank");
           try {
-            const fallbackRes = await fetch(fallbackUrl, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                model: localModel,
-                query: body.query,
-                documents: body.documents,
-                top_n: body.top_n || body.documents.length,
-                return_documents: body.return_documents !== false,
-              }),
-              signal: request.signal,
+            const fallbackAttempt = await fetchLocalRerankAttempt({
+              url: fallbackUrl,
+              providerId: localProvider.providerId,
+              credentials,
+              token,
+              body: requestBody,
+              callerSignal: request.signal,
             });
-            if (request.signal.aborted) {
-              return errorResponse(499, "Rerank request cancelled");
-            }
+            if ("terminal" in fallbackAttempt) return fallbackAttempt.terminal;
+            const fallbackRes = fallbackAttempt.response;
             if (fallbackRes.ok || fallbackRes.status !== 404) {
               res = fallbackRes;
             }

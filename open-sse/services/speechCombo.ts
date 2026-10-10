@@ -31,7 +31,21 @@ import {
   releaseAccountRequestAfterResponseBody,
   reserveSelectedAccountRequest,
 } from "./accountRequestLease.ts";
-import { acquireConfiguredSharedAccountAdmission } from "./accountRequestAdmission.ts";
+import {
+  acquireConfiguredSharedAccountAdmission,
+  getAccountAdmissionAbortStatus,
+} from "./accountRequestAdmission.ts";
+
+async function cancelSpeechResponseBody(
+  response: Response | null | undefined,
+  reason: unknown
+): Promise<void> {
+  try {
+    await response?.body?.cancel(reason);
+  } catch {
+    // A locked/consumed body is already on its terminal path.
+  }
+}
 
 /**
  * Execute a full combo strategy for a text-to-speech request.
@@ -178,17 +192,33 @@ export async function executeSpeechCombo(
         signal: sharedAdmission?.signal ?? signal,
       });
 
-      if (signal?.aborted || sharedAdmission?.signal.aborted) {
-        try {
-          await response?.body?.cancel(signal?.reason ?? sharedAdmission?.signal.reason);
-        } catch {
-          // A consumed/locked body is already on its terminal path.
-        }
-        return errorResponse(499, "Speech request cancelled");
+      const abortStatus = getAccountAdmissionAbortStatus(signal, sharedAdmission?.signal);
+      if (abortStatus) {
+        await cancelSpeechResponseBody(response, signal?.reason ?? sharedAdmission?.signal.reason);
+        return errorResponse(
+          abortStatus,
+          abortStatus === 499 ? "Speech request cancelled" : "Provider account capacity lease lost"
+        );
       }
 
       if (response?.ok) {
         await clearRecoveredProviderState(credentials);
+        const postRecoveryAbortStatus = getAccountAdmissionAbortStatus(
+          signal,
+          sharedAdmission?.signal
+        );
+        if (postRecoveryAbortStatus) {
+          await cancelSpeechResponseBody(
+            response,
+            signal?.reason ?? sharedAdmission?.signal.reason
+          );
+          return errorResponse(
+            postRecoveryAbortStatus,
+            postRecoveryAbortStatus === 499
+              ? "Speech request cancelled"
+              : "Provider account capacity lease lost"
+          );
+        }
         const characters = typeof body.input === "string" ? body.input.length : 0;
         const costUsd = await calculateModalCost(
           "audio",
@@ -216,10 +246,20 @@ export async function executeSpeechCombo(
       }
 
       const status = response?.status || 500;
-      if (status === 499 || signal?.aborted || sharedAdmission?.signal.aborted) {
-        return status === 499 && !signal?.aborted
-          ? response
-          : errorResponse(499, "Speech request cancelled");
+      const errorAbortStatus = getAccountAdmissionAbortStatus(signal, sharedAdmission?.signal);
+      if (errorAbortStatus) {
+        await cancelSpeechResponseBody(response, signal?.reason ?? sharedAdmission?.signal.reason);
+        return errorResponse(
+          errorAbortStatus,
+          errorAbortStatus === 499
+            ? "Speech request cancelled"
+            : "Provider account capacity lease lost"
+        );
+      }
+      if (status === 499) {
+        // Preserve an upstream 499 when neither the caller nor admission lease
+        // aborted; it is a provider response, not a local cancellation signal.
+        return response;
       }
       // The body is read only on the failure path, where it is small and about to
       // be discarded anyway; a successful audio stream is never consumed here.
@@ -231,8 +271,15 @@ export async function executeSpeechCombo(
         // non-text or already-consumed body — keep the status-line message
       }
 
-      if (signal?.aborted || sharedAdmission?.signal.aborted) {
-        return errorResponse(499, "Speech request cancelled");
+      const postReadAbortStatus = getAccountAdmissionAbortStatus(signal, sharedAdmission?.signal);
+      if (postReadAbortStatus) {
+        await cancelSpeechResponseBody(response, signal?.reason ?? sharedAdmission?.signal.reason);
+        return errorResponse(
+          postReadAbortStatus,
+          postReadAbortStatus === 499
+            ? "Speech request cancelled"
+            : "Provider account capacity lease lost"
+        );
       }
 
       if (status === 400 || status === 401 || status === 403) {

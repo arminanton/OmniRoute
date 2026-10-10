@@ -1665,7 +1665,7 @@ async function tryProvider(
         admissionSignal
       ),
   });
-  if (!attempt.admitted) {
+  if (attempt.admitted === false) {
     return { success: false, status: 503, error: attempt.error, terminal: true };
   }
   return attempt.value;

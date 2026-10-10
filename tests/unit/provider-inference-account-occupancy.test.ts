@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { TestContext } from "node:test";
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-inference-occupancy-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.API_KEY_SECRET = process.env.API_KEY_SECRET || "inference-occupancy-test-secret";
+const previousSharedAdmission = process.env.OMNI_SHARED_ADMISSION;
+process.env.OMNI_SHARED_ADMISSION = "false";
 
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
@@ -22,7 +25,7 @@ const rerankRoute = await import("../../src/app/api/v1/rerank/route.ts");
 const originalFetch = globalThis.fetch;
 const seededConnectionIdsByProvider = new Map<string, string[]>();
 
-async function seedConnection(provider: string, name: string) {
+async function seedConnection(provider: string, name: string, maxConcurrent?: number) {
   const connection = await providersDb.createProviderConnection({
     provider,
     authType: "apikey",
@@ -30,6 +33,7 @@ async function seedConnection(provider: string, name: string) {
     apiKey: `${name}-key`,
     isActive: true,
     testStatus: "active",
+    ...(maxConcurrent === undefined ? {} : { maxConcurrent }),
     providerSpecificData: { quotaPreflightEnabled: false },
   });
   readCache.invalidateDbCache("connections");
@@ -38,6 +42,16 @@ async function seedConnection(provider: string, name: string) {
   ids.push(id);
   seededConnectionIdsByProvider.set(provider, ids);
   return id;
+}
+
+async function keepOnlyConnectionActive(provider: string, connectionId: string) {
+  const connections = await providersDb.getProviderConnections();
+  for (const connection of connections) {
+    if (connection.provider === provider && connection.id !== connectionId) {
+      await providersDb.updateProviderConnection(connection.id, { isActive: false });
+    }
+  }
+  readCache.invalidateDbCache("connections");
 }
 
 function inFlightConnectionIds(provider: string): string[] {
@@ -66,6 +80,69 @@ function postJson(url: string, body: unknown, signal?: AbortSignal): Request {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function withSharedAdmission(name: string, run: () => Promise<void>) {
+  const previousShared = process.env.OMNI_SHARED_ADMISSION;
+  const previousDatabase = process.env.OMNI_COORDINATION_DB;
+  const previousUnhealthy = process.env.OMNI_COORDINATION_UNHEALTHY;
+  globalThis.__omniSharedCoordinator?.close();
+  globalThis.__omniSharedCoordinator = undefined;
+  delete process.env.OMNI_COORDINATION_UNHEALTHY;
+  process.env.OMNI_SHARED_ADMISSION = "true";
+  process.env.OMNI_COORDINATION_DB = path.join(TEST_DATA_DIR, `coordination-${name}.sqlite`);
+  try {
+    await run();
+  } finally {
+    globalThis.__omniSharedCoordinator?.close();
+    globalThis.__omniSharedCoordinator = undefined;
+    if (previousShared === undefined) delete process.env.OMNI_SHARED_ADMISSION;
+    else process.env.OMNI_SHARED_ADMISSION = previousShared;
+    if (previousDatabase === undefined) delete process.env.OMNI_COORDINATION_DB;
+    else process.env.OMNI_COORDINATION_DB = previousDatabase;
+    if (previousUnhealthy === undefined) delete process.env.OMNI_COORDINATION_UNHEALTHY;
+    else process.env.OMNI_COORDINATION_UNHEALTHY = previousUnhealthy;
+  }
+}
+
+function installManualLeaseLoss(t: TestContext) {
+  const setInterval = globalThis.setInterval.bind(globalThis);
+  let heartbeat: (() => void) | null = null;
+  t.mock.method(globalThis, "setInterval", ((
+    handler: (...args: any[]) => void,
+    delay?: number,
+    ...args: any[]
+  ) => {
+    const timer = setInterval(handler, delay, ...args);
+    if (delay === 10_000) heartbeat = handler;
+    return timer;
+  }) as typeof globalThis.setInterval);
+
+  return () => {
+    const coordinator = globalThis.__omniSharedCoordinator as any;
+    assert.ok(
+      coordinator,
+      "the shared coordinator must be initialized before simulating lease loss"
+    );
+    const renew = coordinator.renew;
+    coordinator.renew = () => false;
+    try {
+      assert.ok(heartbeat, "the shared account lease installed its heartbeat");
+      heartbeat?.();
+    } finally {
+      coordinator.renew = renew;
+    }
+  };
+}
+
 test.beforeEach(() => {
   accountOccupancy._clearAccountRequestOccupancyForTest();
   globalThis.fetch = originalFetch;
@@ -76,6 +153,8 @@ test.after(async () => {
   await callLogs.waitForCallLogSaves(5000);
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  if (previousSharedAdmission === undefined) delete process.env.OMNI_SHARED_ADMISSION;
+  else process.env.OMNI_SHARED_ADMISSION = previousSharedAdmission;
 });
 
 test("embedding service reserves through upstream completion, error, and pre-dispatch return", async () => {
@@ -336,4 +415,177 @@ test("local rerank fallback keeps one reservation across both fetches and releas
   assert.equal(response.status, 500);
   assert.deepEqual(urls, ["http://127.0.0.1:8199/v1/rerank", "http://127.0.0.1:8199/rerank"]);
   assert.equal(accountOccupancy.getAccountRequestInFlightCount(connectionId), 0);
+});
+
+test("embeddings obey configured shared maxConcurrent across requests", async () => {
+  await withSharedAdmission("embedding-cap", async () => {
+    const connectionId = await seedConnection("openai", "shared-occupancy-embedding", 1);
+    await keepOnlyConnectionActive("openai", connectionId);
+    const firstResponse = deferred<Response>();
+    const secondResponse = deferred<Response>();
+    const firstStarted = deferred<void>();
+    const secondStarted = deferred<void>();
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+      fetchCount++;
+      if (fetchCount === 1) {
+        firstStarted.resolve();
+        return firstResponse.promise;
+      }
+      if (fetchCount === 2) {
+        secondStarted.resolve();
+        return secondResponse.promise;
+      }
+      throw new Error(`unexpected embedding fetch #${fetchCount}`);
+    }) as typeof fetch;
+
+    const requestBody = { model: "openai/text-embedding-3-small", input: "shared cap" };
+    const first = createEmbeddingResponse(requestBody);
+    await firstStarted.promise;
+    const second = createEmbeddingResponse(requestBody);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(fetchCount, 1, "the second embedding waits for the shared account slot");
+
+    firstResponse.resolve(new Response(JSON.stringify(embeddingPayload()), { status: 200 }));
+    assert.equal((await first).status, 200);
+    await secondStarted.promise;
+    secondResponse.resolve(new Response(JSON.stringify(embeddingPayload()), { status: 200 }));
+    assert.equal((await second).status, 200);
+  });
+});
+
+test("cloud rerank obeys configured shared maxConcurrent across requests", async () => {
+  await withSharedAdmission("rerank-cap", async () => {
+    const connectionId = await seedConnection("cohere", "shared-occupancy-rerank", 1);
+    await keepOnlyConnectionActive("cohere", connectionId);
+    const firstResponse = deferred<Response>();
+    const secondResponse = deferred<Response>();
+    const firstStarted = deferred<void>();
+    const secondStarted = deferred<void>();
+    let fetchCount = 0;
+    globalThis.fetch = (async () => {
+      fetchCount++;
+      if (fetchCount === 1) {
+        firstStarted.resolve();
+        return firstResponse.promise;
+      }
+      if (fetchCount === 2) {
+        secondStarted.resolve();
+        return secondResponse.promise;
+      }
+      throw new Error(`unexpected rerank fetch #${fetchCount}`);
+    }) as typeof fetch;
+
+    const requestBody = {
+      model: "cohere/rerank-v3.5",
+      query: "shared cap",
+      documents: ["one", "two"],
+    };
+    const first = rerankRoute.POST(postJson("http://localhost/v1/rerank", requestBody), {});
+    await firstStarted.promise;
+    const second = rerankRoute.POST(postJson("http://localhost/v1/rerank", requestBody), {});
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(fetchCount, 1, "the second rerank waits for the shared account slot");
+
+    firstResponse.resolve(new Response(JSON.stringify(rerankPayload()), { status: 200 }));
+    assert.equal((await first).status, 200);
+    await secondStarted.promise;
+    secondResponse.resolve(new Response(JSON.stringify(rerankPayload()), { status: 200 }));
+    assert.equal((await second).status, 200);
+  });
+});
+
+test("embedding lease loss returns 503 without cooling the provider account", async (t) => {
+  await withSharedAdmission("embedding-lease-loss", async () => {
+    const connectionId = await seedConnection("openai", "shared-lease-loss-embedding", 1);
+    await keepOnlyConnectionActive("openai", connectionId);
+    const loseLease = installManualLeaseLoss(t);
+    const started = deferred<void>();
+    let upstreamSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (_url: unknown, init: RequestInit = {}) => {
+      upstreamSignal = init.signal as AbortSignal | undefined;
+      started.resolve();
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(upstreamSignal?.reason ?? new Error("aborted"));
+        upstreamSignal?.addEventListener("abort", abort, { once: true });
+      });
+    }) as typeof fetch;
+
+    const pending = createEmbeddingResponse({
+      model: "openai/text-embedding-3-small",
+      input: "lease loss",
+    });
+    await started.promise;
+    loseLease();
+    const response = await pending;
+
+    assert.equal(
+      response.status,
+      503,
+      "a shared lease loss is service unavailable, not caller cancellation"
+    );
+    assert.equal(upstreamSignal?.aborted, true, "lease loss aborts the provider request");
+    assert.equal(inFlightConnectionIds("openai").length, 0, "local occupancy is released");
+    const connection = await providersDb.getProviderConnectionById(connectionId);
+    assert.equal(connection.testStatus, "active", "lease loss must not cool the provider account");
+  });
+});
+
+test("local rerank lease loss returns 503 and never starts the alternate endpoint", async (t) => {
+  await withSharedAdmission("local-rerank-lease-loss", async () => {
+    const providerId = "shared-lease-loss-local-rerank";
+    const now = new Date().toISOString();
+    await providersDb.createProviderNode({
+      id: providerId,
+      name: "Shared lease loss local reranker",
+      type: "openai-compatible",
+      prefix: providerId,
+      apiType: "chat",
+      baseUrl: "http://127.0.0.1:8299/v1",
+      createdAt: now,
+      updatedAt: now,
+    });
+    readCache.invalidateDbCache("nodes");
+    const connectionId = await seedConnection(providerId, "shared-lease-loss-local-rerank", 1);
+    const loseLease = installManualLeaseLoss(t);
+    const started = deferred<void>();
+    const urls: string[] = [];
+    let upstreamSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (url: string | URL | Request, init: RequestInit = {}) => {
+      urls.push(String(url));
+      upstreamSignal = init.signal as AbortSignal | undefined;
+      started.resolve();
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(upstreamSignal?.reason ?? new Error("aborted"));
+        upstreamSignal?.addEventListener("abort", abort, { once: true });
+      });
+    }) as typeof fetch;
+
+    const pending = rerankRoute.POST(
+      postJson("http://localhost/v1/rerank", {
+        model: `${providerId}/model-a`,
+        query: "lease loss",
+        documents: ["one"],
+      }),
+      {}
+    );
+    await started.promise;
+    loseLease();
+    const response = await pending;
+
+    assert.equal(
+      response.status,
+      503,
+      "a lost admission lease is not reported as a provider error"
+    );
+    assert.equal(upstreamSignal?.aborted, true);
+    assert.deepEqual(
+      urls,
+      ["http://127.0.0.1:8299/v1/rerank"],
+      "lease loss must stop before /rerank fallback"
+    );
+    assert.equal(accountOccupancy.getAccountRequestInFlightCount(connectionId), 0);
+    const connection = await providersDb.getProviderConnectionById(connectionId);
+    assert.equal(connection.testStatus, "active", "lease loss must not cool the provider account");
+  });
 });

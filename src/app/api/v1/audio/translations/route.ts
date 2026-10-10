@@ -20,7 +20,10 @@ import {
 import { attachOmniRouteMetaToResponse } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
-import { acquireConfiguredSharedAccountAdmission } from "@omniroute/open-sse/services/accountRequestAdmission.ts";
+import {
+  acquireConfiguredSharedAccountAdmission,
+  getAccountAdmissionAbortStatus,
+} from "@omniroute/open-sse/services/accountRequestAdmission.ts";
 
 /**
  * Handle CORS preflight
@@ -143,18 +146,33 @@ export async function POST(request) {
       resolvedModel,
       signal: sharedAdmission?.signal ?? request.signal,
     });
-    if (request.signal.aborted || sharedAdmission?.signal.aborted) {
+    const abortStatus = getAccountAdmissionAbortStatus(request.signal, sharedAdmission?.signal);
+    if (abortStatus) {
       try {
         await response?.body?.cancel(request.signal.reason ?? sharedAdmission?.signal.reason);
       } catch {
         // A consumed/locked response body is already on its terminal path.
       }
-      return errorResponse(499, "Translation request cancelled");
+      return errorResponse(
+        abortStatus,
+        abortStatus === 499
+          ? "Translation request cancelled"
+          : "Provider account capacity lease lost"
+      );
     }
     if (response?.ok) {
       await clearRecoveredProviderState(credentials);
-      if (request.signal.aborted || sharedAdmission?.signal.aborted) {
-        return errorResponse(499, "Translation request cancelled");
+      const postRecoveryAbortStatus = getAccountAdmissionAbortStatus(
+        request.signal,
+        sharedAdmission?.signal
+      );
+      if (postRecoveryAbortStatus) {
+        return errorResponse(
+          postRecoveryAbortStatus,
+          postRecoveryAbortStatus === 499
+            ? "Translation request cancelled"
+            : "Provider account capacity lease lost"
+        );
       }
       // No text body / playback duration available from the multipart upload, so
       // per-second pricing cannot be applied → cost 0 (ADD-only headers, body intact).
@@ -168,8 +186,14 @@ export async function POST(request) {
     }
     return response;
   } catch (error) {
-    if (request.signal.aborted || sharedAdmission?.signal.aborted) {
-      return errorResponse(499, "Translation request cancelled");
+    const abortStatus = getAccountAdmissionAbortStatus(request.signal, sharedAdmission?.signal);
+    if (abortStatus) {
+      return errorResponse(
+        abortStatus,
+        abortStatus === 499
+          ? "Translation request cancelled"
+          : "Provider account capacity lease lost"
+      );
     }
     throw error;
   } finally {

@@ -34,6 +34,7 @@ import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { resolveLocalSyncedEndpointRoute } from "@/lib/providerModels/syncedEndpointRouting";
 import { reserveAccountRequest } from "@omniroute/open-sse/services/accountRequestOccupancy.ts";
+import { markAccountAdmissionFailureResponse } from "@omniroute/open-sse/services/accountRequestAdmission.ts";
 
 type ValidatedEmbeddingBody = Record<string, unknown> & { model: string };
 type ProviderCredentialsResult = Awaited<ReturnType<typeof getProviderCredentials>>;
@@ -492,6 +493,7 @@ export async function createEmbeddingResponse(
   // Best-effort: don't block the error response on the DB write.
   const HARD_ERROR_STATUSES = new Set([401, 402, 403, 404, 429, 500, 502, 503, 504]);
   if (
+    !result.admissionFailure &&
     credentials &&
     "connectionId" in credentials &&
     typeof credentials.connectionId === "string" &&
@@ -513,8 +515,9 @@ export async function createEmbeddingResponse(
 
   responseHeaders.set("Content-Type", "application/json");
   const errorPayload = toJsonErrorPayload(result.error, "Embedding provider error");
-  return new Response(JSON.stringify(errorPayload), {
+  const response = new Response(JSON.stringify(errorPayload), {
     status: result.status,
     headers: responseHeaders,
   });
+  return result.admissionFailure ? markAccountAdmissionFailureResponse(response) : response;
 }

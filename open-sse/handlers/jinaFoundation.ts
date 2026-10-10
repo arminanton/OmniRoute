@@ -30,6 +30,17 @@ export interface JinaFoundationProxyOptions {
   signal?: AbortSignal | null;
 }
 
+function cancellationResponse(
+  callerSignal: AbortSignal | null | undefined,
+  admissionSignal: AbortSignal | undefined
+): Response | null {
+  if (callerSignal?.aborted) return errorResponse(499, "Jina request cancelled");
+  if (admissionSignal?.aborted) {
+    return errorResponse(503, "Provider account capacity lease was lost during Jina request");
+  }
+  return null;
+}
+
 export async function handleJinaFoundationProxy(
   options: JinaFoundationProxyOptions
 ): Promise<Response> {
@@ -62,6 +73,8 @@ export async function handleJinaFoundationProxy(
   const signal = sharedAdmission?.signal ?? options.signal ?? undefined;
 
   try {
+    const cancelledBeforeFetch = cancellationResponse(options.signal, sharedAdmission?.signal);
+    if (cancelledBeforeFetch) return cancelledBeforeFetch;
     signal?.throwIfAborted();
     const res = await fetch(options.upstreamUrl, {
       method: "POST",
@@ -73,8 +86,12 @@ export async function handleJinaFoundationProxy(
       body: JSON.stringify(options.body),
       signal,
     });
+    const cancelledAfterHeaders = cancellationResponse(options.signal, sharedAdmission?.signal);
+    if (cancelledAfterHeaders) return cancelledAfterHeaders;
 
     const text = await res.text();
+    const cancelledAfterBody = cancellationResponse(options.signal, sharedAdmission?.signal);
+    if (cancelledAfterBody) return cancelledAfterBody;
     let parsed: unknown = null;
     try {
       parsed = text ? JSON.parse(text) : null;
@@ -120,9 +137,8 @@ export async function handleJinaFoundationProxy(
     });
     return new Response(JSON.stringify(parsed), { status: 200, headers });
   } catch (err) {
-    if (signal?.aborted) {
-      return errorResponse(499, "Jina request cancelled");
-    }
+    const cancelled = cancellationResponse(options.signal, sharedAdmission?.signal);
+    if (cancelled) return cancelled;
     const message = err instanceof Error ? err.message : String(err);
     return errorResponse(500, `Jina request failed: ${message}`);
   } finally {

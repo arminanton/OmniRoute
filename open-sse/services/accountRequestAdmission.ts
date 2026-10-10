@@ -25,6 +25,16 @@ export type ConfiguredSharedAccountAdmission = {
   release: () => void;
 };
 
+/** Distinguish a client disconnect from loss of the shared-capacity lease. */
+export function getAccountAdmissionAbortStatus(
+  callerSignal?: AbortSignal | null,
+  admissionSignal?: AbortSignal | null
+): 499 | 503 | null {
+  if (callerSignal?.aborted) return 499;
+  if (admissionSignal?.aborted) return 503;
+  return null;
+}
+
 /**
  * Run one selected-account media request under the shared account cap when the
  * operator enabled shared admission and configured a positive account limit.

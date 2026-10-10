@@ -304,3 +304,66 @@ test("combo stops fallback when shared coordinator admission is unavailable", as
     }
   );
 });
+
+test("shared lease loss returns 503 instead of caller-abort 499 and stops speech fallback", async () => {
+  await createProviderConnection({
+    provider: "openai",
+    authType: "apikey",
+    apiKey: "combo-speech-lease-loss-key",
+    name: "speech-combo-lease-loss",
+    isActive: true,
+    testStatus: "active",
+    maxConcurrent: 1,
+    providerSpecificData: {},
+  });
+  await createCombo({
+    name: "speech-lease-loss-fallback",
+    strategy: "priority",
+    models: ["openai/tts-1", "deepgram/aura-asteria-en"],
+  });
+
+  await withSharedAdmission(
+    path.join(TEST_DATA_DIR, "coordination-lease-loss.sqlite"),
+    async () => {
+      const originalFetch = globalThis.fetch;
+      const originalSetInterval = globalThis.setInterval;
+      let calls = 0;
+      let startUpstream!: () => void;
+      const upstreamStarted = new Promise<void>((resolve) => (startUpstream = resolve));
+      globalThis.setInterval = ((callback: TimerHandler, _delay?: number, ...args: unknown[]) => {
+        return setTimeout(() => {
+          const coordinator = globalThis.__omniSharedCoordinator as
+            { renew: (...renewArgs: unknown[]) => boolean } | null | undefined;
+          if (coordinator) coordinator.renew = () => false;
+          if (typeof callback === "function") callback(...args);
+        }, 25) as unknown as ReturnType<typeof setInterval>;
+      }) as typeof setInterval;
+      globalThis.fetch = (async (_url: unknown, init: RequestInit = {}) => {
+        calls++;
+        const signal = init.signal as AbortSignal;
+        startUpstream();
+        return new Promise<Response>((_resolve, reject) => {
+          const abort = () => reject(signal.reason ?? new Error("lease-lost abort"));
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) abort();
+        });
+      }) as typeof fetch;
+
+      try {
+        const responsePromise = executeSpeechCombo(
+          "speech-lease-loss-fallback",
+          { model: "speech-lease-loss-fallback", input: "hello" },
+          Date.now(),
+          new AbortController().signal
+        );
+        await upstreamStarted;
+        const response = await responsePromise;
+        assert.equal(response.status, 503);
+        assert.equal(calls, 1, "lease loss must stop before the fallback provider");
+      } finally {
+        globalThis.fetch = originalFetch;
+        globalThis.setInterval = originalSetInterval;
+      }
+    }
+  );
+});
