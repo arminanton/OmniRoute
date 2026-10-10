@@ -24,7 +24,10 @@ import {
   clearRecoveredProviderState,
 } from "@/sse/services/auth";
 import { isAllRateLimitedCredentials } from "@/app/api/v1/_shared/rateLimit";
-import { handleVideoGeneration } from "@omniroute/open-sse/handlers/videoGeneration.ts";
+import {
+  handleVideoGeneration,
+  isCancellableDirectVideoTarget,
+} from "@omniroute/open-sse/handlers/videoGeneration.ts";
 import { isRemoteMediaFailureResult } from "@/shared/network/remoteImageFetch";
 import {
   isMediaGenerationFailure,
@@ -43,6 +46,7 @@ import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import * as logger from "@/sse/utils/logger";
 import { reserveSelectedAccountRequest } from "./accountRequestLease.ts";
+import { acquireConfiguredSharedAccountAdmission } from "./accountRequestAdmission.ts";
 
 /**
  * Execute a full combo strategy for a video generation request.
@@ -177,16 +181,40 @@ export async function executeVideoCombo(
     }
 
     const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+    let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
     let result: MediaGenerationResultLike;
     try {
+      if (await isCancellableDirectVideoTarget(targetProvider, targetModel, isCustomModel)) {
+        try {
+          sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+            provider: resolveVideoCredentialProvider(targetProvider),
+            credentials,
+            signal: auth.request?.signal || undefined,
+          });
+        } catch (error) {
+          const admissionError = error as { statusCode?: number; message?: string };
+          return errorResponse(
+            admissionError.statusCode === 499 ? 499 : HTTP_STATUS.SERVICE_UNAVAILABLE,
+            admissionError.message || "Provider account capacity admission is unavailable"
+          );
+        }
+      }
+
+      if (auth.request?.signal?.aborted) {
+        return errorResponse(499, "Request cancelled by caller");
+      }
+
       result = await handleVideoGeneration({
         body: { ...body, model: modelStr },
         credentials,
         log,
-        signal: auth.request?.signal || null,
+        signal: sharedAdmission?.signal ?? auth.request?.signal ?? null,
+        callerSignal: auth.request?.signal,
+        admissionSignal: sharedAdmission?.signal,
         ...(isCustomModel && { resolvedProvider: targetProvider }),
       });
     } finally {
+      sharedAdmission?.release();
       releaseAccountRequest();
     }
 
@@ -210,7 +238,15 @@ export async function executeVideoCombo(
         ? (result as { error: string }).error
         : "Video generation failed";
 
-    if (isRemoteMediaFailureResult(result) || status === 400 || status === 401 || status === 403) {
+    const terminalFailure = (result as { terminal?: unknown }).terminal === true;
+    if (
+      terminalFailure ||
+      status === 499 ||
+      isRemoteMediaFailureResult(result) ||
+      status === 400 ||
+      status === 401 ||
+      status === 403
+    ) {
       return errorResponse(status, `[${targetProvider}] ${error}`);
     }
 

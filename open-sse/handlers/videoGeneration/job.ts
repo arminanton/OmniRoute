@@ -255,7 +255,14 @@ export async function handleVideoJobGeneration({
     log,
   });
   if (submitResult.ok === false) {
-    return { success: false, status: submitResult.status, error: submitResult.error };
+    return {
+      success: false,
+      status: submitResult.status,
+      error: submitResult.error,
+      // A transport timeout or server failure may have happened after the
+      // provider accepted the job but before OmniRoute received its id.
+      ...(submitResult.status === 408 || submitResult.status >= 500 ? { terminal: true } : {}),
+    };
   }
 
   const taskId = readStringPath(submitResult.data, preset.taskIdPath);
@@ -263,6 +270,7 @@ export async function handleVideoJobGeneration({
     return {
       success: false,
       status: 502,
+      terminal: true,
       error: `Video provider did not return a job id (${presetName})`,
     };
   }
@@ -280,7 +288,12 @@ export async function handleVideoJobGeneration({
       log,
     });
     if (pollResult.ok === false) {
-      return { success: false, status: pollResult.status, error: pollResult.error };
+      return {
+        success: false,
+        status: pollResult.status,
+        terminal: true,
+        error: pollResult.error,
+      };
     }
 
     const status = readPath(pollResult.data, preset.statusPath);
@@ -315,6 +328,7 @@ export async function handleVideoJobGeneration({
   return {
     success: false,
     status: 504,
+    terminal: true,
     error: `Video job timed out after ${maxPolls} polls (${presetName})`,
   };
 }

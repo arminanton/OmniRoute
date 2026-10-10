@@ -106,6 +106,21 @@ test("search OpenAPI documents caller cancellation with the standard error envel
   );
 });
 
+test("music and video generation OpenAPI document cancellation and account admission errors", () => {
+  for (const pathTemplate of ["/api/v1/music/generations", "/api/v1/videos/generations"]) {
+    assert.equal(
+      responseSchema(pathTemplate, "post", "499").$ref,
+      "#/components/schemas/ApiErrorResponse",
+      `${pathTemplate} documents caller cancellation`
+    );
+    assert.equal(
+      responseSchema(pathTemplate, "post", "503").$ref,
+      "#/components/schemas/ApiErrorResponse",
+      `${pathTemplate} documents unavailable account admission`
+    );
+  }
+});
+
 test("versioned inference request schemas preserve route validation constraints", () => {
   const issue = openapi.components.schemas.V1IssueReportRequest;
   assert.deepEqual(issue.required, ["title"]);

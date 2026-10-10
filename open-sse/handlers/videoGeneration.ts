@@ -8,6 +8,7 @@
  */
 
 import { getVideoProvider, parseVideoModel } from "../config/videoRegistry.ts";
+import { getAccountAdmissionAbortStatus } from "../services/accountRequestAdmission.ts";
 import { kieExecutor } from "../executors/kie.ts";
 import { vertexGenerateVideo } from "../executors/vertexMedia.ts";
 import { handleGoogleFlowVideoGeneration } from "./videoGeneration/googleFlowHandler.ts";
@@ -131,6 +132,8 @@ export async function handleVideoGeneration({
   log,
   resolvedProvider = null,
   signal = null,
+  callerSignal = null,
+  admissionSignal = null,
 }) {
   let { provider, model } = parseVideoModel(body.model);
   if (resolvedProvider) {
@@ -199,6 +202,9 @@ export async function handleVideoGeneration({
       provider,
       providerConfig: syntheticConfig,
       log,
+      signal,
+      callerSignal,
+      admissionSignal,
     });
   }
   if (getVideoJobPreset(providerConfig.format)) {
@@ -211,7 +217,17 @@ export async function handleVideoGeneration({
     });
   }
   if (providerConfig.format === "openai-video") {
-    return handleOpenAIVideoGeneration({ model, provider, providerConfig, body, credentials, log });
+    return handleOpenAIVideoGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      credentials,
+      log,
+      signal,
+      callerSignal,
+      admissionSignal,
+    });
   }
 
   if (providerConfig.format === "vertex-veo") {
@@ -240,7 +256,16 @@ export async function handleVideoGeneration({
   }
 
   if (providerConfig.format === "sdwebui-video") {
-    return handleSDWebUIVideoGeneration({ model, provider, providerConfig, body, log });
+    return handleSDWebUIVideoGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      log,
+      signal,
+      callerSignal,
+      admissionSignal,
+    });
   }
 
   if (providerConfig.format === "kie-video") {
@@ -278,6 +303,9 @@ export async function handleVideoGeneration({
       body,
       credentials,
       log,
+      signal,
+      callerSignal,
+      admissionSignal,
     });
   }
 
@@ -327,13 +355,40 @@ export async function handleVideoGeneration({
   }
   if (resolvedProvider) {
     // Custom provider with no matching built-in format — use OpenAI-compatible fallback
-    return handleOpenAIVideoGeneration({ model, provider, providerConfig, body, credentials, log });
+    return handleOpenAIVideoGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      credentials,
+      log,
+      signal,
+      callerSignal,
+      admissionSignal,
+    });
   }
   return {
     success: false,
     status: 400,
     error: `Unsupported video format: ${providerConfig.format}`,
   };
+}
+
+/**
+ * Whether a video target is a single direct OpenAI-compatible request that can
+ * be aborted with its caller. Asynchronous job presets are excluded because a
+ * caller disconnect cannot cancel accepted provider-side work.
+ */
+export async function isCancellableDirectVideoTarget(
+  provider: string,
+  model: string,
+  isCustomModel: boolean
+): Promise<boolean> {
+  if (isCustomModel) return (await getCustomModelVideoPreset(provider, model)) === null;
+  const providerConfig = getVideoProvider(provider);
+  return ["openai-video", "deepinfra-video", "sdwebui-video"].includes(
+    providerConfig?.format ?? ""
+  );
 }
 
 /**
@@ -571,7 +626,16 @@ async function handleComfyUIVideoGeneration({ model, provider, providerConfig, b
  * Handle SD WebUI video generation via AnimateDiff extension
  * POST to the AnimateDiff API endpoint
  */
-async function handleSDWebUIVideoGeneration({ model, provider, providerConfig, body, log }) {
+async function handleSDWebUIVideoGeneration({
+  model,
+  provider,
+  providerConfig,
+  body,
+  log,
+  signal,
+  callerSignal,
+  admissionSignal,
+}) {
   const startTime = Date.now();
   const [width, height] = (body.size || "512x512").split("x").map(Number);
   const url = `${providerConfig.baseUrl}/animatediff/v1/generate`;
@@ -597,6 +661,7 @@ async function handleSDWebUIVideoGeneration({ model, provider, providerConfig, b
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(upstreamBody),
+      signal,
     });
 
     if (!response.ok) {
@@ -612,7 +677,12 @@ async function handleSDWebUIVideoGeneration({ model, provider, providerConfig, b
         duration: Date.now() - startTime,
         error: errorText.slice(0, 500),
       }).catch(() => {});
-      return { success: false, status: response.status, error: errorText };
+      return {
+        success: false,
+        status: response.status,
+        ...(response.status === 408 || response.status >= 500 ? { terminal: true } : {}),
+        error: errorText,
+      };
     }
 
     const data = await response.json();
@@ -642,10 +712,12 @@ async function handleSDWebUIVideoGeneration({ model, provider, providerConfig, b
     };
   } catch (err) {
     if (log) log.error("VIDEO", `${provider} sdwebui error: ${err.message}`);
+    const abortStatus = getAccountAdmissionAbortStatus(callerSignal, admissionSignal);
+    const status = abortStatus ?? 502;
     saveCallLog({
       method: "POST",
       path: "/v1/videos/generations",
-      status: 502,
+      status,
       model: `${provider}/${model}`,
       provider,
       duration: Date.now() - startTime,
@@ -653,7 +725,8 @@ async function handleSDWebUIVideoGeneration({ model, provider, providerConfig, b
     }).catch(() => {});
     return {
       success: false,
-      status: 502,
+      status,
+      terminal: true,
       error: sanitizeErrorMessage(err) || "Video provider error",
     };
   }

@@ -11,6 +11,8 @@ const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const searchRoute = await import("../../src/app/api/v1/search/route.ts");
 const { getCacheStats } = await import("../../open-sse/services/searchCache.ts");
+const { getAccountRequestInFlightCount } =
+  await import("../../open-sse/services/accountRequestOccupancy.ts");
 const { waitForCallLogSaves } = await import("../../src/lib/usage/callLogs.ts");
 const { flushProxyLogsSync } = await import("../../src/lib/proxyLogger.ts");
 
@@ -37,6 +39,7 @@ async function seedConnection(
   overrides: {
     apiKey?: string | null;
     authType?: string;
+    maxConcurrent?: number | null;
     providerSpecificData?: Record<string, unknown>;
   } = {}
 ) {
@@ -47,6 +50,7 @@ async function seedConnection(
     apiKey: overrides.apiKey ?? "test-key",
     isActive: true,
     testStatus: "active",
+    ...(overrides.maxConcurrent === undefined ? {} : { maxConcurrent: overrides.maxConcurrent }),
     providerSpecificData: overrides.providerSpecificData || {},
   });
 }
@@ -487,13 +491,136 @@ test("v1 search POST falls back to duckduckgo-free when no provider is configure
   }
 });
 
+test("v1 search reserves distinct selected accounts before concurrent provider attempts", async () => {
+  const accountA = await seedConnection("linkup-search", {
+    apiKey: "linkup-capacity-a",
+    maxConcurrent: 1,
+  });
+  const accountB = await seedConnection("linkup-search", {
+    apiKey: "linkup-capacity-b",
+    maxConcurrent: 1,
+  });
+
+  const originalFetch = globalThis.fetch;
+  const requestsStarted = deferred<void>();
+  const authKeys: string[] = [];
+  const finishRequests: Array<() => void> = [];
+  const responses: Promise<Response>[] = [];
+  let fetchCalls = 0;
+
+  globalThis.fetch = async (_url, init = {}) => {
+    fetchCalls++;
+    authKeys.push(new Headers(init.headers).get("Authorization") || "");
+    if (fetchCalls === 2) requestsStarted.resolve();
+
+    const signal = init.signal as AbortSignal;
+    return new Promise<Response>((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+      finishRequests.push(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(
+          new Response(
+            JSON.stringify({
+              results: [
+                {
+                  name: "Concurrent Linkup result",
+                  url: "https://example.com/concurrent-search-result",
+                  content: "The configured account handled this distinct query.",
+                  type: "web",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          )
+        );
+      });
+    });
+  };
+
+  const post = (query: string) =>
+    searchRoute.POST(
+      new Request("http://localhost/api/v1/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          provider: "linkup-search",
+          max_results: 1,
+          search_type: "web",
+        }),
+      })
+    );
+
+  try {
+    const first = post(`distinct capacity query A ${Date.now()}`);
+    responses.push(first);
+    const firstStartedDeadline = Date.now() + 3_000;
+    while (fetchCalls < 1 && Date.now() < firstStartedDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    assert.equal(fetchCalls, 1, "the first provider attempt should start");
+
+    const second = post(`distinct capacity query B ${Date.now()}`);
+    responses.push(second);
+    let startupTimeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        requestsStarted.promise,
+        new Promise<never>((_, reject) => {
+          startupTimeout = setTimeout(
+            () => reject(new Error("second provider attempt did not start")),
+            3_000
+          );
+        }),
+      ]);
+    } finally {
+      if (startupTimeout) clearTimeout(startupTimeout);
+    }
+
+    assert.deepEqual(
+      new Set(authKeys),
+      new Set(["Bearer linkup-capacity-a", "Bearer linkup-capacity-b"]),
+      "an in-flight reservation should make a distinct-query miss select the other account"
+    );
+    assert.equal(getAccountRequestInFlightCount(String(accountA.id)), 1);
+    assert.equal(getAccountRequestInFlightCount(String(accountB.id)), 1);
+
+    for (const finish of finishRequests) finish();
+    const results = await Promise.all(responses);
+    assert.deepEqual(
+      results.map((response) => response.status),
+      [200, 200]
+    );
+    assert.equal(fetchCalls, 2);
+    assert.equal(getAccountRequestInFlightCount(String(accountA.id)), 0);
+    assert.equal(getAccountRequestInFlightCount(String(accountB.id)), 0);
+  } finally {
+    for (const finish of finishRequests) finish();
+    await Promise.allSettled(responses);
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("v1 search POST detaches one cancelled cache waiter without aborting shared upstream work", async () => {
-  await seedConnection("linkup-search", { apiKey: "linkup-cancel-test-key" });
+  const accountA = await seedConnection("linkup-search", {
+    apiKey: "linkup-cancel-test-key-a",
+    maxConcurrent: 1,
+  });
+  const accountB = await seedConnection("linkup-search", {
+    apiKey: "linkup-cancel-test-key-b",
+    maxConcurrent: 1,
+  });
 
   const originalFetch = globalThis.fetch;
   const upstreamStarted = deferred<AbortSignal>();
-  let completeUpstream: (() => void) | undefined;
+  const completeUpstreams: Array<() => void> = [];
   let fetchCalls = 0;
+  const responsePromises: Promise<Response>[] = [];
 
   globalThis.fetch = async (_url, init = {}) => {
     fetchCalls++;
@@ -507,7 +634,7 @@ test("v1 search POST detaches one cancelled cache waiter without aborting shared
         return;
       }
       upstreamSignal.addEventListener("abort", onAbort, { once: true });
-      completeUpstream = () => {
+      completeUpstreams.push(() => {
         upstreamSignal.removeEventListener("abort", onAbort);
         resolve(
           new Response(
@@ -524,7 +651,7 @@ test("v1 search POST detaches one cancelled cache waiter without aborting shared
             { status: 200, headers: { "content-type": "application/json" } }
           )
         );
-      };
+      });
     });
   };
 
@@ -545,11 +672,13 @@ test("v1 search POST detaches one cancelled cache waiter without aborting shared
   try {
     const firstController = new AbortController();
     const firstResponsePromise = searchRoute.POST(request(firstController.signal));
+    responsePromises.push(firstResponsePromise);
     const upstreamSignal = await upstreamStarted.promise;
 
     const hitsBeforeSecondWaiter = getCacheStats().hits;
     const secondController = new AbortController();
     const secondResponsePromise = searchRoute.POST(request(secondController.signal));
+    responsePromises.push(secondResponsePromise);
     const joinDeadline = Date.now() + 3_000;
     while (getCacheStats().hits === hitsBeforeSecondWaiter && Date.now() < joinDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 1));
@@ -571,16 +700,30 @@ test("v1 search POST detaches one cancelled cache waiter without aborting shared
       false,
       "the remaining waiter must keep producer work alive"
     );
+    assert.equal(
+      getAccountRequestInFlightCount(String(accountA.id)) +
+        getAccountRequestInFlightCount(String(accountB.id)),
+      1,
+      "the cancelled waiter must not release the producer's reservation while another waiter remains"
+    );
 
-    assert.ok(completeUpstream, "the shared upstream response should still be pending");
-    completeUpstream();
+    assert.ok(completeUpstreams.length > 0, "the shared upstream response should still be pending");
+    for (const complete of completeUpstreams) complete();
     const secondResponse = await secondResponsePromise;
     const body = (await secondResponse.json()) as any;
 
     assert.equal(secondResponse.status, 200);
     assert.equal(body.results[0].title, "Shared Linkup result");
     assert.equal(fetchCalls, 1, "coalesced requests must make only one provider request");
+    assert.equal(
+      getAccountRequestInFlightCount(String(accountA.id)) +
+        getAccountRequestInFlightCount(String(accountB.id)),
+      0,
+      "the shared reservation must be released after the provider attempt finishes"
+    );
   } finally {
+    for (const complete of completeUpstreams) complete();
+    await Promise.allSettled(responsePromises);
     globalThis.fetch = originalFetch;
   }
 });

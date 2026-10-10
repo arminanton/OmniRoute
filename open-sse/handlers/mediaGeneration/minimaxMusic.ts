@@ -49,6 +49,7 @@ interface MinimaxMusicArgs {
   body: MinimaxMusicBody;
   credentials?: MinimaxMusicCredentials | null;
   log?: MinimaxMusicLog | null;
+  signal?: AbortSignal;
 }
 
 /** Containers accepted by `audio_setting.format`. */
@@ -229,6 +230,7 @@ export async function handleMinimaxMusicGeneration({
   body,
   credentials,
   log,
+  signal,
 }: MinimaxMusicArgs) {
   const startTime = Date.now();
   const token = stringValue(credentials?.apiKey) || stringValue(credentials?.accessToken);
@@ -264,6 +266,7 @@ export async function handleMinimaxMusicGeneration({
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(upstreamBody),
+      signal,
     });
 
     const payload = await readPayload(response);

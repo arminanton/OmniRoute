@@ -36,6 +36,10 @@ import {
   rateLimitedProviderResponse,
   type RateLimitedCredentials,
 } from "@/app/api/v1/_shared/rateLimit";
+import {
+  acquireSearchCredentialSelection,
+  releaseUnclaimedSearchCredentialReservation,
+} from "@omniroute/open-sse/handlers/search/accountAdmission.ts";
 import { getSettings } from "@/lib/db/settings";
 import { isProviderBlockedByIdOrAlias } from "@/shared/utils/noAuthProviders";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
@@ -77,14 +81,28 @@ export async function GET() {
 type SearchCredentials = Record<string, any>;
 type SearchCredentialLookup = SearchCredentials | RateLimitedCredentials | null;
 
-async function resolveSearchCredentials(providerId: string): Promise<SearchCredentialLookup> {
-  const credentials = await getProviderCredentialsWithQuotaPreflight(providerId).catch(() => null);
+async function resolveSearchCredentials(
+  providerId: string,
+  reserveSelectedAccount = false
+): Promise<SearchCredentialLookup> {
+  const selectionOptions = reserveSelectedAccount ? { reserveAccountRequest: true } : undefined;
+  const credentials = await getProviderCredentialsWithQuotaPreflight(
+    providerId,
+    null,
+    null,
+    null,
+    selectionOptions
+  ).catch(() => null);
   if (credentials && !isAllRateLimitedCredentials(credentials)) return credentials;
 
   for (const fallbackId of getSearchCredentialFallbacks(providerId)) {
-    const fallbackCredentials = await getProviderCredentialsWithQuotaPreflight(fallbackId).catch(
-      () => null
-    );
+    const fallbackCredentials = await getProviderCredentialsWithQuotaPreflight(
+      fallbackId,
+      null,
+      null,
+      null,
+      selectionOptions
+    ).catch(() => null);
     if (fallbackCredentials && !isAllRateLimitedCredentials(fallbackCredentials)) {
       return fallbackCredentials;
     }
@@ -94,11 +112,14 @@ async function resolveSearchCredentials(providerId: string): Promise<SearchCrede
   return credentials;
 }
 
-async function resolveSearchExecutionCredentials(providerConfig: {
-  id: string;
-  authType: string;
-}): Promise<SearchCredentialLookup> {
-  const credentials = await resolveSearchCredentials(providerConfig.id);
+async function resolveSearchExecutionCredentials(
+  providerConfig: {
+    id: string;
+    authType: string;
+  },
+  reserveSelectedAccount = false
+): Promise<SearchCredentialLookup> {
+  const credentials = await resolveSearchCredentials(providerConfig.id, reserveSelectedAccount);
   if (credentials) return credentials;
   return providerConfig.authType === "none" ? {} : null;
 }
@@ -188,157 +209,12 @@ async function postHandler(request: Request, context: unknown) {
     );
   }
 
-  let credentials: Record<string, any> | null = null;
-  let alternateProviderId: string | undefined;
-  let alternateCredentials: Record<string, any> | null = null;
-  let firstRateLimitedCredentials: {
-    providerId: string;
-    credentials: RateLimitedCredentials;
-  } | null = null;
-
-  if (body.provider) {
-    // Explicit provider — single credential lookup (with fallback)
-    const explicitCredentials = await resolveSearchExecutionCredentials(providerConfig);
-    if (isAllRateLimitedCredentials(explicitCredentials)) {
-      return rateLimitedProviderResponse(providerConfig.id, explicitCredentials);
-    }
-    credentials = explicitCredentials;
-    if (!credentials) {
-      return errorResponse(
-        HTTP_STATUS.BAD_REQUEST,
-        `No credentials configured for search provider: ${providerConfig.id}. Add an API key for "${providerConfig.id}" in the dashboard.`
-      );
-    }
-  } else {
-    // Auto-select — try the resolved provider first, then iterate others by cost
-    const selectedCredentials = await resolveSearchExecutionCredentials(providerConfig);
-    if (isAllRateLimitedCredentials(selectedCredentials)) {
-      firstRateLimitedCredentials = {
-        providerId: providerConfig.id,
-        credentials: selectedCredentials,
-      };
-    } else {
-      credentials = selectedCredentials;
-    }
-
-    if (!credentials) {
-      // Sort by cost to find cheapest with credentials (fallback-only providers
-      // are reached via the last-resort step below, never the primary pick).
-      const sortedIds = Object.values(SEARCH_PROVIDERS)
-        .filter(
-          (provider) =>
-            !provider.fallbackOnly &&
-            supportsSearchType(provider, body.search_type) &&
-            !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
-        )
-        .sort((a, b) => a.costPerQuery - b.costPerQuery)
-        .map((p) => p.id);
-
-      for (const pid of sortedIds) {
-        if (pid === providerConfig.id) continue;
-        const altConfig = getSearchProvider(pid);
-        const altCreds = altConfig ? await resolveSearchExecutionCredentials(altConfig) : null;
-        if (isAllRateLimitedCredentials(altCreds)) {
-          firstRateLimitedCredentials ??= { providerId: pid, credentials: altCreds };
-          continue;
-        }
-        if (altConfig && altCreds) {
-          providerConfig = altConfig;
-          credentials = altCreds;
-          break;
-        }
-      }
-    }
-
-    // Last resort before failing: promote a fallback-only free provider (e.g.
-    // duckduckgo-free) to the primary pick so out-of-the-box search works when
-    // no credentialed provider is configured at all.
-    if (!credentials) {
-      const fallbackProviders = Object.values(SEARCH_PROVIDERS)
-        .filter(
-          (provider) =>
-            provider.fallbackOnly &&
-            supportsSearchType(provider, body.search_type) &&
-            !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
-        )
-        .sort((a, b) => a.costPerQuery - b.costPerQuery);
-
-      for (const fallbackProvider of fallbackProviders) {
-        providerConfig = fallbackProvider;
-        if (fallbackProvider.id === "duckduckgo-free") {
-          credentials = {};
-          break;
-        }
-        const fallbackCreds = await resolveSearchCredentials(fallbackProvider.id);
-        if (isAllRateLimitedCredentials(fallbackCreds)) continue;
-        if (fallbackCreds) {
-          credentials = fallbackCreds;
-          break;
-        }
-      }
-    }
-
-    if (!credentials) {
-      if (firstRateLimitedCredentials) {
-        return rateLimitedProviderResponse(
-          firstRateLimitedCredentials.providerId,
-          firstRateLimitedCredentials.credentials
-        );
-      }
-      return errorResponse(
-        HTTP_STATUS.BAD_REQUEST,
-        `No credentials configured for any search provider. Add an API key for a search provider (${Object.keys(SEARCH_PROVIDERS).join(", ")}) in the dashboard.`
-      );
-    }
-
-    // Find alternate for failover — must bind credentials to the matched provider.
-    // Exclude fallback-only providers; they are only used by the last-resort step.
-    const otherIds = Object.values(SEARCH_PROVIDERS)
-      .filter(
-        (provider) => !provider.fallbackOnly && supportsSearchType(provider, body.search_type)
-      )
-      .sort((a, b) => a.costPerQuery - b.costPerQuery)
-      .map((p) => p.id)
-      .filter((id) => id !== providerConfig.id);
-
-    for (const pid of otherIds) {
-      const altConfig = getSearchProvider(pid);
-      const creds = altConfig ? await resolveSearchExecutionCredentials(altConfig) : null;
-      if (isAllRateLimitedCredentials(creds)) continue;
-      if (creds) {
-        alternateProviderId = pid;
-        alternateCredentials = creds;
-        break;
-      }
-    }
-
-    // Last-resort: guarantee a free no-key fallback (e.g. duckduckgo-free) as the
-    // failover so out-of-the-box search still works when no credentialed provider
-    // is configured. Only used when no real alternate was found above.
-    if (!alternateProviderId) {
-      for (const provider of Object.values(SEARCH_PROVIDERS)) {
-        if (!provider.fallbackOnly || provider.id === providerConfig.id) continue;
-        if (isUnconfiguredLoopbackSearchProvider(provider)) continue;
-        if (!supportsSearchType(provider, body.search_type)) continue;
-        const fallbackCreds = await resolveSearchExecutionCredentials(provider);
-        if (fallbackCreds && !isAllRateLimitedCredentials(fallbackCreds)) {
-          alternateProviderId = provider.id;
-          alternateCredentials = fallbackCreds;
-          break;
-        }
-      }
-    }
-  }
-
-  // Clamp max_results to provider limit
-  const clampedMaxResults = Math.min(body.max_results, providerConfig.maxMaxResults);
-
-  // Cache key — includes all fields that affect results
-  const cacheKey = computeCacheKey(
+  const initialProviderConfig = providerConfig;
+  const selectionKey = computeCacheKey(
     body.query,
-    providerConfig.id,
+    initialProviderConfig.id,
     body.search_type,
-    clampedMaxResults,
+    Math.min(body.max_results, initialProviderConfig.maxMaxResults),
     body.country,
     body.language,
     {
@@ -348,18 +224,240 @@ async function postHandler(request: Request, context: unknown) {
       content: body.content,
       provider_options: body.provider_options,
       strict_filters: body.strict_filters,
+      requested_provider: body.provider ?? null,
+      blocked_providers: Array.isArray(blockedProviders)
+        ? [...blockedProviders].map(String).sort()
+        : [],
     },
-    {
-      apiKeyId: policy.apiKeyInfo?.id ?? null,
-      connectionId: credentials?.connectionId ?? null,
-      alternateProvider: alternateProviderId ?? null,
-      alternateConnectionId: alternateCredentials?.connectionId ?? null,
-    }
+    { apiKeyId: policy.apiKeyInfo?.id ?? null }
   );
 
-  const ttl = providerConfig.cacheTTLMs ?? SEARCH_CACHE_DEFAULT_TTL_MS;
+  let credentials: Record<string, any> | null = null;
+  let alternateProviderId: string | undefined;
+  let alternateCredentials: Record<string, any> | null = null;
+  let releaseSelection: (() => void) | undefined;
 
   try {
+    const selection = await acquireSearchCredentialSelection(
+      selectionKey,
+      async () => {
+        let selectedProviderConfig = initialProviderConfig;
+        let selectedCredentials: Record<string, any> | null = null;
+        let selectedAlternateProviderId: string | undefined;
+        let selectedAlternateCredentials: Record<string, any> | null = null;
+        let firstRateLimitedCredentials: {
+          providerId: string;
+          credentials: RateLimitedCredentials;
+        } | null = null;
+
+        try {
+          if (body.provider) {
+            const explicitCredentials = await resolveSearchExecutionCredentials(
+              selectedProviderConfig,
+              true
+            );
+            if (isAllRateLimitedCredentials(explicitCredentials)) {
+              return {
+                kind: "response" as const,
+                response: rateLimitedProviderResponse(
+                  selectedProviderConfig.id,
+                  explicitCredentials
+                ),
+              };
+            }
+            selectedCredentials = explicitCredentials;
+            if (!selectedCredentials) {
+              return {
+                kind: "response" as const,
+                response: errorResponse(
+                  HTTP_STATUS.BAD_REQUEST,
+                  `No credentials configured for search provider: ${selectedProviderConfig.id}. Add an API key for "${selectedProviderConfig.id}" in the dashboard.`
+                ),
+              };
+            }
+          } else {
+            // Auto-select — try the resolved provider first, then iterate others by cost.
+            const initialCredentials = await resolveSearchExecutionCredentials(
+              selectedProviderConfig,
+              true
+            );
+            if (isAllRateLimitedCredentials(initialCredentials)) {
+              firstRateLimitedCredentials = {
+                providerId: selectedProviderConfig.id,
+                credentials: initialCredentials,
+              };
+            } else {
+              selectedCredentials = initialCredentials;
+            }
+
+            if (!selectedCredentials) {
+              const sortedIds = Object.values(SEARCH_PROVIDERS)
+                .filter(
+                  (provider) =>
+                    !provider.fallbackOnly &&
+                    supportsSearchType(provider, body.search_type) &&
+                    !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
+                )
+                .sort((a, b) => a.costPerQuery - b.costPerQuery)
+                .map((provider) => provider.id);
+
+              for (const providerId of sortedIds) {
+                if (providerId === selectedProviderConfig.id) continue;
+                const alternateConfig = getSearchProvider(providerId);
+                const alternate = alternateConfig
+                  ? await resolveSearchExecutionCredentials(alternateConfig, true)
+                  : null;
+                if (isAllRateLimitedCredentials(alternate)) {
+                  firstRateLimitedCredentials ??= { providerId, credentials: alternate };
+                  continue;
+                }
+                if (alternateConfig && alternate) {
+                  selectedProviderConfig = alternateConfig;
+                  selectedCredentials = alternate;
+                  break;
+                }
+              }
+            }
+
+            // Last resort: promote a fallback-only free provider when no configured
+            // credentialed provider is available.
+            if (!selectedCredentials) {
+              const fallbackProviders = Object.values(SEARCH_PROVIDERS)
+                .filter(
+                  (provider) =>
+                    provider.fallbackOnly &&
+                    supportsSearchType(provider, body.search_type) &&
+                    !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
+                )
+                .sort((a, b) => a.costPerQuery - b.costPerQuery);
+
+              for (const fallbackProvider of fallbackProviders) {
+                selectedProviderConfig = fallbackProvider;
+                if (fallbackProvider.id === "duckduckgo-free") {
+                  selectedCredentials = {};
+                  break;
+                }
+                const fallback = await resolveSearchCredentials(fallbackProvider.id, true);
+                if (isAllRateLimitedCredentials(fallback)) continue;
+                if (fallback) {
+                  selectedCredentials = fallback;
+                  break;
+                }
+              }
+            }
+
+            if (!selectedCredentials) {
+              const response = firstRateLimitedCredentials
+                ? rateLimitedProviderResponse(
+                    firstRateLimitedCredentials.providerId,
+                    firstRateLimitedCredentials.credentials
+                  )
+                : errorResponse(
+                    HTTP_STATUS.BAD_REQUEST,
+                    `No credentials configured for any search provider. Add an API key for a search provider (${Object.keys(SEARCH_PROVIDERS).join(", ")}) in the dashboard.`
+                  );
+              return { kind: "response" as const, response };
+            }
+
+            // Resolve an alternate for provider failover. It intentionally does
+            // not reserve capacity until handleSearch actually attempts it.
+            const otherIds = Object.values(SEARCH_PROVIDERS)
+              .filter(
+                (provider) =>
+                  !provider.fallbackOnly && supportsSearchType(provider, body.search_type)
+              )
+              .sort((a, b) => a.costPerQuery - b.costPerQuery)
+              .map((provider) => provider.id)
+              .filter((providerId) => providerId !== selectedProviderConfig.id);
+
+            for (const providerId of otherIds) {
+              const alternateConfig = getSearchProvider(providerId);
+              const alternate = alternateConfig
+                ? await resolveSearchExecutionCredentials(alternateConfig)
+                : null;
+              if (isAllRateLimitedCredentials(alternate)) continue;
+              if (alternate) {
+                selectedAlternateProviderId = providerId;
+                selectedAlternateCredentials = alternate;
+                break;
+              }
+            }
+
+            if (!selectedAlternateProviderId) {
+              for (const fallbackProvider of Object.values(SEARCH_PROVIDERS)) {
+                if (
+                  !fallbackProvider.fallbackOnly ||
+                  fallbackProvider.id === selectedProviderConfig.id
+                ) {
+                  continue;
+                }
+                if (isUnconfiguredLoopbackSearchProvider(fallbackProvider)) continue;
+                if (!supportsSearchType(fallbackProvider, body.search_type)) continue;
+                const fallback = await resolveSearchExecutionCredentials(fallbackProvider);
+                if (fallback && !isAllRateLimitedCredentials(fallback)) {
+                  selectedAlternateProviderId = fallbackProvider.id;
+                  selectedAlternateCredentials = fallback;
+                  break;
+                }
+              }
+            }
+          }
+
+          return {
+            kind: "execution" as const,
+            providerConfig: selectedProviderConfig,
+            credentials: selectedCredentials!,
+            alternateProviderId: selectedAlternateProviderId,
+            alternateCredentials: selectedAlternateCredentials,
+          };
+        } catch (error) {
+          selectedCredentials?.releaseAccountRequest?.();
+          throw error;
+        }
+      },
+      (plan) => {
+        if (plan.kind === "execution") {
+          releaseUnclaimedSearchCredentialReservation(plan.credentials);
+        }
+      }
+    );
+    releaseSelection = selection.release;
+    if (selection.value.kind === "response") return selection.value.response.clone();
+
+    providerConfig = selection.value.providerConfig;
+    credentials = selection.value.credentials;
+    alternateProviderId = selection.value.alternateProviderId;
+    alternateCredentials = selection.value.alternateCredentials;
+
+    // Clamp max_results to provider limit.
+    const clampedMaxResults = Math.min(body.max_results, providerConfig.maxMaxResults);
+
+    // Cache key — includes all fields that affect results
+    const cacheKey = computeCacheKey(
+      body.query,
+      providerConfig.id,
+      body.search_type,
+      clampedMaxResults,
+      body.country,
+      body.language,
+      {
+        filters: body.filters,
+        offset: body.offset,
+        time_range: body.time_range,
+        content: body.content,
+        provider_options: body.provider_options,
+        strict_filters: body.strict_filters,
+      },
+      {
+        apiKeyId: policy.apiKeyInfo?.id ?? null,
+        connectionId: credentials?.connectionId ?? null,
+        alternateProvider: alternateProviderId ?? null,
+        alternateConnectionId: alternateCredentials?.connectionId ?? null,
+      }
+    );
+
+    const ttl = providerConfig.cacheTTLMs ?? SEARCH_CACHE_DEFAULT_TTL_MS;
+
     const { data: searchResult, cached } = await getOrCoalesce(
       cacheKey,
       ttl,
@@ -434,6 +532,10 @@ async function postHandler(request: Request, context: unknown) {
       status: 500,
       headers: { "Content-Type": "application/json", ...CORS_HEADERS },
     });
+  } finally {
+    // Selection-owned cleanup releases unclaimed reservations only after every
+    // identical request has left this shared plan.
+    releaseSelection?.();
   }
 }
 

@@ -35,6 +35,24 @@ import { sanitizeErrorMessage } from "../utils/error.ts";
 import { handleFalMusicGeneration } from "./mediaGeneration/fal.ts";
 import { handleMinimaxMusicGeneration } from "./mediaGeneration/minimaxMusic.ts";
 
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+
 function normalizeKieSunoModel(model: string): string {
   const map: Record<string, string> = {
     "suno-v3.5": "V3_5",
@@ -83,7 +101,7 @@ function normalizeKieMusicTracks(recordData: unknown): Array<Record<string, unkn
 /**
  * Handle music generation request
  */
-export async function handleMusicGeneration({ body, credentials, log }) {
+export async function handleMusicGeneration({ body, credentials, log, signal, pollSignal }) {
   const { provider, model } = parseMusicModel(body.model);
 
   if (!provider) {
@@ -111,6 +129,7 @@ export async function handleMusicGeneration({ body, credentials, log }) {
         negativePrompt: typeof body.negative_prompt === "string" ? body.negative_prompt : undefined,
         sampleCount: typeof body.sample_count === "number" ? body.sample_count : undefined,
         seed: typeof body.seed === "number" ? body.seed : undefined,
+        signal,
       });
       return {
         success: true,
@@ -127,6 +146,10 @@ export async function handleMusicGeneration({ body, credentials, log }) {
   }
 
   if (providerConfig.format === "fal-ai-music") {
+    // Fal queue handling is shared with the video route and currently owns its
+    // own bounded poll lifecycle. Keep this path awaited so account occupancy
+    // remains held until it settles; signal plumbing belongs with that shared
+    // helper and is intentionally left unchanged in this music-only lane.
     return handleFalMusicGeneration({ model, provider, providerConfig, body, credentials, log });
   }
 
@@ -144,14 +167,41 @@ export async function handleMusicGeneration({ body, credentials, log }) {
   }
 
   if (providerConfig.format === "kie-music") {
-    return handleKieMusicGeneration({ model, provider, providerConfig, body, credentials, log });
+    return handleKieMusicGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      credentials,
+      log,
+      signal,
+      pollSignal,
+    });
   }
 
   if (providerConfig.format === "suno-music") {
-    return handleSunoMusicGeneration({ model, provider, providerConfig, body, credentials, log });
+    return handleSunoMusicGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      credentials,
+      log,
+      signal,
+      pollSignal,
+    });
   }
   if (providerConfig.format === "udio-music") {
-    return handleUdioMusicGeneration({ model, provider, providerConfig, body, credentials, log });
+    return handleUdioMusicGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      credentials,
+      log,
+      signal,
+      pollSignal,
+    });
   }
 
   if (providerConfig.format === "minimax-music") {
@@ -162,6 +212,7 @@ export async function handleMusicGeneration({ body, credentials, log }) {
       body,
       credentials,
       log,
+      signal,
     });
   }
 
@@ -291,6 +342,8 @@ async function handleKieMusicGeneration({
   body,
   credentials,
   log,
+  signal,
+  pollSignal,
 }: {
   model: string;
   provider: string;
@@ -311,6 +364,9 @@ async function handleKieMusicGeneration({
     info: (scope: string, message: string) => void;
     error: (scope: string, message: string) => void;
   } | null;
+  signal?: AbortSignal;
+  /** Lease-only signal used after the provider accepts an asynchronous task. */
+  pollSignal?: AbortSignal | null;
 }) {
   const startTime = Date.now();
   const timeoutMs = Number(body.timeout_ms) > 0 ? Number(body.timeout_ms) : 300000;
@@ -362,7 +418,13 @@ async function handleKieMusicGeneration({
 
   try {
     const endpoint = new URL(url).pathname;
-    const createData = await kieExecutor.createTask({ baseUrl, token, payload, endpoint });
+    const createData = await kieExecutor.createTask({
+      baseUrl,
+      token,
+      payload,
+      endpoint,
+      signal,
+    });
     const taskId = getKieTaskId(createData);
     if (!taskId) {
       const errorMessage =
@@ -388,6 +450,10 @@ async function handleKieMusicGeneration({
       token,
       timeoutMs,
       pollIntervalMs,
+      // Once a task id is known, the provider offers no cancellation endpoint.
+      // The route passes null here so polling continues while it retains local
+      // and shared account reservations through terminal completion/timeout.
+      signal: pollSignal === undefined ? signal : (pollSignal ?? undefined),
     });
 
     if (state === "success") {
@@ -442,6 +508,8 @@ async function handleSunoMusicGeneration({
   body,
   credentials,
   log,
+  signal,
+  pollSignal,
 }) {
   const startTime = Date.now();
   const cookie = credentials?.apiKey || credentials?.providerSpecificData?.cookie || "";
@@ -464,6 +532,7 @@ async function handleSunoMusicGeneration({
         tags: body.tags || "",
         make_instrumental: body.instrumental || false,
       }),
+      signal,
     });
     if (!res.ok) {
       const errorText = await res.text();
@@ -493,15 +562,20 @@ async function handleSunoMusicGeneration({
       return { success: false, status: 502, error: "No clips returned from Suno" };
     }
     const deadline = Date.now() + 300000;
+    // The provider cannot cancel a task after returning clip IDs. Continue
+    // polling under the account lease and let the route report 499 after the
+    // accepted job reaches a terminal state.
+    const taskSignal = pollSignal === undefined ? signal : (pollSignal ?? undefined);
     while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 5000));
+      await sleepWithSignal(5000, taskSignal);
       const feedRes = await fetch(`${providerConfig.statusUrl}?ids=${ids.join(",")}`, {
         headers: { Cookie: cookie },
+        signal: taskSignal,
       });
       const songs = await feedRes.json();
       const ready = songs.filter((s) => s.audio_url);
       if (ready.length > 0) {
-        const audioRes = await fetch(ready[0].audio_url);
+        const audioRes = await fetch(ready[0].audio_url, { signal: taskSignal });
         if (!audioRes.ok) {
           return {
             success: false,
@@ -563,6 +637,8 @@ async function handleUdioMusicGeneration({
   body,
   credentials,
   log,
+  signal,
+  pollSignal,
 }) {
   const startTime = Date.now();
   const cookie = credentials?.apiKey || credentials?.providerSpecificData?.cookie || "";
@@ -578,6 +654,7 @@ async function handleUdioMusicGeneration({
       method: "POST",
       headers: { "Content-Type": "application/json", Cookie: cookie },
       body: JSON.stringify({ prompt, samplerOptions: { seed: -1 } }),
+      signal,
     });
     if (!res.ok) {
       const errorText = await res.text();
@@ -607,16 +684,17 @@ async function handleUdioMusicGeneration({
       return { success: false, status: 502, error: "No tracks returned from Udio" };
     }
     const deadline = Date.now() + 300000;
+    const taskSignal = pollSignal === undefined ? signal : (pollSignal ?? undefined);
     while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 5000));
+      await sleepWithSignal(5000, taskSignal);
       const statusRes = await fetch(
         `https://www.udio.com/api/songs?songIds=${trackIds.join(",")}`,
-        { headers: { Cookie: cookie } }
+        { headers: { Cookie: cookie }, signal: taskSignal }
       );
       const songs = await statusRes.json();
       const ready = songs.filter((s) => s.finished && s.song_path);
       if (ready.length > 0) {
-        const audioRes = await fetch(ready[0].song_path);
+        const audioRes = await fetch(ready[0].song_path, { signal: taskSignal });
         if (!audioRes.ok) {
           return {
             success: false,

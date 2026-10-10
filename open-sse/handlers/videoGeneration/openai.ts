@@ -5,6 +5,7 @@ import {
 } from "@/shared/utils/fetchTimeout";
 import { saveCallLog } from "@/lib/usageDb";
 import { sanitizeErrorMessage } from "../../utils/error.ts";
+import { getAccountAdmissionAbortStatus } from "../../services/accountRequestAdmission.ts";
 
 interface LogLike {
   info?: (tag: string, msg: string, meta?: unknown) => void;
@@ -17,6 +18,10 @@ interface CredentialsLike {
   apiKey?: unknown;
   accessToken?: unknown;
 }
+
+type VideoEndpointResult =
+  | { success: true; status: number; data: { created: number; data: unknown[] } }
+  | { success: false; status: number; terminal?: true; error: string };
 
 /**
  * Resolve the video generation endpoint URL from credentials and fallback.
@@ -51,36 +56,73 @@ function resolveVideoEndpoint(credentials: unknown, fallback: string): string {
  */
 async function fetchVideoEndpoint(
   url: string,
-  { headers, body, log }: { headers: Record<string, string>; body: string; log?: LogLike }
-) {
+  {
+    headers,
+    body,
+    log,
+    signal,
+    callerSignal,
+    admissionSignal,
+  }: {
+    headers: Record<string, string>;
+    body: string;
+    log?: LogLike;
+    signal?: AbortSignal | null;
+    callerSignal?: AbortSignal | null;
+    admissionSignal?: AbortSignal | null;
+  }
+): Promise<VideoEndpointResult> {
   try {
     const response = await fetchWithTimeout(url, {
       method: "POST",
       headers,
       body,
       timeoutMs: getConfiguredTimeout(),
+      signal,
     });
     if (!response.ok) {
       const errorText = await response.text();
       log?.error?.("VIDEO", `Upstream ${response.status} for ${url}: ${errorText}`);
-      return { success: false, status: response.status, error: errorText };
+      return {
+        success: false,
+        status: response.status,
+        ...(response.status === 408 || response.status >= 500 ? { terminal: true } : {}),
+        error: errorText,
+      };
     }
     const data = await response.json();
     return {
       success: true,
+      status: response.status,
       data: { created: data.created || Math.floor(Date.now() / 1000), data: data.data || [] },
     };
   } catch (err) {
     const message = err?.message;
+    const abortStatus = getAccountAdmissionAbortStatus(callerSignal, admissionSignal);
     const isTimeout = err instanceof FetchTimeoutError || err?.name === "AbortError";
-    log?.error?.(
-      "VIDEO",
-      `${isTimeout ? "Timeout" : "Request error"} for ${url}: ${sanitizeErrorMessage(message || err)}`
-    );
+    const safeMessage = sanitizeErrorMessage(message || err);
+    const failureLabel =
+      abortStatus === 499
+        ? "Caller cancelled"
+        : abortStatus === 503
+          ? "Shared account lease lost"
+          : isTimeout
+            ? "Timeout"
+            : "Request error";
+    log?.error?.("VIDEO", `${failureLabel} for ${url}: ${safeMessage}`);
     return {
       success: false,
-      status: isTimeout ? 504 : 502,
-      error: `Video provider error: ${sanitizeErrorMessage(message || err)}`,
+      status: abortStatus ?? (isTimeout ? 504 : 502),
+      ...(abortStatus !== null ? { terminal: true } : {}),
+      // A transport failure after dispatch has an ambiguous acceptance state.
+      // Do not let a combo submit the same expensive generation to a fallback.
+      ...(isTimeout || (!abortStatus && !err?.status) ? { terminal: true } : {}),
+      error:
+        abortStatus === 499
+          ? "Video request cancelled by caller"
+          : abortStatus === 503
+            ? "Video request stopped after shared account lease loss"
+            : `Video provider error: ${safeMessage}`,
     };
   }
 }
@@ -96,6 +138,9 @@ export async function handleOpenAIVideoGeneration({
   body,
   credentials,
   log,
+  signal,
+  callerSignal,
+  admissionSignal,
 }: {
   model: string;
   provider: string;
@@ -103,6 +148,10 @@ export async function handleOpenAIVideoGeneration({
   body: unknown;
   credentials: unknown;
   log?: LogLike;
+  /** Active transport signal (caller signal or the configured shared lease). */
+  signal?: AbortSignal | null;
+  callerSignal?: AbortSignal | null;
+  admissionSignal?: AbortSignal | null;
 }) {
   const startTime = Date.now();
   const creds = credentials as CredentialsLike | null | undefined;
@@ -136,10 +185,18 @@ export async function handleOpenAIVideoGeneration({
     headers,
     body: JSON.stringify(upstreamBody),
     log,
+    signal,
+    callerSignal,
+    admissionSignal,
   });
 
-  if (!fetchResult.success) {
-    return { success: false, status: fetchResult.status, error: fetchResult.error };
+  if (fetchResult.success === false) {
+    return {
+      success: false,
+      status: fetchResult.status,
+      ...(fetchResult.terminal ? { terminal: true } : {}),
+      error: fetchResult.error,
+    };
   }
 
   // Save call log for billing/tracking

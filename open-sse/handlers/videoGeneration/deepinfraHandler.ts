@@ -13,6 +13,7 @@
 
 import { sanitizeErrorMessage } from "../../utils/error.ts";
 import { saveCallLog } from "@/lib/usageDb";
+import { getAccountAdmissionAbortStatus } from "../../services/accountRequestAdmission.ts";
 
 interface DeepinfraHandlerArgs {
   model: string;
@@ -26,6 +27,9 @@ interface DeepinfraHandlerArgs {
     seed?: unknown;
   };
   credentials?: { apiKey?: string; accessToken?: string } | null;
+  signal?: AbortSignal | null;
+  callerSignal?: AbortSignal | null;
+  admissionSignal?: AbortSignal | null;
   log?: {
     info?: (scope: string, message: string) => void;
     error?: (scope: string, message: string) => void;
@@ -109,7 +113,12 @@ function buildDeepinfraFetchError(
   const errorMessage = extractDeepinfraErrorMessage(data) || `DeepInfra returned HTTP ${status}`;
   log?.error?.("VIDEO", `${ctx.provider} deepinfra-video error ${status}: ${errorMessage}`);
   logDeepinfraCall(ctx, status, { error: errorMessage.slice(0, 500) });
-  return { success: false, status, error: errorMessage };
+  return {
+    success: false,
+    status,
+    ...(status === 408 || status >= 500 ? { terminal: true } : {}),
+    error: errorMessage,
+  };
 }
 
 function buildDeepinfraSuccess(ctx: CallLogContext, videoUrl: string) {
@@ -126,24 +135,36 @@ function buildDeepinfraSuccess(ctx: CallLogContext, videoUrl: string) {
 function buildDeepinfraCatchError(
   ctx: CallLogContext,
   err: unknown,
-  log?: DeepinfraHandlerArgs["log"]
+  log?: DeepinfraHandlerArgs["log"],
+  callerSignal?: AbortSignal | null,
+  admissionSignal?: AbortSignal | null
 ) {
   const errorMessage = sanitizeErrorMessage(err) || "Video provider error";
+  const abortStatus = getAccountAdmissionAbortStatus(callerSignal, admissionSignal);
   log?.error?.("VIDEO", `${ctx.provider} deepinfra-video error: ${errorMessage}`);
-  logDeepinfraCall(ctx, 502, { error: errorMessage });
-  return { success: false, status: 502, error: errorMessage };
+  const status = abortStatus ?? 502;
+  logDeepinfraCall(ctx, status, { error: errorMessage });
+  return {
+    success: false,
+    status,
+    // A dropped direct generation connection has an unknown acceptance state.
+    terminal: true,
+    error: errorMessage,
+  };
 }
 
 async function fetchDeepinfraVideo(
   baseUrl: string,
   model: string,
   token: string,
-  requestBody: unknown
+  requestBody: unknown,
+  signal?: AbortSignal | null
 ) {
   const res = await fetch(`${baseUrl}/${model}`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(requestBody),
+    signal,
   });
   const data: DeepinfraVideoResponse = await res.json().catch(() => ({}));
   return { res, data };
@@ -156,6 +177,9 @@ export async function handleDeepinfraVideoGeneration({
   body,
   credentials,
   log,
+  signal,
+  callerSignal,
+  admissionSignal,
 }: DeepinfraHandlerArgs) {
   const ctx: CallLogContext = { provider, model, startTime: Date.now() };
   const token = credentials?.apiKey || credentials?.accessToken;
@@ -169,7 +193,7 @@ export async function handleDeepinfraVideoGeneration({
   log?.info?.("VIDEO", `${provider}/${model} (deepinfra-video) | prompt: "${promptPreview}..."`);
 
   try {
-    const { res, data } = await fetchDeepinfraVideo(baseUrl, model, token, requestBody);
+    const { res, data } = await fetchDeepinfraVideo(baseUrl, model, token, requestBody, signal);
     if (!res.ok) return buildDeepinfraFetchError(ctx, res.status, data, log);
 
     const videoUrl = typeof data.video_url === "string" ? data.video_url : null;
@@ -181,6 +205,6 @@ export async function handleDeepinfraVideoGeneration({
 
     return buildDeepinfraSuccess(ctx, videoUrl);
   } catch (err: unknown) {
-    return buildDeepinfraCatchError(ctx, err, log);
+    return buildDeepinfraCatchError(ctx, err, log, callerSignal, admissionSignal);
   }
 }

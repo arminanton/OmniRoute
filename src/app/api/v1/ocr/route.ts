@@ -9,7 +9,7 @@ import {
   clearRecoveredProviderState,
 } from "@/sse/services/auth";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
-import { parseOcrModel } from "@omniroute/open-sse/config/ocrRegistry.ts";
+import { getOcrTransformation, parseOcrModel } from "@omniroute/open-sse/config/ocrRegistry.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
@@ -20,6 +20,10 @@ import {
   rateLimitedProviderResponse,
 } from "@/app/api/v1/_shared/rateLimit";
 import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
+import {
+  acquireConfiguredSharedAccountAdmission,
+  getAccountAdmissionAbortStatus,
+} from "@omniroute/open-sse/services/accountRequestAdmission.ts";
 
 export { resolveVertexOcrAccessToken };
 
@@ -108,6 +112,11 @@ async function postHandler(request, context) {
     { reserveAccountRequest: true }
   );
   const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
+  const releaseReservations = () => {
+    sharedAdmission?.release();
+    releaseAccountRequest();
+  };
   try {
     if (request.signal.aborted) return cancelledResponse();
     if (!credentials) {
@@ -120,34 +129,105 @@ async function postHandler(request, context) {
       return rateLimitedProviderResponse(resolvedProvider, credentials);
     }
 
+    // Azure Document Intelligence accepts a remote operation before polling it,
+    // and its API does not expose cancellation for that accepted task. Keep its
+    // existing bounded in-process ownership path below; only acquire the
+    // cancellable shared lease for synchronous OCR providers.
+    const isAsyncOcr = typeof getOcrTransformation(resolvedProvider).pollUrl === "function";
+    if (!isAsyncOcr) {
+      const selectedProvider =
+        typeof (credentials as { provider?: unknown }).provider === "string"
+          ? (credentials as { provider: string }).provider
+          : resolvedProvider;
+      try {
+        sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+          provider: selectedProvider,
+          credentials,
+          signal: request.signal,
+        });
+      } catch (error) {
+        const admissionError = error as {
+          code?: string;
+        };
+        if (admissionError.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+          const status = getAccountAdmissionAbortStatus(request.signal) ?? 503;
+          return errorResponse(
+            status,
+            status === 499
+              ? "OCR request cancelled"
+              : "Provider account capacity admission is unavailable"
+          );
+        }
+        throw error;
+      }
+    }
+    const ocrSignal = sharedAdmission?.signal ?? request.signal;
+    const preflightAbortStatus = getAccountAdmissionAbortStatus(request.signal, ocrSignal);
+    if (preflightAbortStatus) {
+      return errorResponse(
+        preflightAbortStatus,
+        preflightAbortStatus === 499
+          ? "OCR request cancelled"
+          : "Provider account capacity lease lost"
+      );
+    }
+
     const tokenReadyCredentials = await resolveVertexOcrAccessToken(
       resolvedProvider,
       credentials,
-      request.signal
+      ocrSignal
     );
-    if (request.signal.aborted) return cancelledResponse();
+    const tokenAbortStatus = getAccountAdmissionAbortStatus(request.signal, ocrSignal);
+    if (tokenAbortStatus) {
+      return errorResponse(
+        tokenAbortStatus,
+        tokenAbortStatus === 499 ? "OCR request cancelled" : "Provider account capacity lease lost"
+      );
+    }
     const ocrCredentials = resolveOcrCredentials(tokenReadyCredentials, resolvedProvider);
 
     const response = await handleOcr({
       body: { ...body, model },
       credentials: ocrCredentials,
-      signal: request.signal,
+      signal: ocrSignal,
     });
     // Azure's accepted operation is deliberately allowed to finish its in-process,
     // attempt-bounded polling after a disconnect. Keep the account slot through
     // that handler lifetime, then report cancellation. This is not a durable task
     // owner and does not recover polling after a process restart.
-    if (request.signal.aborted) return cancelledResponse();
+    const responseAbortStatus = getAccountAdmissionAbortStatus(request.signal, ocrSignal);
+    if (responseAbortStatus) {
+      return errorResponse(
+        responseAbortStatus,
+        responseAbortStatus === 499
+          ? "OCR request cancelled"
+          : "Provider account capacity lease lost"
+      );
+    }
     if (response?.ok) {
       await clearRecoveredProviderState(credentials);
-      if (request.signal.aborted) return cancelledResponse();
+      const recoveryAbortStatus = getAccountAdmissionAbortStatus(request.signal, ocrSignal);
+      if (recoveryAbortStatus) {
+        return errorResponse(
+          recoveryAbortStatus,
+          recoveryAbortStatus === 499
+            ? "OCR request cancelled"
+            : "Provider account capacity lease lost"
+        );
+      }
     }
     return response;
   } catch (error) {
-    if (request.signal.aborted) return cancelledResponse();
+    const abortStatus = getAccountAdmissionAbortStatus(request.signal, sharedAdmission?.signal);
+    if (abortStatus) {
+      return errorResponse(
+        abortStatus,
+        abortStatus === 499 ? "OCR request cancelled" : "Provider account capacity lease lost"
+      );
+    }
     throw error;
   } finally {
-    releaseAccountRequest();
+    releaseReservations();
   }
 }
 

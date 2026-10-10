@@ -42121,6 +42121,24 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "499":
+          description: >-
+            The caller cancelled music generation. Synchronous upstream work is aborted;
+            after an asynchronous provider accepts a task, OmniRoute keeps the task's
+            account reservation while its in-process poll lifecycle settles, then reports
+            cancellation. Provider-side work may continue because not all providers expose
+            a task-cancellation API.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          description: >-
+            Configured shared account admission is unavailable before dispatch or its lease
+            is lost during an accepted music task. The request does not fall back to another
+            provider; accepted work remains owned by the in-process poll lifecycle.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         default:
           description: Provider or route failure; upstream status codes vary by provider.
           content:
@@ -43003,6 +43021,21 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "499":
+          description: >-
+            The caller cancelled a direct, cancellable video request. Accepted asynchronous
+            provider jobs may continue because provider-side cancellation is not available;
+            their existing route lifecycle retains local account occupancy while polling.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          description: >-
+            Configured shared account admission is unavailable or its lease was lost for a
+            direct, cancellable video request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         default:
           description: Provider or route failure; upstream status codes vary by provider.
           content:

@@ -1,4 +1,7 @@
-import { handleVideoGeneration } from "@omniroute/open-sse/handlers/videoGeneration.ts";
+import {
+  handleVideoGeneration,
+  isCancellableDirectVideoTarget,
+} from "@omniroute/open-sse/handlers/videoGeneration.ts";
 import { resolveVideoCredentialProvider } from "@omniroute/open-sse/handlers/videoGeneration/googleFlow.ts";
 import { withInjectionGuard } from "@/middleware/promptInjectionGuard";
 import {
@@ -25,6 +28,7 @@ import {
 import type { MediaGenerationResultLike } from "@/app/api/v1/_shared/mediaGenerationRoute";
 import { getSpecialtyModelsResponse } from "@/app/api/v1/_shared/specialtyCatalog";
 import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
+import { acquireConfiguredSharedAccountAdmission } from "@omniroute/open-sse/services/accountRequestAdmission.ts";
 import {
   isVideoPromptOptional,
   resolveLocalOverrideCredentials,
@@ -143,16 +147,45 @@ async function postHandler(request, context) {
   }
 
   const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
   let result: MediaGenerationResultLike;
   try {
+    const isDirectCancellable = await isCancellableDirectVideoTarget(
+      provider,
+      requestedModel,
+      isCustomModel
+    );
+    if (isDirectCancellable) {
+      try {
+        sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+          provider: resolveVideoCredentialProvider(provider),
+          credentials,
+          signal: request.signal,
+        });
+      } catch (error) {
+        const admissionError = error as { statusCode?: number; message?: string };
+        return errorResponse(
+          admissionError.statusCode === 499 ? 499 : HTTP_STATUS.SERVICE_UNAVAILABLE,
+          admissionError.message || "Provider account capacity admission is unavailable"
+        );
+      }
+    }
+
+    if (request.signal.aborted) {
+      return errorResponse(499, "Request cancelled by caller");
+    }
+
     result = await handleVideoGeneration({
       body,
       credentials,
       log,
-      signal: request.signal,
+      signal: sharedAdmission?.signal ?? request.signal,
+      callerSignal: request.signal,
+      admissionSignal: sharedAdmission?.signal,
       ...(isCustomModel && { resolvedProvider: provider }),
     });
   } finally {
+    sharedAdmission?.release();
     releaseAccountRequest();
   }
 
