@@ -14055,7 +14055,7 @@ paths:
           description: Compression stats unavailable
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+              schema: { $ref: "#/components/schemas/CompressionMemoUnavailableResponse" }
 
   /api/rate-limits:
     get:
@@ -47145,6 +47145,13 @@ components:
             memo: { $ref: "#/components/schemas/CompressionMemoStats" }
           additionalProperties: false
         timestamp: { type: string, format: date-time }
+      additionalProperties: false
+    CompressionMemoUnavailableResponse:
+      type: object
+      required: [status, error]
+      properties:
+        status: { type: string, const: error }
+        error: { type: string, const: compression_stats_unavailable }
       additionalProperties: false
     ResilienceAuthCategory:
       type: string

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { COMPRESSION_MEMO_UNAVAILABLE_RESPONSE } from "../../src/app/api/monitoring/compression/route.ts";
 import fs from "node:fs";
 import path from "node:path";
 import * as yaml from "js-yaml";
@@ -92,6 +93,26 @@ test("cache routes declare typed read, eviction, in-memory stats, and cache-memo
       ?.schema?.const,
     "no-store, no-cache, must-revalidate"
   );
+
+  const compressionUnavailable = success("/api/monitoring/compression", "get", "503");
+  assert.equal(
+    compressionUnavailable.$ref,
+    "#/components/schemas/CompressionMemoUnavailableResponse"
+  );
+  const unavailableSchema = spec.components.schemas.CompressionMemoUnavailableResponse;
+  assert.equal(unavailableSchema.type, "object");
+  assert.deepEqual(unavailableSchema.required, ["status", "error"]);
+  assert.deepEqual(Object.keys(unavailableSchema.properties ?? {}).sort(), ["error", "status"]);
+  assert.equal(unavailableSchema.properties?.status?.const, "error");
+  assert.equal(unavailableSchema.properties?.error?.const, "compression_stats_unavailable");
+  assert.deepEqual(Object.keys(COMPRESSION_MEMO_UNAVAILABLE_RESPONSE).sort(), ["error", "status"]);
+  assert.deepEqual(COMPRESSION_MEMO_UNAVAILABLE_RESPONSE, {
+    status: unavailableSchema.properties.status.const,
+    error: unavailableSchema.properties.error.const,
+  });
+  assert.equal(unavailableSchema.additionalProperties, false);
+  assert.ok(!("stack" in (unavailableSchema.properties ?? {})));
+  assert.ok(!("exception" in (unavailableSchema.properties ?? {})));
 
   const trendHours = operation("/api/cache", "get").parameters?.find(
     (parameter) => parameter.name === "trendHours"

@@ -3,6 +3,11 @@ import pino from "pino";
 
 const logger = pino({ name: "monitoring-compression-api" });
 
+export const COMPRESSION_MEMO_UNAVAILABLE_RESPONSE = {
+  status: "error",
+  error: "compression_stats_unavailable",
+} as const;
+
 /**
  * GET /api/monitoring/compression — Compression result-memo observability snapshot
  *
@@ -37,9 +42,6 @@ export async function GET() {
     );
   } catch (error) {
     logger.error({ err: error }, "GET /api/monitoring/compression failed");
-    return NextResponse.json(
-      { status: "error", error: "compression_stats_unavailable" },
-      { status: 503 }
-    );
+    return NextResponse.json(COMPRESSION_MEMO_UNAVAILABLE_RESPONSE, { status: 503 });
   }
 }
