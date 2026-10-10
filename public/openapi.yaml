@@ -5949,7 +5949,10 @@ paths:
       description: Returns models in Ollama /api/tags format for Ollama client compatibility
       responses:
         "200":
-          description: Ollama model tags
+          description: Ollama-compatible tags returned from the local model-tag fixture.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OllamaTagsResponse" }
 
   # ─── Proxy Subscriptions ───────────────────────────────────────
 
@@ -16435,7 +16438,16 @@ paths:
       summary: "GET analytics › auto routing"
       responses:
         "200":
-          description: OK
+          description: Auto-routing usage totals, variant counts, and top providers; query failures fall back to zeroed aggregates.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutoRoutingAnalyticsResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/analytics/compression:
     get:
       operationId: getApiAnalyticsCompression
@@ -16444,7 +16456,21 @@ paths:
       summary: "GET analytics › compression"
       responses:
         "200":
-          description: OK
+          description: Compression totals for the selected time window.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionAnalyticsSummaryResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Compression analytics could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/analytics/diversity:
     get:
       operationId: getApiAnalyticsDiversity
@@ -16453,7 +16479,15 @@ paths:
       summary: "GET analytics › diversity"
       responses:
         "200":
-          description: OK
+          description: In-memory provider-diversity summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderDiversityReportResponse" }
+        "500":
+          description: Diversity report could not be read; the serialized error property may be omitted when no message is available.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderDiversityErrorResponse" }
   /api/assess:
     get:
       operationId: getApiAssess
@@ -19341,7 +19375,15 @@ paths:
       summary: "GET free provider rankings"
       responses:
         "200":
-          description: OK
+          description: Free-provider rankings, optionally filtered and annotated with connection or usage data.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FreeProviderRankingsResponse" }
+        "400":
+          description: Query parameters failed validation; details maps invalid fields to their validation messages.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FreeProviderRankingsQueryErrorResponse" }
   /api/free-tier/summary:
     get:
       operationId: getApiFreeTierSummary
@@ -19765,7 +19807,15 @@ paths:
       summary: "GET health › degradation"
       responses:
         "200":
-          description: OK
+          description: Degradation counts and either the active feature report or a compact summary when `summary=true`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthDegradationResponse" }
+        "500":
+          description: Degradation report could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/health/ping:
     get:
       operationId: getApiHealthPing
@@ -19774,7 +19824,15 @@ paths:
       summary: "GET health › ping"
       responses:
         "200":
-          description: OK
+          description: Database liveness probe succeeded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthPingResponse" }
+        "503":
+          description: Database ping failed or the probe raised an error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HealthPingErrorResponse" }
   /api/intelligence/sync:
     delete:
       operationId: deleteApiIntelligenceSync
@@ -21310,7 +21368,15 @@ paths:
       summary: "GET network › info"
       responses:
         "200":
-          description: OK
+          description: Local, LAN, and detected Tailscale base URLs for the OpenAI-compatible API.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NetworkInfoResponse" }
+        "401":
+          description: Authentication is required by the active local policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/oauth/{provider}/paste-credentials:
     parameters:
       - name: provider
@@ -21584,7 +21650,21 @@ paths:
       summary: "GET omniroute › status"
       responses:
         "200":
-          description: OK
+          description: Sanitized status snapshot; does not execute a live model request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OmniRouteStatusResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Operational status could not be built.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/playground/simulate-route:
     post:
       operationId: postApiPlaygroundSimulateRoute
@@ -25112,7 +25192,26 @@ paths:
       summary: "DELETE resilience › model cooldowns"
       responses:
         "200":
-          description: OK
+          description: All cooldowns were cleared, or the matching provider/model cooldown was cleared if present.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelCooldownClearResponse" }
+        "400":
+          description: The request body failed validation or did not identify a provider/model pair.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Cooldown state could not be cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiResilienceModelCooldowns
       tags:
@@ -25120,7 +25219,21 @@ paths:
       summary: "GET resilience › model cooldowns"
       responses:
         "200":
-          description: OK
+          description: Current model lockouts, ordered by remaining cooldown.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelCooldownListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Cooldown state could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/routing/decisions/{requestId}:
     parameters:
       - name: requestId
@@ -25144,7 +25257,20 @@ paths:
       summary: "GET search › providers"
       responses:
         "200":
-          description: OK
+          description: Search and fetch provider catalog plus the legacy search-provider data array.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchProviderCatalogResponse" }
+        "401":
+          description: Authentication is required by the active local policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Provider catalog could not be built.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/search/stats:
     get:
       operationId: getApiSearchStats
@@ -25153,7 +25279,20 @@ paths:
       summary: "GET search › stats"
       responses:
         "200":
-          description: OK
+          description: Search-cache counters, per-provider aggregates, and up to ten recent search summaries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SearchStatsResponse" }
+        "401":
+          description: Authentication is required by the active local policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Search statistics could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/services/9router/models:
     get:
       operationId: getApiServices9routerModels
@@ -25213,7 +25352,21 @@ paths:
       summary: "GET session pools"
       responses:
         "200":
-          description: OK
+          description: Health information for all registered web-session pools.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebSessionPoolHealthReport" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Session-pool health could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/session-pools/{provider}:
     parameters:
       - name: provider
@@ -25228,7 +25381,26 @@ paths:
       summary: "GET session pools › <provider>"
       responses:
         "200":
-          description: OK
+          description: Health information for the requested web-session pool.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebSessionPoolProviderResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: No session pool was found for the provider.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Session-pool health could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/authz-inventory:
     get:
       operationId: getApiSettingsAuthzInventory
@@ -59753,4 +59925,646 @@ components:
         errors:
           type: array
           items: { $ref: "#/components/schemas/PluginScanError" }
+      additionalProperties: false
+
+    AutoRoutingAnalyticsTopProvider:
+      type: object
+      required: [provider, count]
+      properties:
+        provider: { type: string }
+        count: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    AutoRoutingAnalyticsResponse:
+      type: object
+      required: [totalRequests, variantBreakdown, topProviders]
+      properties:
+        totalRequests: { type: integer, minimum: 0 }
+        variantBreakdown:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        topProviders:
+          type: array
+          items: { $ref: "#/components/schemas/AutoRoutingAnalyticsTopProvider" }
+      additionalProperties: false
+
+    CompressionAnalyticsModeSummary:
+      type: object
+      required: [count, tokensSaved, avgSavingsPct, skipped]
+      properties:
+        count: { type: integer, minimum: 0 }
+        tokensSaved: { type: number }
+        avgSavingsPct: { type: number }
+        skipped: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    CompressionAnalyticsEngineSummary:
+      type: object
+      required: [count, tokensSaved, avgSavingsPct]
+      properties:
+        count: { type: integer, minimum: 0 }
+        tokensSaved: { type: number }
+        avgSavingsPct: { type: number }
+      additionalProperties: false
+
+    CompressionAnalyticsCounterSummary:
+      type: object
+      required: [count, tokensSaved]
+      properties:
+        count: { type: integer, minimum: 0 }
+        tokensSaved: { type: number }
+      additionalProperties: false
+
+    CompressionAnalyticsHourlySummary:
+      type: object
+      required: [hour, count, tokensSaved]
+      properties:
+        hour: { type: string, format: date-time }
+        count: { type: integer, minimum: 0 }
+        tokensSaved: { type: number }
+      additionalProperties: false
+
+    CompressionAnalyticsRealUsage:
+      type: object
+      required:
+        [requestsWithReceipts, promptTokens, completionTokens, totalTokens, cacheReadTokens, cacheWriteTokens, estimatedUsdSaved, bySource]
+      properties:
+        requestsWithReceipts: { type: integer, minimum: 0 }
+        promptTokens: { type: number }
+        completionTokens: { type: number }
+        totalTokens: { type: number }
+        cacheReadTokens: { type: number }
+        cacheWriteTokens: { type: number }
+        estimatedUsdSaved: { type: number }
+        bySource:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    CompressionAnalyticsMcpDescription:
+      type: object
+      required: [snapshots, estimatedTokensSaved]
+      properties:
+        snapshots: { type: integer, minimum: 0 }
+        estimatedTokensSaved: { type: number }
+      additionalProperties: false
+
+    CompressionAnalyticsSummaryResponse:
+      type: object
+      required:
+        [totalRequests, totalTokensSaved, avgSavingsPct, avgDurationMs, byMode, byEngine, byCompressionCombo, byProvider, last24h, totalSkipped, bySkipReason, validationFallbacks, realUsage, mcpDescriptionCompression]
+      properties:
+        totalRequests: { type: integer, minimum: 0 }
+        totalTokensSaved: { type: number }
+        avgSavingsPct: { type: number }
+        avgDurationMs: { type: number }
+        byMode:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/CompressionAnalyticsModeSummary" }
+        byEngine:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/CompressionAnalyticsEngineSummary" }
+        byCompressionCombo:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/CompressionAnalyticsCounterSummary" }
+        byProvider:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/CompressionAnalyticsCounterSummary" }
+        last24h:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionAnalyticsHourlySummary" }
+        totalSkipped: { type: integer, minimum: 0 }
+        bySkipReason:
+          type: object
+          additionalProperties: { type: integer, minimum: 0 }
+        validationFallbacks: { type: integer, minimum: 0 }
+        realUsage: { $ref: "#/components/schemas/CompressionAnalyticsRealUsage" }
+        mcpDescriptionCompression: { $ref: "#/components/schemas/CompressionAnalyticsMcpDescription" }
+      additionalProperties: false
+
+    ProviderDiversityReportResponse:
+      type: object
+      required: [score, totalRequests, providers, windowSize, ttlMs]
+      properties:
+        score: { type: number }
+        totalRequests: { type: integer, minimum: 0 }
+        providers:
+          type: object
+          additionalProperties:
+            type: object
+            required: [count, share]
+            properties:
+              count: { type: integer, minimum: 0 }
+              share: { type: number, minimum: 0, maximum: 1 }
+            additionalProperties: false
+        windowSize: { type: integer, minimum: 0 }
+        ttlMs: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ProviderDiversityErrorResponse:
+      type: object
+      description: The handler serializes an omitted `error` when no sanitizable message exists.
+      properties:
+        error: { type: string }
+      additionalProperties: false
+
+    FreeProviderModelScore:
+      type: object
+      required: [modelId, modelName, score, eloRaw, confidence, category]
+      properties:
+        modelId: { type: string }
+        modelName: { type: string }
+        score: { type: number }
+        eloRaw: { type: [number, "null"] }
+        confidence: { type: [string, "null"] }
+        category: { type: string }
+      additionalProperties: false
+
+    FreeProviderUsage:
+      type: object
+      required: [requests, successes, successRate, avgLatencyMs, lastRequestAt, windowHours]
+      properties:
+        requests: { type: integer, minimum: 0 }
+        successes: { type: integer, minimum: 0 }
+        successRate: { type: [number, "null"], minimum: 0, maximum: 1 }
+        avgLatencyMs: { type: [number, "null"] }
+        lastRequestAt: { type: [string, "null"] }
+        windowHours: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    FreeProviderReliabilityConnection:
+      type: object
+      required: [testStatus, rateLimitedUntil, state]
+      properties:
+        testStatus: { type: [string, "null"] }
+        rateLimitedUntil: { type: [string, "null"] }
+        state: { type: string, enum: [healthy, degraded, down] }
+      additionalProperties: false
+
+    FreeProviderReliability:
+      type: object
+      required: [connections, state]
+      properties:
+        connections:
+          type: array
+          items: { $ref: "#/components/schemas/FreeProviderReliabilityConnection" }
+        state: { type: string, enum: [healthy, degraded, down] }
+        usage: { $ref: "#/components/schemas/FreeProviderUsage" }
+      additionalProperties: false
+
+    FreeProviderRanking:
+      type: object
+      required: [id, name, icon, color, category, topModel, averageScore, modelCount]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        icon: { type: string }
+        color: { type: string }
+        textIcon: { type: string }
+        category: { type: string, enum: [noauth, oauth, apikey] }
+        topModel:
+          oneOf:
+            - { $ref: "#/components/schemas/FreeProviderModelScore" }
+            - { type: "null" }
+        averageScore: { type: number }
+        modelCount: { type: integer, minimum: 0 }
+        reliability: { $ref: "#/components/schemas/FreeProviderReliability" }
+      additionalProperties: false
+
+    FreeProviderRankingsResponse:
+      type: object
+      required: [rankings]
+      properties:
+        rankings:
+          type: array
+          items: { $ref: "#/components/schemas/FreeProviderRanking" }
+      additionalProperties: false
+
+    FreeProviderRankingsQueryErrorResponse:
+      type: object
+      required: [error, details]
+      properties:
+        error: { type: string, const: Invalid query parameters }
+        details:
+          type: object
+          description: Zod fieldErrors map; only fields that failed validation are present.
+          additionalProperties:
+            type: array
+            items: { type: string }
+      additionalProperties: false
+
+    HealthPingResponse:
+      type: object
+      required: [status, timestamp, latencyMs]
+      properties:
+        status: { type: string, const: ok }
+        timestamp: { type: string, format: date-time }
+        latencyMs: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    HealthPingErrorResponse:
+      type: object
+      required: [status, error]
+      properties:
+        status: { type: string, const: error }
+        error: { type: string, enum: [db_query_failed, ping_failed] }
+      additionalProperties: false
+
+    DegradationLevelSummary:
+      type: object
+      required: [full, reduced, minimal, default]
+      properties:
+        full: { type: integer, minimum: 0 }
+        reduced: { type: integer, minimum: 0 }
+        minimal: { type: integer, minimum: 0 }
+        default: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    DegradationFeatureStatus:
+      type: object
+      required: [level, feature, capability, reason, since]
+      properties:
+        level: { type: string, enum: [full, reduced, minimal, default] }
+        feature: { type: string }
+        capability: { type: string }
+        reason: { type: string }
+        since: { type: string, format: date-time }
+      additionalProperties: false
+
+    HealthDegradationReportResponse:
+      type: object
+      required: [active, summary, features]
+      properties:
+        active: { type: boolean }
+        summary: { $ref: "#/components/schemas/DegradationLevelSummary" }
+        features:
+          type: array
+          items: { $ref: "#/components/schemas/DegradationFeatureStatus" }
+      additionalProperties: false
+
+    HealthDegradationSummaryResponse:
+      type: object
+      required: [summary, isDegraded]
+      properties:
+        summary: { $ref: "#/components/schemas/DegradationLevelSummary" }
+        isDegraded: { type: boolean }
+      additionalProperties: false
+
+    HealthDegradationResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/HealthDegradationReportResponse" }
+        - { $ref: "#/components/schemas/HealthDegradationSummaryResponse" }
+      description: The response shape depends on the `summary=true` query parameter.
+
+    NetworkInfoResponse:
+      type: object
+      required: [localUrl, lanUrls, tailscaleIpUrl]
+      properties:
+        localUrl: { type: string, format: uri }
+        lanUrls:
+          type: array
+          items: { type: string, format: uri }
+        tailscaleIpUrl: { type: [string, "null"], format: uri }
+      additionalProperties: false
+
+    ModelCooldownItem:
+      type: object
+      required: [provider, model, connectionId, reason, remainingMs, failureCount]
+      properties:
+        provider: { type: string }
+        model: { type: string }
+        connectionId: { type: string }
+        reason: { type: string }
+        remainingMs: { type: number, minimum: 0 }
+        failureCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ModelCooldownListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ModelCooldownItem" }
+      additionalProperties: false
+
+    ModelCooldownClearAllResponse:
+      type: object
+      required: [ok, clearedAll]
+      properties:
+        ok: { type: boolean, const: true }
+        clearedAll: { type: boolean, const: true }
+      additionalProperties: false
+
+    ModelCooldownClearOneResponse:
+      type: object
+      required: [ok, removed]
+      properties:
+        ok: { type: boolean, const: true }
+        removed: { type: boolean }
+      additionalProperties: false
+
+    ModelCooldownClearResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/ModelCooldownClearAllResponse" }
+        - { $ref: "#/components/schemas/ModelCooldownClearOneResponse" }
+
+    SearchProviderCatalogItem:
+      type: object
+      required: [id, name, kind, costPerQuery, freeMonthlyQuota, status, configureHref]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind: { type: string, enum: [search, fetch] }
+        costPerQuery: { type: number, minimum: 0 }
+        freeMonthlyQuota: { type: integer, minimum: 0 }
+        searchTypes:
+          type: array
+          items: { type: string }
+        fetchFormats:
+          type: array
+          items: { type: string }
+        status: { type: string, enum: [configured, missing, rate_limited] }
+        configureHref: { type: string }
+      additionalProperties: false
+
+    SearchProviderLegacyDataItem:
+      type: object
+      required: [id, object, created, name, search_types]
+      properties:
+        id: { type: string }
+        object: { type: string, const: search_provider }
+        created: { type: integer, minimum: 0, description: Unix timestamp in seconds. }
+        name: { type: string }
+        search_types:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    SearchProviderCatalogResponse:
+      type: object
+      required: [providers, data]
+      properties:
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/SearchProviderCatalogItem" }
+        data:
+          type: array
+          description: Legacy compatibility array; fetch entries use an empty search_types list.
+          items: { $ref: "#/components/schemas/SearchProviderLegacyDataItem" }
+      additionalProperties: false
+
+    SearchStatsCache:
+      type: object
+      required: [size, hits, misses]
+      properties:
+        size: { type: integer, minimum: 0 }
+        hits: { type: integer, minimum: 0 }
+        misses: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    SearchStatsProvider:
+      type: object
+      required: [requests, avg_latency_ms, total_cost]
+      properties:
+        requests: { type: integer, minimum: 0 }
+        avg_latency_ms: { type: [integer, "null"] }
+        total_cost: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    SearchStatsRecentItem:
+      type: object
+      required: [query, provider, timestamp, filters]
+      properties:
+        query: { type: string }
+        provider: { type: string }
+        timestamp: { type: string }
+        filters:
+          description: Parsed request-summary JSON value; `{}` is used when parsing fails or filters are absent.
+      additionalProperties: false
+
+    SearchStatsResponse:
+      type: object
+      required: [cache, providers, recent_searches]
+      properties:
+        cache: { $ref: "#/components/schemas/SearchStatsCache" }
+        providers:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/SearchStatsProvider" }
+        recent_searches:
+          type: array
+          items: { $ref: "#/components/schemas/SearchStatsRecentItem" }
+      additionalProperties: false
+
+    WebSessionPoolInfo:
+      type: object
+      required:
+        [totalSessions, activeSessions, cooldownSessions, deadSessions, totalRequests, successfulRequests, successRate, throughput, uptime]
+      properties:
+        totalSessions: { type: integer, minimum: 0 }
+        activeSessions: { type: integer, minimum: 0 }
+        cooldownSessions: { type: integer, minimum: 0 }
+        deadSessions: { type: integer, minimum: 0 }
+        totalRequests: { type: integer, minimum: 0 }
+        successfulRequests: { type: integer, minimum: 0 }
+        successRate: { type: string }
+        throughput: { type: string }
+        uptime: { type: string }
+      additionalProperties: false
+
+    WebSessionPoolBreakerInfo:
+      type: object
+      required: [state, inCooldown, cooldownRemainingMs, failureCount, lastFailureAt]
+      properties:
+        state: { type: string }
+        inCooldown: { type: boolean }
+        cooldownRemainingMs: { type: [number, "null"] }
+        failureCount: { type: integer, minimum: 0 }
+        lastFailureAt: { type: [number, "null"] }
+      additionalProperties: false
+
+    WebSessionPoolSessionInfo:
+      type: object
+      required:
+        [id, fingerprint, status, totalRequests, successfulRequests, successRate, inflight, cooldownRemaining, age]
+      properties:
+        id: { type: string }
+        fingerprint: { type: string }
+        status: { type: string, enum: [active, cooldown, dead] }
+        totalRequests: { type: integer, minimum: 0 }
+        successfulRequests: { type: integer, minimum: 0 }
+        successRate: { type: string }
+        inflight: { type: integer, minimum: 0 }
+        cooldownRemaining: { type: string }
+        age: { type: string }
+      additionalProperties: false
+
+    WebSessionPoolProviderHealth:
+      type: object
+      required: [provider, pool, breaker, sessions, health, issues]
+      properties:
+        provider: { type: string }
+        pool: { oneOf: [{ $ref: "#/components/schemas/WebSessionPoolInfo" }, { type: "null" }] }
+        breaker: { oneOf: [{ $ref: "#/components/schemas/WebSessionPoolBreakerInfo" }, { type: "null" }] }
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/WebSessionPoolSessionInfo" }
+        health: { type: string, enum: [healthy, degraded, down] }
+        issues:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    WebSessionPoolHealthReport:
+      type: object
+      required: [checkedAt, providers]
+      properties:
+        checkedAt: { type: string, format: date-time }
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/WebSessionPoolProviderHealth" }
+      additionalProperties: false
+
+    WebSessionPoolProviderResponse:
+      allOf:
+        - { $ref: "#/components/schemas/WebSessionPoolProviderHealth" }
+        - type: object
+          required: [checkedAt]
+          properties:
+            checkedAt: { type: string, format: date-time }
+      description: A single provider pool-health record with the report timestamp.
+
+    OllamaTagModel:
+      type: object
+      required: [name, modified_at, size, digest, details]
+      properties:
+        name: { type: string }
+        modified_at: { type: string, format: date-time }
+        size: { type: integer, minimum: 0 }
+        digest: { type: string }
+        details:
+          type: object
+          required: [format, family, parameter_size, quantization_level]
+          properties:
+            format: { type: string }
+            family: { type: string }
+            parameter_size: { type: string }
+            quantization_level: { type: string }
+          additionalProperties: false
+      additionalProperties: false
+
+    OllamaTagsResponse:
+      type: object
+      required: [models]
+      properties:
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/OllamaTagModel" }
+      additionalProperties: false
+
+    OmniRouteStatusProviderConnection:
+      type: object
+      required: [id, provider, active, health, failureState]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        active: { type: boolean }
+        health: { type: string, enum: [disabled, healthy, unknown] }
+        failureState: { type: string, enum: [recent_error, none] }
+      additionalProperties: false
+
+    OmniRouteStatusPool:
+      type: object
+      required: [id, name, connectionIds, allocationCount]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        connectionIds:
+          type: array
+          items: { type: string }
+        allocationCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    OmniRouteStatusCircuitsPersisted:
+      type: object
+      required: [open, halfOpen, closed, source]
+      properties:
+        open: { type: integer, minimum: 0 }
+        halfOpen: { type: integer, minimum: 0 }
+        closed: { type: integer, minimum: 0 }
+        source: { type: string, const: persisted circuit breaker registry }
+      additionalProperties: false
+
+    OmniRouteStatusCircuitsUnavailable:
+      type: object
+      required: [status, source]
+      properties:
+        status: { type: string, const: unknown }
+        source: { type: string, const: resilience subsystem unavailable }
+      additionalProperties: false
+
+    OmniRouteStatusResponse:
+      type: object
+      required:
+        [generatedAt, liveRequestExecuted, gateway, catalog, providers, pools, quotaMonitoring, circuits, usage, budgets]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        liveRequestExecuted: { type: boolean, const: false }
+        gateway: { type: string, enum: [healthy, degraded] }
+        catalog:
+          type: object
+          required: [available]
+          properties:
+            available: { type: boolean, const: true }
+          additionalProperties: false
+        providers:
+          type: object
+          required: [configured, active, healthy, disabled, connections]
+          properties:
+            configured: { type: integer, minimum: 0 }
+            active: { type: integer, minimum: 0 }
+            healthy: { type: integer, minimum: 0 }
+            disabled: { type: integer, minimum: 0 }
+            connections:
+              type: array
+              items: { $ref: "#/components/schemas/OmniRouteStatusProviderConnection" }
+          additionalProperties: false
+        pools:
+          type: object
+          required: [count, allocations, items]
+          properties:
+            count: { type: integer, minimum: 0 }
+            allocations: { type: integer, minimum: 0 }
+            items:
+              type: array
+              items: { $ref: "#/components/schemas/OmniRouteStatusPool" }
+          additionalProperties: false
+        quotaMonitoring:
+          type: object
+          required: [authoritative, headerBased, configured, unsupported, status]
+          properties:
+            authoritative: { type: integer, minimum: 0 }
+            headerBased: { type: integer, minimum: 0 }
+            configured: { type: integer, minimum: 0 }
+            unsupported: { type: [integer, "null"], minimum: 0 }
+            status: { type: string, enum: [partial, unknown] }
+          additionalProperties: false
+        circuits:
+          oneOf:
+            - { $ref: "#/components/schemas/OmniRouteStatusCircuitsPersisted" }
+            - { $ref: "#/components/schemas/OmniRouteStatusCircuitsUnavailable" }
+        usage:
+          type: object
+          required: [source, liveRequestsExecuted]
+          properties:
+            source: { type: string, const: usage_history and call_logs }
+            liveRequestsExecuted: { type: boolean, const: false }
+          additionalProperties: false
+        budgets:
+          type: object
+          required: [source, upstreamQuotaClaims]
+          properties:
+            source: { type: string, const: internal governance limits }
+            upstreamQuotaClaims: { type: boolean, const: false }
+          additionalProperties: false
       additionalProperties: false
