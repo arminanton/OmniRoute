@@ -7222,6 +7222,7 @@ paths:
       description: Detects the API format of a request body (OpenAI, Claude, Gemini, etc.)
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
@@ -7233,6 +7234,20 @@ paths:
       responses:
         "200":
           description: Detected format
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorDetectResponse" }
+        "400":
+          description: Malformed JSON or invalid translator-detection body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorDetectFailureResponse" }
+        "500":
+          description: Detection failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorOperationFailureResponse" }
 
   /api/translator/translate:
     post:
@@ -7285,6 +7300,7 @@ paths:
       summary: Send translated request to provider
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
@@ -7297,7 +7313,32 @@ paths:
                   type: object
       responses:
         "200":
-          description: Provider response (may be SSE stream)
+          description: Streaming provider response; the handler forces event-stream media type for an upstream success.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-cache }
+            Connection:
+              schema: { type: string, const: keep-alive }
+          content:
+            text/event-stream:
+              schema: { type: string, x-sensitive: true }
+        "400":
+          description: Invalid request, unsupported translator provider, or no active connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorSendLocalFailureResponse" }
+        "500":
+          description: Translator send failed before receiving a provider error response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorOperationFailureResponse" }
+        default:
+          description: Non-success provider response status forwarded with normalized error details.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorSendUpstreamFailureResponse" }
 
   /api/translator/history:
     get:
@@ -7305,9 +7346,24 @@ paths:
       tags: [Translator]
       summary: Get translation history
       description: Returns recent translation events for the Live Monitor
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Event count; invalid/nonpositive values use the default and positive values are capped at 200.
+          schema: { type: string, default: "50" }
       responses:
         "200":
           description: Translation history entries
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorHistoryResponse" }
+        "500":
+          description: Translation history could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorHistoryFailureResponse" }
 
   # ─── CLI Remote Mode ───────────────────────────────────────────
 
@@ -12541,27 +12597,32 @@ paths:
       security: []
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: true
-              properties:
-                initData:
-                  type: string
-                message:
-                  type: string
-                update_id:
-                  type: integer
+            schema: { $ref: "#/components/schemas/TelegramUpdateRequest" }
       responses:
         "200":
           description: Update acknowledged or Mini App reply returned
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramUpdateResponse" }
         "400":
           description: Invalid JSON, request shape, or missing Mini App message
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramErrorResponse" }
         "401":
           description: Invalid Mini App initData signature
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramErrorResponse" }
         "503":
           description: Telegram integration is not configured
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TelegramErrorResponse" }
 
   /api/resilience/reset:
     post:
@@ -13355,6 +13416,15 @@ paths:
       responses:
         "200":
           description: Token health status
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenHealthResponse" }
+        "500":
+          description: OAuth token health query failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenHealthFailureResponse" }
 
   # ─── Evals & Policies ──────────────────────────────────────────
 
@@ -30533,9 +30603,42 @@ paths:
       tags:
         - Radar
       summary: "POST radar › sync all"
+      requestBody:
+        required: false
+        description: Optional empty JSON object; absent/blank or `{}` only, at most 1 KiB.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RadarSyncBodyRequest" }
       responses:
         "200":
-          description: OK
+          description: Independent result for each catalog, referral, offers, and Intel feed sync.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RadarSyncAllResponse" }
+        "400":
+          description: Sync body is malformed or contains fields.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Radar is disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Sync body exceeds the 1 KiB limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Aggregate Radar sync failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/relay/tokens:
     get:
       operationId: getApiRelayTokens
@@ -35390,9 +35493,29 @@ paths:
       tags:
         - Synced available models
       summary: "GET synced available models"
+      parameters:
+        - name: provider
+          in: query
+          required: false
+          description: When nonempty, wraps the selected provider’s models in `{models:[...]}`; omitted/empty returns a provider-keyed record.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Provider-specific model wrapper or map of all synchronized models grouped by provider.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncedAvailableModelsResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncedModelsErrorResponse" }
+        "500":
+          description: Synchronized model catalog could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncedModelsErrorResponse" }
   /api/system/env/repair:
     get:
       operationId: getApiSystemEnvRepair
@@ -35412,14 +35535,29 @@ paths:
         - {}
       responses:
         "401":
-          $ref: "#/components/responses/ManagementAuthenticationRequired"
+          description: Management authentication or the route-level legacy authentication check rejected the request.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: OAuth environment repair plan with missing variable names only.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnvRepairPlanResponse" }
+        "500":
+          description: Failed to inspect environment defaults; handler returns the error message.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiSystemEnvRepair
       tags:
@@ -35438,14 +35576,29 @@ paths:
         - {}
       responses:
         "401":
-          $ref: "#/components/responses/ManagementAuthenticationRequired"
+          description: Management authentication or the route-level legacy authentication check rejected the request.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Environment repair result with backup path and missing variable names.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnvRepairApplyResponse" }
+        "500":
+          description: Failed to repair environment defaults; handler returns the error message.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/system/version:
     get:
       operationId: getApiSystemVersion
@@ -36099,9 +36252,30 @@ paths:
       tags:
         - Translator
       summary: "POST translator › transform stream"
+      description: Transforms a bounded Chat Completions SSE text payload into Responses API SSE text.
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TranslatorTransformStreamRequest" }
       responses:
         "200":
-          description: OK
+          description: Transformed SSE content returned as a JSON string.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorTransformStreamResponse" }
+        "400":
+          description: Malformed JSON or invalid rawSse input.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorDetectFailureResponse" }
+        "500":
+          description: Stream transformation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TranslatorOperationFailureResponse" }
   /api/tunnels/cloudflared:
     get:
       operationId: getApiTunnelsCloudflared
@@ -36110,16 +36284,54 @@ paths:
       summary: "GET tunnels › cloudflared"
       responses:
         "200":
-          description: OK
+          description: Cloudflared tunnel status, including local binary/log paths and public endpoint state.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudflaredTunnelStatus" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Cloudflared status could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
     post:
       operationId: postApiTunnelsCloudflared
       tags:
         - Tunnels
       summary: "POST tunnels › cloudflared"
       x-local-only: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloudflaredTunnelActionRequest" }
       responses:
         "200":
-          description: OK
+          description: Tunnel action result and resulting Cloudflared status.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CloudflaredTunnelActionResponse" }
+        "400":
+          description: Malformed JSON or invalid action.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Cloudflared action failed; details are reduced to a safe reason.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
   /api/tunnels/ngrok:
     get:
       operationId: getApiTunnelsNgrok
@@ -36128,15 +36340,54 @@ paths:
       summary: "GET tunnels › ngrok"
       responses:
         "200":
-          description: OK
+          description: Ngrok tunnel status, public endpoint, and current phase.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NgrokTunnelStatus" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Ngrok status could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
     post:
       operationId: postApiTunnelsNgrok
       tags:
         - Tunnels
       summary: "POST tunnels › ngrok"
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NgrokTunnelActionRequest" }
       responses:
         "200":
-          description: OK
+          description: Tunnel action result and resulting Ngrok status; missing authToken may return phase needs_auth with HTTP 200.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NgrokTunnelActionResponse" }
+        "400":
+          description: Malformed JSON or invalid action/token field.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Ngrok action failed; details are reduced to a safe reason.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
   /api/tunnels/tailscale:
     get:
       operationId: getApiTunnelsTailscale
@@ -36145,7 +36396,21 @@ paths:
       summary: "GET tunnels › tailscale"
       responses:
         "200":
-          description: OK
+          description: Tailscale tunnel and daemon status, including local install and process metadata.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TailscaleTunnelStatus" }
+        "401":
+          description: Authentication required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Tailscale status could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
   /api/tunnels/tailscale/check:
     get:
       operationId: getApiTunnelsTailscaleCheck
@@ -70232,4 +70497,429 @@ components:
             offers: { $ref: "#/components/schemas/RadarStatusCache" }
             intel: { $ref: "#/components/schemas/RadarStatusCache" }
           additionalProperties: false
+      additionalProperties: false
+
+    RadarSyncAllResponse:
+      type: object
+      x-sensitive: true
+      required: [catalog, referrals, offers, intel]
+      properties:
+        catalog: { $ref: "#/components/schemas/RadarSyncStatus" }
+        referrals: { $ref: "#/components/schemas/RadarReferralsSyncStatus" }
+        offers: { $ref: "#/components/schemas/RadarOffersSyncStatus" }
+        intel: { $ref: "#/components/schemas/RadarIntelSyncStatus" }
+      additionalProperties: false
+
+    RadarReferralsSyncStatus:
+      oneOf:
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: disabled } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: opt_out } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: invalid_signature } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: invalid_schema } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: stale } }
+          additionalProperties: false
+        - type: object
+          required: [status]
+          properties: { status: { type: string, const: too_large } }
+          additionalProperties: false
+        - type: object
+          required: [status, generatedAt, tier]
+          properties:
+            status: { type: string, const: updated }
+            generatedAt: { type: string, format: date-time }
+            tier: { type: string, enum: [community, live] }
+          additionalProperties: false
+        - type: object
+          required: [status, reason]
+          properties:
+            status: { type: string, const: error }
+            reason: { type: string, x-sensitive: true }
+          additionalProperties: false
+      x-sensitive: true
+
+    SyncedAvailableModel:
+      type: object
+      required: [id, name, source]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        source: { type: string, const: imported }
+        apiFormat: { type: string }
+        targetFormat: { type: string }
+        upstreamProtocol: { type: string }
+        supportedEndpoints:
+          type: array
+          items: { type: string }
+        supportedThinkingEfforts:
+          type: array
+          items: { type: string }
+        supportsAdaptiveThinking: { type: boolean }
+        defaultThinkingEffort: { type: string }
+        inputTokenLimit: { type: number }
+        outputTokenLimit: { type: number }
+        premiumRequestMultiplier: { type: number, minimum: 0 }
+        description: { type: string }
+        supportsThinking: { type: boolean }
+        alwaysThinking: { type: boolean, const: true }
+        supportsTools: { type: boolean }
+        supportsVideo: { type: boolean }
+        supportsVision: { type: boolean }
+      additionalProperties: false
+
+    SyncedAvailableModelsResponse:
+      oneOf:
+        - type: object
+          required: [models]
+          properties:
+            models:
+              type: array
+              items: { $ref: "#/components/schemas/SyncedAvailableModel" }
+          additionalProperties: false
+        - type: object
+          description: Provider ID keyed map returned when the provider query is omitted or empty.
+          additionalProperties:
+            type: array
+            items: { $ref: "#/components/schemas/SyncedAvailableModel" }
+      x-sensitive: true
+
+    SyncedModelsErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type: { type: string, enum: [invalid_api_key, server_error] }
+          additionalProperties: false
+      additionalProperties: false
+
+    EnvRepairPlanResponse:
+      type: object
+      x-sensitive: true
+      required: [available, created, added, missingCount, missingKeys]
+      properties:
+        available: { type: boolean }
+        created: { type: boolean }
+        added: { type: integer, minimum: 0 }
+        missingCount: { type: integer, minimum: 0 }
+        missingKeys:
+          type: array
+          items: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    EnvRepairApplyResponse:
+      type: object
+      x-sensitive: true
+      required: [success, backupPath, created, added, missingCount, missingKeys]
+      properties:
+        success: { type: boolean, const: true }
+        backupPath: { type: [string, "null"], x-sensitive: true }
+        created: { type: boolean }
+        added: { type: integer, minimum: 0 }
+        missingCount: { type: integer, minimum: 0 }
+        missingKeys:
+          type: array
+          items: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    TelegramUpdateRequest:
+      type: object
+      x-sensitive: true
+      properties:
+        initData: { type: string, x-sensitive: true }
+        message: { type: string, x-sensitive: true }
+        update_id: { type: number }
+      additionalProperties: true
+
+    TelegramUpdateAcknowledgedResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok: { type: boolean, const: true }
+      additionalProperties: false
+
+    TelegramMiniAppReplyResponse:
+      type: object
+      x-sensitive: true
+      required: [ok, reply]
+      properties:
+        ok: { type: boolean, const: true }
+        reply: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    TelegramUpdateResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/TelegramUpdateAcknowledgedResponse" }
+        - { $ref: "#/components/schemas/TelegramMiniAppReplyResponse" }
+
+    TelegramErrorResponse:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
+
+    TokenHealthResponse:
+      type: object
+      x-sensitive: true
+      required: [total, healthy, errored, warning, lastCheckAt, status]
+      properties:
+        total: { type: integer, minimum: 0 }
+        healthy: { type: integer, minimum: 0 }
+        errored: { type: integer, minimum: 0 }
+        warning: { type: integer }
+        lastCheckAt: { type: [string, "null"], format: date-time }
+        status: { type: string, enum: [healthy, warning, error] }
+      additionalProperties: false
+
+    TokenHealthFailureResponse:
+      type: object
+      x-sensitive: true
+      required: [error, status]
+      properties:
+        error: { type: string, x-sensitive: true }
+        status: { type: string, const: unknown }
+      additionalProperties: false
+
+    TranslatorOperationFailureResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    TranslatorDetectFailureResponse:
+      type: object
+      x-sensitive: true
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error:
+          oneOf:
+            - type: object
+              required: [message, details]
+              properties:
+                message: { type: string }
+                details:
+                  type: array
+                  items:
+                    type: object
+                    required: [field, message]
+                    properties:
+                      field: { type: string }
+                      message: { type: string }
+                    additionalProperties: true
+              additionalProperties: false
+            - { type: string }
+      additionalProperties: false
+
+    TranslatorDetectResponse:
+      type: object
+      x-sensitive: true
+      required: [success, format]
+      properties:
+        success: { type: boolean, const: true }
+        format: { type: string }
+      additionalProperties: false
+
+    TranslatorHistoryEvent:
+      type: object
+      x-sensitive: true
+      required: [id, timestamp, routeProvider, routeCombo, routeEndpoint, routeConnectionId, routeConnectionShortId, isComboRouted]
+      properties:
+        id: { type: string }
+        timestamp: { type: string, format: date-time }
+        provider: { type: string }
+        model: { type: string }
+        sourceFormat: { type: string }
+        targetFormat: { type: string }
+        status: { type: string, enum: [success, error] }
+        statusCode: { type: number }
+        latency: { type: number, minimum: 0 }
+        endpoint: { type: string }
+        connectionId: { type: [string, "null"], x-sensitive: true }
+        comboName: { type: [string, "null"] }
+        routeProvider: { type: [string, "null"] }
+        routeCombo: { type: [string, "null"] }
+        routeEndpoint: { type: [string, "null"] }
+        routeConnectionId: { type: [string, "null"], x-sensitive: true }
+        routeConnectionShortId: { type: [string, "null"], x-sensitive: true }
+        isComboRouted: { type: boolean }
+      additionalProperties: true
+
+    TranslatorHistoryResponse:
+      type: object
+      x-sensitive: true
+      required: [success, events, total]
+      properties:
+        success: { type: boolean, const: true }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/TranslatorHistoryEvent" }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    TranslatorHistoryFailureResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
+
+    TranslatorSendLocalFailureResponse:
+      type: object
+      x-sensitive: true
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error:
+          oneOf:
+            - type: object
+              required: [message, details]
+              properties:
+                message: { type: string }
+                details:
+                  type: array
+                  items: { type: object, additionalProperties: true }
+              additionalProperties: false
+            - { type: string }
+      additionalProperties: false
+
+    TranslatorSendUpstreamFailureResponse:
+      type: object
+      x-sensitive: true
+      required: [success, error, details]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string, x-sensitive: true }
+        details: { type: object, x-sensitive: true, additionalProperties: true }
+      additionalProperties: false
+
+    TranslatorTransformStreamRequest:
+      type: object
+      x-sensitive: true
+      required: [rawSse]
+      properties:
+        rawSse: { type: string, minLength: 1, maxLength: 100000, x-sensitive: true }
+      additionalProperties: true
+
+    TranslatorTransformStreamResponse:
+      type: object
+      x-sensitive: true
+      required: [success, transformed]
+      properties:
+        success: { type: boolean, const: true }
+        transformed: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    CloudflaredTunnelStatus:
+      type: object
+      x-sensitive: true
+      required: [supported, installed, managedInstall, installSource, binaryPath, running, pid, publicUrl, apiUrl, targetUrl, phase, lastError, logPath]
+      properties:
+        supported: { type: boolean }
+        installed: { type: boolean }
+        managedInstall: { type: boolean }
+        installSource: { type: [string, "null"], enum: [managed, path, env, null] }
+        binaryPath: { type: [string, "null"], x-sensitive: true }
+        running: { type: boolean }
+        pid: { type: [integer, "null"], minimum: 1, x-sensitive: true }
+        publicUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        apiUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        targetUrl: { type: string, format: uri, x-sensitive: true }
+        phase: { type: string, enum: [unsupported, not_installed, stopped, starting, running, error] }
+        lastError: { type: [string, "null"], x-sensitive: true }
+        logPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    CloudflaredTunnelActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [enable, disable] }
+      additionalProperties: true
+
+    CloudflaredTunnelActionResponse:
+      type: object
+      x-sensitive: true
+      required: [success, action, status]
+      properties:
+        success: { type: boolean, const: true }
+        action: { type: string, enum: [enable, disable] }
+        status: { $ref: "#/components/schemas/CloudflaredTunnelStatus" }
+      additionalProperties: false
+
+    NgrokTunnelStatus:
+      type: object
+      x-sensitive: true
+      required: [supported, installed, running, publicUrl, apiUrl, targetUrl, phase, lastError]
+      properties:
+        supported: { type: boolean }
+        installed: { type: boolean }
+        running: { type: boolean }
+        publicUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        apiUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        targetUrl: { type: string, format: uri, x-sensitive: true }
+        phase: { type: string, enum: [unsupported, not_installed, stopped, needs_auth, starting, running, error] }
+        lastError: { type: [string, "null"], x-sensitive: true }
+      additionalProperties: false
+
+    NgrokTunnelActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [enable, disable] }
+        authToken: { type: string, x-sensitive: true }
+      additionalProperties: true
+
+    NgrokTunnelActionResponse:
+      type: object
+      x-sensitive: true
+      required: [success, action, status]
+      properties:
+        success: { type: boolean, const: true }
+        action: { type: string, enum: [enable, disable] }
+        status: { $ref: "#/components/schemas/NgrokTunnelStatus" }
+      additionalProperties: false
+
+    TailscaleTunnelStatus:
+      type: object
+      x-sensitive: true
+      required: [supported, installed, managedInstall, installSource, binaryPath, loggedIn, daemonRunning, running, tunnelUrl, apiUrl, platform, brewAvailable, lastError, pid, enabled, phase]
+      properties:
+        supported: { type: boolean }
+        installed: { type: boolean }
+        managedInstall: { type: boolean }
+        installSource: { type: [string, "null"], enum: [managed, path, env, windows-default, null] }
+        binaryPath: { type: [string, "null"], x-sensitive: true }
+        loggedIn: { type: boolean }
+        daemonRunning: { type: boolean }
+        running: { type: boolean }
+        tunnelUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        apiUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        platform: { type: string }
+        brewAvailable: { type: boolean }
+        lastError: { type: [string, "null"], x-sensitive: true }
+        pid: { type: [integer, "null"], minimum: 1, x-sensitive: true }
+        enabled: { type: boolean }
+        phase: { type: string, enum: [unsupported, not_installed, needs_login, stopped, running, error] }
       additionalProperties: false
