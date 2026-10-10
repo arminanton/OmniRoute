@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "vectors": [
+    {
+      "name": "threshold-and-lazy-reset-boundary",
+      "actions": [
+        { "op": "record", "connectionId": "fixture-a", "windowKey": "5h", "usedPct": 100, "resetAtMs": 5000, "nowMs": 1000 },
+        { "op": "check", "connectionId": "fixture-a", "windowKey": "5h", "nowMs": 4999, "expected": true },
+        { "op": "check", "connectionId": "fixture-a", "windowKey": "5h", "nowMs": 5000, "expected": false }
+      ]
+    },
+    {
+      "name": "below-threshold-refresh-clears-saturation",
+      "actions": [
+        { "op": "record", "connectionId": "fixture-b", "windowKey": "7d", "usedPct": 100, "resetAtMs": null, "nowMs": 1000 },
+        { "op": "check", "connectionId": "fixture-b", "windowKey": "7d", "nowMs": 1001, "expected": true },
+        { "op": "record", "connectionId": "fixture-b", "windowKey": "7d", "usedPct": 99.9, "resetAtMs": null, "nowMs": 1002 },
+        { "op": "check", "connectionId": "fixture-b", "windowKey": "7d", "nowMs": 1003, "expected": false }
+      ]
+    },
+    {
+      "name": "unknown-reset-keeps-saturation-and-identities-are-isolated",
+      "actions": [
+        { "op": "record", "connectionId": "fixture-c", "windowKey": "7d:sonnet", "usedPct": 100, "resetAtMs": null, "nowMs": 1000 },
+        { "op": "check", "connectionId": "fixture-c", "windowKey": "7d:sonnet", "nowMs": 86401000, "expected": true },
+        { "op": "check", "connectionId": "fixture-c", "windowKey": "7d:opus", "nowMs": 86401000, "expected": false },
+        { "op": "check", "connectionId": "fixture-d", "windowKey": "7d:sonnet", "nowMs": 86401000, "expected": false }
+      ]
+    },
+    {
+      "name": "stale-saturation-observation-is-discarded",
+      "actions": [
+        { "op": "record", "connectionId": "fixture-e", "windowKey": "5h", "usedPct": 100, "resetAtMs": 5000, "nowMs": 5000 },
+        { "op": "check", "connectionId": "fixture-e", "windowKey": "5h", "nowMs": 5000, "expected": false }
+      ]
+    }
+  ]
+}

@@ -15,6 +15,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   isBucketSaturated,
@@ -61,7 +62,11 @@ test("5h bucket: reaches 100% → saturated; after resets_at passes → auto-eli
   const windowKey = "5h";
 
   recordUsage(connectionId, windowKey, 100, FUTURE_ISO, NOW);
-  assert.equal(isBucketSaturated(connectionId, windowKey, NOW), true, "should be saturated at 100%");
+  assert.equal(
+    isBucketSaturated(connectionId, windowKey, NOW),
+    true,
+    "should be saturated at 100%"
+  );
 
   // Advance the clock past resets_at — lazy reset fires on the next read.
   const afterReset = NOW + ONE_HOUR_MS + 1;
@@ -81,6 +86,54 @@ test("SATURATION_THRESHOLD_PCT is 100", () => {
   assert.equal(SATURATION_THRESHOLD_PCT, 100);
 });
 
+test("shared Rust parity vectors match account bucket behavior", () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL(
+        "../../benchmarks/runtime-proxy/fixtures/account-quota-buckets-v1.json",
+        import.meta.url
+      ),
+      "utf8"
+    )
+  ) as {
+    schemaVersion: number;
+    vectors: Array<{
+      name: string;
+      actions: Array<Record<string, string | number | boolean | null>>;
+    }>;
+  };
+  assert.equal(fixture.schemaVersion, 1);
+
+  for (const vector of fixture.vectors) {
+    _clearBucketsForTest();
+    for (const action of vector.actions) {
+      const op = action.op;
+      const connectionId = action.connectionId as string;
+      const windowKey = action.windowKey as string;
+      const nowMs = action.nowMs as number;
+      if (op === "record") {
+        const resetAtMs = action.resetAtMs as number | null;
+        recordUsage(
+          connectionId,
+          windowKey,
+          action.usedPct as number,
+          resetAtMs === null ? null : new Date(resetAtMs).toISOString(),
+          nowMs
+        );
+      } else if (op === "check") {
+        assert.equal(
+          isBucketSaturated(connectionId, windowKey, nowMs),
+          action.expected as boolean,
+          `${vector.name}: ${JSON.stringify(action)}`
+        );
+      } else {
+        assert.fail(`${vector.name}: unsupported fixture operation ${String(op)}`);
+      }
+    }
+  }
+  _clearBucketsForTest();
+});
+
 test("5h bucket: stale signal (resets_at already past) is NOT recorded", () => {
   recordUsage("conn-stale", "5h", 100, PAST_ISO, NOW);
   assert.equal(isBucketSaturated("conn-stale", "5h", NOW), false);
@@ -97,7 +150,11 @@ test("7d bucket: reaches 100% → saturated", () => {
 test("concurrent windows: saturating 5h does NOT saturate 7d", () => {
   recordUsage("conn-two-windows", "5h", 100, FUTURE_ISO, NOW);
   assert.equal(isBucketSaturated("conn-two-windows", "5h", NOW), true, "5h should be saturated");
-  assert.equal(isBucketSaturated("conn-two-windows", "7d", NOW), false, "7d should NOT be saturated");
+  assert.equal(
+    isBucketSaturated("conn-two-windows", "7d", NOW),
+    false,
+    "7d should NOT be saturated"
+  );
 });
 
 test("concurrent windows: saturating 7d does NOT saturate 5h", () => {
@@ -121,7 +178,11 @@ test("per-model buckets are independent: 7d:opus saturated does NOT saturate 7d:
 test("per-model: 7d:sonnet saturated does NOT affect the base 7d bucket", () => {
   recordUsage("conn-pm-base", "7d:sonnet", 100, FUTURE_ISO, NOW);
   assert.equal(isBucketSaturated("conn-pm-base", "7d:sonnet", NOW), true);
-  assert.equal(isBucketSaturated("conn-pm-base", "7d", NOW), false, "base 7d should be independent");
+  assert.equal(
+    isBucketSaturated("conn-pm-base", "7d", NOW),
+    false,
+    "base 7d should be independent"
+  );
 });
 
 test("per-model: lazy reset works for 7d:designer", () => {
