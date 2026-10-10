@@ -87,6 +87,7 @@ test("sync token routes issue, list, use and revoke dedicated tokens", async () 
   );
 
   assert.equal(createResponse.status, 201);
+  assert.equal(createResponse.headers.get("cache-control"), "no-store");
   const createdBody = (await createResponse.json()) as any;
   assert.match(createdBody.token, /^osync_/);
   assert.equal(createdBody.syncToken.name, "Desktop client");

@@ -79,7 +79,7 @@ export async function POST(request: Request) {
         token: issued.token,
         syncToken: tokenSummary,
       },
-      { status: 201 }
+      { status: 201, headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
     return createErrorResponseFromUnknown(error, "Failed to create sync token");
