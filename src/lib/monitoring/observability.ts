@@ -82,6 +82,11 @@ export function projectCallLogArtifactWriterSummary(
     artifactFootprintLimitBytes: count(snapshot.artifactFootprintLimitBytes),
     reservedDiagnosticStubBytes: count(snapshot.reservedDiagnosticStubBytes),
     diagnosticStubFootprintLimitBytes: count(snapshot.diagnosticStubFootprintLimitBytes),
+    activeJobsHighWater: count(snapshot.activeJobsHighWater),
+    queuedArtifactsHighWater: count(snapshot.queuedArtifactsHighWater),
+    queuedDiagnosticStubsHighWater: count(snapshot.queuedDiagnosticStubsHighWater),
+    reservedArtifactBytesHighWater: count(snapshot.reservedArtifactBytesHighWater),
+    reservedDiagnosticStubBytesHighWater: count(snapshot.reservedDiagnosticStubBytesHighWater),
     workerState,
     preparationRefusalsTotal: count(snapshot.preparationRefusalsTotal),
     preparationRefusalsInvalidEstimateTotal: count(

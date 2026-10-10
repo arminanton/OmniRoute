@@ -511,11 +511,16 @@ test("buildHealthPayload projects allowlisted structural chatAdmission fields on
 test("call-log writer health projection allows only bounded scalar gauges and counters", () => {
   const snapshot = {
     activeJobs: 1,
+    activeJobsHighWater: 1,
     queuedArtifacts: 3,
+    queuedArtifactsHighWater: 6,
     queuedDiagnosticStubs: 1,
+    queuedDiagnosticStubsHighWater: 2,
     reservedArtifactBytes: 2 * 1024 * 1024,
+    reservedArtifactBytesHighWater: 8 * 1024 * 1024,
     artifactFootprintLimitBytes: 128 * 1024 * 1024,
     reservedDiagnosticStubBytes: 4_096,
+    reservedDiagnosticStubBytesHighWater: 8_192,
     diagnosticStubFootprintLimitBytes: 16 * 1024 * 1024,
     workerState: "active",
     preparationRefusalsTotal: 7,
@@ -537,11 +542,16 @@ test("call-log writer health projection allows only bounded scalar gauges and co
   const projected = projectCallLogArtifactWriterSummary(snapshot);
   assert.deepEqual(projected, {
     activeJobs: 1,
+    activeJobsHighWater: 1,
     queuedArtifacts: 3,
+    queuedArtifactsHighWater: 6,
     queuedDiagnosticStubs: 1,
+    queuedDiagnosticStubsHighWater: 2,
     reservedArtifactBytes: 2 * 1024 * 1024,
+    reservedArtifactBytesHighWater: 8 * 1024 * 1024,
     artifactFootprintLimitBytes: 128 * 1024 * 1024,
     reservedDiagnosticStubBytes: 4_096,
+    reservedDiagnosticStubBytesHighWater: 8_192,
     diagnosticStubFootprintLimitBytes: 16 * 1024 * 1024,
     workerState: "active",
     preparationRefusalsTotal: 7,

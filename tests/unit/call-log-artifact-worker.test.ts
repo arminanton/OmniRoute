@@ -439,6 +439,8 @@ test("writer health snapshot tracks bounded reservations and exposes no artifact
   assert.equal(reserved.artifactFootprintLimitBytes, 128 * 1024 * 1024);
   assert.equal(reserved.reservedArtifactBytes <= reserved.artifactFootprintLimitBytes, true);
   assert.equal(reserved.activeJobs <= 1, true);
+  assert.ok(reserved.reservedArtifactBytesHighWater >= reserved.reservedArtifactBytes);
+  const reservationHighWater = reserved.reservedArtifactBytesHighWater;
   const serialized = JSON.stringify(reserved);
   assert.doesNotMatch(serialized, /corr-worker-artifact|test-account|private-body|requestBody/);
 
@@ -446,6 +448,10 @@ test("writer health snapshot tracks bounded reservations and exposes no artifact
   assert.equal(
     getCallLogArtifactWriterSnapshot().reservedArtifactBytes,
     before.reservedArtifactBytes
+  );
+  assert.ok(
+    getCallLogArtifactWriterSnapshot().reservedArtifactBytesHighWater >= reservationHighWater,
+    "high-water marks must survive reservation release"
   );
 
   const refusalsBefore = before.preparationRefusalsTotal;

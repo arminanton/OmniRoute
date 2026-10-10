@@ -59,6 +59,11 @@ let closeWaiters: Array<() => void> = [];
 const lastWarningAt = new Map<string, number>();
 let reservedArtifactFootprintBytes = 0;
 let reservedDiagnosticStubBytes = 0;
+let activeJobsHighWater = 0;
+let queuedArtifactsHighWater = 0;
+let queuedDiagnosticStubsHighWater = 0;
+let reservedArtifactBytesHighWater = 0;
+let reservedDiagnosticStubBytesHighWater = 0;
 let preparationRefusalsTotal = 0;
 let preparationRefusalsInvalidEstimateTotal = 0;
 let preparationRefusalsSingleArtifactBudgetTotal = 0;
@@ -72,6 +77,23 @@ let diagnosticStubRefusalsTotal = 0;
 function incrementCounter(value: number, amount = 1): number {
   if (!Number.isSafeInteger(amount) || amount <= 0) return value;
   return Math.min(Number.MAX_SAFE_INTEGER, value + amount);
+}
+
+function updateWriterHighWaterMarks(): void {
+  activeJobsHighWater = Math.max(activeJobsHighWater, active ? 1 : 0);
+  queuedArtifactsHighWater = Math.max(queuedArtifactsHighWater, queue.length);
+  queuedDiagnosticStubsHighWater = Math.max(
+    queuedDiagnosticStubsHighWater,
+    diagnosticStubQueue.length
+  );
+  reservedArtifactBytesHighWater = Math.max(
+    reservedArtifactBytesHighWater,
+    reservedArtifactFootprintBytes
+  );
+  reservedDiagnosticStubBytesHighWater = Math.max(
+    reservedDiagnosticStubBytesHighWater,
+    reservedDiagnosticStubBytes
+  );
 }
 
 type PreparationRefusalReason =
@@ -111,6 +133,12 @@ export type CallLogArtifactWriterSnapshot = Readonly<{
   /** Separate bounded budget for pointer-only diagnostic artifacts. */
   reservedDiagnosticStubBytes: number;
   diagnosticStubFootprintLimitBytes: number;
+  /** Process-lifetime maxima; payload contents and identifiers are never retained. */
+  activeJobsHighWater: number;
+  queuedArtifactsHighWater: number;
+  queuedDiagnosticStubsHighWater: number;
+  reservedArtifactBytesHighWater: number;
+  reservedDiagnosticStubBytesHighWater: number;
   workerState: "not_started" | "idle" | "active" | "closing";
   preparationRefusalsTotal: number;
   preparationRefusalsInvalidEstimateTotal: number;
@@ -129,6 +157,7 @@ export type CallLogArtifactWriterSnapshot = Readonly<{
  * exposes request/provider identifiers, payloads, paths, or error strings.
  */
 export function getCallLogArtifactWriterSnapshot(): CallLogArtifactWriterSnapshot {
+  updateWriterHighWaterMarks();
   return {
     activeJobs: active ? 1 : 0,
     queuedArtifacts: queue.length,
@@ -137,6 +166,11 @@ export function getCallLogArtifactWriterSnapshot(): CallLogArtifactWriterSnapsho
     artifactFootprintLimitBytes: MAX_QUEUED_ARTIFACT_FOOTPRINT_BYTES,
     reservedDiagnosticStubBytes,
     diagnosticStubFootprintLimitBytes: MAX_QUEUED_DIAGNOSTIC_STUB_BYTES,
+    activeJobsHighWater,
+    queuedArtifactsHighWater,
+    queuedDiagnosticStubsHighWater,
+    reservedArtifactBytesHighWater,
+    reservedDiagnosticStubBytesHighWater,
     workerState: closing ? "closing" : active ? "active" : worker ? "idle" : "not_started",
     preparationRefusalsTotal,
     preparationRefusalsInvalidEstimateTotal,
@@ -378,6 +412,7 @@ export function reserveCallLogArtifactPreparation(
   const reservation: CallLogArtifactReservation = { estimatedBytes };
   reservationStates.set(reservation, { estimatedBytes, state: "reserved" });
   reservedArtifactFootprintBytes += estimatedBytes;
+  updateWriterHighWaterMarks();
   return reservation;
 }
 
@@ -569,6 +604,7 @@ function enqueueArtifact(
     } else {
       queue.push(item);
     }
+    updateWriterHighWaterMarks();
     pump();
   });
 }
@@ -919,6 +955,7 @@ function pump(): void {
   }
 
   active = next;
+  updateWriterHighWaterMarks();
   clearIdleTimer();
   if (!next.artifact) {
     failOpen(true, "queued_artifact_missing");

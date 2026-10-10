@@ -51504,8 +51504,8 @@ components:
     CallLogArtifactWriterSnapshot:
       type: object
       description: >-
-        Fixed-shape process-local call-log writer metrics. Cumulative counters reset on process
-        restart. Queue contents and request/provider identifiers are never included.
+        Fixed-shape process-local call-log writer metrics. Cumulative counters and high-water marks
+        reset on process restart. Queue contents and request/provider identifiers are never included.
       required:
         - activeJobs
         - queuedArtifacts
@@ -51514,6 +51514,11 @@ components:
         - artifactFootprintLimitBytes
         - reservedDiagnosticStubBytes
         - diagnosticStubFootprintLimitBytes
+        - activeJobsHighWater
+        - queuedArtifactsHighWater
+        - queuedDiagnosticStubsHighWater
+        - reservedArtifactBytesHighWater
+        - reservedDiagnosticStubBytesHighWater
         - workerState
         - preparationRefusalsTotal
         - preparationRefusalsInvalidEstimateTotal
@@ -51532,6 +51537,11 @@ components:
         artifactFootprintLimitBytes: { type: integer, const: 134217728 }
         reservedDiagnosticStubBytes: { type: integer, minimum: 0, maximum: 16777216 }
         diagnosticStubFootprintLimitBytes: { type: integer, const: 16777216 }
+        activeJobsHighWater: { type: integer, minimum: 0, maximum: 1 }
+        queuedArtifactsHighWater: { type: integer, minimum: 0, maximum: 1024 }
+        queuedDiagnosticStubsHighWater: { type: integer, minimum: 0, maximum: 1024 }
+        reservedArtifactBytesHighWater: { type: integer, minimum: 0, maximum: 134217728 }
+        reservedDiagnosticStubBytesHighWater: { type: integer, minimum: 0, maximum: 16777216 }
         workerState:
           type: string
           enum: [not_started, idle, active, closing]

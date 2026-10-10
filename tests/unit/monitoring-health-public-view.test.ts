@@ -100,6 +100,7 @@ test("management session sees the full health payload", async () => {
   assert.ok(callLogArtifacts, "management health includes bounded call-log writer metrics");
   assert.deepEqual(Object.keys(callLogArtifacts).sort(), [
     "activeJobs",
+    "activeJobsHighWater",
     "artifactFootprintLimitBytes",
     "detailOmissionsTotal",
     "diagnosticStubFootprintLimitBytes",
@@ -111,9 +112,13 @@ test("management session sees the full health payload", async () => {
     "preparationRefusalsSingleArtifactBudgetTotal",
     "preparationRefusalsTotal",
     "queuedArtifacts",
+    "queuedArtifactsHighWater",
     "queuedDiagnosticStubs",
+    "queuedDiagnosticStubsHighWater",
     "reservedArtifactBytes",
+    "reservedArtifactBytesHighWater",
     "reservedDiagnosticStubBytes",
+    "reservedDiagnosticStubBytesHighWater",
     "workerFailuresTotal",
     "workerState",
   ]);
