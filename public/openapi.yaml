@@ -15765,7 +15765,10 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           x-sensitive: true
-          description: Current Crush config state.
+          description: Runtime and raw Crush JSON configuration. The returned provider entry may contain the API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolJsonSettingsStatusResponse" }
     post:
       operationId: postApiCliToolsCrushSettings
       tags:
@@ -15789,7 +15792,11 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Crush config updated.
+          description: Crush OmniRoute provider configuration was written. The config path is local host metadata.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CrushSettingsAppliedResponse" }
     delete:
       operationId: deleteApiCliToolsCrushSettings
       tags:
@@ -15813,7 +15820,10 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Crush config entry removed.
+          description: Crush OmniRoute provider entry was removed, or no config file existed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CrushSettingsRemovedResponse" }
   /api/cli-tools/codewhale-settings:
     get:
       operationId: getApiCliToolsCodewhaleSettings
@@ -15841,7 +15851,10 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           x-sensitive: true
-          description: Current CodeWhale config state.
+          description: Runtime and raw CodeWhale TOML configuration, which may contain its plaintext API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolTextSettingsStatusResponse" }
     post:
       operationId: postApiCliToolsCodewhaleSettings
       tags:
@@ -15865,7 +15878,11 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: CodeWhale config updated.
+          description: CodeWhale configuration was written. The config path is local host metadata.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodeWhaleSettingsAppliedResponse" }
     delete:
       operationId: deleteApiCliToolsCodewhaleSettings
       tags:
@@ -15889,7 +15906,10 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: CodeWhale config entry removed.
+          description: CodeWhale OmniRoute configuration was removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodeWhaleSettingsRemovedResponse" }
 
   # --- Generated route coverage (docs audit 2026-08-31) -----------------------
   # Minimal entries for every implemented route not documented above. Methods
@@ -16900,7 +16920,10 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: DeepSeek TUI configuration was removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeepseekTuiSettingsRemovedResponse" }
     get:
       operationId: getApiCliToolsDeepseekTuiSettings
       tags:
@@ -16925,7 +16948,10 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           x-sensitive: true
-          description: OK
+          description: Runtime and raw DeepSeek TUI TOML configuration, which may contain its plaintext API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolTextSettingsStatusResponse" }
     post:
       operationId: postApiCliToolsDeepseekTuiSettings
       tags:
@@ -16949,7 +16975,11 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: DeepSeek TUI configuration was written. The config path is local host metadata.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeepseekTuiSettingsAppliedResponse" }
   /api/cli-tools/detect:
     get:
       operationId: getApiCliToolsDetect
@@ -17020,7 +17050,10 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Forge configuration was removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ForgeSettingsRemovedResponse" }
     get:
       operationId: getApiCliToolsForgeSettings
       tags:
@@ -17041,7 +17074,10 @@ paths:
         "200":
           x-sensitive: true
           description: >-
-            Returns the local Forge TOML config, which may include a plaintext API key.
+            Runtime and local Forge TOML configuration, which may include a plaintext API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolTextSettingsStatusResponse" }
     post:
       operationId: postApiCliToolsForgeSettings
       tags:
@@ -17060,7 +17096,11 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Forge configuration was written. The config path is local host metadata.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ForgeSettingsAppliedResponse" }
   /api/cli-tools/grok-build-settings:
     delete:
       operationId: deleteApiCliToolsGrokBuildSettings
@@ -17080,7 +17120,10 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Grok Build model slots were reset, or no config file existed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GrokBuildSettingsRemovedResponse" }
     get:
       operationId: getApiCliToolsGrokBuildSettings
       tags:
@@ -17102,6 +17145,9 @@ paths:
           x-sensitive: true
           description: >-
             Returns Grok Build local config-derived settings and filesystem paths; API-key values are redacted, but the remaining local configuration metadata is sensitive.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GrokBuildSettingsStatusResponse" }
     post:
       operationId: postApiCliToolsGrokBuildSettings
       tags:
@@ -17120,7 +17166,11 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Grok Build OmniRoute model slots were applied. The config path is local host metadata.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GrokBuildSettingsAppliedResponse" }
   /api/cli-tools/hermes-agent-settings:
     get:
       operationId: getApiCliToolsHermesAgentSettings
@@ -39244,6 +39294,233 @@ components:
         message:
           type: string
           enum: [OmniRoute settings removed successfully, No config file to reset]
+      additionalProperties: false
+    CliToolSettingsUnavailableResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, config, message]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean, const: false }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        config: { type: "null" }
+        message: { type: string }
+      additionalProperties: false
+    CliToolTextSettingsReadyResponse:
+      type: object
+      x-sensitive: true
+      required:
+        [installed, runnable, command, commandPath, runtimeMode, reason, config, hasOmniRoute, configPath]
+      properties:
+        installed: { type: boolean, const: true }
+        runnable: { type: boolean, const: true }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        config:
+          type: [string, "null"]
+          x-sensitive: true
+          description: Raw TOML config text; may contain the CLI API key.
+        hasOmniRoute: { type: boolean }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    CliToolTextSettingsStatusResponse:
+      type: object
+      x-sensitive: true
+      description: >-
+        Returns runtime status plus either an unavailable/not-runnable result or the raw text config.
+        The config and path fields can contain sensitive local credential material.
+      oneOf:
+        - { $ref: "#/components/schemas/CliToolSettingsUnavailableResponse" }
+        - { $ref: "#/components/schemas/CliToolTextSettingsReadyResponse" }
+    CliToolJsonSettingsReadyResponse:
+      type: object
+      x-sensitive: true
+      required:
+        [installed, runnable, command, commandPath, runtimeMode, reason, config, hasOmniRoute, configPath]
+      properties:
+        installed: { type: boolean, const: true }
+        runnable: { type: boolean, const: true }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        config:
+          type: [object, "null"]
+          x-sensitive: true
+          description: Raw Crush JSON config; may contain the OmniRoute API key.
+          additionalProperties: true
+        hasOmniRoute: { type: boolean }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    CliToolJsonSettingsStatusResponse:
+      type: object
+      x-sensitive: true
+      description: >-
+        Returns runtime status plus either an unavailable/not-runnable result or raw Crush JSON
+        configuration. The config and path fields can contain sensitive local credential material.
+      oneOf:
+        - { $ref: "#/components/schemas/CliToolSettingsUnavailableResponse" }
+        - { $ref: "#/components/schemas/CliToolJsonSettingsReadyResponse" }
+    CodeWhaleSettingsAppliedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: CodeWhale settings applied successfully! }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    CrushSettingsAppliedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Crush settings applied successfully! }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    DeepseekTuiSettingsAppliedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: DeepSeek TUI settings applied successfully! }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    ForgeSettingsAppliedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Forge settings applied successfully! }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    GrokBuildSettingsAppliedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath, modelSlot]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Grok Build settings applied successfully! }
+        configPath: { type: string, x-sensitive: true }
+        modelSlot: { type: string, const: omniroute }
+      additionalProperties: false
+    CodeWhaleSettingsRemovedResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: CodeWhale settings removed successfully }
+      additionalProperties: false
+    CrushSettingsRemovedResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          enum: [No config file to reset, Crush OmniRoute settings removed]
+      additionalProperties: false
+    DeepseekTuiSettingsRemovedResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: DeepSeek TUI settings removed successfully }
+      additionalProperties: false
+    ForgeSettingsRemovedResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Forge settings removed successfully }
+      additionalProperties: false
+    GrokBuildSettingsRemovedResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          enum: [No config file to reset, OmniRoute model slots removed from Grok Build]
+      additionalProperties: false
+    GrokBuildSettingsRedactedModel:
+      type: object
+      description: Parsed Grok Build model slot with api_key omitted.
+      required: [model, base_url, name, api_backend, context_window]
+      properties:
+        model: { type: [string, "null"] }
+        base_url: { type: [string, "null"] }
+        name: { type: [string, "null"] }
+        api_backend: { type: [string, "null"] }
+        context_window: { type: [integer, "null"], minimum: 1 }
+      additionalProperties: false
+    GrokBuildSettingsRedacted:
+      type: object
+      description: Grok Build settings snapshot with all API key values removed.
+      required: [model, default, subagentModels, subagentMappings]
+      properties:
+        model:
+          oneOf:
+            - { $ref: "#/components/schemas/GrokBuildSettingsRedactedModel" }
+            - { type: "null" }
+        default: { type: [string, "null"] }
+        subagentModels:
+          type: object
+          required: [general-purpose, explore, plan]
+          properties:
+            general-purpose:
+              oneOf:
+                - { $ref: "#/components/schemas/GrokBuildSettingsRedactedModel" }
+                - { type: "null" }
+            explore:
+              oneOf:
+                - { $ref: "#/components/schemas/GrokBuildSettingsRedactedModel" }
+                - { type: "null" }
+            plan:
+              oneOf:
+                - { $ref: "#/components/schemas/GrokBuildSettingsRedactedModel" }
+                - { type: "null" }
+          additionalProperties: false
+        subagentMappings:
+          type: object
+          required: [general-purpose, explore, plan]
+          properties:
+            general-purpose: { type: [string, "null"] }
+            explore: { type: [string, "null"] }
+            plan: { type: [string, "null"] }
+          additionalProperties: false
+      additionalProperties: false
+    GrokBuildSettingsStatusResponse:
+      type: object
+      x-sensitive: true
+      description: >-
+        Grok Build model settings omit API key values, but include local config path and credential-presence metadata.
+      required:
+        [installed, runnable, command, commandPath, runtimeMode, requiresBinary, config, settings, hasOmniRoute, apiKeyConfigured, configPath]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean }
+        version: { type: string }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        reason: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        requiresBinary: { type: boolean }
+        config: { $ref: "#/components/schemas/GrokBuildSettingsRedacted" }
+        settings: { $ref: "#/components/schemas/GrokBuildSettingsRedacted" }
+        hasOmniRoute: { type: boolean }
+        apiKeyConfigured:
+          type: boolean
+          description: Indicates whether an API key exists without returning its value.
+        configPath: { type: string, x-sensitive: true }
       additionalProperties: false
     ClaudeCliSettingsStatusResponse:
       type: object
