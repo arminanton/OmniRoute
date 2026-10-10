@@ -10,10 +10,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { NextRequest } from "next/server";
+import { parse } from "yaml";
 import { makeManagementSessionRequest } from "../helpers/managementSession.ts";
+
+type HealthResponseSchema = {
+  additionalProperties?: boolean;
+  properties?: Record<string, { enum?: unknown[] }>;
+};
+type HealthOpenApi = { components: { schemas: Record<string, HealthResponseSchema> } };
 
 const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omni-health-view-"));
 process.env.DATA_DIR = TEST_DATA_DIR;
+const openapi = parse(
+  fs.readFileSync(path.join(process.cwd(), "docs/openapi.yaml"), "utf8")
+) as HealthOpenApi;
 
 const core = await import("../../src/lib/db/core.ts");
 const route = await import("../../src/app/api/monitoring/health/route.ts");
@@ -47,6 +57,10 @@ test("anonymous degraded health GET remains liveness-only when payload construct
 
   assert.equal(res.status, 200);
   assert.deepEqual(body, { status: "degraded" });
+  const publicSchema = openapi.components.schemas.PublicHealthResponse;
+  assert.equal(publicSchema.additionalProperties, false);
+  assert.ok(publicSchema.properties?.status?.enum?.includes(body.status));
+  assert.ok(Object.keys(body).every((key) => key in (publicSchema.properties ?? {})));
 });
 
 test("management caller receives degraded health details after payload construction fails", async () => {
@@ -67,6 +81,9 @@ test("management caller receives degraded health details after payload construct
   assert.ok(body.sessions && typeof body.sessions === "object");
   assert.ok(body.chatAdmission === null);
   assert.ok(body.callLogArtifacts === null);
+  const degradedSchema = openapi.components.schemas.DegradedHealthResponse;
+  assert.equal(degradedSchema.additionalProperties, false);
+  assert.deepEqual(Object.keys(body).sort(), Object.keys(degradedSchema.properties ?? {}).sort());
 });
 
 test("management session sees the full health payload", async () => {
