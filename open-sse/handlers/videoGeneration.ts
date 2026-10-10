@@ -187,6 +187,7 @@ export async function handleVideoGeneration({
         body,
         credentials,
         log,
+        callerSignal,
       });
     }
     if (log)
@@ -220,6 +221,7 @@ export async function handleVideoGeneration({
       body,
       credentials,
       log,
+      callerSignal,
     });
   }
   if (providerConfig.format === "openai-video") {
@@ -315,6 +317,7 @@ export async function handleVideoGeneration({
       body,
       credentials,
       log,
+      callerSignal,
     });
   }
 

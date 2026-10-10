@@ -259,6 +259,71 @@ test("video route dispatches submit→poll job flow for custom model with agnes-
   assert.equal(calls[1].url, "https://custom.example.com/agnesapi?video_id=video-123");
 });
 
+test("video route keeps polling an accepted job after caller cancellation, then returns 499", async () => {
+  globalThis.setTimeout = immediateButSafeTimeout as typeof setTimeout;
+
+  await modelsDb.addCustomModel(
+    "custom-job-provider-cancel",
+    "job-video-cancel-v1",
+    "Job Video Cancel v1",
+    "manual",
+    "chat-completions",
+    ["videos"],
+    undefined,
+    {},
+    undefined,
+    { preset: "agnes-video-job" }
+  );
+
+  await providersDb.createProviderConnection({
+    provider: "custom-job-provider-cancel",
+    authType: "apikey",
+    apiKey: "custom-cancel-key",
+    providerSpecificData: { baseUrl: "https://custom.example.com" },
+  });
+
+  const caller = new AbortController();
+  let pollCount = 0;
+  globalThis.fetch = (async (url: unknown) => {
+    if (String(url).endsWith("/v1/videos")) {
+      return createResponse(JSON.stringify({ video_id: "accepted-cancel-job" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    pollCount += 1;
+    if (pollCount === 1) {
+      caller.abort();
+      return createResponse(JSON.stringify({ status: "processing" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return createResponse(
+      JSON.stringify({
+        status: "completed",
+        metadata: { url: "https://custom.example.com/out.mp4" },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } }
+    );
+  }) as typeof fetch;
+
+  const response = await videoRoute.POST(
+    new Request("http://localhost/api/v1/videos/generations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "custom-job-provider-cancel/job-video-cancel-v1",
+        prompt: "cancel after the provider accepts the job",
+      }),
+      signal: caller.signal,
+    })
+  );
+
+  assert.equal(pollCount, 2, "route forwards callerSignal without cancelling accepted-job polling");
+  assert.equal(response.status, 499);
+});
+
 test("video route returns 502 when job preset reports failed status", async () => {
   globalThis.setTimeout = immediateButSafeTimeout as typeof setTimeout;
 

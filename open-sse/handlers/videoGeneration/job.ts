@@ -15,7 +15,18 @@ import {
   getConfiguredTimeout,
 } from "@/shared/utils/fetchTimeout";
 import { sanitizeErrorMessage } from "../../utils/error.ts";
-import { sleep } from "../../utils/sleep.ts";
+
+/**
+ * A job preset owns one server-side budget from submit through final poll.
+ * Five minutes is the normal ceiling; callers may request longer, but never
+ * more than fifteen minutes. The per-request fetch timeout is also capped so
+ * a large FETCH_TIMEOUT_MS cannot outlive the task budget.
+ */
+const DEFAULT_VIDEO_JOB_TIMEOUT_MS = 5 * 60_000;
+const MAX_VIDEO_JOB_TIMEOUT_MS = 15 * 60_000;
+const MAX_VIDEO_JOB_FETCH_TIMEOUT_MS = 120_000;
+const MAX_VIDEO_JOB_POLLS = 300;
+const MAX_VIDEO_JOB_POLL_INTERVAL_MS = 10_000;
 
 interface LogLike {
   info?: (tag: string, msg: string, meta?: unknown) => void;
@@ -209,10 +220,13 @@ export async function handleVideoJobGeneration({
   log,
   maxPolls: maxPollsOverride,
   pollIntervalMs: pollIntervalOverride,
+  timeoutMs: timeoutMsOverride,
+  callerSignal,
 }: {
   model: string;
   presetName: string;
-  body: Record<string, unknown>;
+  /** `timeout_ms` and `poll_interval_ms` are OmniRoute controls, not upstream extras. */
+  body: Record<string, unknown> & { timeout_ms?: unknown; poll_interval_ms?: unknown };
   credentials?: unknown;
   log?: {
     info?: (tag: string, msg: string, meta?: unknown) => void;
@@ -220,6 +234,10 @@ export async function handleVideoJobGeneration({
   };
   maxPolls?: number;
   pollIntervalMs?: number;
+  /** Optional lifecycle budget, clamped to MAX_VIDEO_JOB_TIMEOUT_MS. */
+  timeoutMs?: number;
+  /** Client disconnect signal. It is used for preflight/submit only. */
+  callerSignal?: AbortSignal | null;
 }) {
   const preset = getVideoJobPreset(presetName);
   if (!preset) {
@@ -231,6 +249,12 @@ export async function handleVideoJobGeneration({
   }
 
   const baseUrl = resolveJobBaseUrl(credentials, preset.baseUrlFallback);
+  const startedAt = Date.now();
+  const requestedTimeout = Number.isFinite(timeoutMsOverride)
+    ? Math.max(1, Number(timeoutMsOverride))
+    : resolvePositiveMs(body.timeout_ms, DEFAULT_VIDEO_JOB_TIMEOUT_MS);
+  const timeoutMs = Math.min(MAX_VIDEO_JOB_TIMEOUT_MS, requestedTimeout);
+  const deadlineAt = startedAt + timeoutMs;
   log?.info?.("VIDEO", `Job preset ${presetName} submitting ${model}`);
   log?.info?.("VIDEO", JSON.stringify({ baseUrl }));
 
@@ -241,18 +265,34 @@ export async function handleVideoJobGeneration({
     // passthrough of the remainder — the API keeps catchall extras
     extras: Object.fromEntries(
       Object.entries(body ?? {}).filter(
-        ([key]) => key !== "model" && key !== "prompt" && key !== "duration"
+        ([key]) =>
+          key !== "model" &&
+          key !== "prompt" &&
+          key !== "duration" &&
+          key !== "timeout_ms" &&
+          key !== "poll_interval_ms"
       )
     ),
   });
 
   const submitPath = preset.submit.path.replace("{model}", encodeURIComponent(model));
   const submitUrl = `${baseUrl}${submitPath}`; // baseUrl never ends with "/"
+  // Do not dispatch a job after the client has already gone away. During the
+  // submit itself, caller abort is ambiguous: the provider may have accepted
+  // the POST even though we did not receive its response, so that outcome is
+  // terminal and must not be replayed through a combo fallback.
+  if (callerSignal?.aborted) {
+    return cancelledJobResult(false);
+  }
+
   const submitResult = await fetchJson(submitUrl, {
     method: preset.submit.method,
     headers: buildJobHeaders(preset, credentials),
     body: JSON.stringify(bodyForPreset),
     log,
+    deadlineAt,
+    callerSignal,
+    honorCallerAbort: true,
   });
   if (submitResult.ok === false) {
     return {
@@ -261,7 +301,9 @@ export async function handleVideoJobGeneration({
       error: submitResult.error,
       // A transport timeout or server failure may have happened after the
       // provider accepted the job but before OmniRoute received its id.
-      ...(submitResult.status === 408 || submitResult.status >= 500 ? { terminal: true } : {}),
+      ...(submitResult.status === 408 || submitResult.status === 499 || submitResult.status >= 500
+        ? { terminal: true }
+        : {}),
     };
   }
 
@@ -276,29 +318,46 @@ export async function handleVideoJobGeneration({
   }
 
   // Poll loop.
-  const maxPolls = maxPollsOverride ?? preset.maxPolls;
-  const pollInterval = pollIntervalOverride ?? preset.pollIntervalMs;
+  const requestedPolls = Number.isFinite(maxPollsOverride) ? maxPollsOverride : preset.maxPolls;
+  const requestedPollInterval = Number.isFinite(pollIntervalOverride)
+    ? pollIntervalOverride
+    : resolvePositiveMs(body.poll_interval_ms, preset.pollIntervalMs);
+  const maxPolls = Math.min(MAX_VIDEO_JOB_POLLS, Math.max(1, Math.floor(requestedPolls)));
+  const pollInterval = Math.min(
+    MAX_VIDEO_JOB_POLL_INTERVAL_MS,
+    Math.max(0, Math.floor(requestedPollInterval))
+  );
 
   for (let attempt = 1; attempt <= maxPolls; attempt += 1) {
-    await sleep(pollInterval);
+    const remainingBeforeWait = deadlineAt - Date.now();
+    if (remainingBeforeWait <= 0) break;
+    await waitFor(Math.min(pollInterval, remainingBeforeWait));
+    if (Date.now() >= deadlineAt) break;
     const pollUrl = `${baseUrl}${preset.poll.pathTemplate.replace("{taskId}", encodeURIComponent(taskId))}`;
     const pollResult = await fetchJson(pollUrl, {
       method: "GET",
       headers: buildJobHeaders(preset, credentials),
       log,
+      deadlineAt,
     });
     if (pollResult.ok === false) {
+      // Client cancellation never cancels already accepted upstream work. We
+      // continue observing it until a terminal status or the task deadline.
+      // If an observation itself becomes impossible after cancellation, the
+      // only useful client result is still 499, and it remains non-replayable.
       return {
         success: false,
-        status: pollResult.status,
+        status: callerSignal?.aborted ? 499 : pollResult.status,
         terminal: true,
-        error: pollResult.error,
+        error: callerSignal?.aborted ? "Video generation request cancelled" : pollResult.error,
       };
     }
+    if (Date.now() >= deadlineAt) break;
 
     const status = readPath(pollResult.data, preset.statusPath);
     const jobState = isDoneStatus(status, preset.statusDone, preset.statusFailed);
     if (jobState === "done") {
+      if (callerSignal?.aborted) return cancelledJobResult(true);
       const url = readResultUrl(pollResult.data, preset.resultPath);
       if (!url) {
         return {
@@ -317,6 +376,7 @@ export async function handleVideoJobGeneration({
       };
     }
     if (jobState === "failed") {
+      if (callerSignal?.aborted) return cancelledJobResult(true);
       return {
         success: false,
         status: 502,
@@ -327,10 +387,33 @@ export async function handleVideoJobGeneration({
 
   return {
     success: false,
-    status: 504,
+    status: callerSignal?.aborted ? 499 : 504,
     terminal: true,
-    error: `Video job timed out after ${maxPolls} polls (${presetName})`,
+    error: callerSignal?.aborted
+      ? "Video generation request cancelled"
+      : Date.now() >= deadlineAt
+        ? `Video job exceeded its ${timeoutMs}ms deadline (${presetName})`
+        : `Video job timed out after ${maxPolls} polls (${presetName})`,
   };
+}
+
+function cancelledJobResult(ambiguousOrAccepted: boolean) {
+  return {
+    success: false,
+    status: 499,
+    ...(ambiguousOrAccepted ? { terminal: true } : {}),
+    error: "Video generation request cancelled",
+  };
+}
+
+function waitFor(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolvePositiveMs(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" || typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 function buildJobHeaders(preset: VideoJobPreset, credentials?: unknown): Record<string, string> {
@@ -377,40 +460,108 @@ async function fetchJson(
     headers,
     body,
     log,
+    deadlineAt,
+    callerSignal,
+    honorCallerAbort = false,
   }: {
     method: string;
     headers: Record<string, string>;
     body?: string;
     log?: LogLike;
+    deadlineAt: number;
+    callerSignal?: AbortSignal | null;
+    honorCallerAbort?: boolean;
   }
 ): Promise<{ ok: true; data: unknown } | { ok: false; status: number; error: string }> {
+  const remainingMs = deadlineAt - Date.now();
+  if (remainingMs <= 0) {
+    return {
+      ok: false,
+      status: callerSignal?.aborted ? 499 : 504,
+      error: callerSignal?.aborted
+        ? "Video generation request cancelled"
+        : "Video job lifecycle deadline exceeded",
+    };
+  }
+  if (honorCallerAbort && callerSignal?.aborted) {
+    return { ok: false, status: 499, error: "Video generation request cancelled" };
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = Math.max(
+    1,
+    Math.min(MAX_VIDEO_JOB_FETCH_TIMEOUT_MS, getConfiguredTimeout(), remainingMs)
+  );
+  let requestTimedOut = false;
+  let callerAborted = false;
+  const abortForCaller = () => {
+    callerAborted = true;
+    controller.abort();
+  };
+  if (honorCallerAbort && callerSignal) {
+    callerSignal.addEventListener("abort", abortForCaller, { once: true });
+  }
+  // fetchWithTimeout clears its timer when response headers arrive. Keep this
+  // outer timer alive until the response body has been fully read and parsed.
+  const requestTimer = setTimeout(() => {
+    requestTimedOut = true;
+    controller.abort();
+  }, timeoutMs);
   try {
     const response = await fetchWithTimeout(url, {
       method,
       headers,
       ...(body !== undefined ? { body } : {}),
-      timeoutMs: getConfiguredTimeout(),
+      timeoutMs,
+      signal: controller.signal,
     });
-    if (!response.ok) {
-      const errorText = await response.text();
-      log?.error?.("VIDEO", `Upstream ${response.status} for ${url}: ${errorText.slice(0, 200)}`);
-      return { ok: false, status: response.status, error: errorText };
+    const responseText = await response.text();
+    if (Date.now() >= deadlineAt) {
+      return {
+        ok: false,
+        status: callerSignal?.aborted ? 499 : 504,
+        error: callerSignal?.aborted
+          ? "Video generation request cancelled"
+          : "Video job lifecycle deadline exceeded",
+      };
     }
-    const data = await response.json();
+    if (honorCallerAbort && callerSignal?.aborted) {
+      return { ok: false, status: 499, error: "Video generation request cancelled" };
+    }
+    if (!response.ok) {
+      log?.error?.(
+        "VIDEO",
+        `Upstream ${response.status} for ${url}: ${responseText.slice(0, 200)}`
+      );
+      return { ok: false, status: response.status, error: responseText };
+    }
+    const data: unknown = JSON.parse(responseText);
     return { ok: true, data };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     const isTimeout =
       err instanceof FetchTimeoutError || (err instanceof Error && err.name === "AbortError");
+    if (callerAborted || (honorCallerAbort && callerSignal?.aborted)) {
+      return {
+        ok: false,
+        status: 499,
+        error: "Video generation request cancelled",
+      };
+    }
     log?.error?.(
       "VIDEO",
       `${isTimeout ? "Timeout" : "Request error"} for ${url}: ${sanitizeErrorMessage(message)}`
     );
     return {
       ok: false,
-      status: isTimeout ? 504 : 502,
+      status: isTimeout || requestTimedOut || Date.now() >= deadlineAt ? 504 : 502,
       error: `Video provider error: ${sanitizeErrorMessage(message)}`,
     };
+  } finally {
+    clearTimeout(requestTimer);
+    if (honorCallerAbort && callerSignal) {
+      callerSignal.removeEventListener("abort", abortForCaller);
+    }
   }
 }
 
