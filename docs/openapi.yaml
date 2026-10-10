@@ -10232,7 +10232,15 @@ paths:
         - {}
       responses:
         "200":
-          description: Import result
+          description: Whether Cursor credentials were found and imported. The found result contains raw OAuth tokens.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              description: Prevents caching of the raw access and refresh tokens in this response.
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CursorAutoImportResponse" }
 
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
@@ -10251,7 +10259,10 @@ paths:
         - {}
       responses:
         "200":
-          description: Current import status
+          description: Cursor token import instructions and form field metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthImportGuideResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -10274,7 +10285,10 @@ paths:
         - {}
       responses:
         "200":
-          description: Credentials imported
+          description: Credential-free summary of the imported Cursor connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthSingleConnectionImportResponse" }
 
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
@@ -10295,7 +10309,11 @@ paths:
         - {}
       responses:
         "200":
-          description: Import result
+          description: Kiro credential auto-import outcome. A not-found result may include host filesystem paths.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KiroAutoImportResponse" }
 
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
@@ -10320,7 +10338,10 @@ paths:
         - {}
       responses:
         "200":
-          description: Credentials imported
+          description: Credential-free summary of the imported Kiro connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthSingleConnectionImportResponse" }
 
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
@@ -15708,6 +15729,9 @@ paths:
       responses:
         "200":
           description: Connection imported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthSingleConnectionImportResponse" }
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -20891,7 +20915,11 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Preview importable CLIProxyAPI accounts. OAuth tokens are omitted; the configured directory may reveal a host filesystem path.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliProxyOAuthImportPreviewResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -20909,7 +20937,11 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Per-account CLIProxyAPI import result. Partial failures remain in the result list; credentials are not returned.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliProxyOAuthImportResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -20928,7 +20960,10 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Per-account Codex import results. Individual failures are reported while the operation still returns HTTP 200.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexOAuthBulkImportResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -20947,7 +20982,10 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Whether the in-memory Cursor login session was cancelled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CursorLoginCancelResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -20966,7 +21004,10 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Cursor login polling result. A pending result and a completed connection are both HTTP 200.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CursorLoginPollResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -20985,7 +21026,11 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Cursor PKCE login session and authorization URL. The verifier remains server-side.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CursorLoginStartResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -21004,7 +21049,10 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Credential-free summary of the imported Kiro or Amazon Q connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthSingleConnectionImportResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -21023,7 +21071,10 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Trae token import instructions and form field metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthImportGuideResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -21041,7 +21092,10 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Credential-free summary of the imported Trae connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthSingleConnectionImportResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -55289,6 +55343,273 @@ components:
           type: array
           items: { $ref: "#/components/schemas/CodexAuthImportEntryError" }
       additionalProperties: false
+
+    OAuthImportedConnectionSummary:
+      type: object
+      description: Minimal persisted-connection projection; authentication secrets and provider-specific credentials are omitted.
+      required: [id, provider]
+      properties:
+        id: { type: string, minLength: 1 }
+        provider: { type: string, minLength: 1 }
+        email: { type: [string, "null"] }
+        name: { type: [string, "null"] }
+      additionalProperties: false
+
+    OAuthSingleConnectionImportResponse:
+      type: object
+      required: [success, connection]
+      properties:
+        success: { type: boolean, const: true }
+        connection: { $ref: "#/components/schemas/OAuthImportedConnectionSummary" }
+      additionalProperties: false
+
+    CliProxyOAuthImportPreviewAccount:
+      type: object
+      required: [provider, type, email]
+      properties:
+        provider:
+          type: string
+          enum: [claude, codex, antigravity, kimi]
+        type:
+          type: string
+          enum: [anthropic, claude, codex, antigravity, kimi]
+        email:
+          type: [string, "null"]
+          description: Account email if present in the source file; never includes OAuth tokens.
+      additionalProperties: false
+
+    CliProxyOAuthImportPreviewResponse:
+      type: object
+      description: >-
+        CLIProxyAPI preview omits access and refresh tokens. `dir` is the configured host filesystem
+        path and should be treated as sensitive operational metadata.
+      x-sensitive: true
+      required: [dir, scanned, skipped, accounts]
+      properties:
+        dir: { type: string }
+        scanned: { type: integer, minimum: 0 }
+        skipped: { type: integer, minimum: 0 }
+        accounts:
+          type: array
+          items: { $ref: "#/components/schemas/CliProxyOAuthImportPreviewAccount" }
+      additionalProperties: false
+
+    CliProxyOAuthImportResult:
+      type: object
+      required: [provider, email, ok]
+      properties:
+        provider:
+          type: string
+          enum: [claude, codex, antigravity, kimi]
+        email: { type: [string, "null"] }
+        ok: { type: boolean }
+        error:
+          type: string
+          description: Sanitized per-account persistence error, present only when ok is false.
+      additionalProperties: false
+
+    CliProxyOAuthImportResponse:
+      type: object
+      description: >-
+        Import summary contains account emails and sanitized row errors, but never the OAuth
+        access/refresh tokens read from CLIProxyAPI files. Individual row failures do not change
+        the HTTP 200 status.
+      x-sensitive: true
+      required: [scanned, skipped, imported, results]
+      properties:
+        scanned: { type: integer, minimum: 0 }
+        skipped: { type: integer, minimum: 0 }
+        imported: { type: integer, minimum: 0 }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/CliProxyOAuthImportResult" }
+      additionalProperties: false
+
+    CodexOAuthImportSuccessResult:
+      type: object
+      required: [index, ok, connectionId, email]
+      properties:
+        index: { type: integer, minimum: 0 }
+        ok: { type: boolean, const: true }
+        connectionId: { type: string }
+        email: { type: string }
+      additionalProperties: false
+
+    CodexOAuthImportFailureResult:
+      type: object
+      required: [index, ok, error]
+      properties:
+        index: { type: integer, minimum: 0 }
+        ok: { type: boolean, const: false }
+        error: { type: string, description: Sanitized record-specific import failure. }
+      additionalProperties: false
+
+    CodexOAuthBulkImportResponse:
+      type: object
+      description: >-
+        Every Codex record is processed independently. `success` is a boolean indicating whether
+        all records imported; the handler returns HTTP 200 for partial or total per-record failure.
+        OAuth token material is never returned in this summary.
+      required: [success, imported, failed, total, results]
+      properties:
+        success: { type: boolean }
+        imported: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 1 }
+        results:
+          type: array
+          items:
+            oneOf:
+              - { $ref: "#/components/schemas/CodexOAuthImportSuccessResult" }
+              - { $ref: "#/components/schemas/CodexOAuthImportFailureResult" }
+      additionalProperties: false
+
+    CursorAutoImportIdeResponse:
+      type: object
+      required: [found, accessToken, source]
+      properties:
+        found: { type: boolean, const: true }
+        accessToken: { type: string, description: Raw Cursor OAuth access token. }
+        refreshToken: { type: string, description: Raw Cursor OAuth refresh token when present. }
+        machineId: { type: string, description: Cursor machine identifier when present. }
+        source: { type: string, const: cursor-ide }
+      additionalProperties: false
+
+    CursorAutoImportAgentResponse:
+      type: object
+      required: [found, accessToken, source]
+      properties:
+        found: { type: boolean, const: true }
+        accessToken: { type: string, description: Raw Cursor OAuth access token. }
+        source: { type: string, const: cursor-agent }
+      additionalProperties: false
+
+    CursorAutoImportNotFoundResponse:
+      type: object
+      required: [found, error]
+      properties:
+        found: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
+
+    CursorAutoImportResponse:
+      type: object
+      description: >-
+        Sensitive credential response. A found result returns a raw access token and may return a
+        refresh token and machine ID; callers must not persist or cache this response.
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/CursorAutoImportIdeResponse" }
+        - { $ref: "#/components/schemas/CursorAutoImportAgentResponse" }
+        - { $ref: "#/components/schemas/CursorAutoImportNotFoundResponse" }
+
+    OAuthImportGuideField:
+      type: object
+      required: [name, label, description, type]
+      properties:
+        name: { type: string }
+        label: { type: string }
+        description: { type: string }
+        type: { type: string, enum: [textarea, text] }
+        required: { type: boolean }
+      additionalProperties: false
+
+    OAuthImportGuideResponse:
+      type: object
+      required: [provider, method, instructions, requiredFields]
+      properties:
+        provider: { type: string, enum: [cursor, trae] }
+        method: { type: string, const: import_token }
+        instructions: { type: string }
+        requiredFields:
+          type: array
+          items: { $ref: "#/components/schemas/OAuthImportGuideField" }
+      additionalProperties: false
+
+    CursorLoginStartResponse:
+      type: object
+      description: Transient login capability and authorization URL; the PKCE verifier is not exposed.
+      x-sensitive: true
+      required: [success, sessionId, loginUrl, expiresInSeconds]
+      properties:
+        success: { type: boolean, const: true }
+        sessionId: { type: string }
+        loginUrl: { type: string, format: uri }
+        expiresInSeconds: { type: integer, const: 900 }
+      additionalProperties: false
+
+    CursorLoginPollPendingResponse:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, const: pending }
+      additionalProperties: false
+
+    CursorLoginPollCompleteResponse:
+      type: object
+      required: [status, success, connection]
+      properties:
+        status: { type: string, const: ok }
+        success: { type: boolean, const: true }
+        connection:
+          type: object
+          required: [provider, email]
+          properties:
+            id: { type: string, description: Omitted if persistence did not return an ID. }
+            provider: { type: string, const: cursor }
+            email: { type: [string, "null"] }
+          additionalProperties: false
+      additionalProperties: false
+
+    CursorLoginPollResponse:
+      type: object
+      oneOf:
+        - { $ref: "#/components/schemas/CursorLoginPollPendingResponse" }
+        - { $ref: "#/components/schemas/CursorLoginPollCompleteResponse" }
+
+    CursorLoginCancelResponse:
+      type: object
+      required: [success, cancelled]
+      properties:
+        success: { type: boolean, const: true }
+        cancelled: { type: boolean }
+      additionalProperties: false
+
+    KiroAutoImportFoundResponse:
+      type: object
+      required: [found, source, email, profileArn, region, message]
+      properties:
+        found: { type: boolean, const: true }
+        source:
+          type: string
+          description: "`kiro-cli-sqlite` or the selected AWS SSO cache filename."
+        email: { type: [string, "null"] }
+        profileArn: { type: [string, "null"] }
+        region: { type: [string, "null"] }
+        message: { type: string }
+      additionalProperties: false
+
+    KiroAutoImportNotFoundResponse:
+      type: object
+      required: [found, error]
+      properties:
+        found: { type: boolean, const: false }
+        error: { type: string }
+        triedPaths:
+          type: array
+          description: Host filesystem paths probed for local Kiro credentials.
+          items: { type: string }
+      additionalProperties: false
+
+    KiroAutoImportResponse:
+      type: object
+      description: >-
+        May include local filesystem paths in the not-found case; it never returns OAuth token
+        values. Treat the response as sensitive host metadata.
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/KiroAutoImportFoundResponse" }
+        - { $ref: "#/components/schemas/KiroAutoImportNotFoundResponse" }
 
     CodexAuthFlowErrorResponse:
       type: object
