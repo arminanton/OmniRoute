@@ -136,6 +136,22 @@ test("versioned inference request schemas preserve route validation constraints"
   const video = requestSchema("/api/v1/videos/generations", "post");
   assertRef(video, "VideoGenerationRequest");
   assert.deepEqual(openapi.components.schemas.VideoGenerationRequest.required, ["model"]);
+  assert.equal(
+    openapi.components.schemas.VideoGenerationRequest.properties?.timeout_ms?.type,
+    "integer"
+  );
+  assert.equal(
+    openapi.components.schemas.VideoGenerationRequest.properties?.timeout_ms?.minimum,
+    1
+  );
+  assert.equal(
+    openapi.components.schemas.VideoGenerationRequest.properties?.poll_interval_ms?.type,
+    "integer"
+  );
+  assert.equal(
+    openapi.components.schemas.VideoGenerationRequest.properties?.poll_interval_ms?.minimum,
+    1
+  );
 
   const webFetch = requestSchema("/api/v1/web/fetch", "post");
   assertRef(webFetch, "WebFetchRequest");

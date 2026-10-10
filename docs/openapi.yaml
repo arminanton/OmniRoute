@@ -55466,6 +55466,18 @@ components:
             - type: number
             - type: string
         durationSeconds: { type: number, minimum: 0 }
+        timeout_ms:
+          type: integer
+          minimum: 1
+          description: >-
+            Optional deadline in milliseconds for asynchronous video generation. The provider adapter
+            may clamp this to its supported maximum; the default is provider-specific.
+        poll_interval_ms:
+          type: integer
+          minimum: 1
+          description: >-
+            Optional delay in milliseconds between asynchronous job status checks. The provider
+            adapter may clamp this to its supported range.
         negative_prompt: { type: string }
       additionalProperties: true
 
