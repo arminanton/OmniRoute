@@ -1,7 +1,6 @@
 import { isDashboardSessionAuthenticated } from "@/shared/utils/apiAuth.ts";
 import { isRequireApiKeyEnabled } from "@/shared/utils/featureFlags";
-import { extractApiKey } from "@/sse/services/auth.ts";
-import { extractGoogApiKeyHeader } from "@/sse/services/googApiKeyAuth.ts";
+import { extractClientApiCredential } from "../clientApiCredentials";
 import type { AuthOutcome, PolicyContext, RoutePolicy } from "../context";
 import { allow, reject } from "../context";
 
@@ -18,37 +17,6 @@ function isWsHandshake(ctx: PolicyContext): boolean {
   }
 }
 
-function extractBearer(request: Request): string | null {
-  const raw = request.headers.get("authorization") ?? request.headers.get("Authorization");
-  const xApiKey = request.headers.get("x-api-key") ?? request.headers.get("X-Api-Key");
-  const xGoogApiKey = extractGoogApiKeyHeader(request.headers);
-  if (raw) {
-    const trimmed = raw.trim();
-    if (trimmed.toLowerCase().startsWith("bearer ")) {
-      const token = trimmed.slice(7).trim();
-      if (token) return token;
-    }
-    // A non-"Bearer <token>" Authorization header (an empty "Bearer ", or a
-    // client's own non-OmniRoute token — VS Code Copilot sends one even when the
-    // OmniRoute key lives in the URL path of a /vscode tokenized endpoint) must
-    // NOT short-circuit auth. Fall through to x-api-key and the path-scoped URL
-    // token below instead of rejecting the request with "Authentication required".
-  }
-
-  if (xApiKey) {
-    return xApiKey.trim() || null;
-  }
-
-  // Issue #7034: gemini-cli (and any @google/genai-based client) sends its
-  // key via x-goog-api-key exclusively — accept it unconditionally, same
-  // shape as the x-api-key fallback above.
-  if (xGoogApiKey) {
-    return xGoogApiKey;
-  }
-
-  return extractApiKey(request);
-}
-
 function maskKeyId(apiKey: string): string {
   const tail = apiKey.slice(-4);
   return `key_${tail}`;
@@ -57,7 +25,7 @@ function maskKeyId(apiKey: string): string {
 export const clientApiPolicy: RoutePolicy = {
   routeClass: "CLIENT_API",
   async evaluate(ctx: PolicyContext): Promise<AuthOutcome> {
-    const bearer = extractBearer(ctx.request as Request);
+    const bearer = extractClientApiCredential(ctx.request as Request);
     if (!bearer) {
       // The WS descriptor handshake is a metadata read; the route handler
       // performs the actual wsAuth/dashboard/API-key decision and returns the

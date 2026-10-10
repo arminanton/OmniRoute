@@ -38,7 +38,7 @@ import {
   isNoThinkingAliasEnabled,
   isDisableThinkingLevelVariantsEnabled,
 } from "@/shared/utils/featureFlags";
-import { extractApiKey } from "@/sse/services/auth";
+import { extractClientApiCredential } from "@/server/authz/clientApiCredentials";
 import { maybeOmitCatalogModelName } from "./catalogHelpers";
 import { isCodexModelCatalogClient } from "./catalogRequest";
 import { getPricing } from "@/lib/db/settings/pricing";
@@ -219,7 +219,7 @@ export async function finalizeCatalogResponse(
   headers: Record<string, string>,
   enrichmentSnapshot?: CatalogEnrichmentSnapshot
 ): Promise<Response> {
-  const apiKey = extractApiKey(request);
+  const apiKey = extractClientApiCredential(request);
   if (apiKey) {
     const { getApiKeyMetadata, isModelAllowedForKey } = await import("@/lib/db/apiKeys");
     const keyMeta = await getApiKeyMetadata(apiKey);

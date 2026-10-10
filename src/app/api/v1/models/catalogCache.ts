@@ -17,7 +17,7 @@ import { createHmac } from "node:crypto";
 import { after } from "next/server";
 
 import { getModelCatalogCacheVersion } from "@/lib/db/readCache";
-import { extractApiKey } from "@/sse/services/auth";
+import { extractClientApiCredential } from "@/server/authz/clientApiCredentials";
 
 import { isCodexModelCatalogClient } from "./catalogRequest";
 
@@ -181,7 +181,7 @@ let _catalogBuilderRuns = 0;
 function buildCatalogCacheKey(request: Request, catalogSettings?: CatalogCacheOptions): string {
   const url = new URL(request.url);
   const prefix = url.searchParams.get("prefix") || "";
-  const apiKey = extractApiKey(request) || "";
+  const apiKey = extractClientApiCredential(request) || "";
   const isCodex = isCodexModelCatalogClient(request) ? "1" : "0";
   const configuredOnly = url.searchParams.get("configuredOnly") === "true" ? "1" : "0";
   const hideAuto = catalogSettings?.hideAutoCombos ? "1" : "0";

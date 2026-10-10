@@ -88,7 +88,7 @@ import {
   normalizeBlockedProviderSet,
 } from "@/shared/utils/noAuthProviders";
 import { getSourcedTokenLimit, getTokenLimit } from "@omniroute/open-sse/services/contextManager";
-import { extractApiKey } from "@/sse/services/auth";
+import { extractClientApiCredential } from "@/server/authz/clientApiCredentials";
 import type { ComboModelStep } from "@/lib/combos/steps";
 import {
   type CustomModelEntry,
@@ -785,7 +785,7 @@ async function buildUnifiedModelsResponseCore(
     // Everything the quota path needs (`combos`, `timestamp`,
     // `buildComboCatalogMetadata`) already exists here, so return before the
     // provider/auto-combo/registry loops start.
-    const earlyApiKey = extractApiKey(request);
+    const earlyApiKey = extractClientApiCredential(request);
     if (earlyApiKey) {
       const { getApiKeyMetadata } = await import("@/lib/db/apiKeys");
       const earlyKeyMeta = await getApiKeyMetadata(earlyApiKey);
@@ -1947,7 +1947,7 @@ async function buildUnifiedModelsResponseCore(
     }
 
     // Filter by API key permissions if requested
-    const apiKey = extractApiKey(request);
+    const apiKey = extractClientApiCredential(request);
     let finalModels = models;
     if (apiKey) {
       const { isModelAllowedForKey, getApiKeyMetadata } = await import("@/lib/db/apiKeys");

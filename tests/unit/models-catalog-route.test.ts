@@ -128,6 +128,53 @@ test("v1 models catalog accepts bearer API keys and filters the list by allowed 
   );
 });
 
+test("v1 models catalog accepts a bare x-api-key and scopes visibility to that key", async () => {
+  await settingsDb.updateSettings({
+    requireLogin: true,
+    password: "hashed-password",
+    requireAuthForModels: true,
+  });
+  await seedConnection("openai", { name: "openai-x-api-key" });
+  await seedConnection("claude", {
+    authType: "oauth",
+    name: "claude-x-api-key",
+    apiKey: null,
+    accessToken: "claude-access",
+  });
+
+  const key = await apiKeysDb.createApiKey("catalog-x-api-key", "machine-catalog-x-api-key");
+  await apiKeysDb.updateApiKeyPermissions(key.id, { allowedModels: ["openai/*"] });
+  const request = new Request("http://localhost/api/v1/models", {
+    headers: { "x-api-key": key.key },
+  });
+
+  // The central CLIENT_API policy and the route-level catalog must select the
+  // same credential; otherwise the request passes middleware and then 401s.
+  const { clientApiPolicy } = await import("../../src/server/authz/policies/clientApi.ts");
+  const centralAuth = await clientApiPolicy.evaluate({
+    request,
+    classification: {
+      routeClass: "CLIENT_API",
+      reason: "client_api_v1",
+      normalizedPath: "/api/v1/models",
+    },
+    requestId: "test-client-api-x-api-key",
+  });
+  assert.equal(centralAuth.allow, true);
+
+  const response = await v1ModelsCatalog.getUnifiedModelsResponse(request);
+  const body = (await response.json()) as any;
+  const ids = body.data.map((item: any) => item.id);
+
+  assert.equal(response.status, 200);
+  assert.ok(ids.some((id: string) => id.startsWith("openai/")));
+  assert.equal(
+    ids.some((id: string) => id.startsWith("claude/") || id.startsWith("cc/")),
+    false,
+    "the x-api-key must continue to scope the catalog by its allowedModels policy"
+  );
+});
+
 test("v1 models catalog does NOT accept API keys supplied via query string (#3300 security follow-up)", async () => {
   // Query-string token fallbacks (`?token=`/`?key=`/`?apiKey=`/`?api_key=`) were
   // intentionally removed — a credential in the query string leaks into access

@@ -1,5 +1,5 @@
 import { isAuthRequired, isDashboardSessionAuthenticated } from "@/shared/utils/apiAuth";
-import { extractApiKey } from "@/sse/services/auth";
+import { extractClientApiCredential } from "@/server/authz/clientApiCredentials";
 
 // Request-scoped catalog helpers: API-key auth gating for `/v1/models` and Codex
 // CLI client detection. Extracted verbatim from ./catalog.ts.
@@ -18,7 +18,7 @@ export async function getModelCatalogAuthRejection(
   if (!authRequired) return null;
   if (settings.requireAuthForModels === false) return null;
 
-  const apiKey = extractApiKey(request);
+  const apiKey = extractClientApiCredential(request);
   if (apiKey) {
     if (await validateCatalogApiKey(apiKey)) return null;
     return Response.json(
