@@ -38,6 +38,7 @@ import {
   RUNWAYML_IMAGE_REQUIRED_MODELS,
 } from "../config/runway.ts";
 import {
+  createComfyWorkflowDeadline,
   ComfyWorkflowSubmitError,
   submitComfyWorkflow,
   pollComfyResult,
@@ -187,7 +188,7 @@ export async function handleVideoGeneration({
         body,
         credentials,
         log,
-        callerSignal,
+        callerSignal: callerSignal ?? signal,
       });
     }
     if (log)
@@ -221,7 +222,7 @@ export async function handleVideoGeneration({
       body,
       credentials,
       log,
-      callerSignal,
+      callerSignal: callerSignal ?? signal,
     });
   }
   if (providerConfig.format === "openai-video") {
@@ -239,7 +240,13 @@ export async function handleVideoGeneration({
   }
 
   if (providerConfig.format === "vertex-veo") {
-    return handleVertexVeoGeneration({ model, body, credentials, log });
+    return handleVertexVeoGeneration({
+      model,
+      body,
+      credentials,
+      log,
+      callerSignal: callerSignal ?? signal,
+    });
   }
 
   if (providerConfig.format === "fal-ai-video") {
@@ -302,7 +309,15 @@ export async function handleVideoGeneration({
   }
 
   if (providerConfig.format === "haiper-video") {
-    return handleHaiperVideoGeneration({ model, provider, providerConfig, body, credentials, log });
+    return handleHaiperVideoGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      credentials,
+      log,
+      callerSignal: callerSignal ?? signal,
+    });
   }
 
   if (providerConfig.format === "veoaifree-web") {
@@ -366,7 +381,14 @@ export async function handleVideoGeneration({
     // UC (uncensored.com): one handler serves both surfaces, picking by
     // credential — persona web (Clerk JWT, un-metered, upload/generate + HEAD
     // poll) or uc-direct REST (X-api-key, metered, async submit + status poll).
-    return handleUcVideoGeneration({ model, provider, body, credentials, log });
+    return handleUcVideoGeneration({
+      model,
+      provider,
+      body,
+      credentials,
+      log,
+      callerSignal: callerSignal ?? signal,
+    });
   }
   if (providerConfig.format === "adobe-firefly-video") {
     return handleAdobeFireflyVideoGeneration({
@@ -421,7 +443,7 @@ export async function isCancellableDirectVideoTarget(
  * Veo video generation via Vertex AI (predictLongRunning → poll → MP4).
  * Uses the Vertex chat credentials (Service Account JSON or Express key).
  */
-async function handleVertexVeoGeneration({ model, body, credentials, log }) {
+async function handleVertexVeoGeneration({ model, body, credentials, log, callerSignal }) {
   try {
     const aspectRatio =
       typeof body.aspect_ratio === "string"
@@ -444,6 +466,9 @@ async function handleVertexVeoGeneration({ model, body, credentials, log }) {
       aspectRatio,
       durationSeconds,
       negativePrompt: typeof body.negative_prompt === "string" ? body.negative_prompt : undefined,
+      maxWaitMs: body.timeout_ms ?? body.max_wait_ms ?? body.maxWaitMs,
+      pollIntervalMs: body.poll_interval_ms,
+      callerSignal,
     });
 
     const item = result.base64
@@ -459,6 +484,7 @@ async function handleVertexVeoGeneration({ model, body, credentials, log }) {
     return {
       success: false,
       status: typeof err?.status === "number" ? err.status : 502,
+      ...(err?.terminal === true ? { terminal: true } : {}),
       error: sanitizeErrorMessage(err?.message || "Vertex Veo generation failed"),
     };
   }
@@ -608,10 +634,17 @@ async function handleComfyUIVideoGeneration({
     );
   }
 
+  const deadline = createComfyWorkflowDeadline(300_000);
   try {
-    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow, signal);
+    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow, signal, {
+      signal: deadline.signal,
+      deadlineAt: deadline.deadlineAt,
+    });
     promptAccepted = true;
-    const historyEntry = await pollComfyResult(providerConfig.baseUrl, promptId, 300_000);
+    const historyEntry = await pollComfyResult(providerConfig.baseUrl, promptId, 300_000, {
+      signal: deadline.signal,
+      deadlineAt: deadline.deadlineAt,
+    });
     // Keep the remote prompt and its account reservation awaited until the
     // history entry proves the job settled. Only cancel retrieval afterward.
     if (signal?.aborted) {
@@ -625,13 +658,15 @@ async function handleComfyUIVideoGeneration({
     const outputFiles = extractComfyOutputFiles(historyEntry);
 
     const videos = [];
+    const outputSignal = combineMediaSignals(deadline.signal, signal);
     for (const file of outputFiles) {
       const buffer = await fetchComfyOutput(
         providerConfig.baseUrl,
         file.filename,
         file.subfolder,
         file.type,
-        signal
+        outputSignal,
+        { deadlineAt: deadline.deadlineAt }
       );
       const base64 = Buffer.from(buffer).toString("base64");
       videos.push({ b64_json: base64, format: "webp" });
@@ -654,12 +689,17 @@ async function handleComfyUIVideoGeneration({
   } catch (err) {
     if (log) log.error("VIDEO", `${provider} comfyui error: ${err.message}`);
     const abortStatus = getAccountAdmissionAbortStatus(callerSignal, admissionSignal);
-    const status = abortStatus ?? (signal?.aborted ? 499 : 502);
+    const callerCancelled = Boolean(callerSignal?.aborted || (signal?.aborted && !abortStatus));
+    const knownSubmitStatus = err instanceof ComfyWorkflowSubmitError ? err.status : undefined;
+    const status =
+      abortStatus ??
+      (callerCancelled ? 499 : (knownSubmitStatus ?? (deadline.expired ? 504 : 502)));
     const terminal =
       promptAccepted ||
       (err instanceof ComfyWorkflowSubmitError && err.terminal) ||
       status === 499 ||
-      status === 503;
+      status === 503 ||
+      status === 504;
     saveCallLog({
       method: "POST",
       path: "/v1/videos/generations",
@@ -680,6 +720,8 @@ async function handleComfyUIVideoGeneration({
             ? "Video generation request cancelled"
             : sanitizeErrorMessage(err) || "Video provider error",
     };
+  } finally {
+    deadline.dispose();
   }
 }
 
@@ -1192,6 +1234,82 @@ const RUNWAY_TERMINAL_FAILURE_STATUSES = new Set([
   "DELETED",
 ]);
 
+const HAIPER_DEFAULT_TASK_TIMEOUT_MS = 300_000;
+const HAIPER_MAX_TASK_TIMEOUT_MS = 600_000;
+const HAIPER_DEFAULT_POLL_INTERVAL_MS = 5_000;
+const HAIPER_MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+class HaiperDeadlineExceeded extends Error {
+  constructor(readonly phase: string) {
+    super(`Haiper video ${phase} exceeded the task deadline`);
+    this.name = "HaiperDeadlineExceeded";
+  }
+}
+
+function createHaiperTaskDeadline(timeoutMs: number) {
+  const deadlineAt = Date.now() + timeoutMs;
+  const controller = new AbortController();
+  let expired = false;
+  let phase = "task";
+
+  const expire = (expiredPhase: string) => {
+    if (expired) return;
+    expired = true;
+    phase = expiredPhase;
+    controller.abort(new HaiperDeadlineExceeded(expiredPhase));
+  };
+  const timer = setTimeout(() => expire(phase), Math.min(timeoutMs, HAIPER_MAX_TIMER_DELAY_MS));
+
+  return {
+    signal: controller.signal,
+    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+    isExpired: () => expired || Date.now() >= deadlineAt,
+    getPhase: () => phase,
+    async run<T>(operation: () => Promise<T>, operationPhase: string): Promise<T> {
+      phase = operationPhase;
+      if (controller.signal.aborted || Date.now() >= deadlineAt) {
+        expire(operationPhase);
+        throw controller.signal.reason ?? new HaiperDeadlineExceeded(operationPhase);
+      }
+
+      let onAbort: (() => void) | undefined;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () =>
+          reject(controller.signal.reason ?? new HaiperDeadlineExceeded(operationPhase));
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+      });
+
+      try {
+        const result = await Promise.race([Promise.resolve().then(operation), aborted]);
+        if (Date.now() >= deadlineAt) {
+          expire(operationPhase);
+          throw controller.signal.reason ?? new HaiperDeadlineExceeded(operationPhase);
+        }
+        return result;
+      } finally {
+        if (onAbort) controller.signal.removeEventListener("abort", onAbort);
+      }
+    },
+    dispose() {
+      clearTimeout(timer);
+      if (!controller.signal.aborted) controller.abort();
+    },
+  };
+}
+
+function haiperFailure(status: number, error: string, terminal = false) {
+  return {
+    success: false as const,
+    status,
+    ...(terminal ? { terminal: true as const } : {}),
+    error,
+  };
+}
+
+function isHaiperDeadlineExceeded(error: unknown): error is HaiperDeadlineExceeded {
+  return error instanceof HaiperDeadlineExceeded;
+}
+
 async function handleHaiperVideoGeneration({
   model,
   provider,
@@ -1199,80 +1317,204 @@ async function handleHaiperVideoGeneration({
   body,
   credentials,
   log,
+  callerSignal,
 }) {
   const startTime = Date.now();
   const token = credentials?.apiKey || "";
-  const res = await fetch(providerConfig.baseUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", HAIPER_KEY: token },
-    body: JSON.stringify({ prompt: body.prompt, duration: 4, aspect_ratio: "16:9" }),
-  });
-  if (!res.ok) {
-    const errorText = await res.text();
+  const requestedTimeoutMs = Number(body.timeout_ms);
+  const timeoutMs =
+    Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+      ? Math.min(Math.floor(requestedTimeoutMs), HAIPER_MAX_TASK_TIMEOUT_MS)
+      : HAIPER_DEFAULT_TASK_TIMEOUT_MS;
+  const requestedPollIntervalMs = Number(body.poll_interval_ms);
+  const pollIntervalMs =
+    Number.isFinite(requestedPollIntervalMs) && requestedPollIntervalMs > 0
+      ? Math.min(Math.floor(requestedPollIntervalMs), HAIPER_MAX_TIMER_DELAY_MS)
+      : HAIPER_DEFAULT_POLL_INTERVAL_MS;
+  if (callerSignal?.aborted) {
+    return haiperFailure(499, "Haiper video request cancelled before submission");
+  }
+
+  const deadline = createHaiperTaskDeadline(Math.max(1, timeoutMs));
+  let submitDispatched = false;
+  let taskAccepted = false;
+  let lastStatus = "unknown";
+  const record = (status: number, error?: string) => {
     saveCallLog({
       method: "POST",
       path: "/v1/videos/generations",
-      status: res.status,
+      status,
       model: `${provider}/${model}`,
       provider,
       duration: Date.now() - startTime,
-      error: errorText.slice(0, 500),
+      ...(error ? { error: error.slice(0, 500) } : {}),
     }).catch(() => {});
-    return { success: false, status: res.status, error: errorText };
-  }
-  const { job_id } = await res.json();
-  const deadline = Date.now() + 300000;
-  while (Date.now() < deadline) {
-    await sleep(5000);
-    const statusRes = await fetch(`${providerConfig.statusUrl}/${job_id}`, {
-      headers: { HAIPER_KEY: token },
-    });
-    const status = await statusRes.json();
-    if (status.status === "completed" || status.status === "succeeded") {
-      const videoUrl = status.creation_url || status.output?.video_url;
-      if (videoUrl) {
-        const videoRes = await fetch(videoUrl);
-        const buf = await videoRes.arrayBuffer();
-        saveCallLog({
-          method: "POST",
-          path: "/v1/videos/generations",
-          status: 200,
-          model: `${provider}/${model}`,
-          provider,
-          duration: Date.now() - startTime,
-        }).catch(() => {});
-        return {
+  };
+  const finish = (result: ReturnType<typeof haiperFailure> | { success: true; data: unknown }) =>
+    callerSignal?.aborted
+      ? haiperFailure(499, "Haiper video request cancelled after submission began", true)
+      : result;
+
+  try {
+    const res = await deadline.run(() => {
+      if (callerSignal?.aborted) {
+        return Promise.reject(new Error("Haiper video request cancelled before submission"));
+      }
+      submitDispatched = true;
+      return fetch(providerConfig.baseUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", HAIPER_KEY: token },
+        body: JSON.stringify({ prompt: body.prompt, duration: 4, aspect_ratio: "16:9" }),
+        signal: deadline.signal,
+      });
+    }, "task submission");
+
+    if (!res.ok) {
+      let errorText = `Haiper task submission failed (${res.status})`;
+      try {
+        errorText = await deadline.run(() => res.text(), "submission response handling");
+      } catch (error) {
+        // The HTTP status itself is definitive for ordinary 4xx responses. Avoid
+        // allowing a stalled error body to turn a confirmed rejection into a retryable timeout.
+        if (isHaiperDeadlineExceeded(error) && (res.status === 408 || res.status >= 500)) {
+          const timeoutError = "Haiper task submission response timed out";
+          record(callerSignal?.aborted ? 499 : 504, timeoutError);
+          return finish(haiperFailure(callerSignal?.aborted ? 499 : 504, timeoutError, true));
+        }
+      }
+      record(res.status, errorText);
+      return finish(haiperFailure(res.status, errorText, res.status === 408 || res.status >= 500));
+    }
+
+    let submitData: any;
+    try {
+      submitData = await deadline.run(() => res.json(), "submission response handling");
+    } catch (error) {
+      if (isHaiperDeadlineExceeded(error)) throw error;
+      throw new Error("Haiper returned an unreadable successful submission response", {
+        cause: error,
+      });
+    }
+
+    const jobId = typeof submitData?.job_id === "string" ? submitData.job_id : "";
+    if (!jobId) {
+      const errorText = "Haiper successful submission response did not include job_id";
+      record(502, errorText);
+      return finish(haiperFailure(502, errorText, true));
+    }
+    taskAccepted = true;
+
+    while (deadline.remainingMs() > 0) {
+      if (deadline.remainingMs() <= 0) break;
+      const statusRes = await deadline.run(
+        () =>
+          fetch(`${providerConfig.statusUrl}/${encodeURIComponent(jobId)}`, {
+            headers: { HAIPER_KEY: token },
+            signal: deadline.signal,
+          }),
+        "task poll"
+      );
+      if (!statusRes.ok) {
+        let errorText = `Haiper accepted job ${jobId} but polling returned HTTP ${statusRes.status}`;
+        try {
+          errorText = await deadline.run(() => statusRes.text(), "poll response handling");
+        } catch (error) {
+          if (isHaiperDeadlineExceeded(error)) throw error;
+        }
+        record(callerSignal?.aborted ? 499 : statusRes.status, errorText);
+        return finish(
+          haiperFailure(callerSignal?.aborted ? 499 : statusRes.status, errorText, true)
+        );
+      }
+
+      let status: any;
+      try {
+        status = await deadline.run(() => statusRes.json(), "poll response handling");
+      } catch (error) {
+        if (isHaiperDeadlineExceeded(error)) throw error;
+        throw new Error(`Haiper accepted job ${jobId} but returned an unreadable poll response`, {
+          cause: error,
+        });
+      }
+      lastStatus = String(status?.status || "unknown").toLowerCase();
+
+      if (lastStatus === "failed") {
+        const errorText = status?.error || status?.message || "Haiper video generation failed";
+        record(callerSignal?.aborted ? 499 : 502, errorText);
+        // A provider-confirmed FAILED task cannot still be running, so another
+        // combo target may safely be attempted when the caller remains connected.
+        return finish(haiperFailure(502, errorText));
+      }
+
+      if (lastStatus === "completed" || lastStatus === "succeeded") {
+        if (callerSignal?.aborted) {
+          record(499, "Haiper video request cancelled after task completion");
+          return haiperFailure(499, "Haiper video request cancelled after submission began", true);
+        }
+        const videoUrl = status?.creation_url || status?.output?.video_url;
+        if (!videoUrl) {
+          const errorText = `Haiper job ${jobId} completed without a video URL`;
+          record(502, errorText);
+          return haiperFailure(502, errorText, true);
+        }
+        const outputSignal = combineMediaSignals(deadline.signal, callerSignal) ?? deadline.signal;
+        const videoRes = await deadline.run(
+          () => fetch(videoUrl, { signal: outputSignal }),
+          "output download"
+        );
+        if (!videoRes.ok) {
+          void videoRes.body?.cancel().catch(() => {});
+          const errorText = `Haiper output download returned HTTP ${videoRes.status}`;
+          record(callerSignal?.aborted ? 499 : videoRes.status, errorText);
+          return finish(
+            haiperFailure(callerSignal?.aborted ? 499 : videoRes.status, errorText, true)
+          );
+        }
+        const buf = await deadline.run(() => videoRes.arrayBuffer(), "output download body");
+        record(callerSignal?.aborted ? 499 : 200);
+        return finish({
           success: true,
           data: {
             created: Math.floor(Date.now() / 1000),
             data: [{ b64_json: Buffer.from(buf).toString("base64"), format: "mp4" }],
           },
-        };
+        });
       }
+
+      const waitMs = Math.min(pollIntervalMs, deadline.remainingMs());
+      if (waitMs <= 0) break;
+      await deadline.run(() => sleepWithSignal(waitMs, deadline.signal), "poll interval");
     }
-    if (status.status === "failed") {
-      saveCallLog({
-        method: "POST",
-        path: "/v1/videos/generations",
-        status: 502,
-        model: `${provider}/${model}`,
-        provider,
-        duration: Date.now() - startTime,
-        error: "Haiper video generation failed",
-      }).catch(() => {});
-      return { success: false, status: 502, error: "Haiper video generation failed" };
-    }
+
+    const timeoutError = `Haiper job ${jobId} timed out after ${timeoutMs}ms (status: ${lastStatus})`;
+    const timedOutStatus = callerSignal?.aborted ? 499 : 504;
+    record(timedOutStatus, timeoutError);
+    return haiperFailure(
+      timedOutStatus,
+      callerSignal?.aborted ? "Haiper video request cancelled" : timeoutError,
+      true
+    );
+  } catch (error) {
+    const timedOut = isHaiperDeadlineExceeded(error) || deadline.isExpired();
+    const callerCancelled = Boolean(callerSignal?.aborted);
+    const status = callerCancelled ? 499 : timedOut ? 504 : 502;
+    const message = callerCancelled
+      ? "Haiper video request cancelled after submission began"
+      : timedOut
+        ? `Haiper video ${isHaiperDeadlineExceeded(error) ? error.phase : deadline.getPhase()} timed out`
+        : error instanceof Error
+          ? error.message
+          : "Haiper video provider error";
+    record(status, message);
+    if (log?.error) log.error("VIDEO", `${provider} Haiper error: ${message}`);
+    return haiperFailure(
+      status,
+      message,
+      submitDispatched || taskAccepted || timedOut || callerCancelled
+    );
+  } finally {
+    deadline.dispose();
   }
-  saveCallLog({
-    method: "POST",
-    path: "/v1/videos/generations",
-    status: 504,
-    model: `${provider}/${model}`,
-    provider,
-    duration: Date.now() - startTime,
-    error: "Haiper video generation timed out",
-  }).catch(() => {});
-  return { success: false, status: 504, error: "Haiper video generation timed out" };
 }
 
 function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {

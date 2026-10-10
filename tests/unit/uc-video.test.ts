@@ -659,11 +659,11 @@ test("persona video rejects a foreign result URL without HEAD", async () => {
   }
 });
 
-test("persona video HEAD polling stops during an abortable wait", async () => {
+test("persona video keeps observing an accepted task after the caller disconnects", async () => {
   const controller = new AbortController();
   const resultUrl = "https://videogen.moveinwater.com/result";
   const base = personaFetch({
-    pendingPolls: Number.POSITIVE_INFINITY,
+    pendingPolls: 1,
     resultUrl,
     jwt: fakeJwt("uid", FUTURE_EXP),
   });
@@ -673,6 +673,7 @@ test("persona video HEAD polling stops during an abortable wait", async () => {
       heads++;
       assert.ok(init.signal instanceof AbortSignal);
       assert.equal(init.redirect, "error");
+      assert.notEqual(init.signal, controller.signal);
     }
     return base(url, init);
   }) as typeof fetch;
@@ -682,15 +683,15 @@ test("persona video HEAD polling stops during an abortable wait", async () => {
     body: { prompt: "x" },
     credentials: PERSONA_CRED,
     fetchImpl,
-    signal: controller.signal,
-    sleepImpl: async () => {
-      queueMicrotask(() => controller.abort());
-      return new Promise<void>(() => {});
-    },
+    callerSignal: controller.signal,
+    sleepImpl: async () => controller.abort(),
   });
   assert.equal(result.success, false);
-  if (!result.success) assert.equal(result.status, 499);
-  assert.equal(heads, 1);
+  if (!result.success) {
+    assert.equal(result.status, 499);
+    assert.equal(result.terminal, true);
+  }
+  assert.equal(heads, 2);
 });
 
 test("direct video refuses a returned foreign status URL before sending its API key", async () => {
@@ -742,16 +743,20 @@ test("direct video status polling rejects redirects without leaking API key", as
   assert.equal(polls, 1);
 });
 
-test("direct video status polling stops during an abortable wait", async () => {
+test("direct video keeps polling an accepted task after the caller disconnects", async () => {
   const statusUrl = "https://api.uncensored.com/api/v1/videos/status/1";
   const controller = new AbortController();
   let polls = 0;
   const fetchImpl = (async (url: string, init: RequestInit) => {
-    if (url === UC_DIRECT_VIDEO_URL)
+    if (url === UC_DIRECT_VIDEO_URL) {
       return Response.json({ status: "pending", status_url: statusUrl });
+    }
     polls++;
     assert.ok(init.signal instanceof AbortSignal);
-    return Response.json({ status: "pending" });
+    assert.notEqual(init.signal, controller.signal);
+    return Response.json(
+      polls === 1 ? { status: "pending" } : { status: "completed", url: "https://cdn/done.mp4" }
+    );
   }) as typeof fetch;
   const result = await handleUcVideoGeneration({
     model: "uc-direct/t2v",
@@ -759,15 +764,15 @@ test("direct video status polling stops during an abortable wait", async () => {
     body: { prompt: "x" },
     credentials: DIRECT_CRED,
     fetchImpl,
-    signal: controller.signal,
-    sleepImpl: async () => {
-      queueMicrotask(() => controller.abort());
-      return new Promise<void>(() => {});
-    },
+    callerSignal: controller.signal,
+    sleepImpl: async () => controller.abort(),
   });
   assert.equal(result.success, false);
-  if (!result.success) assert.equal(result.status, 499);
-  assert.equal(polls, 1);
+  if (!result.success) {
+    assert.equal(result.status, 499);
+    assert.equal(result.terminal, true);
+  }
+  assert.equal(polls, 2);
 });
 
 test("direct video status GET has a per-request timeout when transport ignores abort", async () => {
@@ -782,7 +787,7 @@ test("direct video status GET has a per-request timeout when transport ignores a
   const result = await handleUcVideoGeneration({
     model: "uc-direct/t2v",
     provider: "uc",
-    body: { prompt: "x", timeout_ms: 0 },
+    body: { prompt: "x", timeout_ms: 500 },
     credentials: DIRECT_CRED,
     fetchImpl,
     sleepImpl: noSleep,
@@ -790,6 +795,141 @@ test("direct video status GET has a per-request timeout when transport ignores a
   assert.equal(result.success, false);
   if (!result.success) assert.equal(result.status, 504);
   assert.equal(pollSignal?.aborted, true);
+});
+
+test("direct submit and response-body read share the server deadline", async () => {
+  let submitSignal: AbortSignal | undefined;
+  const fetchImpl = (async (_url: string, init: RequestInit) => {
+    submitSignal = init.signal as AbortSignal;
+    return {
+      ok: true,
+      status: 200,
+      json: () => new Promise<unknown>(() => {}),
+    } as unknown as Response;
+  }) as typeof fetch;
+  const result = await handleUcVideoGeneration({
+    model: "uc-direct/t2v",
+    provider: "uc",
+    body: { prompt: "x", timeout_ms: 500 },
+    credentials: DIRECT_CRED,
+    fetchImpl,
+  });
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.equal(result.status, 504);
+    assert.equal(result.terminal, true);
+  }
+  assert.equal(submitSignal?.aborted, true);
+});
+
+test("persona generate POST continues through polling after caller disconnect", async () => {
+  const controller = new AbortController();
+  const resultUrl = "https://videogen.moveinwater.com/disconnected";
+  const base = personaFetch({
+    pendingPolls: 1,
+    resultUrl,
+    jwt: fakeJwt("uid", FUTURE_EXP),
+  });
+  let generateSignal: AbortSignal | undefined;
+  let heads = 0;
+  const fetchImpl = (async (url: string, init: RequestInit = {}) => {
+    if (url === UC_PERSONA_TEXT_TO_VIDEO_URL) {
+      generateSignal = init.signal as AbortSignal;
+      controller.abort();
+    }
+    if (url === resultUrl) heads++;
+    return base(url, init);
+  }) as typeof fetch;
+  const result = await handleUcVideoGeneration({
+    model: "uc/wan-2.2-spicy",
+    provider: "uc",
+    body: { prompt: "x", poll_interval_ms: 1 },
+    credentials: PERSONA_CRED,
+    callerSignal: controller.signal,
+    fetchImpl,
+    sleepImpl: noSleep,
+  });
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.equal(result.status, 499);
+    assert.equal(result.terminal, true);
+  }
+  assert.notEqual(generateSignal, controller.signal);
+  assert.equal(generateSignal?.aborted, false);
+  assert.equal(heads, 2);
+});
+
+test("direct submit continues through status polling after caller disconnect", async () => {
+  const controller = new AbortController();
+  const statusUrl = "https://api.uncensored.com/api/v1/videos/status/disconnected";
+  let submitSignal: AbortSignal | undefined;
+  let polls = 0;
+  const fetchImpl = (async (url: string, init: RequestInit = {}) => {
+    if (url === UC_DIRECT_VIDEO_URL) {
+      submitSignal = init.signal as AbortSignal;
+      controller.abort();
+      return Response.json({ status: "pending", status_url: statusUrl });
+    }
+    polls++;
+    return Response.json(
+      polls === 1 ? { status: "processing" } : { status: "completed", url: "https://cdn/done.mp4" }
+    );
+  }) as typeof fetch;
+  const result = await handleUcVideoGeneration({
+    model: "uc-direct/t2v",
+    provider: "uc",
+    body: { prompt: "x", poll_interval_ms: 1 },
+    credentials: DIRECT_CRED,
+    callerSignal: controller.signal,
+    fetchImpl,
+    sleepImpl: noSleep,
+  });
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.equal(result.status, 499);
+    assert.equal(result.terminal, true);
+  }
+  assert.notEqual(submitSignal, controller.signal);
+  assert.equal(submitSignal?.aborted, false);
+  assert.equal(polls, 2);
+});
+
+test("confirmed direct task failure is retryable only while the caller is connected", async () => {
+  const statusUrl = "https://api.uncensored.com/api/v1/videos/status/failed";
+  const fetchImpl = (async (url: string) =>
+    url === UC_DIRECT_VIDEO_URL
+      ? Response.json({ status: "pending", status_url: statusUrl })
+      : Response.json({ status: "failed" })) as typeof fetch;
+  const result = await handleUcVideoGeneration({
+    model: "uc-direct/t2v",
+    provider: "uc",
+    body: { prompt: "x" },
+    credentials: DIRECT_CRED,
+    fetchImpl,
+  });
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.equal(result.status, 502);
+    assert.equal(result.retryable, true);
+    assert.equal(result.terminal, undefined);
+  }
+});
+
+test("ambiguous direct submit failure is terminal to prevent duplicate generation", async () => {
+  const result = await handleUcVideoGeneration({
+    model: "uc-direct/t2v",
+    provider: "uc",
+    body: { prompt: "x" },
+    credentials: DIRECT_CRED,
+    fetchImpl: (async () => {
+      throw new Error("socket closed after request dispatch");
+    }) as typeof fetch,
+  });
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.equal(result.status, 502);
+    assert.equal(result.terminal, true);
+  }
 });
 
 test("persona video input resolver blocks private DNS answers before any fetch", async (t) => {
@@ -941,6 +1081,71 @@ test("persona video keeps the opaque signed PUT query and redacts upload errors"
   assert.ok(!errors.join(" ").includes("secret%2Fopaque"));
 });
 
+test("persona input-image upload cancels the unused provider error body", async () => {
+  const signedUrl = "https://d.moveinwater.com/up/tok?token=secret";
+  const base = personaFetch({
+    pendingPolls: 0,
+    resultUrl: "https://videogen.moveinwater.com/result",
+    jwt: fakeJwt("uid", FUTURE_EXP),
+  });
+  let bodyCancelled = false;
+  const fetchImpl = (async (url: string, init: RequestInit = {}) => {
+    if (url === UC_PERSONA_SIGNED_URL) {
+      return Response.json({ signed_url: signedUrl, blob_name: "blob_1" });
+    }
+    if (init.method === "PUT") {
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          bodyCancelled = true;
+        },
+      });
+      return new Response(body, { status: 502 });
+    }
+    return base(url, init);
+  }) as typeof fetch;
+  const result = await handleUcVideoGeneration({
+    model: "uc/wan-2.2-spicy",
+    provider: "uc",
+    body: { prompt: "x", image: "data:image/png;base64,iVBORw0KGgo=" },
+    credentials: PERSONA_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 502);
+  assert.equal(bodyCancelled, true);
+});
+
+test("direct status polling cancels an unused provider error body", async () => {
+  const statusUrl = "https://api.uncensored.com/api/v1/videos/status/1";
+  let bodyCancelled = false;
+  const fetchImpl = (async (url: string) => {
+    if (url === UC_DIRECT_VIDEO_URL) {
+      return Response.json({ status: "pending", status_url: statusUrl });
+    }
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        bodyCancelled = true;
+      },
+    });
+    return new Response(body, { status: 503 });
+  }) as typeof fetch;
+  const result = await handleUcVideoGeneration({
+    model: "uc-direct/t2v",
+    provider: "uc",
+    body: { prompt: "x" },
+    credentials: DIRECT_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 503);
+  assert.equal(result.terminal, true);
+  assert.equal(bodyCancelled, true);
+});
+
 test("direct status polling errors do not echo an opaque status query", async () => {
   const statusUrl = "https://api.uncensored.com/api/v1/videos/status/1?token=secret%2Fquery";
   const fetchImpl = (async (url: string) => {
@@ -963,19 +1168,79 @@ test("direct status polling errors do not echo an opaque status query", async ()
   }
 });
 
+test("persona submit preserves a known 429 when its error body hits the deadline", async () => {
+  const base = personaFetch({
+    pendingPolls: 0,
+    resultUrl: "https://videogen.moveinwater.com/result",
+    jwt: fakeJwt("uid", FUTURE_EXP),
+  });
+  const fetchImpl = (async (url: string, init: RequestInit = {}) => {
+    if (url === UC_PERSONA_TEXT_TO_VIDEO_URL) {
+      const response = new Response(null, { status: 429 });
+      response.text = () => new Promise<string>(() => {});
+      return response;
+    }
+    return base(url, init);
+  }) as typeof fetch;
+  const result = await handleUcVideoGeneration({
+    model: "uc/wan-2.2-spicy",
+    provider: "uc",
+    body: { prompt: "x", timeout_ms: 500 },
+    credentials: PERSONA_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  });
+
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.equal(result.status, 429);
+    assert.equal(result.retryable, true);
+    assert.equal(result.terminal, undefined);
+  }
+});
+
+test("direct submit preserves a known 429 when its error body hits the deadline", async () => {
+  const fetchImpl = (async (url: string) => {
+    if (url !== UC_DIRECT_VIDEO_URL) throw new Error(`unexpected URL: ${url}`);
+    const response = new Response(null, { status: 429 });
+    response.text = () => new Promise<string>(() => {});
+    return response;
+  }) as typeof fetch;
+  const result = await handleUcVideoGeneration({
+    model: "uc-direct/t2v",
+    provider: "uc",
+    body: { prompt: "x", timeout_ms: 100 },
+    credentials: DIRECT_CRED,
+    fetchImpl,
+    sleepImpl: noSleep,
+  });
+
+  assert.equal(result.success, false);
+  if (!result.success) {
+    assert.equal(result.status, 429);
+    assert.equal(result.retryable, true);
+    assert.equal(result.terminal, undefined);
+  }
+});
+
 test("direct status polling bounds a hung JSON body and aborts the fetch signal", async () => {
   const statusUrl = "https://api.uncensored.com/api/v1/videos/status/1";
   let pollSignal: AbortSignal | undefined;
+  let submitCalls = 0;
+  let pollCalls = 0;
   const fetchImpl = (async (url: string, init: RequestInit) => {
-    if (url === UC_DIRECT_VIDEO_URL)
+    if (url === UC_DIRECT_VIDEO_URL) {
+      submitCalls++;
       return Response.json({ status: "pending", status_url: statusUrl });
+    }
+    pollCalls++;
     pollSignal = init.signal as AbortSignal;
     return { ok: true, status: 200, json: () => new Promise<unknown>(() => {}) } as Response;
   }) as typeof fetch;
   const result = await handleUcVideoGeneration({
     model: "uc-direct/t2v",
     provider: "uc",
-    body: { prompt: "x", timeout_ms: 0 },
+    body: { prompt: "x", timeout_ms: 500 },
     credentials: DIRECT_CRED,
     fetchImpl,
     sleepImpl: noSleep,
@@ -983,4 +1248,6 @@ test("direct status polling bounds a hung JSON body and aborts the fetch signal"
   assert.equal(result.success, false);
   if (!result.success) assert.equal(result.status, 504);
   assert.equal(pollSignal?.aborted, true);
+  assert.equal(submitCalls, 1);
+  assert.equal(pollCalls, 1);
 });

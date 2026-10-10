@@ -93,7 +93,9 @@ test("absolute deadline bounds polling waits", async () => {
     return response({ status: "processing" });
   }) as typeof fetch;
 
-  const result = await runJob({ timeoutMs: 1, pollIntervalMs: 10_000, maxPolls: 10 });
+  // Leave enough time for submit/JSON parsing even on a busy CI host, while
+  // keeping the first poll delay far beyond the lifecycle budget.
+  const result = await runJob({ timeoutMs: 250, pollIntervalMs: 10_000, maxPolls: 10 });
 
   assert.equal(calls, 1, "the deadline expires during the bounded wait before the first poll");
   assert.equal(result.success, false);

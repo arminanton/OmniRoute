@@ -90,7 +90,10 @@ test("video route diverts a combo name to the combo executor and honors the Comf
       return createResponse(
         JSON.stringify({
           "combo-prompt-1": {
-            outputs: { 1: [{ filename: "out.webp", subfolder: "", type: "output" }] },
+            outputs: {
+              1: { gifs: [{ filename: "out.webp", subfolder: "", type: "output" }] },
+            },
+            status: { status_str: "success", completed: true },
           },
         }),
         { status: 200, headers: { "content-type": "application/json" } }

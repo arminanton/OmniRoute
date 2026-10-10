@@ -16,10 +16,20 @@ const { handleMusicGeneration } = await import("../../open-sse/handlers/musicGen
 
 const FALLBACK = "http://localhost:8188";
 const OVERRIDE = "http://comfyui:8188";
+const nativeSetTimeout = globalThis.setTimeout;
 
 function immediateTimeout(callback, _ms, ...args) {
   if (typeof callback === "function") callback(...args);
   return 0;
+}
+
+function immediatePollTimeout(callback, ms, ...args) {
+  // ComfyUI's workflow deadline is a real 5-minute timer; only collapse the
+  // polling delay so this base-URL test does not expire the workflow instantly.
+  if (ms >= 300_000) {
+    return nativeSetTimeout(callback as TimerHandler, ms, ...args);
+  }
+  return immediateTimeout(callback, ms, ...args);
 }
 
 function mockComfyFetch(promptId: string, seenUrls: string[]) {
@@ -103,7 +113,7 @@ test("handleVideoGeneration uses the connection's providerSpecificData.baseUrl o
   const originalFetch = globalThis.fetch;
   const originalSetTimeout = globalThis.setTimeout;
   const seenUrls: string[] = [];
-  globalThis.setTimeout = immediateTimeout;
+  globalThis.setTimeout = immediatePollTimeout;
   globalThis.fetch = mockComfyFetch("vid-override", seenUrls);
 
   try {
@@ -156,17 +166,11 @@ test("resolveComfyUiBaseUrl returns the fallback when providerSpecificData is ab
 });
 
 test("resolveComfyUiBaseUrl returns the fallback when providerSpecificData is null", () => {
-  assert.equal(
-    resolveComfyUiBaseUrl({ providerSpecificData: null }, FALLBACK),
-    FALLBACK
-  );
+  assert.equal(resolveComfyUiBaseUrl({ providerSpecificData: null }, FALLBACK), FALLBACK);
 });
 
 test("resolveComfyUiBaseUrl returns the fallback when baseUrl is absent", () => {
-  assert.equal(
-    resolveComfyUiBaseUrl({ providerSpecificData: {} }, FALLBACK),
-    FALLBACK
-  );
+  assert.equal(resolveComfyUiBaseUrl({ providerSpecificData: {} }, FALLBACK), FALLBACK);
 });
 
 test("resolveComfyUiBaseUrl returns the fallback when baseUrl is not a string", () => {

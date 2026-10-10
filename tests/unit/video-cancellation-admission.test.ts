@@ -337,7 +337,12 @@ test("accepted async video job retains occupancy and does not submit combo fallb
     if (target === "https://video-job.example/v1/videos") {
       assert.equal(occupancy.getAccountRequestInFlightCount(acceptedJobConnectionId), 1);
       // The provider accepted the job. A caller disconnect cannot cancel it.
-      controller.abort(new Error("caller disconnected after acceptance"));
+      // Defer disconnect until after fetchJson has consumed the successful
+      // submit body and obtained the job id; a synchronous abort here would
+      // model an ambiguous submit response instead.
+      originalSetTimeout(() => {
+        controller.abort(new Error("caller disconnected after acceptance"));
+      }, 0);
       return Response.json({ video_id: "accepted-video-job" });
     }
     if (target === "https://video-job.example/agnesapi?video_id=accepted-video-job") {
@@ -354,7 +359,10 @@ test("accepted async video job retains occupancy and does not submit combo fallb
     postVideo("video-uncertain-accepted-job", controller.signal)
   );
 
-  assert.equal(response.status, 500);
+  // The accepted provider task is still polled after disconnect. Once the
+  // observation fails, report the caller cancellation while keeping the
+  // outcome terminal so combo cannot replay the accepted request.
+  assert.equal(response.status, 499);
   assert.deepEqual(calls, [
     "https://video-job.example/v1/videos",
     "https://video-job.example/agnesapi?video_id=accepted-video-job",

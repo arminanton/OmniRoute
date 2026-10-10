@@ -16,7 +16,6 @@
  */
 
 import { Buffer } from "node:buffer";
-import { sleep } from "../utils/sleep.ts";
 import {
   parseSAFromApiKey,
   getAccessToken,
@@ -108,6 +107,137 @@ function buildModelRequest(
 
 interface VertexHttpError extends Error {
   status?: number;
+  terminal?: true;
+}
+
+const VEO_DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
+const VEO_MAX_TASK_TIMEOUT_MS = 15 * 60 * 1000;
+const VEO_DEFAULT_POLL_INTERVAL_MS = 10_000;
+const VEO_MAX_POLL_INTERVAL_MS = 60_000;
+const VEO_MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+class VertexVeoDeadlineExceeded extends Error {
+  constructor(readonly phase: string) {
+    super(`Vertex Veo ${phase} exceeded the task deadline`);
+    this.name = "VertexVeoDeadlineExceeded";
+  }
+}
+
+class VertexVeoCallerCancelled extends Error {
+  constructor(readonly afterSubmit: boolean) {
+    super(
+      afterSubmit
+        ? "Vertex Veo request cancelled after submission began"
+        : "Vertex Veo request cancelled before submission"
+    );
+    this.name = "VertexVeoCallerCancelled";
+  }
+}
+
+function createVeoDeadline(timeoutMs: number) {
+  const deadlineAt = Date.now() + timeoutMs;
+  const controller = new AbortController();
+  let activePhase = "task";
+  let expired = false;
+  const expire = (phase: string) => {
+    if (expired) return;
+    expired = true;
+    activePhase = phase;
+    controller.abort(new VertexVeoDeadlineExceeded(phase));
+  };
+  const timer = setTimeout(() => expire(activePhase), Math.min(timeoutMs, VEO_MAX_TIMER_DELAY_MS));
+
+  return {
+    signal: controller.signal,
+    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+    isExpired: () => expired || Date.now() >= deadlineAt,
+    async run<T>(operation: () => Promise<T>, phase: string): Promise<T> {
+      activePhase = phase;
+      if (controller.signal.aborted || Date.now() >= deadlineAt) {
+        expire(phase);
+        throw controller.signal.reason ?? new VertexVeoDeadlineExceeded(phase);
+      }
+
+      let onAbort: (() => void) | undefined;
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(controller.signal.reason ?? new VertexVeoDeadlineExceeded(phase));
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+      });
+      try {
+        const value = await Promise.race([Promise.resolve().then(operation), aborted]);
+        if (Date.now() >= deadlineAt) {
+          expire(phase);
+          throw controller.signal.reason ?? new VertexVeoDeadlineExceeded(phase);
+        }
+        return value;
+      } finally {
+        if (onAbort) controller.signal.removeEventListener("abort", onAbort);
+      }
+    },
+    dispose() {
+      clearTimeout(timer);
+    },
+  };
+}
+
+function veoFailureError(message: string, status: number, terminal = false): VertexHttpError {
+  const error = new Error(message) as VertexHttpError;
+  error.status = status;
+  if (terminal) error.terminal = true;
+  return error;
+}
+
+function sleepWithVeoSignal(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new VertexVeoDeadlineExceeded("poll wait"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new VertexVeoDeadlineExceeded("poll wait"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function resolveVeoTimeout(value: unknown): number {
+  const requested = Number(value);
+  return Number.isFinite(requested) && requested > 0
+    ? Math.max(1, Math.min(Math.floor(requested), VEO_MAX_TASK_TIMEOUT_MS))
+    : VEO_DEFAULT_TASK_TIMEOUT_MS;
+}
+
+function resolveVeoPollInterval(value: unknown): number {
+  const requested = Number(value);
+  return Number.isFinite(requested) && requested > 0
+    ? Math.max(1, Math.min(Math.floor(requested), VEO_MAX_POLL_INTERVAL_MS))
+    : VEO_DEFAULT_POLL_INTERVAL_MS;
+}
+
+function combineVeoSignals(signals: Array<AbortSignal | null | undefined>) {
+  const controller = new AbortController();
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal != null);
+  const handlers = new Map<AbortSignal, () => void>();
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      controller.abort(signal.reason);
+      break;
+    }
+    const handler = () => controller.abort(signal.reason);
+    handlers.set(signal, handler);
+    signal.addEventListener("abort", handler, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose() {
+      for (const [signal, handler] of handlers) signal.removeEventListener("abort", handler);
+    },
+  };
 }
 
 async function vertexError(res: Response): Promise<VertexHttpError> {
@@ -314,61 +444,207 @@ export async function vertexGenerateVideo(
     image?: { bytesBase64Encoded: string; mimeType: string };
     pollIntervalMs?: number;
     maxWaitMs?: number;
+    callerSignal?: AbortSignal | null;
   }
 ): Promise<{ base64?: string; url?: string; format: string }> {
-  const auth = await resolveVertexAuth(credentials);
-  const submit = buildModelRequest(auth, options.model, "predictLongRunning");
+  const deadline = createVeoDeadline(resolveVeoTimeout(options.maxWaitMs));
+  const callerSignal = options.callerSignal;
+  let submitDispatched = false;
+  let operationAccepted = false;
 
-  const instance: Record<string, unknown> = { prompt: options.prompt };
-  if (options.image) instance.image = options.image;
-  const parameters: Record<string, unknown> = {
-    sampleCount: typeof options.sampleCount === "number" ? options.sampleCount : 1,
-  };
-  if (options.aspectRatio) parameters.aspectRatio = options.aspectRatio;
-  if (typeof options.durationSeconds === "number")
-    parameters.durationSeconds = options.durationSeconds;
-  if (options.negativePrompt) parameters.negativePrompt = options.negativePrompt;
+  try {
+    if (callerSignal?.aborted) throw new VertexVeoCallerCancelled(false);
 
-  const submitRes = await fetch(submit.url, {
-    method: "POST",
-    headers: submit.headers,
-    body: JSON.stringify({ instances: [instance], parameters }),
-  });
-  if (!submitRes.ok) throw await vertexError(submitRes);
-  const op = await submitRes.json();
-  const operationName = (op as { name?: unknown })?.name;
-  if (typeof operationName !== "string" || operationName.length === 0) {
-    throw new Error("Vertex Veo did not return an operation name");
-  }
-
-  const poll = buildModelRequest(auth, options.model, "fetchPredictOperation");
-  const intervalMs =
-    options.pollIntervalMs && options.pollIntervalMs > 0 ? options.pollIntervalMs : 10000;
-  const maxWaitMs = options.maxWaitMs && options.maxWaitMs > 0 ? options.maxWaitMs : 5 * 60 * 1000;
-  const deadline = Date.now() + maxWaitMs;
-
-  while (Date.now() < deadline) {
-    await sleep(intervalMs);
-    const pollRes = await fetch(poll.url, {
-      method: "POST",
-      headers: poll.headers,
-      body: JSON.stringify({ operationName }),
-    });
-    if (!pollRes.ok) throw await vertexError(pollRes);
-    const pollData = await pollRes.json();
-    if ((pollData as { done?: unknown })?.done) {
-      const opError = (pollData as { error?: { message?: unknown } })?.error;
-      if (opError) throw new Error(String(opError.message || "Veo operation failed"));
-      const videos = (pollData as { response?: { videos?: unknown } })?.response?.videos;
-      const video = Array.isArray(videos) ? (videos[0] as Record<string, unknown>) : null;
-      if (video && typeof video.bytesBase64Encoded === "string") {
-        return { base64: video.bytesBase64Encoded, format: "mp4" };
-      }
-      if (video && typeof video.gcsUri === "string") {
-        return { url: video.gcsUri, format: "mp4" };
-      }
-      throw new Error("Veo operation completed but returned no video");
+    // The server-owned deadline starts before OAuth resolution, so a stalled token
+    // exchange cannot consume unbounded time before the generation request begins.
+    const authSignals = combineVeoSignals([deadline.signal, callerSignal]);
+    let auth: ResolvedVertexAuth;
+    try {
+      auth = await deadline.run(
+        () => resolveVertexAuth(credentials, authSignals.signal),
+        "authentication"
+      );
+    } finally {
+      authSignals.dispose();
     }
+    if (callerSignal?.aborted) throw new VertexVeoCallerCancelled(false);
+    const submit = buildModelRequest(auth, options.model, "predictLongRunning");
+
+    const instance: Record<string, unknown> = { prompt: options.prompt };
+    if (options.image) instance.image = options.image;
+    const parameters: Record<string, unknown> = {
+      sampleCount: typeof options.sampleCount === "number" ? options.sampleCount : 1,
+    };
+    if (options.aspectRatio) parameters.aspectRatio = options.aspectRatio;
+    if (typeof options.durationSeconds === "number")
+      parameters.durationSeconds = options.durationSeconds;
+    if (options.negativePrompt) parameters.negativePrompt = options.negativePrompt;
+
+    const submitRes = await deadline.run(() => {
+      if (callerSignal?.aborted) throw new VertexVeoCallerCancelled(false);
+      // Once fetch is called the server cannot know whether Vertex accepted the
+      // operation if the socket/body fails. The handler marks that outcome terminal.
+      submitDispatched = true;
+      return fetch(submit.url, {
+        method: "POST",
+        headers: submit.headers,
+        body: JSON.stringify({ instances: [instance], parameters }),
+        signal: deadline.signal,
+      });
+    }, "submission");
+
+    if (!submitRes.ok) {
+      let upstreamError: VertexHttpError;
+      try {
+        upstreamError = await deadline.run(
+          () => vertexError(submitRes),
+          "submission response body"
+        );
+      } catch (error) {
+        // The response headers already prove this was rejected. If only the
+        // diagnostic body stalls, preserve the known HTTP status and its
+        // retryability instead of turning a 429 into an ambiguous 504.
+        if (error instanceof VertexVeoDeadlineExceeded) {
+          upstreamError = veoFailureError(
+            `Vertex AI error (${submitRes.status})`,
+            submitRes.status,
+            submitRes.status === 408 || submitRes.status >= 500
+          );
+        } else {
+          throw error;
+        }
+      }
+      if (callerSignal?.aborted) throw new VertexVeoCallerCancelled(true);
+      // Explicit client/quota rejections are safe to route elsewhere. A timeout or
+      // server error after dispatch is ambiguous because Vertex may have accepted it.
+      if (submitRes.status === 408 || submitRes.status >= 500) upstreamError.terminal = true;
+      throw upstreamError;
+    }
+
+    let operationName: unknown;
+    try {
+      const op = await deadline.run(() => submitRes.json(), "submission response body");
+      operationName = (op as { name?: unknown })?.name;
+    } catch (error) {
+      if (error instanceof VertexVeoDeadlineExceeded) throw error;
+      throw veoFailureError(
+        "Vertex Veo accepted the request but returned an unreadable operation response",
+        502,
+        true
+      );
+    }
+    if (typeof operationName !== "string" || operationName.length === 0) {
+      throw veoFailureError(
+        "Vertex Veo accepted the request but did not return an operation name",
+        502,
+        true
+      );
+    }
+    operationAccepted = true;
+    const poll = buildModelRequest(auth, options.model, "fetchPredictOperation");
+    const intervalMs = resolveVeoPollInterval(options.pollIntervalMs);
+
+    while (deadline.remainingMs() > 0) {
+      await deadline.run(
+        () => sleepWithVeoSignal(Math.min(intervalMs, deadline.remainingMs()), deadline.signal),
+        "poll wait"
+      );
+      const pollRes = await deadline.run(
+        () =>
+          fetch(poll.url, {
+            method: "POST",
+            headers: poll.headers,
+            body: JSON.stringify({ operationName }),
+            signal: deadline.signal,
+          }),
+        "operation poll"
+      );
+      if (!pollRes.ok) {
+        const upstreamError = await deadline.run(() => vertexError(pollRes), "poll response body");
+        if (callerSignal?.aborted) throw new VertexVeoCallerCancelled(true);
+        // The operation is already accepted. Never create a second operation via
+        // combo after a polling transport/provider error.
+        upstreamError.terminal = true;
+        throw upstreamError;
+      }
+
+      let pollData: unknown;
+      try {
+        pollData = await deadline.run(() => pollRes.json(), "poll response body");
+      } catch (error) {
+        if (error instanceof VertexVeoDeadlineExceeded) throw error;
+        throw veoFailureError(
+          "Vertex Veo accepted operation returned an unreadable poll response",
+          502,
+          true
+        );
+      }
+      if ((pollData as { done?: unknown })?.done) {
+        if (callerSignal?.aborted) throw new VertexVeoCallerCancelled(true);
+        const opError = (pollData as { error?: { code?: unknown; message?: unknown } })?.error;
+        if (opError) {
+          // Vertex has explicitly finished this operation with an error, so it is
+          // safe for a combo to try another provider rather than duplicate work.
+          const code = Number(opError.code);
+          const status = Number.isInteger(code) && code >= 400 && code <= 599 ? code : 502;
+          throw veoFailureError(String(opError.message || "Veo operation failed"), status);
+        }
+
+        const output = await deadline.run(async () => {
+          const videos = (pollData as { response?: { videos?: unknown } })?.response?.videos;
+          const video = Array.isArray(videos) ? (videos[0] as Record<string, unknown>) : null;
+          if (video && typeof video.bytesBase64Encoded === "string") {
+            return { base64: video.bytesBase64Encoded, format: "mp4" };
+          }
+          if (video && typeof video.gcsUri === "string") {
+            return { url: video.gcsUri, format: "mp4" };
+          }
+          throw veoFailureError("Veo operation completed but returned no video", 502, true);
+        }, "output processing");
+        if (callerSignal?.aborted) throw new VertexVeoCallerCancelled(true);
+        return output;
+      }
+    }
+    throw new VertexVeoDeadlineExceeded("operation polling");
+  } catch (error) {
+    if (error instanceof VertexVeoCallerCancelled) {
+      throw veoFailureError(error.message, 499, error.afterSubmit);
+    }
+    if (callerSignal?.aborted && !submitDispatched) {
+      throw veoFailureError("Vertex Veo request cancelled before submission", 499);
+    }
+    const typedError = error as VertexHttpError;
+    if (typeof typedError?.status === "number") {
+      throw veoFailureError(typedError.message, typedError.status, typedError.terminal === true);
+    }
+    if (error instanceof VertexVeoDeadlineExceeded || deadline.isExpired()) {
+      const phase = error instanceof VertexVeoDeadlineExceeded ? error.phase : "task";
+      const cancelled = Boolean(callerSignal?.aborted && submitDispatched);
+      throw veoFailureError(
+        cancelled
+          ? "Vertex Veo request cancelled after submission began"
+          : `Vertex Veo ${phase} timed out`,
+        cancelled ? 499 : 504,
+        submitDispatched || operationAccepted
+      );
+    }
+    if (callerSignal?.aborted && submitDispatched) {
+      throw veoFailureError("Vertex Veo request cancelled after submission began", 499, true);
+    }
+    if (submitDispatched && !typedError?.status) {
+      throw veoFailureError(
+        operationAccepted
+          ? "Vertex Veo accepted operation failed during polling or output processing"
+          : "Vertex Veo submission outcome is unknown after a transport error",
+        502,
+        true
+      );
+    }
+    if (typedError && typeof typedError.status === "number") {
+      throw veoFailureError(typedError.message, typedError.status, typedError.terminal === true);
+    }
+    throw veoFailureError(error instanceof Error ? error.message : String(error), 502, false);
+  } finally {
+    deadline.dispose();
   }
-  throw new Error("Vertex Veo video generation timed out");
 }

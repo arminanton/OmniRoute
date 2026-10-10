@@ -54,13 +54,7 @@
 import { resolveUcCredential } from "../../../executors/uc/credentials.ts";
 import { mintUcSessionToken } from "../../../executors/uc/clerkAuth.ts";
 import { UC_ORIGIN } from "../../../executors/uc/constants.ts";
-import {
-  boundedUcPollMs,
-  UC_MAX_POLL_ATTEMPTS,
-  UcPollTimeoutError,
-  waitForUcPoll,
-  withUcPollTimeout,
-} from "../../../executors/uc/polling.ts";
+import { boundedUcPollMs } from "../../../executors/uc/polling.ts";
 import { validateUcBlobName, validateUcRemoteUrl } from "../../../executors/uc/urlSafety.ts";
 import { resolveCursorImages } from "../../../utils/cursorImages.ts";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
@@ -79,6 +73,12 @@ export const UC_DEFAULT_VIDEO_MODEL = "wan-2.2-spicy";
 
 const UC_POLL_TIMEOUT_MS_DEFAULT = 300_000;
 const UC_POLL_INTERVAL_MS_DEFAULT = 3_000;
+const UC_VIDEO_MIN_POLL_INTERVAL_MS = 100;
+// Avoid making the poll count an earlier deadline when a caller requests a
+// short interval: at this interval, the cap spans the full maximum lifecycle.
+const UC_VIDEO_MAX_POLL_ATTEMPTS = Math.ceil(
+  UC_POLL_TIMEOUT_MS_DEFAULT / UC_VIDEO_MIN_POLL_INTERVAL_MS
+);
 
 type SleepImpl = (ms: number) => Promise<void>;
 const realSleep: SleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -130,6 +130,9 @@ interface UcVideoHandlerArgs {
   /** Optional; falls back to `body.prompt`. */
   prompt?: string;
   log?: UcVideoLog | null;
+  /** Client disconnect signal; ignored after a generation POST is dispatched. */
+  callerSignal?: AbortSignal;
+  /** Backwards-compatible alias for direct callers/tests. */
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   sleepImpl?: SleepImpl;
@@ -149,7 +152,13 @@ type UcVideoResult =
         }>;
       };
     }
-  | { success: false; status: number; error: string; retryable?: boolean };
+  | {
+      success: false;
+      status: number;
+      error: string;
+      retryable?: boolean;
+      terminal?: boolean;
+    };
 
 /**
  * Strip a routing prefix (`uc/` or `uc-direct/`) and return the canonical UC
@@ -294,41 +303,159 @@ async function resolveImageBytes(
 
 type UcPollOutcome = { state: "ready" } | { state: "failed"; status: number; error: string };
 
+class UcVideoDeadlineError extends Error {
+  constructor() {
+    super("UC video generation deadline exceeded");
+    this.name = "UcVideoDeadlineError";
+  }
+}
+
+class UcVideoCallerAbortError extends Error {
+  constructor() {
+    super("Request aborted");
+    this.name = "UcVideoCallerAbortError";
+  }
+}
+
+interface UcVideoDeadline {
+  readonly startedAt: number;
+  readonly controller: AbortController;
+  deadlineAt: number;
+  timer: ReturnType<typeof setTimeout>;
+  timedOut: boolean;
+  remainingMs(): number;
+  tighten(timeoutMs: number): void;
+  dispose(): void;
+}
+
+/** One server-owned deadline covers the complete accepted-task lifecycle. */
+function createUcVideoDeadline(timeoutMs: number): UcVideoDeadline {
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const deadline: UcVideoDeadline = {
+    startedAt,
+    controller,
+    deadlineAt: startedAt + timeoutMs,
+    timer: undefined as unknown as ReturnType<typeof setTimeout>,
+    timedOut: false,
+    remainingMs() {
+      return Math.max(0, this.deadlineAt - Date.now());
+    },
+    tighten(nextTimeoutMs) {
+      this.deadlineAt = Math.min(this.deadlineAt, this.startedAt + nextTimeoutMs);
+      arm();
+    },
+    dispose() {
+      clearTimeout(this.timer);
+    },
+  };
+
+  const arm = () => {
+    clearTimeout(deadline.timer);
+    const remaining = deadline.deadlineAt - Date.now();
+    deadline.timer = setTimeout(
+      () => {
+        deadline.timedOut = true;
+        controller.abort(new UcVideoDeadlineError());
+      },
+      Math.max(0, remaining)
+    );
+  };
+  arm();
+  return deadline;
+}
+
+/** Race work, including body reads and injected sleeps, against server/caller cancellation. */
+async function withinUcVideoDeadline<T>(
+  deadline: UcVideoDeadline,
+  operation: (signal: AbortSignal) => Promise<T>,
+  callerSignal?: AbortSignal
+): Promise<T> {
+  if (deadline.timedOut || deadline.remainingMs() <= 0) {
+    deadline.timedOut = true;
+    deadline.controller.abort(new UcVideoDeadlineError());
+    throw new UcVideoDeadlineError();
+  }
+  if (callerSignal?.aborted) throw new UcVideoCallerAbortError();
+
+  const operationController = new AbortController();
+  let rejectStopped: (error: Error) => void = () => {};
+  const stopped = new Promise<never>((_resolve, reject) => {
+    rejectStopped = reject;
+  });
+  const onDeadline = () => {
+    operationController.abort(new UcVideoDeadlineError());
+    rejectStopped(new UcVideoDeadlineError());
+  };
+  const onCallerAbort = () => {
+    operationController.abort(new UcVideoCallerAbortError());
+    rejectStopped(new UcVideoCallerAbortError());
+  };
+  deadline.controller.signal.addEventListener("abort", onDeadline, { once: true });
+  callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+
+  try {
+    if (deadline.controller.signal.aborted) onDeadline();
+    if (callerSignal?.aborted) onCallerAbort();
+    const work = operationController.signal.aborted
+      ? stopped
+      : Promise.resolve().then(() => operation(operationController.signal));
+    const result = await Promise.race([work, stopped]);
+    if (deadline.timedOut || deadline.remainingMs() <= 0) throw new UcVideoDeadlineError();
+    if (callerSignal?.aborted) throw new UcVideoCallerAbortError();
+    return result;
+  } finally {
+    deadline.controller.signal.removeEventListener("abort", onDeadline);
+    callerSignal?.removeEventListener("abort", onCallerAbort);
+  }
+}
+
+function ucVideoCancelled(): UcVideoResult {
+  return { success: false, status: 499, terminal: true, error: "Request aborted" };
+}
+
+function ucVideoTimedOut(error: string): UcVideoResult {
+  return { success: false, status: 504, terminal: true, error };
+}
+
+function ucVideoPreSubmitTimeout(error: string): UcVideoResult {
+  return { success: false, status: 504, error };
+}
+
+function isCallerAbort(error: unknown): boolean {
+  return error instanceof UcVideoCallerAbortError;
+}
+
+function isDeadlineError(error: unknown): boolean {
+  return error instanceof UcVideoDeadlineError;
+}
+
 /** Poll the pre-determined persona result URL with HEAD until HTTP 200, or time out. */
 async function pollUcVideoUrl(
   url: string,
-  timeoutMs: number,
+  deadline: UcVideoDeadline,
   pollIntervalMs: number,
   fetchImpl: typeof fetch,
   sleepImpl: SleepImpl,
-  signal: AbortSignal | undefined,
   log?: UcVideoLog | null
 ): Promise<UcPollOutcome> {
-  const deadline = Date.now() + timeoutMs;
   let attempt = 0;
-  // Poll at least once even when timeoutMs is 0; also cap no-delay sleepers.
-  do {
-    if (signal?.aborted) return { state: "failed", status: 499, error: "Request aborted" };
+  while (deadline.remainingMs() > 0) {
     attempt += 1;
     let resp: Response;
     try {
-      resp = await withUcPollTimeout(
-        (pollSignal) => fetchImpl(url, { method: "HEAD", redirect: "error", signal: pollSignal }),
-        Math.max(100, Math.min(15_000, deadline - Date.now())),
-        signal
+      resp = await withinUcVideoDeadline(deadline, (pollSignal) =>
+        fetchImpl(url, { method: "HEAD", redirect: "error", signal: pollSignal })
       );
     } catch (err) {
-      if (signal?.aborted) return { state: "failed", status: 499, error: "Request aborted" };
       return {
         state: "failed",
-        status: err instanceof UcPollTimeoutError ? 504 : 502,
-        error:
-          err instanceof UcPollTimeoutError
-            ? "UC video result polling request timed out"
-            : "UC video result polling request failed",
+        status: isDeadlineError(err) ? 504 : 502,
+        error: isDeadlineError(err)
+          ? "UC video generation timed out waiting for a result"
+          : "UC video result polling request failed",
       };
     }
-    if (signal?.aborted) return { state: "failed", status: 499, error: "Request aborted" };
     if (resp.status >= 200 && resp.status < 300) return { state: "ready" };
     // 403/404 = not ready yet; anything else is a hard failure.
     if (resp.status !== 403 && resp.status !== 404) {
@@ -339,11 +466,15 @@ async function pollUcVideoUrl(
       };
     }
     log?.info?.("VIDEO", `uc-video result pending, poll #${attempt} in ${pollIntervalMs}ms`);
-    if (attempt >= UC_MAX_POLL_ATTEMPTS || Date.now() + pollIntervalMs >= deadline) break;
-    if (!(await waitForUcPoll(pollIntervalMs, sleepImpl, signal))) {
-      return { state: "failed", status: 499, error: "Request aborted" };
+    if (attempt >= UC_VIDEO_MAX_POLL_ATTEMPTS) break;
+    try {
+      const waitMs = Math.min(pollIntervalMs, deadline.remainingMs());
+      if (waitMs <= 0) break;
+      await withinUcVideoDeadline(deadline, () => sleepImpl(waitMs));
+    } catch {
+      break;
     }
-  } while (Date.now() < deadline);
+  }
 
   return {
     state: "failed",
@@ -359,7 +490,8 @@ interface PersonaContext {
   credentials: UcVideoCredentials;
   prompt: string;
   log?: UcVideoLog | null;
-  signal?: AbortSignal;
+  callerSignal?: AbortSignal;
+  deadline: UcVideoDeadline;
   fetchImpl: typeof fetch;
   sleepImpl: SleepImpl;
 }
@@ -370,7 +502,18 @@ interface PersonaContext {
  * pre-determined result URL until it returns 200.
  */
 async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult> {
-  const { model, provider, body, credentials, prompt, log, signal, fetchImpl, sleepImpl } = ctx;
+  const {
+    model,
+    provider,
+    body,
+    credentials,
+    prompt,
+    log,
+    callerSignal,
+    deadline,
+    fetchImpl,
+    sleepImpl,
+  } = ctx;
 
   const cred = resolveUcCredential(credentials?.providerSpecificData);
   if (!cred) {
@@ -382,12 +525,26 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     };
   }
 
-  const mint = await mintUcSessionToken({
-    sid: cred.sid,
-    cookies: cred.cookies,
-    fetchImpl,
-    signal,
-  });
+  let mint: Awaited<ReturnType<typeof mintUcSessionToken>>;
+  try {
+    mint = await withinUcVideoDeadline(
+      deadline,
+      (signal) =>
+        mintUcSessionToken({
+          sid: cred.sid,
+          cookies: cred.cookies,
+          fetchImpl,
+          signal,
+        }),
+      callerSignal
+    );
+  } catch (err) {
+    if (isCallerAbort(err)) return ucVideoCancelled();
+    if (isDeadlineError(err))
+      return ucVideoPreSubmitTimeout("UC video generation timed out before submit");
+    return { success: false, status: 502, error: "UC Clerk token mint failed", retryable: true };
+  }
+  if (callerSignal?.aborted) return ucVideoCancelled();
   if (!mint.ok || !mint.token) {
     return {
       success: false,
@@ -414,8 +571,19 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
 
   if (inputImage) {
     // Image-to-video: (1) signed URL, (2) PUT bytes, (3) generate.
-    const bytes = await resolveImageBytes(inputImage, signal);
-    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await withinUcVideoDeadline(
+        deadline,
+        (signal) => resolveImageBytes(inputImage, signal),
+        callerSignal
+      );
+    } catch (err) {
+      if (isCallerAbort(err)) return ucVideoCancelled();
+      if (isDeadlineError(err))
+        return ucVideoPreSubmitTimeout("UC video generation timed out preparing input");
+      bytes = null;
+    }
     if (!bytes) {
       return {
         success: false,
@@ -425,15 +593,42 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     }
 
     const signedBody = { content_type: "image/png", user_identifier: cred.uid };
-    let signedResp: Response;
+    let signedResult: {
+      status: number;
+      ok: boolean;
+      detail?: string;
+      json?: unknown;
+      invalidJson?: boolean;
+    };
     try {
-      signedResp = await fetchImpl(UC_PERSONA_SIGNED_URL, {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify(signedBody),
-        signal,
-      });
+      signedResult = await withinUcVideoDeadline(
+        deadline,
+        async (signal) => {
+          const response = await fetchImpl(UC_PERSONA_SIGNED_URL, {
+            method: "POST",
+            headers: authHeaders,
+            body: JSON.stringify(signedBody),
+            signal,
+          });
+          if (!response.ok) {
+            return {
+              status: response.status,
+              ok: false,
+              detail: (await response.text().catch(() => "")).slice(0, 500),
+            };
+          }
+          try {
+            return { status: response.status, ok: true, json: await response.json() };
+          } catch {
+            return { status: response.status, ok: true, invalidJson: true };
+          }
+        },
+        callerSignal
+      );
     } catch (err) {
+      if (isCallerAbort(err)) return ucVideoCancelled();
+      if (isDeadlineError(err))
+        return ucVideoPreSubmitTimeout("UC video generation timed out requesting an upload URL");
       const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
       log?.error?.(
         "VIDEO",
@@ -441,21 +636,18 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
       );
       return { success: false, status: 502, error: errorText };
     }
-    if (!signedResp.ok) {
-      const detail = (await signedResp.text().catch(() => "")).slice(0, 500);
+    if (!signedResult.ok) {
       return {
         success: false,
-        status: signedResp.status,
-        error: detail || `UC signed-url request failed (HTTP ${signedResp.status})`,
-        retryable: signedResp.status === 401 || signedResp.status === 403,
+        status: signedResult.status,
+        error: signedResult.detail || `UC signed-url request failed (HTTP ${signedResult.status})`,
+        retryable: signedResult.status === 401 || signedResult.status === 403,
       };
     }
-    let signedJson: unknown;
-    try {
-      signedJson = await signedResp.json();
-    } catch {
+    if (signedResult.invalidJson) {
       return { success: false, status: 502, error: "UC signed-url returned a non-JSON response" };
     }
+    const signedJson = signedResult.json;
     const signedRec = (signedJson && typeof signedJson === "object" ? signedJson : {}) as Record<
       string,
       unknown
@@ -469,7 +661,7 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
         error: "UC signed-url response missing signed_url or blob_name",
       };
     }
-    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
+    if (callerSignal?.aborted) return ucVideoCancelled();
     let signedUrl: string;
     let blobName: string;
     try {
@@ -484,29 +676,42 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     // plain ArrayBuffer (not a possibly-shared buffer view).
     const putBody = new Uint8Array(bytes.byteLength);
     putBody.set(bytes);
-    let putResp: Response;
+    let putResult: { ok: boolean; status: number };
     try {
-      putResp = await fetchImpl(signedUrl, {
-        method: "PUT",
-        redirect: "error",
-        headers: { "Content-Type": "image/png" },
-        body: putBody,
-        signal,
-      });
-    } catch {
+      putResult = await withinUcVideoDeadline(
+        deadline,
+        async (signal) => {
+          const response = await fetchImpl(signedUrl, {
+            method: "PUT",
+            redirect: "error",
+            headers: { "Content-Type": "image/png" },
+            body: putBody,
+            signal,
+          });
+          // This response is used only for its status; discard any payload so
+          // a provider error body cannot pin the connection while we return.
+          void response.body?.cancel().catch(() => {});
+          return { ok: response.ok, status: response.status };
+        },
+        callerSignal
+      );
+    } catch (err) {
+      if (isCallerAbort(err)) return ucVideoCancelled();
+      if (isDeadlineError(err))
+        return ucVideoPreSubmitTimeout("UC video generation timed out uploading the input image");
       // Fetch exceptions can contain the signed query; never echo the token.
       log?.error?.("VIDEO", `${provider} uc-video (persona) upload transport error`);
       return { success: false, status: 502, error: "UC input-image upload transport failed" };
     }
-    if (!putResp.ok) {
+    if (!putResult.ok) {
       return {
         success: false,
-        status: putResp.status,
-        error: `UC input-image upload failed (HTTP ${putResp.status})`,
+        status: putResult.status,
+        error: `UC input-image upload failed (HTTP ${putResult.status})`,
       };
     }
 
-    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
+    if (callerSignal?.aborted) return ucVideoCancelled();
     genUrl = UC_PERSONA_IMAGE_TO_VIDEO_URL;
     requestBody = buildUcPersonaVideoBody(prompt, canonicalModel, body, blobName);
   } else {
@@ -515,45 +720,95 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
     requestBody = buildUcPersonaVideoBody(prompt, canonicalModel, body, null);
   }
 
-  let genResp: Response;
+  if (callerSignal?.aborted) return ucVideoCancelled();
+
+  let genResult: {
+    status: number;
+    ok: boolean;
+    detail?: string;
+    json?: unknown;
+    invalidJson?: boolean;
+  };
+  let knownRejectedStatus: number | undefined;
   try {
-    genResp = await fetchImpl(genUrl, {
-      method: "POST",
-      headers: authHeaders,
-      body: JSON.stringify(requestBody),
-      signal,
+    // Once this POST is dispatched, caller disconnects must not abort an
+    // ambiguous/accepted provider operation. Only the server deadline applies.
+    genResult = await withinUcVideoDeadline(deadline, async (signal) => {
+      if (callerSignal?.aborted) throw new UcVideoCallerAbortError();
+      const response = await fetchImpl(genUrl, {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify(requestBody),
+        signal,
+      });
+      if (!response.ok) {
+        knownRejectedStatus = response.status;
+        return {
+          status: response.status,
+          ok: false,
+          detail: (await response.text().catch(() => "")).slice(0, 500),
+        };
+      }
+      try {
+        return { status: response.status, ok: true, json: await response.json() };
+      } catch {
+        return { status: response.status, ok: true, invalidJson: true };
+      }
     });
   } catch (err) {
+    if (callerSignal?.aborted) return ucVideoCancelled();
+    if (isDeadlineError(err)) {
+      if (knownRejectedStatus !== undefined) {
+        return {
+          success: false,
+          status: knownRejectedStatus,
+          error: `UC persona video generation failed (HTTP ${knownRejectedStatus}; error body timed out)`,
+          retryable: [401, 403, 429].includes(knownRejectedStatus),
+          ...(knownRejectedStatus === 408 || knownRejectedStatus >= 500 ? { terminal: true } : {}),
+        };
+      }
+      return ucVideoTimedOut("UC video generation timed out during submit");
+    }
     const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
     log?.error?.("VIDEO", `${provider} uc-video (persona) generate transport error: ${errorText}`);
-    return { success: false, status: 502, error: errorText };
+    // A transport failure after dispatch cannot prove the generation was not
+    // accepted, so another account/provider must not replay this prompt.
+    return { success: false, status: 502, terminal: true, error: errorText };
   }
-  if (!genResp.ok) {
-    const detail = (await genResp.text().catch(() => "")).slice(0, 500);
+  if (!genResult.ok) {
+    if (callerSignal?.aborted) return ucVideoCancelled();
+    const possiblyAccepted = genResult.status === 408 || genResult.status >= 500;
     log?.error?.(
       "VIDEO",
-      `${provider} uc-video (persona) generate error ${genResp.status}: ${detail}`
+      `${provider} uc-video (persona) generate error ${genResult.status}: ${genResult.detail}`
     );
     return {
       success: false,
-      status: genResp.status,
-      error: detail || `UC persona video generation failed (HTTP ${genResp.status})`,
-      retryable: genResp.status === 401 || genResp.status === 403,
+      status: genResult.status,
+      error: genResult.detail || `UC persona video generation failed (HTTP ${genResult.status})`,
+      retryable: genResult.status === 401 || genResult.status === 403 || genResult.status === 429,
+      ...(possiblyAccepted ? { terminal: true } : {}),
     };
   }
 
-  let genJson: unknown;
-  try {
-    genJson = await genResp.json();
-  } catch {
-    return { success: false, status: 502, error: "UC persona returned a non-JSON video response" };
-  }
-  const genRec = (genJson && typeof genJson === "object" ? genJson : {}) as Record<string, unknown>;
-  const rawResultUrl = typeof genRec.url === "string" ? genRec.url : "";
-  if (!rawResultUrl) {
+  if (genResult.invalidJson) {
+    if (callerSignal?.aborted) return ucVideoCancelled();
     return {
       success: false,
       status: 502,
+      terminal: true,
+      error: "UC persona returned a non-JSON video response",
+    };
+  }
+  const genJson = genResult.json;
+  const genRec = (genJson && typeof genJson === "object" ? genJson : {}) as Record<string, unknown>;
+  const rawResultUrl = typeof genRec.url === "string" ? genRec.url : "";
+  if (!rawResultUrl) {
+    if (callerSignal?.aborted) return ucVideoCancelled();
+    return {
+      success: false,
+      status: 502,
+      terminal: true,
       error: "UC persona video response carried no result url",
     };
   }
@@ -561,39 +816,42 @@ async function handleUcPersonaVideo(ctx: PersonaContext): Promise<UcVideoResult>
   try {
     resultUrl = validateUcRemoteUrl(rawResultUrl, "video-result").toString();
   } catch {
-    return { success: false, status: 502, error: "UC persona video result URL is not allowed" };
+    if (callerSignal?.aborted) return ucVideoCancelled();
+    return {
+      success: false,
+      status: 502,
+      terminal: true,
+      error: "UC persona video result URL is not allowed",
+    };
   }
   const requestId = typeof genRec.request_id === "string" ? genRec.request_id : undefined;
   const timeoutSeconds = Number(genRec.timeout_seconds);
 
-  const defaultTimeoutMs =
-    Number.isFinite(timeoutSeconds) && timeoutSeconds > 0
-      ? Math.min(timeoutSeconds * 1000, UC_POLL_TIMEOUT_MS_DEFAULT)
-      : boundedUcPollMs(
-          process.env.UC_VIDEO_POLL_TIMEOUT_MS,
-          UC_POLL_TIMEOUT_MS_DEFAULT,
-          UC_POLL_TIMEOUT_MS_DEFAULT
-        );
-  const timeoutMs = boundedUcPollMs(body.timeout_ms, defaultTimeoutMs, UC_POLL_TIMEOUT_MS_DEFAULT);
-  const pollIntervalMs = boundedUcPollMs(
-    body.poll_interval_ms,
-    boundedUcPollMs(process.env.UC_VIDEO_POLL_INTERVAL_MS, UC_POLL_INTERVAL_MS_DEFAULT, 30_000),
-    30_000
+  if (Number.isFinite(timeoutSeconds) && timeoutSeconds > 0) {
+    deadline.tighten(Math.min(timeoutSeconds * 1000, UC_POLL_TIMEOUT_MS_DEFAULT));
+  }
+  const pollIntervalMs = Math.max(
+    UC_VIDEO_MIN_POLL_INTERVAL_MS,
+    boundedUcPollMs(
+      body.poll_interval_ms,
+      boundedUcPollMs(process.env.UC_VIDEO_POLL_INTERVAL_MS, UC_POLL_INTERVAL_MS_DEFAULT, 30_000),
+      30_000
+    )
   );
 
-  const poll = await pollUcVideoUrl(
-    resultUrl,
-    timeoutMs,
-    pollIntervalMs,
-    fetchImpl,
-    sleepImpl,
-    signal,
-    log
-  );
+  const poll = await pollUcVideoUrl(resultUrl, deadline, pollIntervalMs, fetchImpl, sleepImpl, log);
   if (poll.state === "failed") {
+    if (callerSignal?.aborted) return ucVideoCancelled();
     log?.error?.("VIDEO", `${provider} uc-video (persona) poll ${poll.status}: ${poll.error}`);
-    return { success: false, status: poll.status, error: poll.error };
+    return {
+      success: false,
+      status: poll.status,
+      terminal: true,
+      error: poll.error,
+    };
   }
+
+  if (callerSignal?.aborted) return ucVideoCancelled();
 
   return {
     success: true,
@@ -611,7 +869,8 @@ interface DirectContext {
   credentials: UcVideoCredentials;
   prompt: string;
   log?: UcVideoLog | null;
-  signal?: AbortSignal;
+  callerSignal?: AbortSignal;
+  deadline: UcVideoDeadline;
   fetchImpl: typeof fetch;
   sleepImpl: SleepImpl;
 }
@@ -622,7 +881,18 @@ interface DirectContext {
  * or return the job id when the backend is callback-only.
  */
 async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
-  const { model, provider, body, credentials, prompt, log, signal, fetchImpl, sleepImpl } = ctx;
+  const {
+    model,
+    provider,
+    body,
+    credentials,
+    prompt,
+    log,
+    callerSignal,
+    deadline,
+    fetchImpl,
+    sleepImpl,
+  } = ctx;
 
   const apiKey = typeof credentials.apiKey === "string" ? credentials.apiKey.trim() : "";
   const canonicalModel = resolveUcVideoModel(model);
@@ -643,51 +913,102 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
     "Content-Type": "application/json",
   };
 
-  let resp: Response;
+  if (callerSignal?.aborted) return ucVideoCancelled();
+
+  let submitResult: {
+    status: number;
+    ok: boolean;
+    detail?: string;
+    json?: unknown;
+    invalidJson?: boolean;
+  };
+  let knownRejectedStatus: number | undefined;
   try {
-    resp = await fetchImpl(UC_DIRECT_VIDEO_URL, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody),
-      signal,
+    // Do not link the caller's disconnect to a dispatched create-job POST.
+    // The provider may have accepted the job even if the client goes away.
+    submitResult = await withinUcVideoDeadline(deadline, async (signal) => {
+      if (callerSignal?.aborted) throw new UcVideoCallerAbortError();
+      const response = await fetchImpl(UC_DIRECT_VIDEO_URL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal,
+      });
+      if (!response.ok) {
+        knownRejectedStatus = response.status;
+        return {
+          status: response.status,
+          ok: false,
+          detail: (await response.text().catch(() => "")).slice(0, 500),
+        };
+      }
+      try {
+        return { status: response.status, ok: true, json: await response.json() };
+      } catch {
+        return { status: response.status, ok: true, invalidJson: true };
+      }
     });
   } catch (err) {
+    if (callerSignal?.aborted) return ucVideoCancelled();
+    if (isDeadlineError(err) && knownRejectedStatus !== undefined) {
+      return {
+        success: false,
+        status: knownRejectedStatus,
+        error: `UC direct video generation failed (HTTP ${knownRejectedStatus}; error body timed out)`,
+        ...(knownRejectedStatus === 429 ? { retryable: true } : {}),
+        ...(knownRejectedStatus === 408 || knownRejectedStatus >= 500 ? { terminal: true } : {}),
+      };
+    }
+    if (isDeadlineError(err))
+      return ucVideoTimedOut("UC direct video generation timed out during submit");
     const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
     log?.error?.("VIDEO", `${provider} uc-video (direct) transport error: ${errorText}`);
-    return { success: false, status: 502, error: errorText };
+    return { success: false, status: 502, terminal: true, error: errorText };
   }
 
-  if (!resp.ok) {
-    const detail = (await resp.text().catch(() => "")).slice(0, 500);
-    log?.error?.("VIDEO", `${provider} uc-video (direct) error ${resp.status}: ${detail}`);
+  if (!submitResult.ok) {
+    if (callerSignal?.aborted) return ucVideoCancelled();
+    log?.error?.(
+      "VIDEO",
+      `${provider} uc-video (direct) error ${submitResult.status}: ${submitResult.detail}`
+    );
     return {
       success: false,
-      status: resp.status,
-      error: detail || `UC direct video generation failed (HTTP ${resp.status})`,
+      status: submitResult.status,
+      error:
+        submitResult.detail || `UC direct video generation failed (HTTP ${submitResult.status})`,
       // 429 = rate limit (retry another account/later). 402 funds / 403 moderation
       // are non-retryable per the REST error contract.
-      ...(resp.status === 429 ? { retryable: true } : {}),
+      ...(submitResult.status === 429 ? { retryable: true } : {}),
+      ...(submitResult.status === 408 || submitResult.status >= 500 ? { terminal: true } : {}),
     };
   }
 
-  let json: unknown;
-  try {
-    json = await resp.json();
-  } catch {
-    return { success: false, status: 502, error: "UC direct returned a non-JSON video response" };
-  }
-
-  let extracted = extractUcDirectVideo(json);
-  if (isDirectFailed(extracted.status)) {
+  if (submitResult.invalidJson) {
+    if (callerSignal?.aborted) return ucVideoCancelled();
     return {
       success: false,
       status: 502,
+      terminal: true,
+      error: "UC direct returned a non-JSON video response",
+    };
+  }
+  const json = submitResult.json;
+
+  let extracted = extractUcDirectVideo(json);
+  if (isDirectFailed(extracted.status)) {
+    if (callerSignal?.aborted) return ucVideoCancelled();
+    return {
+      success: false,
+      status: 502,
+      retryable: true,
       error: `UC direct video job failed (status: ${extracted.status})`,
     };
   }
 
   // Already complete (sync-ish response carrying a url).
   if (isDirectComplete(extracted.status, extracted.url) && extracted.url) {
+    if (callerSignal?.aborted) return ucVideoCancelled();
     return buildDirectSuccess(extracted.url, extracted.requestId, extracted.status);
   }
 
@@ -695,6 +1016,7 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
   // can reconcile via its own callback.
   if (!extracted.statusUrl) {
     if (extracted.requestId) {
+      if (callerSignal?.aborted) return ucVideoCancelled();
       return {
         success: true,
         data: {
@@ -709,9 +1031,11 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
         },
       };
     }
+    if (callerSignal?.aborted) return ucVideoCancelled();
     return {
       success: false,
       status: 502,
+      terminal: true,
       error: "UC direct video job returned no url, status_url, or job id",
     };
   }
@@ -721,96 +1045,99 @@ async function handleUcDirectVideo(ctx: DirectContext): Promise<UcVideoResult> {
   try {
     statusUrl = validateUcRemoteUrl(extracted.statusUrl, "direct-status").toString();
   } catch {
-    return { success: false, status: 502, error: "UC direct status URL is not allowed" };
+    if (callerSignal?.aborted) return ucVideoCancelled();
+    return {
+      success: false,
+      status: 502,
+      terminal: true,
+      error: "UC direct status URL is not allowed",
+    };
   }
-  const timeoutMs = boundedUcPollMs(
-    body.timeout_ms,
-    UC_POLL_TIMEOUT_MS_DEFAULT,
-    UC_POLL_TIMEOUT_MS_DEFAULT
+  const pollIntervalMs = Math.max(
+    UC_VIDEO_MIN_POLL_INTERVAL_MS,
+    boundedUcPollMs(body.poll_interval_ms, UC_POLL_INTERVAL_MS_DEFAULT, 30_000)
   );
-  const pollIntervalMs = boundedUcPollMs(
-    body.poll_interval_ms,
-    UC_POLL_INTERVAL_MS_DEFAULT,
-    30_000
-  );
-  const deadline = Date.now() + timeoutMs;
   let attempt = 0;
-  do {
-    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
+  while (deadline.remainingMs() > 0) {
     attempt += 1;
     let statusPoll: { response: Response; json?: unknown; invalidJson?: boolean };
     try {
-      statusPoll = await withUcPollTimeout(
-        async (pollSignal) => {
-          const response = await fetchImpl(statusUrl, {
-            method: "GET",
-            redirect: "error",
-            headers: { "X-api-key": apiKey },
-            signal: pollSignal,
-          });
-          if (!response.ok || response.status >= 300) return { response };
-          try {
-            // Keep one abort signal active through the response body read.
-            return { response, json: await response.json() };
-          } catch {
-            return { response, invalidJson: true };
-          }
-        },
-        Math.max(100, Math.min(15_000, deadline - Date.now())),
-        signal
-      );
+      statusPoll = await withinUcVideoDeadline(deadline, async (pollSignal) => {
+        const response = await fetchImpl(statusUrl, {
+          method: "GET",
+          redirect: "error",
+          headers: { "X-api-key": apiKey },
+          signal: pollSignal,
+        });
+        if (!response.ok || response.status >= 300) {
+          void response.body?.cancel().catch(() => {});
+          return { response };
+        }
+        try {
+          // Keep one abort signal active through the response body read.
+          return { response, json: await response.json() };
+        } catch {
+          return { response, invalidJson: true };
+        }
+      });
     } catch (err) {
-      if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
+      if (callerSignal?.aborted) return ucVideoCancelled();
       return {
         success: false,
-        status: err instanceof UcPollTimeoutError ? 504 : 502,
-        error:
-          err instanceof UcPollTimeoutError
-            ? "UC direct status polling request timed out"
-            : "UC direct status polling request failed",
+        status: isDeadlineError(err) ? 504 : 502,
+        terminal: true,
+        error: isDeadlineError(err)
+          ? "UC direct video generation timed out waiting for a result"
+          : "UC direct status polling request failed",
       };
     }
-    if (signal?.aborted) return { success: false, status: 499, error: "Request aborted" };
     const statusResp = statusPoll.response;
     if (!statusResp.ok || statusResp.status >= 300) {
+      if (callerSignal?.aborted) return ucVideoCancelled();
       return {
         success: false,
         status: statusResp.status,
+        terminal: true,
         error: `UC direct status poll failed (HTTP ${statusResp.status})`,
-        ...(statusResp.status === 429 ? { retryable: true } : {}),
       };
     }
     if (statusPoll.invalidJson) {
+      if (callerSignal?.aborted) return ucVideoCancelled();
       return {
         success: false,
         status: 502,
+        terminal: true,
         error: "UC direct status poll returned a non-JSON response",
       };
     }
     const statusJson = statusPoll.json;
     extracted = extractUcDirectVideo(statusJson);
     if (isDirectFailed(extracted.status)) {
+      if (callerSignal?.aborted) return ucVideoCancelled();
       return {
         success: false,
         status: 502,
+        retryable: true,
         error: `UC direct video job failed (status: ${extracted.status})`,
       };
     }
     if (isDirectComplete(extracted.status, extracted.url) && extracted.url) {
+      if (callerSignal?.aborted) return ucVideoCancelled();
       return buildDirectSuccess(extracted.url, extracted.requestId, extracted.status);
     }
     log?.info?.("VIDEO", `uc-video (direct) job pending, poll #${attempt} in ${pollIntervalMs}ms`);
-    if (attempt >= UC_MAX_POLL_ATTEMPTS || Date.now() + pollIntervalMs >= deadline) break;
-    if (!(await waitForUcPoll(pollIntervalMs, sleepImpl, signal))) {
-      return { success: false, status: 499, error: "Request aborted" };
+    if (attempt >= UC_VIDEO_MAX_POLL_ATTEMPTS) break;
+    try {
+      const waitMs = Math.min(pollIntervalMs, deadline.remainingMs());
+      if (waitMs <= 0) break;
+      await withinUcVideoDeadline(deadline, () => sleepImpl(waitMs));
+    } catch {
+      break;
     }
-  } while (Date.now() < deadline);
+  }
 
-  return {
-    success: false,
-    status: 504,
-    error: "UC direct video generation timed out waiting for a result",
-  };
+  if (callerSignal?.aborted) return ucVideoCancelled();
+  return ucVideoTimedOut("UC direct video generation timed out waiting for a result");
 }
 
 function buildDirectSuccess(url: string, requestId?: string, status?: string): UcVideoResult {
@@ -843,41 +1170,64 @@ export async function handleUcVideoGeneration({
   prompt: promptArg,
   log,
   signal,
+  callerSignal,
   fetchImpl = fetch,
   sleepImpl = realSleep,
 }: UcVideoHandlerArgs): Promise<UcVideoResult> {
+  const clientSignal = callerSignal ?? signal;
+  const defaultTimeoutMs = boundedUcPollMs(
+    process.env.UC_VIDEO_POLL_TIMEOUT_MS,
+    UC_POLL_TIMEOUT_MS_DEFAULT,
+    UC_POLL_TIMEOUT_MS_DEFAULT
+  );
+  const timeoutMs = boundedUcPollMs(body.timeout_ms, defaultTimeoutMs, UC_POLL_TIMEOUT_MS_DEFAULT);
+  const deadline = createUcVideoDeadline(timeoutMs);
+
   const prompt =
     typeof promptArg === "string" && promptArg.trim()
       ? promptArg.trim()
       : typeof body.prompt === "string"
         ? body.prompt.trim()
         : "";
-  if (!prompt) {
-    return { success: false, status: 400, error: "Prompt is required for UC video generation" };
-  }
+  try {
+    if (!prompt) {
+      return { success: false, status: 400, error: "Prompt is required for UC video generation" };
+    }
+    if (clientSignal?.aborted) return ucVideoCancelled();
 
-  if (isUcDirectVideoCredential(credentials)) {
-    return handleUcDirectVideo({
+    if (isUcDirectVideoCredential(credentials)) {
+      return await handleUcDirectVideo({
+        model,
+        provider,
+        body,
+        credentials,
+        prompt,
+        log,
+        callerSignal: clientSignal,
+        deadline,
+        fetchImpl,
+        sleepImpl,
+      });
+    }
+    return await handleUcPersonaVideo({
       model,
       provider,
       body,
       credentials,
       prompt,
       log,
-      signal,
+      callerSignal: clientSignal,
+      deadline,
       fetchImpl,
       sleepImpl,
     });
+  } catch (err) {
+    if (clientSignal?.aborted || isCallerAbort(err)) return ucVideoCancelled();
+    if (isDeadlineError(err)) return ucVideoTimedOut("UC video generation deadline exceeded");
+    const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
+    log?.error?.("VIDEO", `${provider} uc-video unexpected error: ${errorText}`);
+    return { success: false, status: 502, terminal: true, error: errorText };
+  } finally {
+    deadline.dispose();
   }
-  return handleUcPersonaVideo({
-    model,
-    provider,
-    body,
-    credentials,
-    prompt,
-    log,
-    signal,
-    fetchImpl,
-    sleepImpl,
-  });
 }
