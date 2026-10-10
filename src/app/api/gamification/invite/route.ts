@@ -59,7 +59,10 @@ export async function POST(request: NextRequest) {
     parsed.data.maxUses
   );
 
-  return NextResponse.json({ code, token }, { status: 201, headers: CORS_HEADERS });
+  return NextResponse.json({ code, token }, {
+    status: 201,
+    headers: { ...CORS_HEADERS, "Cache-Control": "no-store" },
+  });
 }
 
 export async function DELETE(request: NextRequest) {

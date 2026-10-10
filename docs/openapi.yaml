@@ -21544,18 +21544,39 @@ paths:
       tags:
         - Gamification
       summary: "DELETE gamification › invite"
-      description: Revokes an invite by its ID. A missing ID returns HTTP 400.
+      description: >-
+        Revokes an invite by its ID; a missing ID returns HTTP 400. Authentication is conditional
+        management access, not explicit public access: locked installs require a management
+        credential, while `requireLogin=false` bypasses the requirement and first-run bootstrap
+        without configured credentials is loopback-only. Management API keys require `manage` or
+        `admin`; scoped `oma_` access tokens use method-derived scopes (`write` for DELETE).
       parameters:
         - name: id
           in: query
           required: true
           schema: { type: string, minLength: 1 }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Invite revocation completed.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "400":
+          description: Required invite ID is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     get:
       operationId: getApiGamificationInvite
       tags:
@@ -21563,18 +21584,42 @@ paths:
       summary: "GET gamification › invite"
       description: >-
         Lists invite records created by an API key. The returned `code` can redeem an invite and
-        is sensitive; plaintext redemption tokens are not included in list records.
+        is sensitive; plaintext redemption tokens are not included in list records. The requested
+        `apiKeyId` is not bound to the caller identity. Authentication is conditional management
+        access, not explicit public access: locked installs require a management credential, while
+        `requireLogin=false` bypasses the requirement and first-run bootstrap without configured
+        credentials is loopback-only. Management API keys require `manage` or `admin`; scoped `oma_`
+        access tokens use method-derived `read` scope for GET.
       parameters:
         - name: apiKeyId
           in: query
           required: true
+          description: API key identifier; treat as sensitive account metadata.
+          x-sensitive: true
           schema: { type: string, minLength: 1 }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Invite records created by the requested API key.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationInviteListResponse" }
+        "400":
+          description: Required API key ID is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiGamificationInvite
       tags:
@@ -21582,37 +21627,83 @@ paths:
       summary: "POST gamification › invite"
       description: >-
         Creates an invite and returns its eight-character redemption code and one-time plaintext
-        token. Both returned values are sensitive; the token is stored only as a hash.
+        token. Both returned values are sensitive; the token is stored only as a hash. Authentication
+        is conditional management access, not explicit public access: locked installs require a
+        management credential, while `requireLogin=false` bypasses the requirement and first-run
+        bootstrap without configured credentials is loopback-only. Management API keys require
+        `manage` or `admin`; scoped `oma_` access tokens use method-derived `write` scope for POST.
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/GamificationInviteCreateRequest" }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "201":
           description: Invite created; the redemption code and plaintext token are returned once.
           x-sensitive: true
+          headers:
+            Cache-Control:
+              description: Prevents storage of the one-time invite code and plaintext redemption token.
+              schema: { type: string, const: no-store }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationInviteCreatedResponse" }
+        "400":
+          description: Invalid JSON body or invite parameters; validation details may be included.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/gamification/invite/redeem:
     post:
       operationId: postApiGamificationInviteRedeem
       tags:
         - Gamification
       summary: "POST gamification › invite › redeem"
-      description: Redeems an invite code for an API key. The request code is sensitive.
+      description: >-
+        Redeems an invite code for an API key; the request code and API key ID are sensitive. The
+        invite code alone does not replace management auth when the instance is locked. Authentication
+        is conditional management access, not explicit public access: locked installs require a
+        management credential, while `requireLogin=false` bypasses the requirement and first-run
+        bootstrap without configured credentials is loopback-only. Management API keys require
+        `manage` or `admin`; scoped `oma_` access tokens use method-derived `write` scope for POST.
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/GamificationInviteRedeemRequest" }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Invite redeemed; `serverUrl` is omitted when no URL was attached.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationInviteRedeemResponse" }
+        "400":
+          description: Invalid request or invite code rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/gamification/leaderboard:
     get:
       operationId: getApiGamificationLeaderboard
@@ -21622,7 +21713,12 @@ paths:
       description: >-
         Returns the leaderboard with API key display names for the management dashboard. Names
         are nullable when a leaderboard row has no matching API key. When `apiKeyId` is supplied,
-        the response also includes that key's rank and neighboring entries.
+        the response also includes that key's rank and neighboring entries; the supplied ID is
+        not bound to the caller identity. API key IDs, display names, scores, and ranks are sensitive.
+        Authentication is conditional management access, not explicit public access: locked installs
+        require a management credential, while `requireLogin=false` bypasses the requirement and
+        first-run bootstrap without configured credentials is loopback-only. Management API keys
+        require `manage` or `admin`; scoped `oma_` access tokens use method-derived `read` scope for GET.
       parameters:
         - name: scope
           in: query
@@ -21636,7 +21732,17 @@ paths:
         - name: apiKeyId
           in: query
           required: false
+          description: API key identifier used to look up rank and neighbors; treat as sensitive account metadata.
+          x-sensitive: true
           schema: { type: string }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Leaderboard rows, optional rank neighbors, and management display names.
@@ -21644,6 +21750,14 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationLeaderboardResponse" }
+        "400":
+          description: The requested limit is outside the supported range.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/gamification/level:
     get:
       operationId: getApiGamificationLevel
@@ -21653,96 +21767,232 @@ paths:
       description: >-
         Returns one API key's XP level when `apiKeyId` is supplied, or the operator-wide aggregate
         otherwise. An unknown API key returns `level: null`; the streak object is still present.
+        The supplied API key ID and returned activity data are sensitive. Authentication is
+        conditional management access, not explicit public access: locked installs require a
+        management credential, while `requireLogin=false` bypasses the requirement and first-run
+        bootstrap without configured credentials is loopback-only. Management API keys require
+        `manage` or `admin`; scoped `oma_` access tokens use method-derived `read` scope for GET.
       parameters:
         - name: apiKeyId
           in: query
           required: false
+          description: API key identifier; treat as sensitive account metadata.
+          x-sensitive: true
           schema: { type: string }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: API key or aggregate XP level together with current and longest streaks.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationLevelResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/gamification/notifications:
     get:
       operationId: getApiGamificationNotifications
       tags:
         - Gamification
       summary: "GET gamification › notifications"
+      description: >-
+        Opens an SSE stream of badge notifications for the required `apiKeyId`. The ID and streamed
+        badge activity are sensitive, and the requested ID is not bound to caller identity.
+        Authentication is conditional management access, not explicit public access: locked installs
+        require a management credential, while `requireLogin=false` bypasses the requirement and
+        first-run bootstrap without configured credentials is loopback-only. Management API keys
+        require `manage` or `admin`; scoped `oma_` access tokens use method-derived `read` scope for GET.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: apiKeyId
+          in: query
+          required: true
+          description: API key identifier selecting the notification stream; treat as sensitive metadata.
+          x-sensitive: true
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: OK
+          description: Badge-notification SSE stream; response is no-cache and uses keep-alive.
+          x-sensitive: true
+          content:
+            text/event-stream:
+              schema: { type: string, description: UTF-8 Server-Sent Events stream. }
+        "400":
+          description: Required API key ID is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/gamification/rotate:
     post:
       operationId: postApiGamificationRotate
       tags:
         - Gamification
       summary: "POST gamification › rotate"
-      description: Archives and clears a weekly or monthly leaderboard scope.
+      description: >-
+        Archives and clears a weekly or monthly leaderboard scope. This is a state-changing
+        management operation. Authentication is conditional management access, not explicit public
+        access: locked installs require a management credential, while `requireLogin=false` bypasses
+        the requirement and first-run bootstrap without configured credentials is loopback-only.
+        Management API keys require `manage` or `admin`; scoped `oma_` access tokens use
+        method-derived `write` scope for POST.
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/GamificationRotateRequest" }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Rotation completed for the requested scope.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationRotateResponse" }
+        "400":
+          description: Scope is missing or is not weekly/monthly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "500":
+          description: The handler failed while parsing the request body or rotating the scope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/gamification/servers:
     delete:
       operationId: deleteApiGamificationServers
       tags:
         - Gamification
       summary: "DELETE gamification › servers"
-      description: Disconnects a community server by its ID.
+      description: >-
+        Disconnects a community server by its ID; this is a state-changing management operation.
+        Authentication is conditional management access, not explicit public access: locked installs
+        require a management credential, while `requireLogin=false` bypasses the requirement and
+        first-run bootstrap without configured credentials is loopback-only. Management API keys
+        require `manage` or `admin`; scoped `oma_` access tokens use method-derived `write` scope for DELETE.
       parameters:
         - name: id
           in: query
           required: true
           schema: { type: string, minLength: 1 }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Disconnection completed.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "400":
+          description: Required server ID is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     get:
       operationId: getApiGamificationServers
       tags:
         - Gamification
       summary: "GET gamification › servers"
       description: >-
-        Lists community-server connection metadata. The API key hash is excluded from the
-        projection.
+        Lists community-server connection metadata. The API key hash is excluded from the projection;
+        server URLs, status, and error details remain sensitive operational metadata. Authentication
+        is conditional management access, not explicit public access: locked installs require a
+        management credential, while `requireLogin=false` bypasses the requirement and first-run
+        bootstrap without configured credentials is loopback-only. Management API keys require
+        `manage` or `admin`; scoped `oma_` access tokens use method-derived `read` scope for GET.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Community-server connection metadata without API key hashes.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationServersResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiGamificationServers
       tags:
         - Gamification
       summary: "POST gamification › servers"
       description: >-
-        Connects to a community server. The supplied API key is hashed before storage and is never
-        returned in the created server record.
+        Connects to a community server. The supplied API key is sensitive, is hashed before storage,
+        and is never returned in the created server record. This is a state-changing management
+        operation. Authentication is conditional management access, not explicit public access:
+        locked installs require a management credential, while `requireLogin=false` bypasses the
+        requirement and first-run bootstrap without configured credentials is loopback-only.
+        Management API keys require `manage` or `admin`; scoped `oma_` access tokens use
+        method-derived `write` scope for POST.
       requestBody:
         required: true
         x-sensitive: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/GamificationServerConnectRequest" }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "201":
           description: Community server connected; credential material is omitted.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationServerConnectResponse" }
+        "400":
+          description: Invalid JSON body or server connection fields; validation details may be included.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/gamification/stream:
     get:
       operationId: getApiGamificationStream
@@ -21752,18 +22002,31 @@ paths:
       description: >-
         Streams leaderboard updates as Server-Sent Events. Each leaderboard event carries a JSON
         frame; errors are sent as `event: error` frames and heartbeats are SSE comments. Invalid
-        scopes fall back to `global`.
+        scopes fall back to `global`. API key IDs, scores, and activity are sensitive. Authentication
+        is conditional management access, not explicit public access: locked installs require a
+        management credential, while `requireLogin=false` bypasses the requirement and first-run
+        bootstrap without configured credentials is loopback-only. Management API keys require
+        `manage` or `admin`; scoped `oma_` access tokens use method-derived `read` scope for GET.
       parameters:
         - name: scope
           in: query
           required: false
           description: Known scopes are global, weekly, monthly, tokens_shared, and contributions; unknown values fall back to global.
           schema: { type: string, default: global }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: >-
             Server-Sent Events stream with an initial leaderboard frame, updates every five
             seconds, error event frames, and heartbeat comments.
+          x-sensitive: true
           content:
             text/event-stream:
               schema:
@@ -21771,18 +22034,38 @@ paths:
                 description: UTF-8 Server-Sent Events stream; heartbeat comments have no data payload.
               x-sse-event-schema:
                 $ref: "#/components/schemas/GamificationStreamEvent"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/gamification/transfer:
     get:
       operationId: getApiGamificationTransfer
       tags:
         - Gamification
       summary: "GET gamification › transfer"
-      description: Returns an API key's token balance and the latest 20 transfer ledger entries.
+      description: >-
+        Returns an API key's token balance and latest 20 transfer ledger entries. The supplied API
+        key ID is not bound to caller identity; balances, API key IDs, amounts, and transfer history
+        are sensitive. Authentication is conditional management access, not explicit public access:
+        locked installs require a management credential, while `requireLogin=false` bypasses the
+        requirement and first-run bootstrap without configured credentials is loopback-only.
+        Management API keys require `manage` or `admin`; scoped `oma_` access tokens use
+        method-derived `read` scope for GET.
       parameters:
         - name: apiKeyId
           in: query
           required: true
+          description: API key identifier whose balance and transfer history are requested; treat as sensitive metadata.
+          x-sensitive: true
           schema: { type: string, minLength: 1 }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Current balance and recent transfer history.
@@ -21790,23 +22073,56 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationTransferHistoryResponse" }
+        "400":
+          description: Required API key ID is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiGamificationTransfer
       tags:
         - Gamification
       summary: "POST gamification › transfer"
-      description: Transfers tokens between API keys and returns the generated idempotency key.
+      description: >-
+        Transfers tokens between API keys and returns a generated idempotency key. The source and
+        destination API key IDs, amount, and reason are sensitive; neither ID is bound to caller
+        identity. This is a state-changing management operation. Authentication is conditional
+        management access, not explicit public access: locked installs require a management
+        credential, while `requireLogin=false` bypasses the requirement and first-run bootstrap
+        without configured credentials is loopback-only. Management API keys require `manage` or
+        `admin`; scoped `oma_` access tokens use method-derived `write` scope for POST.
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/GamificationTransferRequest" }
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Transfer result.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationTransferResponse" }
+        "400":
+          description: Invalid JSON body, transfer fields, or ledger operation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/github-skills:
     get:
       operationId: getApiGithubSkills
@@ -62187,6 +62503,7 @@ components:
 
     GamificationInviteListResponse:
       type: object
+      x-sensitive: true
       required: [invites]
       properties:
         invites:
@@ -62196,15 +62513,24 @@ components:
 
     GamificationInviteCreateRequest:
       type: object
+      x-sensitive: true
       required: [apiKeyId]
       properties:
-        apiKeyId: { type: string, minLength: 1 }
-        serverUrl: { type: string }
+        apiKeyId:
+          type: string
+          minLength: 1
+          x-sensitive: true
+          description: API key identifier associated with the invite.
+        serverUrl:
+          type: string
+          x-sensitive: true
+          description: Optional community server URL attached to the invite.
         maxUses: { type: number, exclusiveMinimum: 0, default: 1 }
       additionalProperties: true
 
     GamificationInviteCreatedResponse:
       type: object
+      x-sensitive: true
       description: Plaintext invite credentials are returned by this create response only.
       required: [code, token]
       properties:
@@ -62220,6 +62546,7 @@ components:
 
     GamificationInviteRedeemRequest:
       type: object
+      x-sensitive: true
       required: [code, apiKeyId]
       properties:
         code:
@@ -62227,40 +62554,58 @@ components:
           minLength: 1
           writeOnly: true
           x-sensitive: true
-        apiKeyId: { type: string, minLength: 1 }
+        apiKeyId:
+          type: string
+          minLength: 1
+          x-sensitive: true
+          description: API key identifier associated with the redemption.
       additionalProperties: true
 
     GamificationInviteRedeemResponse:
       type: object
+      x-sensitive: true
       required: [success]
       properties:
         success: { type: boolean, const: true }
         serverUrl:
           type: string
+          x-sensitive: true
           description: Present only when the invite was created with a non-empty server URL.
       additionalProperties: false
 
     GamificationLeaderboardEntry:
       type: object
+      x-sensitive: true
       required: [apiKeyId, scope, score, updatedAt, name]
       properties:
-        apiKeyId: { type: string }
+        apiKeyId:
+          type: string
+          x-sensitive: true
+          description: API key identifier; treat as sensitive account metadata.
         scope: { type: string }
         score: { type: number }
         updatedAt: { type: string }
-        name: { type: [string, "null"] }
+        name:
+          type: [string, "null"]
+          x-sensitive: true
+          description: API key display name; treat as sensitive account metadata.
       additionalProperties: false
 
     GamificationLeaderboardNeighborEntry:
       type: object
+      x-sensitive: true
       required: [apiKeyId, score]
       properties:
-        apiKeyId: { type: string }
+        apiKeyId:
+          type: string
+          x-sensitive: true
+          description: API key identifier; treat as sensitive account metadata.
         score: { type: number }
       additionalProperties: false
 
     GamificationLeaderboardNeighbors:
       type: object
+      x-sensitive: true
       required: [above, below]
       properties:
         above:
@@ -62273,6 +62618,7 @@ components:
 
     GamificationLeaderboardResponse:
       type: object
+      x-sensitive: true
       required: [entries, myRank, neighbors]
       properties:
         entries:
@@ -62287,9 +62633,13 @@ components:
 
     GamificationLevelRecord:
       type: object
+      x-sensitive: true
       required: [apiKeyId, totalXp, currentLevel, updatedAt]
       properties:
-        apiKeyId: { type: string }
+        apiKeyId:
+          type: string
+          x-sensitive: true
+          description: API key identifier; treat as sensitive account metadata.
         totalXp: { type: number }
         currentLevel: { type: integer, minimum: 1 }
         updatedAt: { type: string }
@@ -62305,6 +62655,7 @@ components:
 
     GamificationLevelResponse:
       type: object
+      x-sensitive: true
       required: [level, streak]
       properties:
         level:
@@ -62331,20 +62682,28 @@ components:
 
     GamificationCommunityServer:
       type: object
+      x-sensitive: true
       description: Safe list projection; the stored API key hash is not included.
       required: [id, name, url, connectedAt, lastSyncAt, status, errorMessage]
       properties:
         id: { type: string }
         name: { type: string }
-        url: { type: string }
+        url:
+          type: string
+          x-sensitive: true
+          description: Connected community server URL; treat as operational metadata.
         connectedAt: { type: string }
         lastSyncAt: { type: [string, "null"] }
         status: { type: string, enum: [connected, disconnected, error] }
-        errorMessage: { type: [string, "null"] }
+        errorMessage:
+          type: [string, "null"]
+          x-sensitive: true
+          description: Connection error detail; may contain sensitive operational information.
       additionalProperties: false
 
     GamificationServersResponse:
       type: object
+      x-sensitive: true
       required: [servers]
       properties:
         servers:
@@ -62367,19 +62726,27 @@ components:
 
     GamificationServerCreated:
       type: object
+      x-sensitive: true
       description: Created response projection; it never includes the submitted key or stored key hash.
       required: [id, name, url, status, lastSyncAt, errorMessage]
       properties:
         id: { type: string }
         name: { type: string }
-        url: { type: string }
+        url:
+          type: string
+          x-sensitive: true
+          description: Connected community server URL; treat as operational metadata.
         status: { type: string, const: connected }
         lastSyncAt: { type: [string, "null"] }
-        errorMessage: { type: [string, "null"] }
+        errorMessage:
+          type: [string, "null"]
+          x-sensitive: true
+          description: Connection error detail; may contain sensitive operational information.
       additionalProperties: false
 
     GamificationServerConnectResponse:
       type: object
+      x-sensitive: true
       required: [server]
       properties:
         server: { $ref: "#/components/schemas/GamificationServerCreated" }
@@ -62387,6 +62754,7 @@ components:
 
     GamificationStreamLeaderboardFrame:
       type: object
+      x-sensitive: true
       required: [type, scope, entries]
       properties:
         type: { type: string, const: leaderboard }
@@ -62400,9 +62768,13 @@ components:
 
     GamificationStreamLeaderboardEntry:
       type: object
+      x-sensitive: true
       required: [apiKeyId, scope, score, updatedAt]
       properties:
-        apiKeyId: { type: string }
+        apiKeyId:
+          type: string
+          x-sensitive: true
+          description: API key identifier; treat as sensitive account metadata.
         scope: { type: string }
         score: { type: number }
         updatedAt: { type: string }
@@ -62410,6 +62782,7 @@ components:
 
     GamificationStreamErrorFrame:
       type: object
+      x-sensitive: true
       required: [error]
       properties:
         error:
@@ -62418,17 +62791,25 @@ components:
       additionalProperties: false
 
     GamificationStreamEvent:
+      x-sensitive: true
       oneOf:
         - { $ref: "#/components/schemas/GamificationStreamLeaderboardFrame" }
         - { $ref: "#/components/schemas/GamificationStreamErrorFrame" }
 
     GamificationTokenLedgerEntry:
       type: object
+      x-sensitive: true
       required: [id, fromApiKeyId, toApiKeyId, amount, reason, idempotencyKey, createdAt]
       properties:
         id: { type: integer }
-        fromApiKeyId: { type: string }
-        toApiKeyId: { type: string }
+        fromApiKeyId:
+          type: string
+          x-sensitive: true
+          description: Source API key identifier; treat as sensitive account metadata.
+        toApiKeyId:
+          type: string
+          x-sensitive: true
+          description: Destination API key identifier; treat as sensitive account metadata.
         amount: { type: number }
         reason: { type: [string, "null"] }
         idempotencyKey: { type: [string, "null"] }
@@ -62437,6 +62818,7 @@ components:
 
     GamificationTransferHistoryResponse:
       type: object
+      x-sensitive: true
       required: [balance, history]
       properties:
         balance: { type: number }
@@ -62447,16 +62829,28 @@ components:
 
     GamificationTransferRequest:
       type: object
+      x-sensitive: true
       required: [fromApiKeyId, toApiKeyId, amount]
       properties:
-        fromApiKeyId: { type: string, minLength: 1 }
-        toApiKeyId: { type: string, minLength: 1 }
+        fromApiKeyId:
+          type: string
+          minLength: 1
+          x-sensitive: true
+          description: Source API key identifier; treat as sensitive account metadata.
+        toApiKeyId:
+          type: string
+          minLength: 1
+          x-sensitive: true
+          description: Destination API key identifier; treat as sensitive account metadata.
         amount: { type: number, exclusiveMinimum: 0 }
-        reason: { type: string }
+        reason:
+          type: string
+          x-sensitive: true
       additionalProperties: true
 
     GamificationTransferResponse:
       type: object
+      x-sensitive: true
       required: [success, idempotencyKey]
       properties:
         success: { type: boolean, const: true }
