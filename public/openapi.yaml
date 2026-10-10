@@ -32,9 +32,11 @@ tags:
   - name: Memory
     description: >-
       Conversational memory management — CRUD, engine status, playground preview, summarization,
-      reindex, and Qdrant settings (plan 21 — v3.8.6). Protected profiles require a dashboard
-      session or a management-scoped API key; unlocked `requireLogin=false` installs and the fresh
-      loopback setup bootstrap may allow anonymous access on legacy `isAuthenticated()` routes.
+      reindex, and Qdrant settings (plan 21 — v3.8.6). `requireManagementAuth` routes accept management
+      Bearer keys, dashboard sessions, trusted loopback CLI/internal-service credentials, qualified
+      Google/Anthropic management-key headers, or method-scoped `oma_live_` tokens; unlocked
+      `requireLogin=false` profiles may allow anonymous access. Legacy `isAuthenticated()` routes have
+      a narrower per-operation security declaration and may be anonymous when authentication is off.
   - name: Chat
     description: OpenAI-compatible chat completions
   - name: Messages
@@ -629,8 +631,16 @@ paths:
       tags:
         - Memory
       summary: List memory entries
+      description: >-
+        Uses `requireManagementAuth`: accepts management Bearer keys, dashboard sessions, trusted loopback CLI/internal-service credentials, qualified Google or Anthropic management API-key headers, and scoped `oma_live_` tokens. Method-specific token scopes apply; unlocked `requireLogin=false` profiles may allow anonymous access.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       parameters:
         - name: apiKeyId
           in: query
@@ -704,14 +714,31 @@ paths:
                           misses:
                             type: integer
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "500":
+          description: Memory listing failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiMemory
       tags:
         - Memory
       summary: Create a memory entry
+      description: >-
+        Uses `requireManagementAuth`: accepts management Bearer keys, dashboard sessions, trusted loopback CLI/internal-service credentials, qualified Google or Anthropic management API-key headers, and scoped `oma_live_` tokens. Method-specific token scopes apply; unlocked `requireLogin=false` profiles may allow anonymous access.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -754,9 +781,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/MemoryEntry"
         "400":
-          description: Validation error
+          description: Malformed JSON or memory validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/memory/{id}:
     parameters:
       - name: id
@@ -770,8 +809,16 @@ paths:
       tags:
         - Memory
       summary: Get a single memory entry
+      description: >-
+        Uses `requireManagementAuth`: accepts management Bearer keys, dashboard sessions, trusted loopback CLI/internal-service credentials, qualified Google or Anthropic management API-key headers, and scoped `oma_live_` tokens. Method-specific token scopes apply; unlocked `requireLogin=false` profiles may allow anonymous access.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       responses:
         "200":
           description: Memory entry
@@ -780,9 +827,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/MemoryEntry"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "404":
-          description: Memory not found
+          description: Memory entry was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryErrorResponse" }
+        "500":
+          description: Reading the memory entry failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiMemoryById
       tags:
@@ -790,7 +849,13 @@ paths:
       summary: Update a memory entry
       description: Update `type`, `key`, `content`, and/or `metadata` of an existing memory. If an embedding source is available, the vector in `vec_memories` is also regenerated. Corresponds to `MemoryUpdatePutSchema`.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -823,11 +888,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/MemoryEntry"
         "400":
-          description: Validation error
+          description: Malformed JSON or memory validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "404":
-          description: Memory not found
+          description: Memory entry was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Updating the memory entry failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     delete:
       operationId: deleteApiMemoryById
       tags:
@@ -835,7 +920,13 @@ paths:
       summary: Delete a memory entry
       description: Deletes the SQLite row, removes the vector from `vec_memories`, and best-effort deletes the point from Qdrant.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       responses:
         "200":
           description: Deleted
@@ -847,9 +938,26 @@ paths:
                   success:
                     type: boolean
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "404":
-          description: Memory not found
+          description: Memory entry was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Deleting the memory entry failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/memory/health:
     get:
       operationId: getApiMemoryHealth
@@ -858,7 +966,13 @@ paths:
       summary: Memory store health check
       description: Round-trip create→list→delete to verify the store is alive.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       responses:
         "200":
           description: Health result
@@ -874,7 +988,16 @@ paths:
                   error:
                     type: [string, "null"]
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "500":
+          description: The extraction-pipeline health check failed; working is false and error contains a sanitized message.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryHealthResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/memory/retrieve-preview:
     post:
       operationId: postApiMemoryRetrievePreview
@@ -883,7 +1006,13 @@ paths:
       summary: Dry-run memory retrieval (Playground)
       description: Simulates `retrieveMemories()` for a given query and returns the ranked results with score, tier, and token count. Does NOT modify any memory. Corresponds to `RetrievePreviewSchema`.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -991,9 +1120,26 @@ paths:
                   budgetMaxTokens:
                     type: integer
         "400":
-          description: Validation error
+          description: Malformed JSON or memory retrieval-preview validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Generating a memory retrieval preview failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/memory/embedding-providers:
     get:
       operationId: getApiMemoryEmbeddingProviders
@@ -1002,7 +1148,9 @@ paths:
       summary: List embedding providers
       description: Returns all providers that have embedding-capable models, indicating which have an active API key configured.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Provider list
@@ -1034,6 +1182,11 @@ paths:
                                 type: [integer, "null"]
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          description: Listing memory embedding providers failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/memory/engine-status:
     get:
       operationId: getApiMemoryEngineStatus
@@ -1042,7 +1195,9 @@ paths:
       summary: Memory engine status
       description: Returns the full engine status including keyword tier availability, embedding resolution, vector store statistics (sqlite-vec), Qdrant health, and rerank configuration. Corresponds to `MemoryEngineStatusSchema`.
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Engine status
@@ -1130,6 +1285,11 @@ paths:
                         type: string
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "500":
+          description: Reading memory engine status failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/memory/summarize:
     post:
       operationId: postApiMemorySummarize
@@ -1138,7 +1298,13 @@ paths:
       summary: Compact old memories
       description: "Manually triggers memory compaction for memories older than `olderThanDays`. Use `dryRun: true` to preview candidates. Corresponds to `MemorySummarizeSchema`."
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1173,9 +1339,26 @@ paths:
                   dryRun:
                     type: boolean
         "400":
-          description: Validation error
+          description: Malformed JSON or memory summarization validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Summarizing memory entries failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/memory/reindex:
     post:
       operationId: postApiMemoryReindex
@@ -1184,7 +1367,13 @@ paths:
       summary: Trigger vector reindex
       description: "Starts background reindexing of memories with `needs_reindex = 1`. Use `force: true` to regenerate ALL vectors regardless of index status. Corresponds to `MemoryReindexSchema`."
       security:
+        - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1211,9 +1400,26 @@ paths:
                     type: integer
                     description: Memories still pending after this batch
         "400":
-          description: Validation error
+          description: Malformed JSON or memory reindex validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MemoryErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Starting memory reindexing failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/memory:
     get:
       operationId: getApiSettingsMemory
@@ -3254,6 +3460,11 @@ paths:
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "500":
+          description: Listing configured models failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     put:
       operationId: putApiModels
       tags: [Models]
@@ -3292,9 +3503,26 @@ paths:
                 $ref: "#/components/schemas/ModelAliasMutationResponse"
         "400":
           description: Invalid model or alias
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Updating the model alias failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/models/alias:
     get:
@@ -3329,9 +3557,27 @@ paths:
                 $ref: "#/components/schemas/ModelAliasLookupResponse"
         "400":
           description: Alias could not be resolved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: The alias does not map to a configured model.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: The alias resolves to multiple models and needs a provider-qualified name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "500":
+          description: Resolving model aliases failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     put:
       operationId: putApiModelsAlias
       tags: [Models]
@@ -3369,9 +3615,26 @@ paths:
                 $ref: "#/components/schemas/ModelAliasMutationResponse"
         "400":
           description: Model or alias is invalid
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Updating the model alias failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     delete:
       operationId: deleteApiModelsAlias
       tags: [Models]
@@ -3404,9 +3667,22 @@ paths:
                 $ref: "#/components/schemas/ModelAliasDeleteResponse"
         "400":
           description: Alias query parameter is required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Deleting the model alias failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/models/catalog:
     get:
@@ -3444,6 +3720,11 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
+        "500":
+          description: Building the full model catalog failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   # ─── Management Endpoints ──────────────────────────────────────
 
@@ -4900,18 +5181,29 @@ paths:
       tags: [API Keys]
       summary: List API keys
       description: >-
-        Lists API-key metadata with stored key values masked. A dashboard session or accepted management
-        bearer credential is required when management authentication is enabled. In an unlocked deployment
-        with `requireLogin=false`, anonymous access is permitted.
+        Lists API-key metadata with stored key values masked. Uses `requireManagementAuth` and accepts
+        management Bearer API keys, dashboard sessions, trusted loopback CLI/internal-service credentials,
+        qualified Google or Anthropic management API-key headers, or a scoped `oma_live_` token with
+        `read` scope. Ordinary management API keys need `manage` or `admin`. An unlocked deployment with
+        `requireLogin=false` may allow anonymous access.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
         - {}
       responses:
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: Listing API keys failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "200":
           description: API key list
           content:
@@ -4926,12 +5218,18 @@ paths:
       tags: [API Keys]
       summary: Create API key
       description: >-
-        Creates an API key and returns its full value once; store the returned key securely. A dashboard
-        session or accepted management bearer credential is required when management authentication is
-        enabled. In an unlocked deployment with `requireLogin=false`, anonymous access is permitted.
+        Creates an API key and returns its full value once; store the returned key securely. Uses
+        `requireManagementAuth` and accepts management Bearer API keys, dashboard sessions, trusted
+        loopback CLI/internal-service credentials, qualified Google or Anthropic management API-key
+        headers, or a scoped `oma_live_` token with `write` scope. Ordinary management API keys need
+        `manage` or `admin`. An unlocked deployment with `requireLogin=false` may allow anonymous access.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
         - {}
       requestBody:
         required: true
@@ -4982,6 +5280,21 @@ paths:
           x-sensitive: true
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "400":
+          description: API-key request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Creating the API key failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/keys/{id}:
     get:
@@ -8265,8 +8578,41 @@ paths:
               schema: { $ref: "#/components/schemas/CliRemoteConnectResponse" }
         "401":
           description: Invalid password
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "429":
           description: Too many failed attempts
+          headers:
+            Retry-After:
+              description: Optional delay before another password attempt is accepted.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "400":
+          description: Invalid JSON or invalid connect request fields.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "403":
+          description: No management password is configured; finish onboarding before connecting a remote CLI.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliConnectNeedsSetupResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Creating the scoped CLI access token failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/cli/whoami:
     get:
@@ -12591,6 +12937,11 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
   /api/oauth/cursor/import:
     get:
       operationId: getApiOauthCursorImport
@@ -12639,6 +12990,21 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "400":
+          description: The OAuth request body is malformed or failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
   /api/oauth/kiro/auto-import:
     get:
       operationId: getApiOauthKiroAutoImport
@@ -12664,6 +13030,11 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
   /api/oauth/kiro/import:
     post:
       operationId: postApiOauthKiroImport
@@ -12692,6 +13063,21 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "400":
+          description: The OAuth request body is malformed or failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
   /api/oauth/kiro/social-authorize:
     get:
       operationId: getApiOauthKiroSocialAuthorize
@@ -18850,6 +19236,16 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
   /api/cli-tools/crush-settings:
     get:
       operationId: getApiCliToolsCrushSettings
@@ -28772,6 +29168,11 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
     post:
       operationId: postApiOauthCliproxyImport
       tags:
@@ -28794,6 +29195,16 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
   /api/oauth/codex/import:
     post:
       operationId: postApiOauthCodexImport
@@ -28816,6 +29227,16 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "400":
+          description: The OAuth request body is malformed or failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/oauth/cursor/login/cancel:
     post:
       operationId: postApiOauthCursorLoginCancel
@@ -28838,6 +29259,16 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "400":
+          description: The OAuth request body is malformed or failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/oauth/cursor/login/poll:
     post:
       operationId: postApiOauthCursorLoginPoll
@@ -28860,6 +29291,36 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "400":
+          description: The OAuth request body is malformed or failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "410":
+          description: The temporary Cursor login session expired or could not be found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "4XX":
+          description: The upstream Cursor login flow returned a client error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "5XX":
+          description: The upstream Cursor login flow or local OAuth operation failed with a server error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
   /api/oauth/cursor/login/start:
     post:
       operationId: postApiOauthCursorLoginStart
@@ -28883,6 +29344,16 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
   /api/oauth/kiro/api-key:
     post:
       operationId: postApiOauthKiroApiKey
@@ -28905,6 +29376,16 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "400":
+          description: The OAuth request body is malformed or failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/oauth/trae/import:
     get:
       operationId: getApiOauthTraeImport
@@ -28948,6 +29429,21 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "400":
+          description: The OAuth request body is malformed or failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
+        "413":
+          description: The request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The OAuth import or login operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OAuthOperationErrorResponse" }
   /api/omniroute/route/preview:
     post:
       operationId: postApiOmnirouteRoutePreview
@@ -50588,6 +51084,13 @@ components:
         scope: { type: string, enum: [read, write, admin] }
         expiresAt: { type: [string, "null"], format: date-time }
       additionalProperties: false
+    CliConnectNeedsSetupResponse:
+      type: object
+      required: [error, needsSetup]
+      properties:
+        error: { type: string, const: "No password configured. Complete onboarding first." }
+        needsSetup: { type: boolean, const: true }
+      additionalProperties: false
     CliAccessTokenRevokedResponse:
       type: object
       required: [success, id]
@@ -53479,6 +53982,37 @@ components:
         needsReindex:
           type: integer
           description: 1 if the vector for this memory is stale or missing
+    MemoryValidationErrorResponse:
+      type: object
+      description: Validation failure returned directly by the legacy memory handlers.
+      required: [message, details]
+      properties:
+        message: { type: string }
+        details:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+              keys:
+                type: array
+                items: { type: string }
+            additionalProperties: false
+      additionalProperties: false
+    MemoryErrorResponse:
+      description: Memory-route error; legacy handlers use either the API error envelope, a string error, or a direct validation object.
+      oneOf:
+        - { $ref: "#/components/schemas/ApiErrorResponse" }
+        - { $ref: "#/components/schemas/StringErrorResponse" }
+        - { $ref: "#/components/schemas/MemoryValidationErrorResponse" }
+    MemoryHealthResponse:
+      type: object
+      properties:
+        working: { type: boolean }
+        latencyMs: { type: number }
+        error: { type: [string, "null"] }
     MemorySettingsExtended:
       type: object
       description: Extended memory settings including 7 new fields from plan 21. All fields are optional for PUT (patch semantics).
@@ -69513,6 +70047,19 @@ components:
         success: { type: boolean, const: true }
         connection: { $ref: "#/components/schemas/OAuthImportedConnectionSummary" }
       additionalProperties: false
+
+    OAuthOperationErrorResponse:
+      type: object
+      description: OAuth route error; some flow and auto-import responses also include status or found metadata.
+      required: [error]
+      properties:
+        error:
+          oneOf:
+            - { type: string }
+            - { type: object, additionalProperties: true }
+        status: { type: string }
+        found: { type: boolean }
+      additionalProperties: true
 
     CliProxyOAuthImportPreviewAccount:
       type: object
