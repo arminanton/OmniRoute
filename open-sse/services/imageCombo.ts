@@ -99,7 +99,15 @@ export async function executeImageCombo(
     // Resolve provider credentials
     let credentials = null;
     try {
-      credentials = await getProviderCredentialsWithQuotaPreflight(targetProvider);
+      credentials = await getProviderCredentialsWithQuotaPreflight(
+        targetProvider,
+        null,
+        null,
+        null,
+        {
+          reserveAccountRequest: true,
+        }
+      );
     } catch {
       // DB unavailable — skip this target
       lastError = { status: 502, error: `Failed to resolve credentials for ${targetProvider}` };
@@ -122,38 +130,47 @@ export async function executeImageCombo(
       continue;
     }
 
-    // Execute image generation for this target
-    const result = (await handleImageGeneration({
-      body: { ...body, model: target.modelStr },
-      credentials,
-      log,
-      signal: auth.request?.signal || null,
-    })) as ImageGenerationResult;
+    try {
+      // Execute image generation for this target
+      const result = (await handleImageGeneration({
+        body: { ...body, model: target.modelStr },
+        credentials,
+        log,
+        signal: auth.request?.signal || null,
+      })) as ImageGenerationResult;
 
-    if (result.success) {
-      await clearRecoveredProviderState(credentials);
-      selectedProvider = targetProvider;
-      selectedModel = target.modelStr;
-      successResult = {
-        data: result.data,
-        provider: targetProvider,
-        model: target.modelStr,
-      };
-      break;
+      if (result.success) {
+        await clearRecoveredProviderState(credentials);
+        selectedProvider = targetProvider;
+        selectedModel = target.modelStr;
+        successResult = {
+          data: result.data,
+          provider: targetProvider,
+          model: target.modelStr,
+        };
+        break;
+      }
+
+      // Classify the failure
+      const status = result.status || 500;
+      const error = typeof result.error === "string" ? result.error : "Image generation failed";
+
+      // Terminal failures (400 bad model, 403 banned, etc.) — stop iterating
+      // Non-terminal failures (429, 5xx) — try next target
+      if (
+        isRemoteMediaFailureResult(result) ||
+        status === 400 ||
+        status === 403 ||
+        status === 401
+      ) {
+        return errorResponse(status, `[${targetProvider}] ${error}`);
+      }
+
+      lastError = { status, error: `[${targetProvider}] ${error}` };
+      fallbackCount += 1;
+    } finally {
+      credentials.releaseAccountRequest?.();
     }
-
-    // Classify the failure
-    const status = result.status || 500;
-    const error = typeof result.error === "string" ? result.error : "Image generation failed";
-
-    // Terminal failures (400 bad model, 403 banned, etc.) — stop iterating
-    // Non-terminal failures (429, 5xx) — try next target
-    if (isRemoteMediaFailureResult(result) || status === 400 || status === 403 || status === 401) {
-      return errorResponse(status, `[${targetProvider}] ${error}`);
-    }
-
-    lastError = { status, error: `[${targetProvider}] ${error}` };
-    fallbackCount += 1;
   }
 
   // 4. Build response

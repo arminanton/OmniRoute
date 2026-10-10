@@ -60,6 +60,7 @@ async function defaultSelectNextCredentials(
 ) {
   return getProviderCredentialsWithQuotaPreflight(provider, null, null, requestedModel, {
     excludeConnectionIds: Array.from(excludedConnectionIds),
+    reserveAccountRequest: true,
   });
 }
 
@@ -91,50 +92,67 @@ export async function executeImageWithCredentialFallback({
 
   while (currentCredentials && !isCredentialSentinel(currentCredentials)) {
     const connectionId = connectionIdOf(currentCredentials);
-    if (connectionId && excludedConnectionIds.has(connectionId)) break;
+    if (connectionId && excludedConnectionIds.has(connectionId)) {
+      currentCredentials.releaseAccountRequest?.();
+      break;
+    }
     if (connectionId) excludedConnectionIds.add(connectionId);
 
+    // Refresh may replace the credential object: retain the original selection's owner.
+    const selectedCredentials = currentCredentials;
+    let released = false;
+    const releaseSelectedAccount = () => {
+      if (released) return;
+      released = true;
+      selectedCredentials.releaseAccountRequest?.();
+    };
     try {
-      currentCredentials = await checkAndRefreshToken(provider, currentCredentials);
-    } catch (error) {
-      if (isRuntimePolicyError(error)) throw error;
-      log.warn("IMAGE", "Credential refresh failed; trying another image-provider account", {
+      try {
+        currentCredentials = await checkAndRefreshToken(provider, currentCredentials);
+      } catch (error) {
+        if (isRuntimePolicyError(error)) throw error;
+        log.warn("IMAGE", "Credential refresh failed; trying another image-provider account", {
+          provider,
+          connectionId,
+          error: sanitizeErrorMessage(error instanceof Error ? error : new Error(String(error))),
+        });
+        if (!connectionId) throw error;
+        releaseSelectedAccount();
+        currentCredentials = await selectNextCredentials(
+          provider,
+          requestedModel,
+          excludedConnectionIds
+        );
+        continue;
+      }
+
+      lastCredentials = currentCredentials;
+      lastResult = await execute(currentCredentials);
+      if (
+        isRuntimePolicyError(lastResult.error) ||
+        isRuntimePolicyError(lastResult.originalError) ||
+        isRuntimePolicyResponse(lastResult.response)
+      ) {
+        return { credentials: lastCredentials, result: lastResult };
+      }
+      const isAuthFailure = Number(lastResult.status) === 401 || lastResult.retryable === true;
+      if (lastResult.success || !isAuthFailure || !connectionId) {
+        return { credentials: lastCredentials, result: lastResult };
+      }
+
+      log.warn("IMAGE", "Image provider rejected credentials; trying another account", {
         provider,
         connectionId,
-        error: sanitizeErrorMessage(error instanceof Error ? error : new Error(String(error))),
       });
-      if (!connectionId) throw error;
+      releaseSelectedAccount();
       currentCredentials = await selectNextCredentials(
         provider,
         requestedModel,
         excludedConnectionIds
       );
-      continue;
+    } finally {
+      releaseSelectedAccount();
     }
-
-    lastCredentials = currentCredentials;
-    lastResult = await execute(currentCredentials);
-    if (
-      isRuntimePolicyError(lastResult.error) ||
-      isRuntimePolicyError(lastResult.originalError) ||
-      isRuntimePolicyResponse(lastResult.response)
-    ) {
-      return { credentials: lastCredentials, result: lastResult };
-    }
-    const isAuthFailure = Number(lastResult.status) === 401 || lastResult.retryable === true;
-    if (lastResult.success || !isAuthFailure || !connectionId) {
-      return { credentials: lastCredentials, result: lastResult };
-    }
-
-    log.warn("IMAGE", "Image provider rejected credentials; trying another account", {
-      provider,
-      connectionId,
-    });
-    currentCredentials = await selectNextCredentials(
-      provider,
-      requestedModel,
-      excludedConnectionIds
-    );
   }
 
   return {

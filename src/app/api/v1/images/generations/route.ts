@@ -266,7 +266,8 @@ async function postHandler(request, context) {
       provider,
       null,
       null,
-      requestedModel
+      requestedModel,
+      { reserveAccountRequest: true }
     );
     if (!credentials) {
       return errorResponse(
@@ -287,7 +288,8 @@ async function postHandler(request, context) {
       provider,
       null,
       syncedEndpointRoute?.connectionIds ?? null,
-      requestedModel
+      requestedModel,
+      { reserveAccountRequest: true }
     );
     if (!credentials) {
       return errorResponse(
@@ -311,7 +313,8 @@ async function postHandler(request, context) {
       provider,
       null,
       null,
-      requestedModel
+      requestedModel,
+      { reserveAccountRequest: true }
     );
     if (localCredentials && !isAllRateLimitedCredentials(localCredentials)) {
       credentials = localCredentials;

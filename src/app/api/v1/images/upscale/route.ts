@@ -102,7 +102,10 @@ async function readUpscaleBody(request: Request): Promise<Record<string, unknown
       }
       return body;
     } catch (err) {
-      log.warn("IMAGE", `Invalid multipart upscale body: ${err instanceof Error ? err.message : err}`);
+      log.warn(
+        "IMAGE",
+        `Invalid multipart upscale body: ${err instanceof Error ? err.message : err}`
+      );
       return null;
     }
   }
@@ -183,93 +186,100 @@ async function postHandler(request: Request) {
     provider,
     null,
     allowedConnections,
-    `${provider}/${model}`
+    `${provider}/${model}`,
+    { reserveAccountRequest: true }
   );
-  if (!credentialsResult) {
-    return errorResponse(
-      HTTP_STATUS.BAD_REQUEST,
-      `No credentials for upscale provider: ${provider}`
-    );
-  }
-
-  // getProviderCredentialsWithQuotaPreflight returns either a credential record or an
-  // all-rate-limited marker; read both through one loose view (the union has no common
-  // discriminant) and narrow explicitly afterwards.
-  const creds = credentialsResult as {
-    allRateLimited?: boolean;
-    retryAfter?: string;
-    retryAfterHuman?: string;
-    apiKey?: string | null;
-    accessToken?: string | null;
-    connectionId?: string | null;
-    providerSpecificData?: Record<string, unknown> | null;
-  };
-
-  if (creds.allRateLimited) {
-    return unavailableResponse(
-      HTTP_STATUS.RATE_LIMITED,
-      `[${provider}] All accounts rate limited`,
-      creds.retryAfter,
-      creds.retryAfterHuman
-    );
-  }
-
-  const upscaleCredentials = {
-    ...(typeof creds.apiKey === "string" && creds.apiKey ? { apiKey: creds.apiKey } : {}),
-    ...(typeof creds.accessToken === "string" && creds.accessToken
-      ? { accessToken: creds.accessToken }
-      : {}),
-    // Adobe Firefly keeps a pasted firefly.adobe.com Cookie here.
-    ...(creds.providerSpecificData ? { providerSpecificData: creds.providerSpecificData } : {}),
-  };
-
-  let proxyInfo: { proxy?: unknown } | null = null;
-  if (creds.connectionId) {
-    try {
-      proxyInfo = (await resolveProxyForConnection(creds.connectionId)) as { proxy?: unknown } | null;
-    } catch {
-      log.debug("PROXY", `Failed to resolve proxy for upscale provider: ${provider}`);
+  try {
+    if (!credentialsResult) {
+      return errorResponse(
+        HTTP_STATUS.BAD_REQUEST,
+        `No credentials for upscale provider: ${provider}`
+      );
     }
-  }
 
-  const runUpscale = () =>
-    handleImageUpscale({ body, credentials: upscaleCredentials, log, signal: request.signal });
+    // getProviderCredentialsWithQuotaPreflight returns either a credential record or an
+    // all-rate-limited marker; read both through one loose view (the union has no common
+    // discriminant) and narrow explicitly afterwards.
+    const creds = credentialsResult as {
+      allRateLimited?: boolean;
+      retryAfter?: string;
+      retryAfterHuman?: string;
+      apiKey?: string | null;
+      accessToken?: string | null;
+      connectionId?: string | null;
+      providerSpecificData?: Record<string, unknown> | null;
+    };
 
-  const result = await (creds.connectionId
-    ? runWithProxyContext((proxyInfo?.proxy as never) || null, runUpscale).catch(
-        (err: { statusCode?: number; message?: string }) => ({
-          success: false,
-          status: err.statusCode || 500,
-          error: err.message,
-        })
-      )
-    : runUpscale());
+    if (creds.allRateLimited) {
+      return unavailableResponse(
+        HTTP_STATUS.RATE_LIMITED,
+        `[${provider}] All accounts rate limited`,
+        creds.retryAfter,
+        creds.retryAfterHuman
+      );
+    }
 
-  if (result.success) {
-    await clearRecoveredProviderState(credentialsResult);
-    const costUsd = await calculateModalCost("image", provider, `${provider}/${model}`, { n: 1 });
-    const headers = new Headers({ "Content-Type": "application/json" });
-    attachOmniRouteMetaHeaders(headers, {
-      provider,
-      model: `${provider}/${model}`,
-      costUsd,
-      latencyMs: Date.now() - startTime,
-      requestId: generateRequestId(),
+    const upscaleCredentials = {
+      ...(typeof creds.apiKey === "string" && creds.apiKey ? { apiKey: creds.apiKey } : {}),
+      ...(typeof creds.accessToken === "string" && creds.accessToken
+        ? { accessToken: creds.accessToken }
+        : {}),
+      // Adobe Firefly keeps a pasted firefly.adobe.com Cookie here.
+      ...(creds.providerSpecificData ? { providerSpecificData: creds.providerSpecificData } : {}),
+    };
+
+    let proxyInfo: { proxy?: unknown } | null = null;
+    if (creds.connectionId) {
+      try {
+        proxyInfo = (await resolveProxyForConnection(creds.connectionId)) as {
+          proxy?: unknown;
+        } | null;
+      } catch {
+        log.debug("PROXY", `Failed to resolve proxy for upscale provider: ${provider}`);
+      }
+    }
+
+    const runUpscale = () =>
+      handleImageUpscale({ body, credentials: upscaleCredentials, log, signal: request.signal });
+
+    const result = await (creds.connectionId
+      ? runWithProxyContext((proxyInfo?.proxy as never) || null, runUpscale).catch(
+          (err: { statusCode?: number; message?: string }) => ({
+            success: false,
+            status: err.statusCode || 500,
+            error: err.message,
+          })
+        )
+      : runUpscale());
+
+    if (result.success) {
+      await clearRecoveredProviderState(credentialsResult);
+      const costUsd = await calculateModalCost("image", provider, `${provider}/${model}`, { n: 1 });
+      const headers = new Headers({ "Content-Type": "application/json" });
+      attachOmniRouteMetaHeaders(headers, {
+        provider,
+        model: `${provider}/${model}`,
+        costUsd,
+        latencyMs: Date.now() - startTime,
+        requestId: generateRequestId(),
+      });
+      return new Response(JSON.stringify((result as { data: unknown }).data), {
+        status: 200,
+        headers,
+      });
+    }
+
+    const errorPayload = toJsonErrorPayload(
+      (result as { error?: unknown }).error,
+      "Image upscale provider error"
+    );
+    return new Response(JSON.stringify(errorPayload), {
+      status: (result as { status?: number }).status ?? HTTP_STATUS.BAD_GATEWAY,
+      headers: { "Content-Type": "application/json" },
     });
-    return new Response(JSON.stringify((result as { data: unknown }).data), {
-      status: 200,
-      headers,
-    });
+  } finally {
+    credentialsResult?.releaseAccountRequest?.();
   }
-
-  const errorPayload = toJsonErrorPayload(
-    (result as { error?: unknown }).error,
-    "Image upscale provider error"
-  );
-  return new Response(JSON.stringify(errorPayload), {
-    status: (result as { status?: number }).status ?? HTTP_STATUS.BAD_GATEWAY,
-    headers: { "Content-Type": "application/json" },
-  });
 }
 
 export const POST = withInjectionGuard(postHandler);

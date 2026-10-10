@@ -243,55 +243,60 @@ async function handleAdobeFireflyEditRequest(params: {
     parsed.provider,
     null,
     allowedConnections,
-    resolvedModel
+    resolvedModel,
+    { reserveAccountRequest: true }
   );
-  if (!credentials) {
-    return errorResponse(
-      HTTP_STATUS.UNAUTHORIZED,
-      `No credentials for provider: ${parsed.provider}`
+  try {
+    if (!credentials) {
+      return errorResponse(
+        HTTP_STATUS.UNAUTHORIZED,
+        `No credentials for provider: ${parsed.provider}`
+      );
+    }
+    if (credentials.allRateLimited) {
+      return unavailableResponse(
+        HTTP_STATUS.RATE_LIMITED,
+        `[${parsed.provider}] All accounts rate limited`,
+        credentials.retryAfter,
+        credentials.retryAfterHuman
+      );
+    }
+
+    // Prefer multi-image list when present; fall back to the primary imageBytes.
+    const dataUrls = buildAdobeFireflyEditDataUrls(images, imageBytes, imageMime);
+    if (dataUrls.length === 0) {
+      return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: image");
+    }
+
+    const result = await handleAdobeFireflyImageGeneration({
+      provider: parsed.provider,
+      model: parsed.model,
+      providerConfig,
+      body: {
+        prompt,
+        size: size ?? undefined,
+        response_format: responseFormat ?? undefined,
+        n: 1,
+        image_url: dataUrls[0],
+        image: dataUrls.length === 1 ? dataUrls[0] : dataUrls,
+        image_urls: dataUrls,
+        images: dataUrls,
+      },
+      credentials,
+      log,
+    });
+
+    if ((result as { success?: boolean }).success) {
+      await clearRecoveredProviderState(credentials);
+      return jsonResponse((result as { data?: unknown }).data);
+    }
+    return jsonResponse(
+      toJsonErrorPayload((result as { error?: unknown }).error, "Image edit provider error"),
+      (result as { status?: number }).status ?? HTTP_STATUS.BAD_GATEWAY
     );
+  } finally {
+    credentials?.releaseAccountRequest?.();
   }
-  if (credentials.allRateLimited) {
-    return unavailableResponse(
-      HTTP_STATUS.RATE_LIMITED,
-      `[${parsed.provider}] All accounts rate limited`,
-      credentials.retryAfter,
-      credentials.retryAfterHuman
-    );
-  }
-
-  // Prefer multi-image list when present; fall back to the primary imageBytes.
-  const dataUrls = buildAdobeFireflyEditDataUrls(images, imageBytes, imageMime);
-  if (dataUrls.length === 0) {
-    return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing required field: image");
-  }
-
-  const result = await handleAdobeFireflyImageGeneration({
-    provider: parsed.provider,
-    model: parsed.model,
-    providerConfig,
-    body: {
-      prompt,
-      size: size ?? undefined,
-      response_format: responseFormat ?? undefined,
-      n: 1,
-      image_url: dataUrls[0],
-      image: dataUrls.length === 1 ? dataUrls[0] : dataUrls,
-      image_urls: dataUrls,
-      images: dataUrls,
-    },
-    credentials,
-    log,
-  });
-
-  if ((result as { success?: boolean }).success) {
-    await clearRecoveredProviderState(credentials);
-    return jsonResponse((result as { data?: unknown }).data);
-  }
-  return jsonResponse(
-    toJsonErrorPayload((result as { error?: unknown }).error, "Image edit provider error"),
-    (result as { status?: number }).status ?? HTTP_STATUS.BAD_GATEWAY
-  );
 }
 
 async function postHandler(request: Request, _context?: unknown) {
@@ -409,76 +414,81 @@ async function postHandler(request: Request, _context?: unknown) {
       parsed.provider,
       null,
       allowedConnections,
-      resolvedModel
+      resolvedModel,
+      { reserveAccountRequest: true }
     );
-    if (!credentials) {
-      return errorResponse(
-        HTTP_STATUS.UNAUTHORIZED,
-        `No credentials for provider: ${parsed.provider}`
-      );
-    }
-    if (credentials.allRateLimited) {
-      return unavailableResponse(
-        HTTP_STATUS.RATE_LIMITED,
-        `[${parsed.provider}] All accounts rate limited`,
-        credentials.retryAfter,
-        credentials.retryAfterHuman
-      );
-    }
-    const credentialDetails = credentials as {
-      connectionId?: unknown;
-      providerSpecificData?: unknown;
-    };
-    if (isCodexFreePlan(credentialDetails.providerSpecificData)) {
-      return errorResponse(
-        HTTP_STATUS.BAD_REQUEST,
-        "Codex image editing requires a paid ChatGPT/Codex plan"
-      );
-    }
-
-    const connectionId =
-      typeof credentialDetails.connectionId === "string" ? credentialDetails.connectionId : null;
-    let proxyInfo = null;
-    if (connectionId) {
-      try {
-        proxyInfo = await resolveProxyForConnection(connectionId);
-      } catch {
-        log.debug("PROXY", `Failed to resolve proxy for image provider: ${parsed.provider}`);
+    try {
+      if (!credentials) {
+        return errorResponse(
+          HTTP_STATUS.UNAUTHORIZED,
+          `No credentials for provider: ${parsed.provider}`
+        );
       }
+      if (credentials.allRateLimited) {
+        return unavailableResponse(
+          HTTP_STATUS.RATE_LIMITED,
+          `[${parsed.provider}] All accounts rate limited`,
+          credentials.retryAfter,
+          credentials.retryAfterHuman
+        );
+      }
+      const credentialDetails = credentials as {
+        connectionId?: unknown;
+        providerSpecificData?: unknown;
+      };
+      if (isCodexFreePlan(credentialDetails.providerSpecificData)) {
+        return errorResponse(
+          HTTP_STATUS.BAD_REQUEST,
+          "Codex image editing requires a paid ChatGPT/Codex plan"
+        );
+      }
+
+      const connectionId =
+        typeof credentialDetails.connectionId === "string" ? credentialDetails.connectionId : null;
+      let proxyInfo = null;
+      if (connectionId) {
+        try {
+          proxyInfo = await resolveProxyForConnection(connectionId);
+        } catch {
+          log.debug("PROXY", `Failed to resolve proxy for image provider: ${parsed.provider}`);
+        }
+      }
+
+      const editImage = () =>
+        handleCodexImageEdit({
+          provider: parsed.provider,
+          model: parsed.model,
+          providerConfig,
+          body: {
+            prompt,
+            size: size ?? undefined,
+            response_format: responseFormat ?? undefined,
+          },
+          referenceImages: images,
+          credentials,
+          log,
+          signal: request.signal,
+        });
+
+      const result = await (connectionId
+        ? runWithProxyContext(proxyInfo?.proxy || null, editImage).catch(() => ({
+            success: false as const,
+            status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+            error: "Image edit proxy error",
+          }))
+        : editImage());
+
+      if (result.success === true) {
+        await clearRecoveredProviderState(credentials);
+        return jsonResponse(result.data);
+      }
+      return jsonResponse(
+        toJsonErrorPayload(result.error, "Image edit provider error"),
+        result.status
+      );
+    } finally {
+      credentials?.releaseAccountRequest?.();
     }
-
-    const editImage = () =>
-      handleCodexImageEdit({
-        provider: parsed.provider,
-        model: parsed.model,
-        providerConfig,
-        body: {
-          prompt,
-          size: size ?? undefined,
-          response_format: responseFormat ?? undefined,
-        },
-        referenceImages: images,
-        credentials,
-        log,
-        signal: request.signal,
-      });
-
-    const result = await (connectionId
-      ? runWithProxyContext(proxyInfo?.proxy || null, editImage).catch(() => ({
-          success: false as const,
-          status: HTTP_STATUS.SERVICE_UNAVAILABLE,
-          error: "Image edit proxy error",
-        }))
-      : editImage());
-
-    if (result.success === true) {
-      await clearRecoveredProviderState(credentials);
-      return jsonResponse(result.data);
-    }
-    return jsonResponse(
-      toJsonErrorPayload(result.error, "Image edit provider error"),
-      result.status
-    );
   }
 
   if (providerConfig?.format === "fal-ai" && isFalImageEditModel(parsed.model)) {
@@ -486,46 +496,51 @@ async function postHandler(request: Request, _context?: unknown) {
       parsed.provider,
       null,
       allowedConnections,
-      resolvedModel
+      resolvedModel,
+      { reserveAccountRequest: true }
     );
-    if (!credentials) {
-      return errorResponse(
-        HTTP_STATUS.UNAUTHORIZED,
-        `No credentials for provider: ${parsed.provider}`
-      );
-    }
-    if (credentials.allRateLimited) {
-      return unavailableResponse(
-        HTTP_STATUS.RATE_LIMITED,
-        `[${parsed.provider}] All accounts rate limited`,
-        credentials.retryAfter,
-        credentials.retryAfterHuman
-      );
-    }
+    try {
+      if (!credentials) {
+        return errorResponse(
+          HTTP_STATUS.UNAUTHORIZED,
+          `No credentials for provider: ${parsed.provider}`
+        );
+      }
+      if (credentials.allRateLimited) {
+        return unavailableResponse(
+          HTTP_STATUS.RATE_LIMITED,
+          `[${parsed.provider}] All accounts rate limited`,
+          credentials.retryAfter,
+          credentials.retryAfterHuman
+        );
+      }
 
-    const result = await handleFalAIImageEdit({
-      provider: parsed.provider,
-      model: parsed.model,
-      providerConfig,
-      body: {
-        prompt,
-        size: size ?? undefined,
-        response_format: responseFormat ?? undefined,
-        n: 1,
-      },
-      images,
-      credentials,
-      log,
-    });
+      const result = await handleFalAIImageEdit({
+        provider: parsed.provider,
+        model: parsed.model,
+        providerConfig,
+        body: {
+          prompt,
+          size: size ?? undefined,
+          response_format: responseFormat ?? undefined,
+          n: 1,
+        },
+        images,
+        credentials,
+        log,
+      });
 
-    if (result.success) {
-      await clearRecoveredProviderState(credentials);
-      return jsonResponse(result.data);
+      if (result.success) {
+        await clearRecoveredProviderState(credentials);
+        return jsonResponse(result.data);
+      }
+      return jsonResponse(
+        toJsonErrorPayload(result.error, "Image edit provider error"),
+        result.status
+      );
+    } finally {
+      credentials?.releaseAccountRequest?.();
     }
-    return jsonResponse(
-      toJsonErrorPayload(result.error, "Image edit provider error"),
-      result.status
-    );
   }
 
   // Adobe Firefly: edit = storage upload + generate-async referenceBlobs (same as i2i generate).
@@ -553,44 +568,49 @@ async function postHandler(request: Request, _context?: unknown) {
       parsed.provider,
       null,
       allowedConnections,
-      resolvedModel
+      resolvedModel,
+      { reserveAccountRequest: true }
     );
-    if (!credentials) {
-      return errorResponse(
-        HTTP_STATUS.UNAUTHORIZED,
-        `No credentials for provider: ${parsed.provider}`
-      );
-    }
-    if (credentials.allRateLimited) {
-      return unavailableResponse(
-        HTTP_STATUS.RATE_LIMITED,
-        `[${parsed.provider}] All accounts rate limited`,
-        credentials.retryAfter,
-        credentials.retryAfterHuman
-      );
-    }
+    try {
+      if (!credentials) {
+        return errorResponse(
+          HTTP_STATUS.UNAUTHORIZED,
+          `No credentials for provider: ${parsed.provider}`
+        );
+      }
+      if (credentials.allRateLimited) {
+        return unavailableResponse(
+          HTTP_STATUS.RATE_LIMITED,
+          `[${parsed.provider}] All accounts rate limited`,
+          credentials.retryAfter,
+          credentials.retryAfterHuman
+        );
+      }
 
-    const result = await handleOpenRouterImageEdit({
-      provider: parsed.provider,
-      model: parsed.model,
-      baseUrl: providerConfig.baseUrl,
-      credentials,
-      prompt,
-      imageBytes,
-      imageMime,
-      size: size ?? undefined,
-      n: 1,
-      log,
-    });
+      const result = await handleOpenRouterImageEdit({
+        provider: parsed.provider,
+        model: parsed.model,
+        baseUrl: providerConfig.baseUrl,
+        credentials,
+        prompt,
+        imageBytes,
+        imageMime,
+        size: size ?? undefined,
+        n: 1,
+        log,
+      });
 
-    if (result.success) {
-      await clearRecoveredProviderState(credentials);
-      return jsonResponse(result.data);
+      if (result.success) {
+        await clearRecoveredProviderState(credentials);
+        return jsonResponse(result.data);
+      }
+      return jsonResponse(
+        toJsonErrorPayload(result.error, "Image edit provider error"),
+        result.status
+      );
+    } finally {
+      credentials?.releaseAccountRequest?.();
     }
-    return jsonResponse(
-      toJsonErrorPayload(result.error, "Image edit provider error"),
-      result.status
-    );
   }
 
   // Other built-in providers do not expose an OpenAI-compatible edit endpoint.
@@ -618,44 +638,49 @@ async function postHandler(request: Request, _context?: unknown) {
     customProviderId,
     null,
     allowedConnections,
-    resolvedModel
+    resolvedModel,
+    { reserveAccountRequest: true }
   );
-  if (!credentials) {
-    return errorResponse(
-      HTTP_STATUS.BAD_REQUEST,
-      `No credentials for custom image provider: ${customProviderId}`
-    );
-  }
-  if (credentials.allRateLimited) {
-    return unavailableResponse(
-      HTTP_STATUS.RATE_LIMITED,
-      `[${customProviderId}] All accounts rate limited`,
-      credentials.retryAfter,
-      credentials.retryAfterHuman
-    );
-  }
+  try {
+    if (!credentials) {
+      return errorResponse(
+        HTTP_STATUS.BAD_REQUEST,
+        `No credentials for custom image provider: ${customProviderId}`
+      );
+    }
+    if (credentials.allRateLimited) {
+      return unavailableResponse(
+        HTTP_STATUS.RATE_LIMITED,
+        `[${customProviderId}] All accounts rate limited`,
+        credentials.retryAfter,
+        credentials.retryAfterHuman
+      );
+    }
 
-  const result = await handleOpenAIImageEdit({
-    provider: customProviderId,
-    model: customModel,
-    credentials,
-    prompt,
-    imageBytes,
-    imageMime,
-    size,
-    responseFormat,
-    n: 1,
-    log,
-  });
+    const result = await handleOpenAIImageEdit({
+      provider: customProviderId,
+      model: customModel,
+      credentials,
+      prompt,
+      imageBytes,
+      imageMime,
+      size,
+      responseFormat,
+      n: 1,
+      log,
+    });
 
-  if (result.success) {
-    await clearRecoveredProviderState(credentials);
-    return jsonResponse((result as any).data);
+    if (result.success) {
+      await clearRecoveredProviderState(credentials);
+      return jsonResponse((result as any).data);
+    }
+    return jsonResponse(
+      toJsonErrorPayload((result as any).error, "Image edit provider error"),
+      (result as any).status
+    );
+  } finally {
+    credentials?.releaseAccountRequest?.();
   }
-  return jsonResponse(
-    toJsonErrorPayload((result as any).error, "Image edit provider error"),
-    (result as any).status
-  );
 }
 
 export const POST = postHandler;

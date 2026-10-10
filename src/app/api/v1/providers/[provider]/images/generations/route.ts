@@ -95,7 +95,8 @@ async function postHandler(request, { params }) {
     rawProvider,
     null,
     null,
-    requestedModel
+    requestedModel,
+    { reserveAccountRequest: true }
   );
   if (!credentials) {
     return errorResponse(
