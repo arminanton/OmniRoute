@@ -22,6 +22,13 @@ import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 
 const PROVIDER = "codex";
 
+/** Ticket validity and OAuth material must never be stored by HTTP caches. */
+function jsonNoStore(body: unknown, init?: ResponseInit): NextResponse {
+  const headers = new Headers(init?.headers);
+  headers.set("Cache-Control", "no-store");
+  return NextResponse.json(body, { ...init, headers });
+}
+
 // GET — validate the ticket so the public page can show "ready" vs "expired".
 export async function GET(
   _request: Request,
@@ -30,12 +37,12 @@ export async function GET(
   const { token } = await params;
   const ticket = peekDeviceFlowTicket(token);
   if (!ticket || ticket.provider !== PROVIDER || ticket.status !== "pending") {
-    return NextResponse.json(
+    return jsonNoStore(
       { valid: false, error: "This link is invalid, already used, or expired." },
       { status: 404 }
     );
   }
-  return NextResponse.json({
+  return jsonNoStore({
     valid: true,
     provider: ticket.provider,
     expiresAt: new Date(ticket.expiresAt).toISOString(),
@@ -53,12 +60,12 @@ export async function POST(
   try {
     rawBody = await request.json();
   } catch {
-    return NextResponse.json({ success: false, error: "Invalid JSON body" }, { status: 400 });
+    return jsonNoStore({ success: false, error: "Invalid JSON body" }, { status: 400 });
   }
 
   const validation = validateBody(oauthDeviceCompleteSchema, rawBody);
   if (isValidationFailure(validation)) {
-    return NextResponse.json({ error: validation.error }, { status: 400 });
+    return jsonNoStore({ error: validation.error }, { status: 400 });
   }
 
   // Claim the ticket FIRST (single-use): an invalid/expired/already-used token
@@ -66,7 +73,7 @@ export async function POST(
   // concurrent/duplicate submissions.
   const ticket = claimDeviceFlowTicket(token, PROVIDER);
   if (!ticket) {
-    return NextResponse.json(
+    return jsonNoStore(
       { success: false, error: "This link is invalid, already used, or expired." },
       { status: 410 }
     );
@@ -95,7 +102,7 @@ export async function POST(
       email: connection.email ?? null,
     });
 
-    return NextResponse.json({
+    return jsonNoStore({
       success: true,
       connection: { id: connection.id, provider: connection.provider, email: connection.email },
     });
@@ -103,7 +110,7 @@ export async function POST(
     // Release the claim so the visitor can retry within the link's lifetime.
     releaseDeviceFlowTicket(token);
     console.error("Codex public device-flow completion error:", err);
-    return NextResponse.json(
+    return jsonNoStore(
       { success: false, error: sanitizeErrorMessage(err?.message) || "Failed to save connection" },
       { status: 500 }
     );

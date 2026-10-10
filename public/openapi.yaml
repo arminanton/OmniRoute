@@ -7247,6 +7247,9 @@ paths:
       responses:
         "200":
           description: Authenticated; access-token details when applicable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliWhoamiResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -8702,7 +8705,15 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           x-sensitive: true
-          description: OpenClaw CLI configuration
+          description: OpenClaw CLI configuration; returned settings may contain plaintext credentials.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenClawSettingsGetResponse" }
+        "500":
+          description: OpenClaw settings could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiCliToolsOpenclawSettings
       tags: [CLI Tools]
@@ -8720,19 +8731,38 @@ paths:
         anonymous access is not.
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
-            schema:
-              type: object
+            schema: { $ref: "#/components/schemas/CliModelConfigRequest" }
       responses:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          description: Management credential rejected or CLI config writes are disabled by policy.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OpenClaw CLI settings applied
+          description: OpenClaw CLI settings applied.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenClawSettingsApplyResponse" }
+        "400":
+          description: Request JSON or CLI model settings are invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "500":
+          description: OpenClaw settings could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     delete:
       operationId: deleteApiCliToolsOpenclawSettings
       tags: [CLI Tools]
@@ -18563,11 +18593,25 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          description: Management credential rejected or CLI config writes are disabled by policy.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Pi OmniRoute settings removed or no config file needed resetting.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PiSettingsDeleteResponse" }
+        "500":
+          description: Pi settings could not be reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliNestedErrorMessageResponse" }
     get:
       operationId: getApiCliToolsPiSettings
       tags:
@@ -18593,7 +18637,15 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           x-sensitive: true
-          description: OK
+          description: Runtime status and Pi JSON configuration, which can contain the API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PiSettingsGetResponse" }
+        "500":
+          description: Pi runtime or config status could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliNestedErrorMessageResponse" }
     post:
       operationId: postApiCliToolsPiSettings
       tags:
@@ -18610,15 +18662,43 @@ paths:
         An oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage
         or admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
         anonymous access is not.
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CliModelConfigRequest" }
       responses:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          description: Management credential rejected or CLI config writes are disabled by policy.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Pi settings were written; the API key is not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PiSettingsApplyResponse" }
+        "400":
+          description: Request JSON or CLI model settings are invalid.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/CliNestedErrorMessageResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "500":
+          description: Pi settings could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliNestedErrorMessageResponse" }
   /api/cli-tools/qwen-settings:
     delete:
       operationId: deleteApiCliToolsQwenSettings
@@ -18637,8 +18717,28 @@ paths:
         - {}
       x-local-only: true
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential rejected or CLI config writes are disabled by policy.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: OmniRoute-managed settings and environment key were removed from Qwen Code.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QwenSettingsDeleteResponse" }
+        "500":
+          description: Qwen Code settings could not be reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     get:
       operationId: getApiCliToolsQwenSettings
       tags:
@@ -18656,10 +18756,24 @@ paths:
         - {}
       x-local-only: true
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           x-sensitive: true
           description: >-
             Returns local Qwen Code settings and filesystem paths that may disclose sensitive configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QwenSettingsGetResponse" }
+        "500":
+          description: Qwen runtime or settings could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiCliToolsQwenSettings
       tags:
@@ -18676,9 +18790,40 @@ paths:
         - ManagementAnthropicApiKeyAuth: []
         - {}
       x-local-only: true
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CliModelConfigRequest" }
       responses:
+        "400":
+          description: Request JSON or CLI model settings are invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management credential rejected or CLI config writes are disabled by policy.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Qwen Code settings were written; the API key is stored in its environment file and is not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QwenSettingsApplyResponse" }
+        "500":
+          description: Qwen Code settings could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/cli-tools/smelt-settings:
     delete:
       operationId: deleteApiCliToolsSmeltSettings
@@ -18699,11 +18844,25 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          description: Management credential rejected or CLI config writes are disabled by policy.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Smelt OmniRoute settings removed or no config file needed resetting.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SmeltSettingsDeleteResponse" }
+        "500":
+          description: Smelt settings could not be reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliNestedErrorMessageResponse" }
     get:
       operationId: getApiCliToolsSmeltSettings
       tags:
@@ -18728,7 +18887,15 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           x-sensitive: true
-          description: OK
+          description: Runtime status and Smelt JSON configuration, which can contain the API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SmeltSettingsGetResponse" }
+        "500":
+          description: Smelt runtime or config status could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliNestedErrorMessageResponse" }
     post:
       operationId: postApiCliToolsSmeltSettings
       tags:
@@ -18744,15 +18911,43 @@ paths:
         POST cli tools › smelt settings This operation is always-protected, including when requireLogin=false. An oma_live_ Access Token requires write scope for this operation. Bearer API
         keys require manage or admin. Dashboard sessions and trusted loopback CLI/internal-service
         credentials are accepted; anonymous access is not.
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CliModelConfigRequest" }
       responses:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          description: Management credential rejected or CLI config writes are disabled by policy.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Smelt settings were written; the API key is not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SmeltSettingsApplyResponse" }
+        "400":
+          description: Request JSON or CLI model settings are invalid.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "500":
+          description: Smelt settings could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliNestedErrorMessageResponse" }
   /api/cli-tools/status:
     get:
       operationId: getApiCliToolsStatus
@@ -18810,8 +19005,20 @@ paths:
       responses:
         "200":
           description: Ticket validity, provider, and expiry for the public connect page.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              description: Prevents caching single-use ticket validity responses.
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexConnectTicketResponse" }
         "404":
           description: Ticket is invalid, expired, already used, or belongs to another provider.
+          headers:
+            Cache-Control:
+              description: Prevents caching responses about a single-use ticket.
+              schema: { type: string, const: no-store }
           content:
             application/json:
               schema:
@@ -18843,38 +19050,43 @@ paths:
         "200":
           description: Codex connection persisted; includes its identifier and account label.
           x-sensitive: true
+          headers:
+            Cache-Control:
+              description: Prevents caching the result of a credential-bearing device-flow exchange.
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexConnectCompleteResponse" }
         "400":
           description: Invalid JSON body or OAuth completion payload.
+          headers:
+            Cache-Control:
+              description: Prevents caching responses to a credential-bearing device-flow exchange.
+              schema: { type: string, const: no-store }
           content:
             application/json:
               schema:
-                type: object
-                required: [error]
-                properties:
-                  success: { type: boolean }
-                  error: { type: string }
+                oneOf:
+                  - { $ref: "#/components/schemas/CodexConnectInvalidJsonResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
         "410":
           description: Single-use ticket is invalid, expired, or already claimed.
+          headers:
+            Cache-Control:
+              description: Prevents caching the single-use ticket result.
+              schema: { type: string, const: no-store }
           content:
             application/json:
-              schema:
-                type: object
-                required: [success, error]
-                properties:
-                  success: { type: boolean, const: false }
-                  error: { type: string }
-                additionalProperties: false
+              schema: { $ref: "#/components/schemas/CodexConnectFailureResponse" }
         "500":
           description: OAuth tokens could not be finalized or the provider connection could not be persisted.
+          headers:
+            Cache-Control:
+              description: Prevents caching details from credential-bearing device-flow requests.
+              schema: { type: string, const: no-store }
           content:
             application/json:
-              schema:
-                type: object
-                required: [success, error]
-                properties:
-                  success: { type: boolean, const: false }
-                  error: { type: string }
-                additionalProperties: false
+              schema: { $ref: "#/components/schemas/CodexConnectFailureResponse" }
   /api/combos/auto:
     get:
       operationId: getApiCombosAuto
@@ -19062,6 +19274,9 @@ paths:
       responses:
         "200":
           description: Comparison rows for the selected compression engines.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CompressionCompareResponse" }
         "400":
           description: Invalid JSON body or message/engine selection failed validation.
           content:
@@ -43699,9 +43914,9 @@ components:
       type: object
       x-sensitive: true
       description: >-
-        Shared JCode/Kilo model settings payload. `apiKey` is plaintext credential input and is
-        write-only. The handlers read `keyId` before shared validation; other unknown fields are
-        accepted by the Zod object and stripped.
+        Shared CLI model-setup payload used by JCode/Kilo, OpenClaw, Pi, Qwen Code, and Smelt.
+        `apiKey` is plaintext credential input and is write-only. The handlers may read `keyId`
+        before shared validation; other unknown fields are accepted by the Zod object and stripped.
       required: [baseUrl, model]
       properties:
         baseUrl: { type: string, minLength: 1 }
@@ -65064,4 +65279,272 @@ components:
         message:
           type: string
           enum: [No settings file to reset, OmniRoute settings removed successfully]
+      additionalProperties: false
+
+    CliNestedErrorMessageResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message: { type: string }
+          additionalProperties: true
+      additionalProperties: false
+
+    OpenClawSettingsUnavailableResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, settings, message]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean, const: false }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"], x-sensitive: true }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        settings: { type: "null" }
+        message:
+          type: string
+          enum: [Open Claw CLI is installed but not runnable, Open Claw CLI is not installed]
+      additionalProperties: false
+
+    OpenClawSettingsReadyResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, settings, hasOmniRoute, settingsPath]
+      properties:
+        installed: { type: boolean, const: true }
+        runnable: { type: boolean, const: true }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"], x-sensitive: true }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        settings:
+          x-sensitive: true
+          description: Raw OpenClaw JSONC settings; the object may contain an API key.
+        hasOmniRoute: { type: boolean }
+        settingsPath: { type: string, x-sensitive: true }
+      additionalProperties: true
+
+    OpenClawSettingsGetResponse:
+      x-sensitive: true
+      description: Runtime status plus either a non-runnable result or raw OpenClaw settings.
+      oneOf:
+        - { $ref: "#/components/schemas/OpenClawSettingsUnavailableResponse" }
+        - { $ref: "#/components/schemas/OpenClawSettingsReadyResponse" }
+
+    OpenClawSettingsApplyResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, settingsPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Open Claw settings applied successfully! }
+        settingsPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    CliToolJsonConfigReadyResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, config, hasOmniRoute, configPath]
+      properties:
+        installed: { type: boolean, const: true }
+        runnable: { type: boolean, const: true }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"], x-sensitive: true }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        config:
+          type: [object, "null"]
+          x-sensitive: true
+          description: Raw CLI JSON configuration; may contain an API key.
+          additionalProperties: true
+        hasOmniRoute: { type: boolean }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    PiSettingsGetResponse:
+      type: object
+      x-sensitive: true
+      description: Runtime status plus either an unavailable result or raw Pi JSON configuration.
+      oneOf:
+        - { $ref: "#/components/schemas/CliToolSettingsUnavailableResponse" }
+        - { $ref: "#/components/schemas/CliToolJsonConfigReadyResponse" }
+
+    PiSettingsApplyResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Pi settings applied successfully! }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    PiSettingsDeleteResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, enum: [No config file to reset, Pi OmniRoute settings removed] }
+      additionalProperties: false
+
+    QwenSettingsGetResponse:
+      type: object
+      x-sensitive: true
+      description: Runtime metadata plus local Qwen Code settings and filesystem paths; the environment-file API key itself is not returned.
+      required: [installed, runnable, command, commandPath, reason, runtimeMode, requiresBinary, settings, hasOmniRoute, settingsPath, envPath]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean }
+        version: { type: string }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"], x-sensitive: true }
+        reason: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        requiresBinary: { type: boolean }
+        settings:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+        hasOmniRoute: { type: boolean }
+        settingsPath: { type: string, x-sensitive: true }
+        envPath: { type: string, x-sensitive: true }
+      additionalProperties: true
+
+    QwenSettingsApplyResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, settingsPath, envPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Qwen Code now routes through OmniRoute }
+        settingsPath: { type: string, x-sensitive: true }
+        envPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    QwenSettingsDeleteResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: OmniRoute settings removed from Qwen Code }
+      additionalProperties: false
+
+    SmeltSettingsGetResponse:
+      type: object
+      x-sensitive: true
+      description: Runtime status plus either an unavailable result or raw Smelt JSON configuration.
+      oneOf:
+        - { $ref: "#/components/schemas/CliToolSettingsUnavailableResponse" }
+        - { $ref: "#/components/schemas/CliToolJsonConfigReadyResponse" }
+
+    SmeltSettingsApplyResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Smelt settings applied successfully! }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    SmeltSettingsDeleteResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, enum: [No config file to reset, Smelt OmniRoute settings removed] }
+      additionalProperties: false
+
+    CliWhoamiAccessTokenResponse:
+      type: object
+      x-sensitive: true
+      required: [authenticated, viaAccessToken, id, name, scope, createdAt, lastUsedAt, expiresAt]
+      properties:
+        authenticated: { type: boolean, const: true }
+        viaAccessToken: { type: boolean, const: true }
+        id: { type: string, x-sensitive: true }
+        name: { type: string, x-sensitive: true }
+        scope: { type: string }
+        createdAt: { type: [string, "null"], format: date-time }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        expiresAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+
+    CliWhoamiOtherCredentialResponse:
+      type: object
+      required: [authenticated, viaAccessToken, scope]
+      properties:
+        authenticated: { type: boolean, const: true }
+        viaAccessToken: { type: boolean, const: false }
+        scope: { type: "null" }
+      additionalProperties: false
+
+    CliWhoamiResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/CliWhoamiAccessTokenResponse" }
+        - { $ref: "#/components/schemas/CliWhoamiOtherCredentialResponse" }
+
+    CodexConnectTicketResponse:
+      type: object
+      required: [valid, provider, expiresAt]
+      properties:
+        valid: { type: boolean, const: true }
+        provider: { type: string, const: codex }
+        expiresAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    CodexConnectInvalidJsonResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string, const: Invalid JSON body }
+      additionalProperties: false
+
+    CodexConnectFailureResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success: { type: boolean, const: false }
+        error: { type: string }
+      additionalProperties: false
+
+    CodexConnectCompleteResponse:
+      type: object
+      x-sensitive: true
+      required: [success, connection]
+      properties:
+        success: { type: boolean, const: true }
+        connection:
+          type: object
+          x-sensitive: true
+          required: [id, provider]
+          properties:
+            id: { type: string, x-sensitive: true }
+            provider: { type: string, const: codex }
+            email: { type: [string, "null"], format: email, x-sensitive: true }
+          additionalProperties: false
+      additionalProperties: false
+
+    CompressionEngineSummaryRow:
+      type: object
+      required: [engine, meanSavingsPercent, meanRetention, totalCompressedTokens]
+      properties:
+        engine: { type: string }
+        meanSavingsPercent: { type: number }
+        meanRetention: { type: number, minimum: 0, maximum: 1 }
+        totalCompressedTokens: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    CompressionCompareResponse:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items: { $ref: "#/components/schemas/CompressionEngineSummaryRow" }
       additionalProperties: false
