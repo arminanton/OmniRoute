@@ -17,12 +17,28 @@ const spec = yaml.load(fs.readFileSync(specPath, "utf8")) as {
     Record<
       string,
       {
+        parameters?: Array<{
+          name?: string;
+          description?: string;
+          schema?: { minLength?: number };
+        }>;
         responses?: Record<string, { content?: Record<string, { schema?: OpenApiSchema }> }>;
       }
     >
   >;
   components: { schemas: Record<string, OpenApiSchema> };
 };
+
+test("call-log list combo parameter is a combo-only flag", () => {
+  const parameters = spec.paths["/api/usage/call-logs"]?.get?.parameters ?? [];
+  const combo = parameters.find((parameter) => parameter.name === "combo");
+  assert.ok(combo, "combo query parameter should be documented");
+  assert.equal(combo.schema?.minLength, 1);
+  assert.match(
+    combo.description ?? "",
+    /non-empty value selects only requests assigned to a combo/i
+  );
+});
 
 test("call-log detail OpenAPI exposes the persisted diagnostic and transport shape", () => {
   const operation = spec.paths["/api/usage/call-logs/{id}"]?.get;

@@ -973,6 +973,7 @@ async function handleChatCoreOwned({
       stage: "registered",
       correlationId,
       sessionTag: conversationId || null,
+      comboName: comboName || null,
     }) || generateRequestId();
 
   // Initialize rate limit settings from persisted DB (once, lazy)

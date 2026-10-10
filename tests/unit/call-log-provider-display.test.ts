@@ -90,6 +90,7 @@ test("buildCallLogListRows adds providerDisplay to active and completed in-memor
         provider: providerId,
         connectionId: null,
         correlationId: "cid-pending",
+        comboName: "Primary fallback",
       },
     ],
     completedDetails: [
@@ -103,6 +104,7 @@ test("buildCallLogListRows adds providerDisplay to active and completed in-memor
         provider: providerId,
         connectionId: null,
         correlationId: "cid-completed",
+        comboName: "Primary fallback",
         status: 200,
         error: null,
       },
@@ -112,6 +114,12 @@ test("buildCallLogListRows adds providerDisplay to active and completed in-memor
   const pending = rows.find((row) => row.id === "pending-1");
   const completed = rows.find((row) => row.id === "completed-1");
 
+  assert.ok(pending);
+  assert.ok(completed);
   assert.equal(pending?.providerDisplay, "Bynara");
   assert.equal(completed?.providerDisplay, "Bynara");
+  assert.equal(pending?.comboName, "Primary fallback");
+  assert.equal(completed?.comboName, "Primary fallback");
+  assert.equal(callLogsRoute.rowMatchesFilter(pending, { combo: "1" }), true);
+  assert.equal(callLogsRoute.rowMatchesFilter(completed, { combo: "1" }), true);
 });

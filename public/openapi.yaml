@@ -6508,7 +6508,8 @@ paths:
           schema: { type: string }
         - name: combo
           in: query
-          schema: { type: string }
+          description: Any non-empty value selects only requests assigned to a combo; the dashboard sends `1`.
+          schema: { type: string, minLength: 1 }
         - name: search
           in: query
           schema: { type: string }

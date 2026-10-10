@@ -13,6 +13,22 @@ const {
 const MINUTE_MS = 60 * 1000;
 const HOUR_MS = 60 * MINUTE_MS;
 
+test("pending request metadata preserves the combo name for in-memory call-log filtering", () => {
+  clearPendingRequests();
+  const model = "gpt-5.6-sol";
+  const provider = "openai-codex";
+  const connectionId = "conn-combo-pending";
+  const id = trackPendingRequest(model, provider, connectionId, true, {
+    comboName: "Primary fallback",
+  });
+  assert.ok(id);
+  assert.equal(getPendingById().get(id)?.comboName, "Primary fallback");
+
+  trackPendingRequest(model, provider, connectionId, false);
+  assert.equal(getPendingById().has(id), false);
+  clearPendingRequests();
+});
+
 test("sweepStalePendingRequests evicts orphaned pending details and self-heals counts", () => {
   clearPendingRequests();
 
@@ -140,8 +156,16 @@ test("trackPendingRequest reuses the same id across a combo's target-attempt ret
   });
 
   assert.equal(secondId, firstId, "retry attempt must reuse the first attempt's id");
-  assert.equal(getPendingById().has(firstId), true, "reused id is live again under the new attempt");
-  assert.equal(getPendingById().get(firstId)?.model, "model-b", "entry reflects the NEW attempt's target");
+  assert.equal(
+    getPendingById().has(firstId),
+    true,
+    "reused id is live again under the new attempt"
+  );
+  assert.equal(
+    getPendingById().get(firstId)?.model,
+    "model-b",
+    "entry reflects the NEW attempt's target"
+  );
 
   clearPendingRequests();
 });

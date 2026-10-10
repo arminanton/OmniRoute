@@ -33,6 +33,13 @@ test.describe("call-logs rowMatchesFilter unit tests", () => {
     assert.equal(rowMatchesFilter(baseRow, { provider: "anthropic" }), false);
   });
 
+  test("combo filter selects combo rows instead of searching for the flag value in the name", () => {
+    const comboRow = { ...baseRow, comboName: "Primary fallback" };
+    const directRow = { ...baseRow, comboName: null };
+    assert.equal(rowMatchesFilter(comboRow, { combo: "1" }), true);
+    assert.equal(rowMatchesFilter(directRow, { combo: "1" }), false);
+  });
+
   test("model filter matches model name and excludes mismatched in-memory rows", () => {
     assert.equal(rowMatchesFilter(baseRow, { model: "gpt-4o" }), true);
     assert.equal(rowMatchesFilter(baseRow, { model: "claude-3-5-sonnet" }), false);
