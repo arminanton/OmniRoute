@@ -6,6 +6,7 @@
 use std::{
     cmp::Ordering,
     collections::HashMap,
+    hash::{Hash, Hasher},
     sync::{
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering},
@@ -50,10 +51,13 @@ struct SchedulerInner {
     accounts: Vec<Arc<Account>>,
     routing_strategy: SyntheticRoutingStrategy,
     affinity: Mutex<HashMap<String, AffinityPin>>,
+    affinity_locks: Vec<Mutex<()>>,
     changed: Arc<Notify>,
     capacity_wait_requests: AtomicU64,
     affinity_ttl: Option<Duration>,
 }
+
+const AFFINITY_LOCK_STRIPES: usize = 64;
 
 #[derive(Clone)]
 pub struct AccountScheduler {
@@ -122,6 +126,7 @@ impl AccountScheduler {
                 accounts: stored,
                 routing_strategy,
                 affinity: Mutex::new(HashMap::new()),
+                affinity_locks: (0..AFFINITY_LOCK_STRIPES).map(|_| Mutex::new(())).collect(),
                 changed: Arc::new(Notify::new()),
                 capacity_wait_requests: AtomicU64::new(0),
                 affinity_ttl: affinity_ttl.filter(|ttl| !ttl.is_zero()),
@@ -147,13 +152,25 @@ impl AccountScheduler {
         &self,
         session_key: Option<&str>,
     ) -> Result<AccountLease, SchedulerError> {
+        let affinity_key = session_key.filter(|_| self.inner.affinity_ttl.is_some());
         let mut counted_capacity_wait = false;
         loop {
             let notified = self.inner.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
 
-            let mut affinity = self.inner.affinity.lock().await;
+            // Requests without affinity never touch either lock. Requests for different
+            // sessions only contend when they hash to the same stripe; the map lock itself is
+            // held just long enough to read or update one pin, never during candidate scanning.
+            let _session_guard = if let Some(key) = affinity_key {
+                Some(
+                    self.inner.affinity_locks[affinity_lock_stripe(key)]
+                        .lock()
+                        .await,
+                )
+            } else {
+                None
+            };
             let now = Instant::now();
             let eligible: Vec<Arc<Account>> = self
                 .inner
@@ -163,74 +180,77 @@ impl AccountScheduler {
                 .cloned()
                 .collect();
             if eligible.is_empty() {
-                if let Some(key) = session_key {
-                    affinity.remove(key);
+                if let Some(key) = affinity_key {
+                    self.inner.affinity.lock().await.remove(key);
                 }
                 return Err(SchedulerError::NoEligibleAccounts);
             }
 
-            let mut used_affinity = false;
-            let mut pinned_index = None;
-            if let (Some(key), Some(ttl)) = (session_key, self.inner.affinity_ttl) {
-                if let Some(pin) = affinity.get(key).cloned() {
-                    if pin.expires_at <= now {
+            let mut pinned_account = None;
+            if let Some(key) = affinity_key {
+                let pin = {
+                    let mut affinity = self.inner.affinity.lock().await;
+                    let pin = affinity.get(key).cloned();
+                    if pin.as_ref().is_some_and(|pin| pin.expires_at <= now) {
                         affinity.remove(key);
-                    } else if let Some(index) = eligible.iter().position(|account| {
-                        account.metadata.id == pin.account_id && has_capacity(account.as_ref())
-                    }) {
-                        pinned_index = Some(index);
-                        used_affinity = true;
-                        affinity.insert(
-                            key.to_owned(),
-                            AffinityPin {
-                                account_id: pin.account_id,
-                                expires_at: now + ttl,
-                            },
-                        );
-                    } else if !eligible
+                        None
+                    } else {
+                        pin
+                    }
+                };
+                if let Some(pin) = pin {
+                    if let Some(account) = eligible
                         .iter()
-                        .any(|account| account.metadata.id == pin.account_id)
+                        .find(|account| account.metadata.id == pin.account_id)
                     {
-                        affinity.remove(key);
+                        pinned_account = Some(account.clone());
+                    } else {
+                        self.inner.affinity.lock().await.remove(key);
                     }
                 }
             }
 
-            let selected = pinned_index
-                .map(|index| eligible[index].clone())
-                .or_else(|| {
-                    let mut available = eligible.iter().filter(|account| has_capacity(account));
-                    match self.inner.routing_strategy {
-                        SyntheticRoutingStrategy::LeastLoaded => available
-                            .min_by(|left, right| compare_load(left, right))
-                            .cloned(),
-                        SyntheticRoutingStrategy::PriorityOrderedFillFirst => {
-                            available.next().cloned()
-                        }
-                    }
-                });
+            let mut selected = None;
+            let mut used_affinity = false;
+            if let Some(account) = pinned_account.as_ref() {
+                if try_reserve_slot(account.as_ref()) {
+                    selected = Some(account.clone());
+                    used_affinity = true;
+                }
+            }
+
+            if selected.is_none() {
+                let mut candidates = eligible.iter().collect::<Vec<_>>();
+                if self.inner.routing_strategy == SyntheticRoutingStrategy::LeastLoaded {
+                    candidates.sort_by(|left, right| compare_load(left, right));
+                }
+                selected = candidates
+                    .into_iter()
+                    .find(|account| try_reserve_slot(account.as_ref()))
+                    .map(|account| account.clone());
+            }
 
             if let Some(account) = selected {
-                account.in_flight.fetch_add(1, AtomicOrdering::AcqRel);
-                if !used_affinity {
-                    if let (Some(key), Some(ttl)) = (session_key, self.inner.affinity_ttl) {
-                        affinity.insert(
-                            key.to_owned(),
-                            AffinityPin {
-                                account_id: account.metadata.id.clone(),
-                                expires_at: now + ttl,
-                            },
-                        );
-                    }
-                }
-                return Ok(AccountLease {
+                // Build the RAII guard before the map-lock await. If this task is cancelled while
+                // waiting to update its pin, dropping the future still releases the reserved slot.
+                let lease = AccountLease {
                     account,
                     changed: self.inner.changed.clone(),
                     used_affinity,
-                });
+                };
+                if let (Some(key), Some(ttl)) = (affinity_key, self.inner.affinity_ttl) {
+                    self.inner.affinity.lock().await.insert(
+                        key.to_owned(),
+                        AffinityPin {
+                            account_id: lease.account.metadata.id.clone(),
+                            expires_at: now + ttl,
+                        },
+                    );
+                }
+                return Ok(lease);
             }
 
-            drop(affinity);
+            drop(_session_guard);
             if !counted_capacity_wait {
                 self.inner
                     .capacity_wait_requests
@@ -263,6 +283,22 @@ impl AccountScheduler {
     }
 }
 
+fn affinity_lock_stripe(key: &str) -> usize {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    hasher.finish() as usize % AFFINITY_LOCK_STRIPES
+}
+
+fn try_reserve_slot(account: &Account) -> bool {
+    let max_in_flight = account.metadata.max_in_flight;
+    account
+        .in_flight
+        .try_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
+            (current < max_in_flight).then_some(current + 1)
+        })
+        .is_ok()
+}
+
 impl AccountLease {
     pub fn account_id(&self) -> &str {
         &self.account.metadata.id
@@ -287,10 +323,6 @@ fn is_eligible(account: &SyntheticAccount, now: Instant) -> bool {
         && account.cooldown_until.is_none_or(|until| until <= now)
 }
 
-fn has_capacity(account: &Account) -> bool {
-    account.in_flight.load(AtomicOrdering::Acquire) < account.metadata.max_in_flight
-}
-
 fn compare_load(left: &Arc<Account>, right: &Arc<Account>) -> Ordering {
     let left_running = left.in_flight.load(AtomicOrdering::Acquire) as u128;
     let right_running = right.in_flight.load(AtomicOrdering::Acquire) as u128;
@@ -307,7 +339,7 @@ fn compare_load(left: &Arc<Account>, right: &Arc<Account>) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::oneshot;
+    use tokio::sync::{Barrier, mpsc, oneshot, watch};
 
     fn account(
         id: &str,
@@ -505,5 +537,118 @@ mod tests {
         assert_eq!(scheduler.in_flight_by_account()["account-a"], 1);
         drop(after_cancel);
         assert_eq!(scheduler.in_flight_by_account()["account-a"], 0);
+    }
+
+    #[tokio::test]
+    async fn one_hundred_concurrent_sessions_respect_caps_and_release_after_cancellation() {
+        const TASKS: usize = 100;
+        const ACCOUNT_COUNT: usize = 4;
+        const PER_ACCOUNT_CAP: usize = 8;
+        const TOTAL_CAPACITY: usize = ACCOUNT_COUNT * PER_ACCOUNT_CAP;
+        const CANCEL_COUNT: usize = 5;
+
+        let scheduler = AccountScheduler::new(
+            (0..ACCOUNT_COUNT)
+                .map(|index| {
+                    account(
+                        &format!("account-{index}"),
+                        true,
+                        None,
+                        false,
+                        PER_ACCOUNT_CAP,
+                    )
+                })
+                .collect(),
+            Some(Duration::from_secs(60)),
+        )
+        .unwrap();
+        let start = Arc::new(Barrier::new(TASKS + 1));
+        let (acquired_tx, mut acquired_rx) = mpsc::unbounded_channel();
+        let (release_tx, release_rx) = watch::channel(false);
+        let mut tasks = (0..TASKS)
+            .map(|task_id| {
+                let scheduler = scheduler.clone();
+                let start = Arc::clone(&start);
+                let acquired_tx = acquired_tx.clone();
+                let mut release_rx = release_rx.clone();
+                tokio::spawn(async move {
+                    start.wait().await;
+                    let session_key = format!("session-{task_id}");
+                    let lease = scheduler
+                        .acquire(Some(&session_key), Duration::from_secs(5))
+                        .await
+                        .expect("capacity should become available before the timeout");
+                    acquired_tx
+                        .send((task_id, lease.account_id().to_owned()))
+                        .expect("test receiver remains open");
+                    while !*release_rx.borrow() {
+                        if release_rx.changed().await.is_err() {
+                            break;
+                        }
+                    }
+                    drop(lease);
+                })
+            })
+            .map(Some)
+            .collect::<Vec<_>>();
+        drop(acquired_tx);
+
+        start.wait().await;
+        let mut first_wave = Vec::with_capacity(TOTAL_CAPACITY);
+        for _ in 0..TOTAL_CAPACITY {
+            first_wave.push(
+                tokio::time::timeout(Duration::from_secs(2), acquired_rx.recv())
+                    .await
+                    .expect("all account slots should be filled")
+                    .expect("an acquisition task should report its lease"),
+            );
+        }
+
+        let counts = scheduler.in_flight_by_account();
+        assert!(counts.values().all(|count| *count <= PER_ACCOUNT_CAP));
+        assert_eq!(counts.values().sum::<usize>(), TOTAL_CAPACITY);
+
+        // Aborting lease holders must drop their guards and wake queued acquisitions.
+        for (task_id, _) in first_wave.iter().take(CANCEL_COUNT) {
+            let task = tasks[*task_id]
+                .take()
+                .expect("task handle is still present");
+            task.abort();
+            assert!(
+                task.await
+                    .expect_err("task should be cancelled")
+                    .is_cancelled()
+            );
+        }
+        for _ in 0..CANCEL_COUNT {
+            tokio::time::timeout(Duration::from_secs(2), acquired_rx.recv())
+                .await
+                .expect("cancelled slots should wake queued tasks")
+                .expect("a queued acquisition should report its lease");
+        }
+
+        let counts_after_cancel = scheduler.in_flight_by_account();
+        assert!(
+            counts_after_cancel
+                .values()
+                .all(|count| *count <= PER_ACCOUNT_CAP)
+        );
+        assert_eq!(counts_after_cancel.values().sum::<usize>(), TOTAL_CAPACITY);
+
+        release_tx
+            .send(true)
+            .expect("lease holders remain subscribed");
+        for task in tasks.into_iter().flatten() {
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .expect("all remaining tasks should finish")
+                .expect("task should complete without panic");
+        }
+        assert!(
+            scheduler
+                .in_flight_by_account()
+                .values()
+                .all(|count| *count == 0)
+        );
     }
 }
