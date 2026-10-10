@@ -141,14 +141,17 @@ export async function POST(request: Request) {
       metadata: { tokenId: record.id, scope: tokenScope },
     });
 
-    return NextResponse.json({
-      success: true,
-      token: secret,
-      id: record.id,
-      name: record.name,
-      scope: record.scope,
-      expiresAt: record.expiresAt,
-    });
+    return NextResponse.json(
+      {
+        success: true,
+        token: secret,
+        id: record.id,
+        name: record.name,
+        scope: record.scope,
+        expiresAt: record.expiresAt,
+      },
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (error) {
     console.error("[CLI] connect failed:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
