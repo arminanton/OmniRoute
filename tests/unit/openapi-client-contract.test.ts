@@ -150,14 +150,21 @@ test("primary inference operations describe their JSON and streaming wire format
   );
 });
 
-test("Jina classify and audio translation document caller-cancellation responses", () => {
-  for (const route of ["/api/v1/classify", "/api/v1/audio/translations"]) {
+test("Jina classify, segment, and translation document cancellation/admission responses", () => {
+  for (const route of ["/api/v1/classify", "/api/v1/segment", "/api/v1/audio/translations"]) {
     const cancelled = operation(route, "post").responses?.["499"];
     assert.ok(cancelled, `${route} must document its source-level abort response`);
     assert.equal(
       cancelled.content?.["application/json"]?.schema?.$ref,
       "#/components/schemas/ApiErrorResponse"
     );
+  }
+
+  for (const route of ["/api/v1/classify", "/api/v1/segment"]) {
+    const responses = operation(route, "post").responses;
+    for (const status of ["400", "401", "403", "429", "500", "503"]) {
+      assert.ok(responses?.[status], `${route} must document HTTP ${status}`);
+    }
   }
 });
 
