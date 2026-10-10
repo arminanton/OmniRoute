@@ -272,3 +272,35 @@ test("auto-select returns 400 when no web-fetch provider is configured", async (
   assert.equal(response.status, 400);
   assert.ok((body.error?.message ?? "").includes("No credentials configured"));
 });
+
+test("route accepts a valid bare x-api-key when key enforcement is enabled", async () => {
+  const previousRequireApiKey = process.env.REQUIRE_API_KEY;
+  const previousOmniRouteApiKey = process.env.OMNIROUTE_API_KEY;
+  process.env.REQUIRE_API_KEY = "true";
+  process.env.OMNIROUTE_API_KEY = "sk-web-fetch-client-api-test";
+  try {
+    const response = await webFetchRoute.POST(
+      new Request("http://localhost/api/v1/web/fetch", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": process.env.OMNIROUTE_API_KEY,
+        },
+        body: JSON.stringify({ url: "https://example.com" }),
+      })
+    );
+    const body = await readJson(response);
+
+    assert.equal(
+      response.status,
+      400,
+      "authentication passed; only missing provider credentials remain"
+    );
+    assert.ok((body.error?.message ?? "").includes("No credentials configured"));
+  } finally {
+    if (previousRequireApiKey === undefined) delete process.env.REQUIRE_API_KEY;
+    else process.env.REQUIRE_API_KEY = previousRequireApiKey;
+    if (previousOmniRouteApiKey === undefined) delete process.env.OMNIROUTE_API_KEY;
+    else process.env.OMNIROUTE_API_KEY = previousOmniRouteApiKey;
+  }
+});

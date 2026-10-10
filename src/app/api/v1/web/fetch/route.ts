@@ -26,13 +26,9 @@ import {
   type WebFetchProviderId,
 } from "@omniroute/open-sse/handlers/webFetch.ts";
 import * as log from "@/sse/utils/logger";
-import {
-  extractApiKey,
-  isValidApiKey,
-  getProviderCredentialsWithQuotaPreflight,
-} from "@/sse/services/auth";
+import { getProviderCredentialsWithQuotaPreflight } from "@/sse/services/auth";
 import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
-import { isRequireApiKeyEnabled } from "@/shared/utils/featureFlags";
+import { enforceClientApiRouteAuth } from "@/shared/utils/clientApiRouteAuth";
 import { v1WebFetchSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import {
@@ -278,16 +274,8 @@ export async function POST(request: Request) {
   }
   const body = validation.data;
 
-  // Optional auth check — when REQUIRE_API_KEY=false, ignore presented
-  // invalid keys so anonymous access works the same as all other client
-  // APIs (#7785).
-  const apiKeyRaw = extractApiKey(request);
-  if (isRequireApiKeyEnabled() && !apiKeyRaw) {
-    return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Authentication required");
-  }
-  if (isRequireApiKeyEnabled() && apiKeyRaw && !(await isValidApiKey(apiKeyRaw))) {
-    return errorResponse(HTTP_STATUS.UNAUTHORIZED, "Invalid API key");
-  }
+  const authRejection = await enforceClientApiRouteAuth(request);
+  if (authRejection) return authRejection;
 
   // Enforce API key policies
   const policy = await enforceApiKeyPolicy(request, "web-fetch");
