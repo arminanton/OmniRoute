@@ -211,3 +211,64 @@ test("azure DI poll never resolves and times out after 30 attempts with a 504", 
   // 1 initial POST + 30 poll attempts (the max cap), no more.
   assert.equal(calls.length, 31);
 });
+
+test("azure DI submit fetch is bounded by the server-owned operation deadline", async () => {
+  const caller = new AbortController();
+  let submitSignal: AbortSignal | null = null;
+  const res = await handleOcr({
+    body: {
+      model: "azure-document-intelligence/prebuilt-read",
+      document: { type: "document_url", document_url: "https://x/d.pdf" },
+    },
+    credentials: { apiKey: "azkey", baseUrl: "https://r.cognitiveservices.azure.com" },
+    signal: caller.signal,
+    operationTimeoutMs: 10,
+    fetchImpl: async (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        submitSignal = init.signal as AbortSignal;
+        assert.ok(submitSignal, "Azure submit receives the server-owned deadline signal");
+        assert.notEqual(submitSignal, caller.signal, "caller abort must not cancel submit");
+        submitSignal.addEventListener("abort", () => reject(submitSignal!.reason), { once: true });
+      }),
+    sleepImpl: noSleep,
+  });
+
+  assert.equal(res.status, 504);
+  assert.equal(submitSignal?.aborted, true);
+});
+
+test("azure DI hanging poll fetch is aborted by the same absolute deadline", async () => {
+  const caller = new AbortController();
+  let pollSignal: AbortSignal | null = null;
+  let calls = 0;
+  const res = await handleOcr({
+    body: {
+      model: "azure-document-intelligence/prebuilt-read",
+      document: { type: "document_url", document_url: "https://x/d.pdf" },
+    },
+    credentials: { apiKey: "azkey", baseUrl: "https://r.cognitiveservices.azure.com" },
+    signal: caller.signal,
+    operationTimeoutMs: 20,
+    fetchImpl: async (_url, init) => {
+      calls++;
+      if (calls === 1) {
+        return new Response(null, {
+          status: 202,
+          headers: { "Operation-Location": "https://poll/op/1" },
+        });
+      }
+
+      pollSignal = init.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => {
+        assert.ok(pollSignal, "Azure polling receives the server-owned deadline signal");
+        assert.notEqual(pollSignal, caller.signal, "caller abort must not cancel accepted polling");
+        pollSignal.addEventListener("abort", () => reject(pollSignal!.reason), { once: true });
+      });
+    },
+    sleepImpl: noSleep,
+  });
+
+  assert.equal(res.status, 504);
+  assert.equal(calls, 2, "the stalled poll fetch is interrupted without resubmitting the job");
+  assert.equal(pollSignal?.aborted, true);
+});

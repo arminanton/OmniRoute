@@ -340,7 +340,9 @@ test("Azure OCR finishes polling an accepted operation after disconnect, then re
     const url = String(input);
     assert.equal(occupancy.getAccountRequestInFlightCount(azureConnectionId), 1);
     if (url.includes(":analyze?")) {
-      assert.equal(init.signal, undefined, "caller abort must not cancel Azure submit");
+      assert.ok(init.signal, "Azure submit receives a server-owned deadline signal");
+      assert.notEqual(init.signal, controller.signal, "caller abort must not cancel Azure submit");
+      assert.equal(init.signal.aborted, false);
       return new Response(null, {
         status: 202,
         headers: { "Operation-Location": "https://ocr-azure.example.test/operations/accepted-1" },
@@ -348,7 +350,13 @@ test("Azure OCR finishes polling an accepted operation after disconnect, then re
     }
     if (url === "https://ocr-azure.example.test/operations/accepted-1") {
       pollCount += 1;
-      assert.equal(init.signal, undefined, "caller abort must not cancel accepted-task polling");
+      assert.ok(init.signal, "Azure polling receives a server-owned deadline signal");
+      assert.notEqual(
+        init.signal,
+        controller.signal,
+        "caller abort must not cancel accepted polling"
+      );
+      assert.equal(init.signal.aborted, false);
       if (pollCount === 1) {
         firstPollStarted.resolve();
         return firstPollResponse.promise;

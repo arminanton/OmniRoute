@@ -23,8 +23,29 @@ import {
 
 const OCR_POLL_MAX_ATTEMPTS = 30;
 const OCR_POLL_INTERVAL_MS = 1000;
+const OCR_OPERATION_TIMEOUT_MS = 30_000;
 
 const defaultSleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function sleepWithAbort(
+  ms: number,
+  signal: AbortSignal,
+  sleepImpl: (ms: number) => Promise<unknown>
+): Promise<void> {
+  if (signal.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
+
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+
+  try {
+    await Promise.race([sleepImpl(ms), aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
 
 export const VERTEX_DEEPSEEK_OCR_PROVIDER_ID = "vertex-deepseek-ocr";
 const VERTEX_OCR_DEFAULT_REGION = "us-central1";
@@ -115,6 +136,7 @@ export async function handleOcr({
   signal,
   fetchImpl = fetch,
   sleepImpl = defaultSleep,
+  operationTimeoutMs = OCR_OPERATION_TIMEOUT_MS,
 }) {
   const startTime = Date.now();
   if (!body.document) {
@@ -147,6 +169,7 @@ export async function handleOcr({
     return errorResponse(400, `No base URL configured for OCR provider: ${providerId}`);
   }
 
+  let asyncDeadlineSignal: AbortSignal | null = null;
   try {
     const transformation = getOcrTransformation(providerId);
     const isAsyncProvider = typeof transformation.pollUrl === "function";
@@ -156,45 +179,79 @@ export async function handleOcr({
     // submit reaches the provider its acceptance may be ambiguous, and aborting
     // it could orphan a remote operation that we then stop tracking.
     signal?.throwIfAborted();
-    const res = await fetchImpl(url, isAsyncProvider ? init : { ...init, signal });
+    const asyncDeadlineController = isAsyncProvider ? new AbortController() : null;
+    asyncDeadlineSignal = asyncDeadlineController?.signal ?? null;
+    const deadlineTimer = asyncDeadlineController
+      ? setTimeout(
+          () => {
+            asyncDeadlineController.abort(
+              Object.assign(new Error("OCR operation timed out"), { name: "TimeoutError" })
+            );
+          },
+          Math.max(1, operationTimeoutMs)
+        )
+      : null;
 
-    if (!res.ok) {
-      const errText = await res.text();
-      if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
-      return buildSanitizedUpstreamErrorResponse({
-        status: res.status,
-        rawBody: errText,
-        fallbackMessage: `OCR provider returned HTTP ${res.status}`,
-        headers: CORS_HEADERS,
+    try {
+      const res = await fetchImpl(
+        url,
+        isAsyncProvider ? { ...init, signal: asyncDeadlineController!.signal } : { ...init, signal }
+      );
+
+      if (!res.ok) {
+        const errText = await res.text();
+        if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
+        return buildSanitizedUpstreamErrorResponse({
+          status: res.status,
+          rawBody: errText,
+          fallbackMessage: `OCR provider returned HTTP ${res.status}`,
+          headers: CORS_HEADERS,
+        });
+      }
+
+      if (asyncDeadlineController?.signal.aborted) {
+        return errorResponse(504, "OCR operation timed out");
+      }
+
+      const pollUrl = transformation.pollUrl?.(res) ?? null;
+      let data: unknown;
+      if (pollUrl) {
+        const authHeader = buildAuthHeader(providerConfig.authHeader, token);
+        data = await pollOcrOperation({
+          pollUrl,
+          authHeader,
+          fetchImpl,
+          sleepImpl,
+          deadlineSignal: asyncDeadlineController!.signal,
+        });
+        // Keep request ownership through terminal status or the bounded polling
+        // limit; never let the caller's abort signal abandon an accepted task.
+        if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
+        if (data instanceof Response) return data;
+      } else {
+        data = await res.json();
+        if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
+      }
+
+      const parsed = transformation.parseResponse(data);
+      const headers = new Headers({ ...CORS_HEADERS, "Content-Type": "application/json" });
+      attachOmniRouteMetaHeaders(headers, {
+        provider: providerId,
+        model: modelId,
+        costUsd: 0,
+        latencyMs: Date.now() - startTime,
+        requestId: generateRequestId(),
       });
+      return new Response(JSON.stringify(parsed), { status: 200, headers });
+    } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
     }
-
-    const pollUrl = transformation.pollUrl?.(res) ?? null;
-    let data: unknown;
-    if (pollUrl) {
-      const authHeader = buildAuthHeader(providerConfig.authHeader, token);
-      data = await pollOcrOperation({ pollUrl, authHeader, fetchImpl, sleepImpl });
-      // Keep request ownership through terminal status or the bounded polling
-      // limit; never let the caller's abort signal abandon an accepted task.
-      if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
-      if (data instanceof Response) return data;
-    } else {
-      data = await res.json();
-      if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
-    }
-
-    const parsed = transformation.parseResponse(data);
-    const headers = new Headers({ ...CORS_HEADERS, "Content-Type": "application/json" });
-    attachOmniRouteMetaHeaders(headers, {
-      provider: providerId,
-      model: modelId,
-      costUsd: 0,
-      latencyMs: Date.now() - startTime,
-      requestId: generateRequestId(),
-    });
-    return new Response(JSON.stringify(parsed), { status: 200, headers });
   } catch (err) {
     if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
+    if (asyncDeadlineSignal?.aborted) return errorResponse(504, "OCR operation timed out");
+    if (err instanceof Error && err.name === "TimeoutError") {
+      return errorResponse(504, "OCR operation timed out");
+    }
     const safeErrorMessage = sanitizeErrorMessage(err).trim() || "OCR request failed";
     console.error("[OCR]", safeErrorMessage);
     return errorResponse(500, "OCR request failed");
@@ -218,12 +275,13 @@ function buildAuthHeader(authHeader: string, token: string): Record<string, stri
  *
  * @returns {Promise<unknown|Response>} the parsed JSON body on success, or an error Response
  */
-async function pollOcrOperation({ pollUrl, authHeader, fetchImpl, sleepImpl }) {
+async function pollOcrOperation({ pollUrl, authHeader, fetchImpl, sleepImpl, deadlineSignal }) {
   for (let attempt = 0; attempt < OCR_POLL_MAX_ATTEMPTS; attempt++) {
-    await sleepImpl(OCR_POLL_INTERVAL_MS);
+    await sleepWithAbort(OCR_POLL_INTERVAL_MS, deadlineSignal, sleepImpl);
     const pollRes = await fetchImpl(pollUrl, {
       method: "GET",
       headers: authHeader,
+      signal: deadlineSignal,
     });
     if (!pollRes.ok) {
       console.error("[OCR] poll error", pollRes.status);
