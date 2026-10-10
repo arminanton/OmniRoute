@@ -41,6 +41,21 @@ const operations = [
   ["get", "/api/gamification/stream"],
   ["get", "/api/gamification/transfer"],
   ["post", "/api/gamification/transfer"],
+  ["get", "/api/github-skills"],
+  ["post", "/api/github-skills"],
+  ["get", "/api/guardrails"],
+  ["post", "/api/guardrails/test"],
+  ["post", "/api/headroom/start"],
+  ["get", "/api/headroom/status"],
+  ["post", "/api/headroom/stop"],
+  ["get", "/api/health/degradation"],
+  ["get", "/api/health/ping"],
+  ["get", "/api/init"],
+  ["delete", "/api/intelligence/sync"],
+  ["get", "/api/intelligence/sync"],
+  ["post", "/api/intelligence/sync"],
+  ["get", "/api/issue-agent/runs"],
+  ["post", "/api/issue-agent/runs"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -55,7 +70,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 29 effective OpenAPI operations", () => {
+test("the audited batches declare all 44 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -65,6 +80,88 @@ test("the audited batches declare all 29 effective OpenAPI operations", () => {
       }
     }
   }
+});
+
+test("health ping and init are explicitly public, while management routes stay conditional", () => {
+  for (const [method, route] of [
+    ["get", "/api/health/ping"],
+    ["get", "/api/init"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.deepEqual(routeOperation.security, []);
+    assert.equal(routeOperation["x-local-only"], undefined);
+  }
+  assert.match(operation("get", "/api/init").description, /explicitly public.*initialization side effect/i);
+  assert.match(operation("get", "/api/health/ping").description, /explicitly public read-only/i);
+
+  for (const [method, route] of [
+    ["get", "/api/github-skills"],
+    ["post", "/api/github-skills"],
+    ["get", "/api/guardrails"],
+    ["post", "/api/guardrails/test"],
+    ["get", "/api/headroom/status"],
+    ["get", "/api/health/degradation"],
+    ["delete", "/api/intelligence/sync"],
+    ["get", "/api/intelligence/sync"],
+    ["post", "/api/intelligence/sync"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.notDeepEqual(routeOperation.security, []);
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.match(routeOperation.description, /method-derived.*(?:read|write)/i);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+  assert.match(operation("get", "/api/health/degradation").description, /not explicitly public/i);
+  assert.equal(operation("get", "/api/health/degradation")["x-local-only"], undefined);
+});
+
+test("headroom and issue-agent local-only gates preserve their distinct remote-bypass behavior", () => {
+  for (const [method, route] of [
+    ["post", "/api/headroom/start"],
+    ["post", "/api/headroom/stop"],
+    ["get", "/api/issue-agent/runs"],
+    ["post", "/api/issue-agent/runs"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.equal(routeOperation["x-local-only"], true);
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.match(routeOperation.description, /loopback.*private-LAN/i);
+    assert.match(routeOperation.description, /requireLogin=false/);
+  }
+  for (const route of ["/api/headroom/start", "/api/headroom/stop"]) {
+    assert.match(operation("post", route).description, /remote management credential cannot bypass/i);
+    assert.ok(operation("post", route).responses["403"]);
+  }
+  for (const method of ["get", "post"]) {
+    const routeOperation = operation(method, "/api/issue-agent/runs");
+    assert.ok(hasScheme(routeOperation.security, "ManagementApiKeyBearerAuth"));
+    assert.match(routeOperation.description, /explicitly configure a path-specific manage-scope bypass/i);
+    assert.match(routeOperation.description, /not an `oma_` access token/i);
+  }
+});
+
+test("guardrail tests, headroom status, and issue-agent payloads are marked sensitive", () => {
+  const guardrailTest = operation("post", "/api/guardrails/test");
+  assert.equal(guardrailTest.requestBody["x-sensitive"], true);
+  assert.equal(guardrailTest.responses["200"]["x-sensitive"], true);
+
+  const headroomStatus = operation("get", "/api/headroom/status");
+  assert.equal(headroomStatus.responses["200"]["x-sensitive"], true);
+
+  const issueAgentPost = operation("post", "/api/issue-agent/runs");
+  assert.equal(issueAgentPost.requestBody["x-sensitive"], true);
+  assert.equal(issueAgentPost.responses["200"]["x-sensitive"], true);
+  assert.equal(issueAgentPost.requestBody.content["application/json"].schema.properties.recordedContext["x-sensitive"], true);
+  assert.equal(issueAgentPost.requestBody.content["application/json"].schema.properties.githubExport["x-sensitive"], true);
+
+  assert.match(operation("post", "/api/github-skills").description, /action: planned.*does not install/i);
+  assert.match(operation("get", "/api/guardrails").description, /comment labels.*LOCAL_ONLY.*no guardrails path/i);
+  assert.equal(operation("get", "/api/guardrails")["x-local-only"], undefined);
+  assert.equal(operation("post", "/api/guardrails/test")["x-local-only"], undefined);
 });
 
 test("gamification routes use conditional management auth without public or locality overrides", () => {

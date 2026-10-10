@@ -11203,6 +11203,11 @@ paths:
       operationId: getApiInit
       tags: [System]
       summary: Initialize application
+      description: >-
+        Explicitly public GET endpoint called to initialize cloud synchronization. The handler calls
+        `ensureCloudSyncInitialized()`, so this is an initialization side effect rather than a pure
+        status read; it returns only whether initialization completed.
+      security: []
       responses:
         "200":
           description: Init status
@@ -22344,73 +22349,279 @@ paths:
       tags:
         - Github skills
       summary: "GET github skills"
+      description: >-
+        Searches GitHub for agent-skill repositories and applies local filters to the results.
+        This route is centrally classified as MANAGEMENT and uses conditional management auth,
+        not explicit public access: locked installs require a management credential, while
+        `requireLogin=false` bypasses the requirement and first-run bootstrap without configured
+        credentials is loopback-only. Management API keys require `manage` or `admin`; scoped
+        `oma_` access tokens use method-derived `read` scope for GET.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: GitHub skill search results and any search errors.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "500":
+          description: GitHub skill search failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiGithubSkills
       tags:
         - Github skills
       summary: "POST github skills"
+      description: >-
+        Resolves candidate destination paths for the selected skill targets. Although the route
+        module comment says “Install,” this handler only returns an `action: planned` result and
+        does not install or write a skill. Authentication is conditional management access, not
+        explicit public access: locked installs require a management credential, while
+        `requireLogin=false` bypasses the requirement and first-run bootstrap without configured
+        credentials is loopback-only. Management API keys require `manage` or `admin`; scoped
+        `oma_` access tokens use method-derived `write` scope for POST.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Planned install destinations and per-target resolution results.
+        "400":
+          description: Invalid JSON or missing repository name.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "500":
+          description: Destination resolution failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/guardrails:
     get:
       operationId: getApiGuardrails
       tags:
         - Guardrails
       summary: "GET guardrails"
+      description: >-
+        Lists registered guardrail names, enabled states, and priorities. The route comment labels
+        this LOCAL_ONLY, but no guardrails path is in the route guard; actual behavior is conditional
+        MANAGEMENT authentication, not public or locality-restricted access. `requireLogin=false`
+        bypasses the management requirement; first-run bootstrap without configured credentials is
+        loopback-only. Management API keys require `manage` or `admin`; scoped `oma_` access tokens
+        use method-derived `read` scope for GET.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current registered guardrail names, enabled states, and priorities.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/guardrails/test:
     post:
       operationId: postApiGuardrailsTest
       tags:
         - Guardrails
       summary: "POST guardrails › test"
+      description: >-
+        Dry-runs registered pre-call guardrails over caller-supplied input and returns per-guardrail
+        verdicts and the resulting payload. Treat request and response content as sensitive. The
+        route comment labels this LOCAL_ONLY, but no guardrails path is in the route guard; actual
+        behavior is conditional MANAGEMENT authentication, not public or locality-restricted access.
+        `requireLogin=false` bypasses the management requirement; first-run bootstrap without
+        configured credentials is loopback-only. Management API keys require `manage` or `admin`;
+        scoped `oma_` access tokens use method-derived `write` scope for POST.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties:
+                input:
+                  description: Sample string, object, or array to pass through the guardrail pipeline.
+                  x-sensitive: true
+                  oneOf:
+                    - { type: string }
+                    - { type: object, additionalProperties: true }
+                    - { type: array, items: {} }
+                disabledGuardrails:
+                  type: array
+                  items: { type: string }
+              additionalProperties: false
       responses:
         "200":
-          description: OK
+          description: Guardrail verdicts and resulting input payload.
+          x-sensitive: true
+        "400":
+          description: Invalid JSON or guardrail test input.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/headroom/start:
     post:
       operationId: postApiHeadroomStart
       tags:
         - Headroom
       summary: "POST headroom › start"
+      description: >-
+        Starts the managed Headroom process. This is a `LOCAL_ONLY` spawn-capable route: only
+        loopback or trusted private-LAN peers pass the locality gate, and a remote management
+        credential cannot bypass it. The handler also refuses to spawn against a non-loopback
+        configured Headroom URL. Within the local boundary, management auth is conditional: locked
+        installs require a management credential; `requireLogin=false` permits anonymous local/LAN
+        access. Management API keys require `manage` or `admin`; scoped `oma_` access tokens use
+        method-derived `write` scope for POST.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Headroom proxy started.
+        "400":
+          description: The configured URL is not loopback or Headroom is not installed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Peer is not local/trusted, or management credentials are invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/headroom/status:
     get:
       operationId: getApiHeadroomStatus
       tags:
         - Headroom
       summary: "GET headroom › status"
+      description: >-
+        Returns Headroom status, configured URL, and managed PID; treat these as sensitive
+        operational metadata. Unlike the start/stop routes, this status route is not `LOCAL_ONLY`;
+        it is centrally classified as MANAGEMENT. Locked installs require a management credential,
+        while `requireLogin=false` bypasses the requirement and first-run bootstrap without
+        configured credentials is loopback-only. Management API keys require `manage` or `admin`;
+        scoped `oma_` access tokens use method-derived `read` scope for GET.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Headroom proxy status, URL, and managed process identifier.
+          x-sensitive: true
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/headroom/stop:
     post:
       operationId: postApiHeadroomStop
       tags:
         - Headroom
       summary: "POST headroom › stop"
+      description: >-
+        Stops the managed Headroom process. This is a `LOCAL_ONLY` spawn-capable route: only
+        loopback or trusted private-LAN peers pass the locality gate, and a remote management
+        credential cannot bypass it. Within the local boundary, management auth is conditional:
+        locked installs require a management credential; `requireLogin=false` permits anonymous
+        local/LAN access. Management API keys require `manage` or `admin`; scoped `oma_` access
+        tokens use method-derived `write` scope for POST.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Stop result; HTTP 409 is returned when the process was not stopped.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Peer is not local/trusted, or management credentials are invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Headroom process was not stopped; the response includes the stop result.
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/health/degradation:
     get:
       operationId: getApiHealthDegradation
       tags:
         - Health
       summary: "GET health › degradation"
+      description: >-
+        Returns the active feature-degradation report or compact summary. This route has no
+        handler-local auth, but `/api/health` is public by exact path only; `/api/health/degradation`
+        is centrally classified as MANAGEMENT, not explicitly public. Locked installs require a
+        management credential; `requireLogin=false` bypasses the requirement and first-run bootstrap
+        without configured credentials is loopback-only. Management API keys require `manage` or
+        `admin`; scoped `oma_` access tokens use method-derived `read` scope for GET. Treat returned
+        feature and degradation state as sensitive operational metadata.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Degradation counts and either the active feature report or a compact summary when `summary=true`.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HealthDegradationResponse" }
@@ -22419,15 +22630,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/health/ping:
     get:
       operationId: getApiHealthPing
       tags:
         - Health
       summary: "GET health › ping"
+      description: >-
+        Explicitly public read-only liveness probe (public-readonly allowlist). It checks process/DB
+        responsiveness and returns status, timestamp, and elapsed latency; no management credential
+        is required. The successful response is marked no-store/no-cache.
+      security: []
       responses:
         "200":
           description: Database liveness probe succeeded.
+          headers:
+            Cache-Control:
+              description: The successful probe response is not cached.
+              schema: { type: string, const: "no-store, no-cache, must-revalidate" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/HealthPingResponse" }
@@ -22442,25 +22665,95 @@ paths:
       tags:
         - Intelligence
       summary: "DELETE intelligence › sync"
+      description: >-
+        Deletes all locally stored synced Arena ELO intelligence data. This is a state-changing
+        management operation. Authentication is conditional management access, not explicit public
+        access: locked installs require a management credential, while `requireLogin=false` bypasses
+        the requirement and first-run bootstrap without configured credentials is loopback-only.
+        Management API keys require `manage` or `admin`; scoped `oma_` access tokens use
+        method-derived `write` scope for DELETE.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Synced intelligence records cleared.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     get:
       operationId: getApiIntelligenceSync
       tags:
         - Intelligence
       summary: "GET intelligence › sync"
+      description: >-
+        Returns current Arena ELO intelligence-sync status. Authentication is conditional
+        management access, not explicit public access: locked installs require a management
+        credential, while `requireLogin=false` bypasses the requirement and first-run bootstrap
+        without configured credentials is loopback-only. Management API keys require `manage` or
+        `admin`; scoped `oma_` access tokens use method-derived `read` scope for GET. Treat sync
+        status as sensitive operational metadata.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current sync status and timestamps.
+          x-sensitive: true
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiIntelligenceSync
       tags:
         - Intelligence
       summary: "POST intelligence › sync"
+      description: >-
+        Triggers Arena ELO intelligence synchronization and persistence; `dryRun` may request a
+        non-persistent run. This is a state-changing management operation and may perform outbound
+        sync work. Authentication is conditional management access, not explicit public access:
+        locked installs require a management credential, while `requireLogin=false` bypasses the
+        requirement and first-run bootstrap without configured credentials is loopback-only.
+        Management API keys require `manage` or `admin`; scoped `oma_` access tokens use
+        method-derived `write` scope for POST.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Sync result, including whether the operation succeeded.
+          x-sensitive: true
+        "400":
+          description: Invalid JSON or sync request body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "502":
+          description: The upstream Arena ELO sync failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/internal/codex-responses-ws:
     post:
       operationId: postApiInternalCodexResponsesWs
@@ -22527,19 +22820,140 @@ paths:
       tags:
         - Issue agent
       summary: "GET issue agent › runs"
+      description: >-
+        Returns only whether Issue Agent is enabled and its supported execution mode; this GET does
+        not list recorded runs. The `/api/issue-agent/` prefix is `LOCAL_ONLY`: loopback and trusted
+        private-LAN peers pass, while remote peers are rejected by default. An operator may
+        explicitly configure a path-specific manage-scope bypass; that remote exception accepts a
+        management-scoped API key or dashboard session, not an `oma_` access token. On an admitted
+        local peer, management auth is conditional: locked installs require credentials, while
+        `requireLogin=false` permits anonymous access; access tokens use method-derived `read` scope.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security:
+            - {}
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with an explicitly configured path-specific manage-scope bypass
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - ManagementSessionAuth: []
+          note: >-
+            The default bypass allowlist does not include issue-agent; remote access requires an
+            explicit runtime allowlist entry. This locality bypass does not accept `oma_` access tokens.
+        - when: Remote peer without an explicitly configured path-specific manage-scope bypass
+          note: Rejected by the LOCAL_ONLY peer gate before ordinary management authentication.
       responses:
         "200":
-          description: OK
+          description: Feature enabled state and supported Issue Agent modes.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peer rejected by LOCAL_ONLY policy or management credential invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiIssueAgentRuns
       tags:
         - Issue agent
       summary: "POST issue agent › runs"
+      description: >-
+        Creates an audited recorded-triage run; when dryRun is false and Issue Agent is enabled,
+        it submits the recorded issue context to the configured model through chat completions.
+        Inputs and returned run/completion data, including issue content, recorded context, audit
+        path, and model output, are sensitive. Execution is disabled by default and requires
+        `OMNIROUTE_ISSUE_AGENT_ENABLED=true`. The `/api/issue-agent/` prefix is `LOCAL_ONLY`:
+        loopback and trusted private-LAN peers pass, while remote peers are rejected by default.
+        An operator may explicitly configure a path-specific manage-scope bypass; that remote
+        exception accepts a management-scoped API key or dashboard session, not an `oma_` access
+        token. On an admitted local peer, management auth is conditional: locked installs require
+        credentials, while `requireLogin=false` permits anonymous access; scoped access tokens use
+        method-derived `write` scope for POST.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security:
+            - {}
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with an explicitly configured path-specific manage-scope bypass
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - ManagementSessionAuth: []
+          note: >-
+            The default bypass allowlist does not include issue-agent; remote access requires an
+            explicit runtime allowlist entry. This locality bypass does not accept `oma_` access tokens.
+        - when: Remote peer without an explicitly configured path-specific manage-scope bypass
+          note: Rejected by the LOCAL_ONLY peer gate before ordinary management authentication.
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Recorded issue triage request; may contain private issue text and context.
+              properties:
+                mode: { type: string, enum: [recorded-triage] }
+                issueUrl:
+                  type: string
+                  x-sensitive: true
+                dryRun: { type: boolean }
+                model: { type: string, minLength: 1, maxLength: 256 }
+                provider: { type: string, minLength: 1, maxLength: 128 }
+                routingPolicy: { type: string, minLength: 1, maxLength: 128 }
+                timeoutMs: { type: integer, minimum: 1, maximum: 120000 }
+                recordedContext:
+                  x-sensitive: true
+                  description: Recorded issue conversation or context payload.
+                githubExport:
+                  x-sensitive: true
+                  description: Imported GitHub issue export, including potentially private content.
+              additionalProperties: false
       responses:
         "200":
-          description: OK
+          description: Recorded run and, unless dryRun is true, model completion.
+          x-sensitive: true
+        "400":
+          description: Invalid JSON, unsupported mode, or invalid issue-agent input.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peer rejected by LOCAL_ONLY policy, feature disabled, or management credentials invalid.
+        "504":
+          description: Recorded triage execution exceeded its configured timeout.
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/keys/{id}/regenerate:
     parameters:
       - name: id

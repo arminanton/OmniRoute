@@ -40,9 +40,9 @@ two are bodyless `HEAD` probes with a `200` response. The 30 without `2xx` inclu
 one WebSocket upgrade, ten catch-all not-found operations, six bodyless `HEAD` catch-alls/artifact
 probes, and five error-only operations. This differs from the earlier 600/387 counts because those
 were an outdated snapshot and counted the two `HEAD` probes in the non-`204` denominator. The
-inventory also finds 856 operations with effective operation-level security declarations (841
-nonempty, 15 explicitly public), 173 with no effective declaration, and 328 operations whose
-text signals conditional auth; all 328 now have a security declaration. The A2A persisted-history
+inventory also finds 871 operations with effective operation-level security declarations (854
+nonempty, 17 explicitly public), 158 with no effective declaration, and 341 operations whose
+text signals conditional auth; all 341 now have a security declaration. The A2A persisted-history
 route lists the accepted API-key/management alternatives and scopes its anonymous alternative to
 the unlocked local-first configuration. The login/setup status GET explicitly declares public
 access for the unauthenticated setup screen. These counts measure OpenAPI declarations, not runtime
@@ -2078,7 +2078,7 @@ image, or production deployment were involved.
   frontend/control plane deployed independently from the inference process.
 - Continue the source audit for response schemas and conditional auth behavior. The deterministic
   inventory reports 866 of 981 body-bearing response candidates with declared schemas on every
-  non-`204` success (115 gaps); route coverage is 705/705. It also lists 173 operations with no
-  effective security declaration; all 328 operations whose text signals conditional auth now have
+  non-`204` success (115 gaps); route coverage is 705/705. It also lists 158 operations with no
+  effective security declaration; all 341 operations whose text signals conditional auth now have
   declarations. These are documentation review queues, not proof that handlers are insecure or
   that the declared response schemas are semantically complete.

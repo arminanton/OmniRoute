@@ -151,13 +151,13 @@ test("canonical OpenAPI inventory reconciles the checked-in report counts", () =
     "redirect-only": 8,
     "websocket-upgrade": 1,
   });
-  assert.equal(inventory.security.operationDeclared, 856);
-  assert.equal(inventory.security.missing, 173);
+  assert.equal(inventory.security.operationDeclared, 871);
+  assert.equal(inventory.security.missing, 158);
   assert.equal(inventory.security.invalidDeclaration, 0);
-  assert.equal(inventory.security.explicitPublic, 15);
+  assert.equal(inventory.security.explicitPublic, 17);
   assert.equal(inventory.security.requiresDeclaredScheme, 156);
-  assert.equal(inventory.security.includesAnonymousAlternative, 685);
-  assert.equal(inventory.security.conditionalAuthText, 328);
+  assert.equal(inventory.security.includesAnonymousAlternative, 698);
+  assert.equal(inventory.security.conditionalAuthText, 341);
   assert.equal(inventory.security.conditionalAuthWithMissingSecurity, 0);
   assert.equal(
     fs.readFileSync(INVENTORY_REPORT, "utf8"),
