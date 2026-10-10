@@ -30,7 +30,11 @@ tags:
   - name: Playground
     description: Playground Studio — preset management and prompt improvement
   - name: Memory
-    description: Conversational memory management — CRUD, engine status, playground preview, summarization, reindex, and Qdrant settings (plan 21 — v3.8.6). All routes require management auth.
+    description: >-
+      Conversational memory management — CRUD, engine status, playground preview, summarization,
+      reindex, and Qdrant settings (plan 21 — v3.8.6). Protected profiles require a dashboard
+      session or a management-scoped API key; unlocked `requireLogin=false` installs and the fresh
+      loopback setup bootstrap may allow anonymous access on legacy `isAuthenticated()` routes.
   - name: Chat
     description: OpenAI-compatible chat completions
   - name: Messages
@@ -1217,9 +1221,21 @@ paths:
         - Memory
         - Settings
       summary: Get memory settings
-      description: Returns the extended memory settings including 7 new fields added in plan 21 (embeddingSource, embeddingProviderModel, transformersEnabled, staticEnabled, rerankEnabled, rerankProviderModel, vectorStore).
+      description: >-
+        Returns the extended memory settings including 7 new fields added in plan 21
+        (embeddingSource, embeddingProviderModel, transformersEnabled, staticEnabled, rerankEnabled,
+        rerankProviderModel, vectorStore). The legacy `isAuthenticated()` handler accepts a
+        dashboard session or a `manage`/`admin` API key via Bearer, Anthropic `x-api-key` (with
+        `anthropic-version` or an Anthropic/Claude User-Agent), or Google `x-goog-api-key`. It does
+        not accept `oma_live_` access tokens or machine tokens when management auth is required.
+        An unlocked `requireLogin=false` install may permit anonymous access; a fresh install may
+        permit loopback bootstrap access. Locked management always requires authentication.
       security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Extended memory settings
@@ -1228,16 +1244,45 @@ paths:
               schema:
                 $ref: "#/components/schemas/MemorySettingsExtended"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: >-
+            Authentication is required. The legacy handler returns a string error; the central
+            management gate may return its structured error envelope.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Memory settings lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsMemory
       tags:
         - Memory
         - Settings
       summary: Update memory settings
-      description: "Update any subset of the extended memory settings. All fields are optional; only provided fields are updated. Schema: `MemorySettingsExtendedSchema`."
+      description: >-
+        Update any subset of the extended memory settings. All fields are optional; only provided
+        fields are updated. Schema: `MemorySettingsExtendedSchema`. The legacy `isAuthenticated()`
+        handler accepts a dashboard session or a `manage`/`admin` API key via Bearer, Anthropic
+        `x-api-key` (with `anthropic-version` or an Anthropic/Claude User-Agent), or Google
+        `x-goog-api-key`. It does not accept `oma_live_` access tokens or machine tokens when
+        management auth is required. An unlocked `requireLogin=false` install may permit anonymous
+        access; a fresh install may permit loopback bootstrap access. Locked management always
+        requires authentication.
       security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1252,9 +1297,32 @@ paths:
               schema:
                 $ref: "#/components/schemas/MemorySettingsExtended"
         "400":
-          description: Validation error
+          description: Invalid JSON body or memory settings validation failed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/DirectValidationErrorPayload" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: >-
+            Authentication is required. The legacy handler returns a string error; the central
+            management gate may return its structured error envelope.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Memory settings update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/qdrant:
     get:
       operationId: getApiSettingsQdrant
@@ -1262,9 +1330,20 @@ paths:
         - Memory
         - Settings
       summary: Get Qdrant settings
-      description: Returns current Qdrant configuration. The `apiKey` field is never returned raw — use `hasApiKey` / `apiKeyMasked` instead.
+      description: >-
+        Returns current Qdrant configuration. The `apiKey` field is never returned raw — use
+        `hasApiKey` / `apiKeyMasked` instead. The legacy `isAuthenticated()` handler accepts a
+        dashboard session or a `manage`/`admin` API key via Bearer, Anthropic `x-api-key` (with
+        `anthropic-version` or an Anthropic/Claude User-Agent), or Google `x-goog-api-key`. It does
+        not accept `oma_live_` access tokens or machine tokens when management auth is required.
+        An unlocked `requireLogin=false` install may permit anonymous access; a fresh install may
+        permit loopback bootstrap access. Locked management always requires authentication.
       security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Qdrant settings
@@ -1273,16 +1352,44 @@ paths:
               schema:
                 $ref: "#/components/schemas/QdrantSettings"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: >-
+            Authentication is required. The legacy handler returns a string error; the central
+            management gate may return its structured error envelope.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Qdrant settings lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsQdrant
       tags:
         - Memory
         - Settings
       summary: Update Qdrant settings
-      description: 'Update Qdrant configuration. Pass `apiKey: ""` to remove the stored key. Schema: `QdrantSettingsUpdateSchema`.'
+      description: >-
+        Update Qdrant configuration. Pass `apiKey: ""` to remove the stored key. Schema:
+        `QdrantSettingsUpdateSchema`. The legacy `isAuthenticated()` handler accepts a dashboard
+        session or a `manage`/`admin` API key via Bearer, Anthropic `x-api-key` (with
+        `anthropic-version` or an Anthropic/Claude User-Agent), or Google `x-goog-api-key`. It does
+        not accept `oma_live_` access tokens or machine tokens when management auth is required.
+        An unlocked `requireLogin=false` install may permit anonymous access; a fresh install may
+        permit loopback bootstrap access. Locked management always requires authentication.
       security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1316,18 +1423,48 @@ paths:
               schema:
                 $ref: "#/components/schemas/QdrantSettings"
         "400":
-          description: Validation error
+          description: Invalid JSON body or Qdrant settings validation failed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/DirectValidationErrorPayload" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: >-
+            Authentication is required. The legacy handler returns a string error; the central
+            management gate may return its structured error envelope.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Qdrant settings update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/qdrant/health:
     get:
       operationId: getApiSettingsQdrantHealth
       tags:
         - Memory
       summary: Qdrant health probe
-      description: Performs a liveness check against the configured Qdrant instance. Returns latency and any connection error (sanitized — no stack traces).
+      description: >-
+        Performs a liveness check against the configured Qdrant instance. Returns latency and any
+        connection error (sanitized — no stack traces). Authentication uses the legacy
+        `isAuthenticated()` rules documented for `/api/settings/qdrant`.
       security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Health result
@@ -1336,16 +1473,45 @@ paths:
               schema:
                 $ref: "#/components/schemas/QdrantHealthResult"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: >-
+            Authentication is required. The legacy handler returns a string error; the central
+            management gate may return its structured error envelope.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Qdrant health check failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/qdrant/search:
     post:
       operationId: postApiSettingsQdrantSearch
       tags:
         - Memory
       summary: Qdrant semantic search test
-      description: "Performs a test semantic search against the Qdrant collection. Useful for validating that the integration works end-to-end. Schema: `QdrantSearchSchema`."
+      description: >-
+        Performs a test semantic search against the Qdrant collection. Useful for validating that
+        the integration works end-to-end. Schema: `QdrantSearchSchema`. The legacy
+        `isAuthenticated()` handler accepts a dashboard session or a `manage`/`admin` API key via
+        Bearer, Anthropic `x-api-key` (with `anthropic-version` or an Anthropic/Claude User-Agent),
+        or Google `x-goog-api-key`. It does not accept `oma_live_` access tokens or machine tokens
+        when management auth is required. An unlocked `requireLogin=false` install may permit
+        anonymous access; a fresh install may permit loopback bootstrap access. Locked management
+        always requires authentication.
       security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1381,20 +1547,48 @@ paths:
                     ok: false
                     results: []
         "400":
-          description: Validation error
+          description: Invalid JSON body or semantic search input validation failed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/DirectValidationErrorPayload" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: >-
+            Authentication is required. The legacy handler returns a string error; the central
+            management gate may return its structured error envelope.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Qdrant semantic search failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
-          description: Qdrant unavailable (structured error, no stack trace)
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/qdrant/cleanup:
     post:
       operationId: postApiSettingsQdrantCleanup
       tags:
         - Memory
       summary: Clean up expired Qdrant points
-      description: Removes Qdrant points for memories that have expired or exceeded the configured retention window.
+      description: >-
+        Removes Qdrant points for memories that have expired or exceeded the configured retention
+        window. Authentication uses the legacy `isAuthenticated()` rules documented for
+        `/api/settings/qdrant`.
       security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Cleanup result
@@ -1403,7 +1597,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/QdrantCleanupResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: >-
+            Authentication is required. The legacy handler returns a string error; the central
+            management gate may return its structured error envelope.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "500":
           description: Qdrant cleanup failed; the error message is sanitized.
           content:
@@ -1415,9 +1621,15 @@ paths:
       tags:
         - Memory
       summary: List Qdrant embedding models
-      description: Returns the list of embedding models available for use with Qdrant.
+      description: >-
+        Returns the list of embedding models available for use with Qdrant. Authentication uses the
+        legacy `isAuthenticated()` rules documented for `/api/settings/qdrant`.
       security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Embedding models list
@@ -1432,7 +1644,24 @@ paths:
                     items:
                       $ref: "#/components/schemas/QdrantEmbeddingModelOption"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          description: >-
+            Authentication is required. The legacy handler returns a string error; the central
+            management gate may return its structured error envelope.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Embedding-model catalog lookup failed; the route returns an empty models array.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QdrantEmbeddingModelsErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   # ─── Proxy Endpoints ──────────────────────────────────────────
 
   /api/v1/search:
@@ -5854,11 +6083,21 @@ paths:
       summary: Get payload rules configuration
       description: |
         Returns the current payload rules used to mutate outgoing request payloads before they
-        are sent upstream.
+        are sent upstream. `requireManagementAuth()` accepts a dashboard session, a management
+        API key (`manage`/`admin` via Bearer, Anthropic `x-api-key`, or Google `x-goog-api-key`),
+        an `oma_live_` Access Token with `read` scope, or trusted loopback CLI/internal-service
+        credentials. An unlocked `requireLogin=false` install may permit anonymous access; locked
+        management always requires authentication. Trusted-local credential schemes are shown as
+        alternatives, but OpenAPI cannot express their loopback restriction.
 
-        Requires a dashboard management session cookie when management auth is enabled.
       security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Current payload rules configuration
@@ -5875,18 +6114,31 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSettingsPayloadRules
       tags: [Settings]
       summary: Update payload rules configuration
       description: |
         Persists and hot reloads payload rules. The legacy input field `default-raw` is accepted
-        on writes and normalized to `defaultRaw` in responses/runtime state.
+        on writes and normalized to `defaultRaw` in responses/runtime state. `requireManagementAuth()`
+        accepts a dashboard session, a management API key (`manage`/`admin` via Bearer, Anthropic
+        `x-api-key`, or Google `x-goog-api-key`), an `oma_live_` Access Token with `write` scope, or
+        trusted loopback CLI/internal-service credentials. An unlocked `requireLogin=false` install
+        may permit anonymous access; locked management always requires authentication. Trusted-local
+        credential schemes are shown as alternatives, but OpenAPI cannot express their loopback
+        restriction.
 
-        Requires a dashboard management session cookie when management auth is enabled.
       security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
         - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -5901,7 +6153,10 @@ paths:
               schema:
                 $ref: "#/components/schemas/PayloadRulesConfig"
         "400":
-          $ref: "#/components/responses/ValidationError"
+          description: Invalid JSON body or payload-rules validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -5911,7 +6166,9 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
+                $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/settings/combo-defaults:
     get:
@@ -8166,10 +8423,25 @@ paths:
         - InternalServiceTokenAuth: []
       x-always-protected: true
       description: >-
-        List CLI tool backups This operation is always-protected, including when requireLogin=false. An
-        oma_live_ Access Token requires read scope for this operation. Bearer API keys require manage or
-        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
-        anonymous access is not.
+        Lists backups for one CLI tool or all supported tools. Optional `tool` and `toolId` query
+        parameters are aliases; when both are present, `tool` takes precedence, and an empty value
+        behaves like an omitted parameter. This operation is always-protected, including when
+        `requireLogin=false`. An `oma_live_` Access Token requires `read` scope; Bearer API keys
+        require `manage` or `admin`. Dashboard sessions and trusted loopback CLI/internal-service
+        credentials are accepted; anonymous access is not.
+      parameters:
+        - name: tool
+          in: query
+          required: false
+          description: Select one CLI tool. Empty is treated as omitted.
+          allowEmptyValue: true
+          schema: { $ref: "#/components/schemas/CliToolBackupToolId" }
+        - name: toolId
+          in: query
+          required: false
+          description: Alias for `tool`; `tool` takes precedence when both are supplied.
+          allowEmptyValue: true
+          schema: { $ref: "#/components/schemas/CliToolBackupToolId" }
       responses:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
@@ -8177,6 +8449,11 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "400":
+          description: The supplied tool identifier is not supported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "200":
           description: >-
             Backup metadata for one selected tool, or a map of tool IDs to backup metadata when no
@@ -8185,10 +8462,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolBackupsListResponse" }
+        "500":
+          description: Backup metadata could not be listed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiCliToolsBackups
       tags: [CLI Tools]
-      summary: Create CLI tool backup
+      summary: Restore a CLI tool backup
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -8196,23 +8478,48 @@ paths:
         - InternalServiceTokenAuth: []
       x-always-protected: true
       description: >-
-        Create CLI tool backup This operation is always-protected, including when requireLogin=false. An
-        oma_live_ Access Token requires write scope for this operation. Bearer API keys require manage or
-        admin. Dashboard sessions and trusted loopback CLI/internal-service credentials are accepted;
-        anonymous access is not.
+        Restores a selected backup for a CLI tool. Supply `tool` or its alias `toolId` together with
+        `backupId`; if both tool fields are supplied, `tool` takes precedence. The operation is
+        always-protected, including when `requireLogin=false`. An `oma_live_` Access Token requires
+        `write` scope; Bearer API keys require `manage` or `admin`. Dashboard sessions and trusted
+        loopback CLI/internal-service credentials are accepted; anonymous access is not.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CliToolBackupMutationRequest" }
       responses:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          description: Invalid management credentials or CLI config writes are disabled.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "400":
+          description: Invalid JSON, backup request, or CLI tool identifier.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "200":
           description: Backup restore result. The original host path is sensitive.
           x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolBackupRestoreResponse" }
+        "500":
+          description: Backup restore failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     delete:
       operationId: deleteApiCliToolsBackups
       tags: [CLI Tools]
@@ -8232,16 +8539,7 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [backupId]
-              properties:
-                tool: { type: string }
-                toolId: { type: string }
-                backupId: { type: string, minLength: 1 }
-              anyOf:
-                - required: [tool]
-                - required: [toolId]
+            schema: { $ref: "#/components/schemas/CliToolBackupMutationRequest" }
       responses:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
@@ -8255,7 +8553,18 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/CliToolBackupDeleteResponse" }
         "400":
-          description: Invalid tool or backup ID
+          description: Invalid JSON, backup request, or CLI tool identifier.
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Backup deletion failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   /api/cli-tools/runtime/{toolId}:
     get:
@@ -50413,6 +50722,26 @@ components:
     CliToolBackupToolId:
       type: string
       enum: [claude, codex, droid, grok-build, openclaw, cline, kilo, qwen]
+    CliToolBackupMutationRequest:
+      type: object
+      required: [backupId]
+      properties:
+        tool:
+          $ref: "#/components/schemas/CliToolBackupToolId"
+        toolId:
+          $ref: "#/components/schemas/CliToolBackupToolId"
+        backupId:
+          type: string
+          minLength: 1
+          pattern: '\S'
+          description: Nonblank identifier; the handler trims whitespace before validation.
+      anyOf:
+        - required: [tool]
+        - required: [toolId]
+      description: >-
+        `tool` and `toolId` are aliases; when both are supplied, the handler uses `tool`. The
+        handler trims both values before validation and accepts then strips unknown properties.
+      additionalProperties: true
     CliToolBackupEntry:
       type: object
       x-sensitive: true
@@ -52898,6 +53227,19 @@ components:
         value: { type: string }
         label: { type: string }
         dimensions: { type: integer, minimum: 1 }
+      additionalProperties: false
+    QdrantEmbeddingModelsErrorResponse:
+      type: object
+      required: [error, models]
+      properties:
+        error:
+          type: object
+          required: [message]
+          properties:
+            message: { type: string }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/QdrantEmbeddingModelOption" }
       additionalProperties: false
     QdrantCleanupResponse:
       type: object
