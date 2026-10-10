@@ -10,8 +10,8 @@ Generated from `docs/openapi.yaml` by `npm run report:openapi-contract-inventory
 - Paths: 705
 - Operations: 1029
 - Body-bearing success-response candidates: 981
-- Candidates with a schema on every declared non-204 2xx response: 911 (92.86%)
-- Candidates with at least one missing/untyped non-204 2xx response: 70
+- Candidates with a schema on every declared non-204 2xx response: 926 (94.39%)
+- Candidates with at least one missing/untyped non-204 2xx response: 55
 - Bodyless 204-only operations: 16
 - HEAD operations: 8 (2 declare success statuses; 6 have no declared 2xx)
 - Operations with no declared 2xx response: 30
@@ -37,7 +37,7 @@ The candidate denominator excludes HEAD/OPTIONS, operations whose only success i
 | Missing response-content state | Status occurrences |
 | ------------------------------ | -----------------: |
 | content-without-schema         |                  0 |
-| no-content                     |                 70 |
+| no-content                     |                 55 |
 | unresolved-response            |                  0 |
 
 ## Security declarations

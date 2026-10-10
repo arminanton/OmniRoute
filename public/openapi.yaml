@@ -22752,6 +22752,9 @@ paths:
       responses:
         "200":
           description: Current registered guardrail names, enabled states, and priorities.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GuardrailsListResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
@@ -22801,6 +22804,9 @@ paths:
         "200":
           description: Guardrail verdicts and resulting input payload.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GuardrailsTestResponse" }
         "400":
           description: Invalid JSON or guardrail test input.
           content:
@@ -22835,6 +22841,10 @@ paths:
       responses:
         "200":
           description: Headroom proxy started.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HeadroomStartResponse" }
         "400":
           description: The configured URL is not loopback or Headroom is not installed.
           content:
@@ -22846,7 +22856,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
-        "500": { $ref: "#/components/responses/InternalError" }
+        "500":
+          description: Headroom startup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/headroom/status:
     get:
@@ -22873,9 +22887,16 @@ paths:
         "200":
           description: Headroom proxy status, URL, and managed process identifier.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HeadroomStatusResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "500": { $ref: "#/components/responses/InternalError" }
+        "500":
+          description: Headroom status could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/headroom/stop:
     post:
@@ -22902,6 +22923,10 @@ paths:
       responses:
         "200":
           description: Stop result; HTTP 409 is returned when the process was not stopped.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HeadroomStopSuccessResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Peer is not local/trusted, or management credentials are invalid.
@@ -22910,7 +22935,14 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "409":
           description: Headroom process was not stopped; the response includes the stop result.
-        "500": { $ref: "#/components/responses/InternalError" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HeadroomStopConflictResponse" }
+        "500":
+          description: Headroom process could not be stopped.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/health/degradation:
     get:
@@ -22999,9 +23031,16 @@ paths:
       responses:
         "200":
           description: Synced intelligence records cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IntelligenceSyncClearedResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "500": { $ref: "#/components/responses/InternalError" }
+        "500":
+          description: Synced intelligence data could not be cleared.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     get:
       operationId: getApiIntelligenceSync
@@ -23027,9 +23066,16 @@ paths:
         "200":
           description: Current sync status and timestamps.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IntelligenceSyncStatusResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "500": { $ref: "#/components/responses/InternalError" }
+        "500":
+          description: Sync status could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiIntelligenceSync
@@ -23052,10 +23098,18 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IntelligenceSyncRequest" }
       responses:
         "200":
           description: Sync result, including whether the operation succeeded.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IntelligenceSyncSuccessResponse" }
         "400":
           description: Invalid JSON or sync request body.
           content:
@@ -23063,12 +23117,16 @@ paths:
               schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
-        "500": { $ref: "#/components/responses/InternalError" }
+        "500":
+          description: Sync operation failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "502":
           description: The upstream Arena ELO sync failed.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+              schema: { $ref: "#/components/schemas/IntelligenceSyncFailureResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/internal/codex-responses-ws:
     post:
@@ -23178,6 +23236,9 @@ paths:
       responses:
         "200":
           description: Feature enabled state and supported Issue Agent modes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IssueAgentStatusResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Remote peer rejected by LOCAL_ONLY policy or management credential invalid.
@@ -23262,13 +23323,32 @@ paths:
         "200":
           description: Recorded run and, unless dryRun is true, model completion.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IssueAgentRunResponse" }
         "400":
           description: Invalid JSON, unsupported mode, or invalid issue-agent input.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/IssueAgentUnsupportedModeResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Remote peer rejected by LOCAL_ONLY policy, feature disabled, or management credentials invalid.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/IssueAgentDisabledResponse" }
         "504":
           description: Recorded triage execution exceeded its configured timeout.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IssueAgentTimeoutResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/keys/{id}/regenerate:
     parameters:
@@ -23905,12 +23985,24 @@ paths:
         "200":
           description: Redis container start result, including runtime and command output.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalRedisStartResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
         "500":
           description: Redis container startup failed; the response includes a sanitized runtime error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalRedisRuntimeFailureResponse" }
         "503":
           description: No container runtime is installed or management authentication is unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/LocalRedisRuntimeUnavailableResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/local/redis/status:
     get:
       operationId: getApiLocalRedisStatus
@@ -23939,6 +24031,9 @@ paths:
         "200":
           description: Redis container and endpoint status without returning the configured Redis URL.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalRedisStatusResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
         "500":
@@ -23971,14 +24066,29 @@ paths:
         "200":
           description: Redis container stop result, including runtime and command output.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalRedisStopResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
         "404":
           description: The managed Redis container is not running or was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalRedisNotRunningResponse" }
         "500":
           description: Redis container stop failed; the response includes a sanitized runtime error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocalRedisRuntimeFailureResponse" }
         "503":
           description: No container runtime is installed or management authentication is unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/LocalRedisRuntimeUnavailableResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/logs/{id}:
     parameters:
       - name: id
@@ -24368,6 +24478,9 @@ paths:
         "200":
           description: MCP server-initiated SSE stream.
           x-sensitive: true
+          content:
+            text/event-stream:
+              schema: { type: string, x-sensitive: true }
         "400":
           description: MCP is enabled with a transport other than `sse`.
           content:
@@ -24449,6 +24562,11 @@ paths:
         "200":
           description: MCP SSE transport response.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpSseJsonRpcResponse" }
+            text/event-stream:
+              schema: { type: string, x-sensitive: true }
         "400":
           description: Invalid JSON-RPC request or MCP transport is not set to `sse`.
           content:
@@ -67510,3 +67628,331 @@ components:
           items: { $ref: "#/components/schemas/GitHubSkillPlanTargetResult" }
         allOk: { type: boolean }
       additionalProperties: false
+
+    GuardrailDescriptor:
+      type: object
+      required: [name, enabled, priority]
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+        priority: { type: number }
+      additionalProperties: false
+
+    GuardrailsListResponse:
+      type: object
+      required: [guardrails]
+      properties:
+        guardrails:
+          type: array
+          items: { $ref: "#/components/schemas/GuardrailDescriptor" }
+      additionalProperties: false
+
+    GuardrailExecutionResult:
+      type: object
+      x-sensitive: true
+      required: [blocked, guardrail, modified, skipped, stage]
+      properties:
+        blocked: { type: boolean }
+        error: { type: string, x-sensitive: true }
+        guardrail: { type: string }
+        message: { type: string, x-sensitive: true }
+        meta:
+          oneOf:
+            - { type: object, additionalProperties: true, x-sensitive: true }
+            - { type: "null" }
+        modified: { type: boolean }
+        skipped: { type: boolean }
+        stage: { type: string, enum: [pre, post] }
+      additionalProperties: false
+
+    GuardrailsTestResponse:
+      type: object
+      x-sensitive: true
+      required: [blocked, results, payload]
+      properties:
+        blocked: { type: boolean }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/GuardrailExecutionResult" }
+        payload: { x-sensitive: true, description: Arbitrary input after pre-call guardrail processing. }
+      additionalProperties: false
+
+    HeadroomStartResponse:
+      type: object
+      x-sensitive: true
+      required: [success, pid, alreadyRunning]
+      properties:
+        success: { type: boolean, const: true }
+        pid: { type: integer, minimum: 1, x-sensitive: true }
+        alreadyRunning: { type: boolean }
+      additionalProperties: false
+
+    HeadroomStatusResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, path, running, python, localUrl, canStart, url, managedPid]
+      properties:
+        installed: { type: boolean }
+        path: { type: [string, "null"], x-sensitive: true }
+        running: { type: boolean }
+        python: { type: [string, "null"], x-sensitive: true }
+        localUrl: { type: boolean }
+        canStart: { type: boolean }
+        url: { type: string, x-sensitive: true }
+        managedPid: { type: [integer, "null"], minimum: 1, x-sensitive: true }
+      additionalProperties: false
+
+    HeadroomStopSuccessResponse:
+      type: object
+      x-sensitive: true
+      required: [stopped, pid]
+      properties:
+        stopped: { type: boolean, const: true }
+        pid: { type: integer, minimum: 1, x-sensitive: true }
+      additionalProperties: false
+
+    HeadroomStopConflictResponse:
+      type: object
+      required: [stopped, reason]
+      properties:
+        stopped: { type: boolean, const: false }
+        reason: { type: string, const: not_running }
+      additionalProperties: false
+
+    IntelligenceSyncRequest:
+      type: object
+      properties:
+        dryRun: { type: boolean }
+      additionalProperties: false
+
+    IntelligenceSyncClearedResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: Synced intelligence data cleared }
+      additionalProperties: false
+
+    IntelligenceSyncStatusResponse:
+      type: object
+      x-sensitive: true
+      required: [enabled, lastSync, lastSyncModelCount, nextSync, intervalMs, sources]
+      properties:
+        enabled: { type: boolean }
+        lastSync: { type: [string, "null"], format: date-time }
+        lastSyncModelCount: { type: integer, minimum: 0 }
+        nextSync: { type: [string, "null"], format: date-time }
+        intervalMs: { type: integer, minimum: 1 }
+        sources:
+          type: array
+          items: { type: string, const: arena_elo }
+      additionalProperties: false
+
+    IntelligenceSyncSuccessResponse:
+      type: object
+      x-sensitive: true
+      required: [success, modelCount, source]
+      properties:
+        success: { type: boolean, const: true }
+        modelCount: { type: integer, minimum: 0 }
+        source: { type: string, const: arena_elo }
+      additionalProperties: false
+
+    IntelligenceSyncFailureResponse:
+      type: object
+      x-sensitive: true
+      required: [success, modelCount, source, error]
+      properties:
+        success: { type: boolean, const: false }
+        modelCount: { type: integer, const: 0 }
+        source: { type: string, const: arena_elo }
+        error: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    IssueAgentStatusResponse:
+      type: object
+      required: [ok, enabled, supportedModes, execution]
+      properties:
+        ok: { type: boolean, const: true }
+        enabled: { type: boolean }
+        supportedModes:
+          type: array
+          items: { type: string, const: recorded-triage }
+          minItems: 1
+          maxItems: 1
+        execution: { type: string, const: disabled-by-default }
+      additionalProperties: false
+
+    IssueAgentContextSummary:
+      type: object
+      x-sensitive: true
+      required: [issueTitle, commentCount, humanCommentCount, botCommentCount, intent, redactedDigestSource]
+      properties:
+        issueTitle: { type: [string, "null"], x-sensitive: true }
+        commentCount: { type: integer, minimum: 0 }
+        humanCommentCount: { type: integer, minimum: 0 }
+        botCommentCount: { type: integer, minimum: 0 }
+        intent: { type: string, enum: [bugfix, review, question, unknown] }
+        redactedDigestSource: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    IssueAgentRunBase:
+      type: object
+      x-sensitive: true
+      required: [accepted, mode, runId, issueUrl, repository, issueNumber, dryRun, context, steps, auditPath]
+      properties:
+        accepted: { type: boolean, const: true }
+        mode: { type: string, const: recorded-triage }
+        runId: { type: string }
+        issueUrl: { type: string, x-sensitive: true }
+        repository: { type: string }
+        issueNumber: { type: integer, minimum: 1 }
+        dryRun: { type: boolean }
+        context: { $ref: "#/components/schemas/IssueAgentContextSummary" }
+        steps:
+          type: array
+          items: { type: string }
+        auditPath: { type: string, x-sensitive: true }
+      additionalProperties: true
+
+    IssueAgentDryRunResponse:
+      allOf:
+        - { $ref: "#/components/schemas/IssueAgentRunBase" }
+        - type: object
+          required: [runner]
+          properties:
+            runner: { type: string, const: deterministic-recorded-triage }
+            dryRun: { type: boolean, const: true }
+      x-sensitive: true
+
+    IssueAgentModelRunResponse:
+      allOf:
+        - { $ref: "#/components/schemas/IssueAgentRunBase" }
+        - type: object
+          required: [runner, completion]
+          properties:
+            runner: { type: string, const: omniroute-chat-completions }
+            dryRun: { type: boolean, const: false }
+            completion: { x-sensitive: true, description: JSON body returned by the configured chat-completions execution. }
+      x-sensitive: true
+
+    IssueAgentRunResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/IssueAgentDryRunResponse" }
+        - { $ref: "#/components/schemas/IssueAgentModelRunResponse" }
+      x-sensitive: true
+
+    IssueAgentUnsupportedModeResponse:
+      type: object
+      required: [error, supportedModes]
+      properties:
+        error: { type: string, const: Unsupported issue-agent mode }
+        supportedModes:
+          type: array
+          items: { type: string, const: recorded-triage }
+          minItems: 1
+          maxItems: 1
+      additionalProperties: false
+
+    IssueAgentDisabledResponse:
+      type: object
+      required: [error, enabled, requiredEnv]
+      properties:
+        error: { type: string, const: Issue Agent execution is disabled }
+        enabled: { type: boolean, const: false }
+        requiredEnv: { type: string, const: OMNIROUTE_ISSUE_AGENT_ENABLED=true }
+      additionalProperties: false
+
+    IssueAgentTimeoutResponse:
+      type: object
+      required: [error, code]
+      properties:
+        error: { type: string }
+        code: { type: string, const: ISSUE_AGENT_TIMEOUT }
+      additionalProperties: false
+
+    LocalRedisStartResponse:
+      type: object
+      x-sensitive: true
+      required: [ok, runtime, name, port, bindHost, stdout, stderr]
+      properties:
+        ok: { type: boolean, const: true }
+        runtime: { type: string, enum: [podman, docker] }
+        name: { type: string }
+        port: { type: string }
+        bindHost: { type: string, x-sensitive: true }
+        stdout: { type: string, x-sensitive: true }
+        stderr: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    LocalRedisStatusResponse:
+      type: object
+      x-sensitive: true
+      required: [runtime, name, port, exists, running, reachable, redisUrlConfigured, redisUrlReachable]
+      properties:
+        runtime: { type: [string, "null"], enum: [podman, docker, null] }
+        name: { type: string }
+        port: { type: string }
+        exists: { type: boolean }
+        running: { type: boolean }
+        reachable: { type: boolean }
+        redisUrlConfigured: { type: boolean }
+        redisUrlReachable: { type: boolean }
+      additionalProperties: false
+
+    LocalRedisStopResponse:
+      type: object
+      x-sensitive: true
+      required: [ok, runtime, name, stdout, stderr]
+      properties:
+        ok: { type: boolean, const: true }
+        runtime: { type: string, enum: [podman, docker] }
+        name: { type: string }
+        stdout: { type: string, x-sensitive: true }
+        stderr: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    LocalRedisNotRunningResponse:
+      type: object
+      required: [ok, runtime, error]
+      properties:
+        ok: { type: boolean, const: false }
+        runtime: { type: string, enum: [podman, docker] }
+        error: { type: string, const: not running }
+      additionalProperties: false
+
+    LocalRedisRuntimeFailureResponse:
+      type: object
+      x-sensitive: true
+      required: [ok, runtime, error]
+      properties:
+        ok: { type: boolean, const: false }
+        runtime: { type: string, enum: [podman, docker] }
+        error: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    LocalRedisRuntimeUnavailableResponse:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: { type: boolean, const: false }
+        error: { type: string, const: No container runtime (podman or docker) found on PATH }
+      additionalProperties: false
+
+    McpSseJsonRpcResponse:
+      type: object
+      x-sensitive: true
+      description: JSON-RPC response returned by the MCP SSE transport; fields depend on the request method.
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        id: { type: [string, number, "null"] }
+        result: { type: object, additionalProperties: true, x-sensitive: true }
+        error:
+          type: object
+          x-sensitive: true
+          properties:
+            code: { type: integer }
+            message: { type: string }
+            data: { x-sensitive: true }
+          additionalProperties: true
+      additionalProperties: true
