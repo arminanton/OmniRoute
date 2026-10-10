@@ -14,9 +14,9 @@
  */
 
 import { NextResponse } from "next/server";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getServiceRow } from "@/lib/db/versionManager";
 import { decrypt } from "@/lib/db/encryption";
-import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
 import { DARIO_DEFAULT_PORT } from "@/lib/services/installers/dario";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 
@@ -26,11 +26,9 @@ export function darioBaseUrl(): string {
   return `http://${host}:${port}`;
 }
 
-/** 401 response when auth is required and the caller isn't authenticated; else null. */
+/** Reuse the central management decision, including its supported local and CLI identities. */
 export async function requireAdminAuth(request: Request): Promise<Response | null> {
-  if (!(await isAuthRequired(request))) return null;
-  if (await isAuthenticated(request)) return null;
-  return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  return requireManagementAuth(request);
 }
 
 /** Read the stored (decrypted) DARIO_ADMIN_TOKEN, or null if unavailable. */

@@ -230,6 +230,27 @@ test("runAuthzPipeline keeps management API rejections as JSON", async () => {
   assert.equal(body.error.code, "AUTH_001");
 });
 
+test("runAuthzPipeline does not trust client-supplied management subject stamps", async () => {
+  await forceAuthRequired();
+
+  const response = await pipeline.runAuthzPipeline(
+    request("http://localhost/api/settings", {
+      headers: {
+        "x-omniroute-route-class": "MANAGEMENT",
+        "x-omniroute-auth-kind": "management_key",
+        "x-omniroute-auth-id": "attacker-controlled",
+        "x-omniroute-auth-label": "local-cli-token",
+        "x-omniroute-auth-scopes": "admin",
+      },
+    }),
+    { enforce: true }
+  );
+  const body = await response.json();
+
+  assert.equal(response.status, 401);
+  assert.equal(body.error.code, "AUTH_001");
+});
+
 test("runAuthzPipeline rejects oversized API bodies before auth", async () => {
   const response = await pipeline.runAuthzPipeline(
     request("http://localhost/api/v1/chat/completions", {
