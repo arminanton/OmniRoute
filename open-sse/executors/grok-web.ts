@@ -1112,7 +1112,7 @@ export class GrokWebExecutor extends BaseExecutor {
         signal,
         callerSignal: callerSignal !== undefined ? callerSignal : signal,
       });
-      if (!readiness.ok && readiness.callerAborted)
+      if (readiness.ok === false && readiness.callerAborted === true)
         throw Object.assign(new Error("Request aborted"), { name: "AbortError" });
       finalResponse = readiness.response;
     } else {

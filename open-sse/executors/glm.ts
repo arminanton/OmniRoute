@@ -489,7 +489,7 @@ export class GlmExecutor extends DefaultExecutor {
         signal: combinedSignal,
         callerSignal: input.callerSignal !== undefined ? input.callerSignal : input.signal,
       });
-      if (!readiness.ok && readiness.callerAborted)
+      if (readiness.ok === false && readiness.callerAborted === true)
         throw Object.assign(new Error("Request aborted"), { name: "AbortError" });
       response = readiness.response;
     }

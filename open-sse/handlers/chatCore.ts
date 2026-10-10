@@ -6291,7 +6291,7 @@ async function handleChatCoreOwned({
         : clientRawRequest?.signal,
     cancelUpstream: () => streamController.abort(),
   });
-  if (!streamReadiness.ok && streamReadiness.callerAborted) {
+  if (streamReadiness.ok === false && streamReadiness.callerAborted === true) {
     // The client request signal also closes streamController and finalizes the
     // pending detail. Return the existing 499 shape without persisting a 504
     // readiness failure or allowing a combo to dispatch its next target.
