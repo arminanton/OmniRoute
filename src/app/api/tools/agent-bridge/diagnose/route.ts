@@ -49,8 +49,11 @@ export async function GET(request: Request): Promise<Response> {
     const certPath = path.join(resolveMitmDataDir(), "mitm", "server.crt");
     const certExists = fs.existsSync(certPath);
     const certTrusted = certExists ? await checkCertInstalled(certPath) : false;
+    const configuredPort = Number(process.env.MITM_LOCAL_PORT);
     const port =
-      Number(process.env.MITM_LOCAL_PORT) > 0 ? Number(process.env.MITM_LOCAL_PORT) : 443;
+      Number.isInteger(configuredPort) && configuredPort >= 1 && configuredPort <= 65535
+        ? configuredPort
+        : 443;
     const serverReachable = status.running ? await probeTcp(port) : false;
 
     // Compute aggregate dnsConfigured when no agentId provided (matches state route)

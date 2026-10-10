@@ -53106,12 +53106,34 @@ components:
         agents: { type: integer, minimum: 0 }
       additionalProperties: false
 
+    AgentBridgeDiagnosticCheck:
+      type: object
+      required: [name, ok, hint]
+      properties:
+        name:
+          type: string
+          enum:
+            - server-running
+            - server-reachable
+            - cert-exists
+            - cert-trusted
+            - dns-configured
+        ok: { type: boolean }
+        hint: { type: [string, "null"] }
+      additionalProperties: false
+
     AgentBridgeDiagnosticsResponse:
       type: object
-      required: [port]
+      required: [healthy, checks, port]
       properties:
+        healthy: { type: boolean }
+        checks:
+          type: array
+          minItems: 5
+          maxItems: 5
+          items: { $ref: "#/components/schemas/AgentBridgeDiagnosticCheck" }
         port: { type: integer, minimum: 1, maximum: 65535 }
-      additionalProperties: true
+      additionalProperties: false
 
     AgentBridgeRepairResponse:
       type: object

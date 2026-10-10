@@ -112,3 +112,19 @@ test("diagnose route: threads ?agentId= query param through to getMitmStatus", a
     "diagnose route must pass agentId through to getMitmStatus so dns-configured reflects the diagnosed agent's hosts"
   );
 });
+
+test("diagnose route falls back to a valid TCP port for malformed MITM_LOCAL_PORT", async () => {
+  const previousPort = process.env.MITM_LOCAL_PORT;
+  process.env.MITM_LOCAL_PORT = "65536.5";
+  try {
+    const { GET } =
+      await import("../../src/app/api/tools/agent-bridge/diagnose/route.ts?probe=port-bound");
+    const response = await GET(new Request("http://localhost/api/tools/agent-bridge/diagnose"));
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as { port: number };
+    assert.equal(body.port, 443);
+  } finally {
+    if (previousPort === undefined) delete process.env.MITM_LOCAL_PORT;
+    else process.env.MITM_LOCAL_PORT = previousPort;
+  }
+});

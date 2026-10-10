@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as yaml from "js-yaml";
 import { collectApiRouteDefinitions } from "../../scripts/check/lib/apiRoutes.mjs";
+import { summarizeDiagnostics } from "../../src/mitm/inspector/diagnostics.ts";
 
 const ROOT = process.cwd();
 const spec = yaml.load(fs.readFileSync(path.join(ROOT, "docs/openapi.yaml"), "utf8")) as any;
@@ -133,6 +134,58 @@ test("AgentBridge certificate, wrappers, and maintenance request contracts match
     spec.components.schemas.AgentBridgeDetectedModelsAgentId.enum.includes("windsurf") &&
       spec.components.schemas.AgentBridgeDetectedModelsAgentId.enum.includes("jules")
   );
+});
+
+test("AgentBridge diagnose response schema matches the source diagnostic report", () => {
+  const diagnose = operation("/api/tools/agent-bridge/diagnose", "get");
+  assert.equal(
+    diagnose.responses?.["200"]?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/AgentBridgeDiagnosticsResponse"
+  );
+
+  const reportSchema = spec.components.schemas.AgentBridgeDiagnosticsResponse;
+  const checkSchema = spec.components.schemas.AgentBridgeDiagnosticCheck;
+  assert.deepEqual(reportSchema.required, ["healthy", "checks", "port"]);
+  assert.equal(reportSchema.additionalProperties, false);
+  assert.equal(reportSchema.properties.healthy.type, "boolean");
+  assert.equal(reportSchema.properties.port.type, "integer");
+  assert.equal(reportSchema.properties.port.minimum, 1);
+  assert.equal(reportSchema.properties.port.maximum, 65535);
+  assert.equal(reportSchema.properties.checks.type, "array");
+  assert.equal(reportSchema.properties.checks.minItems, 5);
+  assert.equal(reportSchema.properties.checks.maxItems, 5);
+  assert.equal(
+    reportSchema.properties.checks.items.$ref,
+    "#/components/schemas/AgentBridgeDiagnosticCheck"
+  );
+
+  const actualReport = summarizeDiagnostics({
+    serverRunning: false,
+    serverReachable: false,
+    certExists: false,
+    certTrusted: false,
+    dnsConfigured: false,
+  });
+  assert.equal(actualReport.healthy, false);
+  assert.deepEqual(
+    checkSchema.properties.name.enum,
+    actualReport.checks.map((check) => check.name)
+  );
+  assert.deepEqual(checkSchema.required, ["name", "ok", "hint"]);
+  assert.equal(checkSchema.additionalProperties, false);
+  assert.equal(checkSchema.properties.ok.type, "boolean");
+  assert.deepEqual(checkSchema.properties.hint.type, ["string", "null"]);
+  assert.ok(actualReport.checks.every((check) => typeof check.hint === "string"));
+
+  const healthyReport = summarizeDiagnostics({
+    serverRunning: true,
+    serverReachable: true,
+    certExists: true,
+    certTrusted: true,
+    dnsConfigured: true,
+  });
+  assert.equal(healthyReport.healthy, true);
+  assert.ok(healthyReport.checks.every((check) => check.hint === null));
 });
 
 test("Traffic Inspector wrappers, media, buffered replay, and nonempty success statuses match handlers", () => {
