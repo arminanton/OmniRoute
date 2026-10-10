@@ -313,7 +313,7 @@ try {
   console.log(
     JSON.stringify(
       {
-        runtime: `node-${process.version}`,
+        runtime: process.versions.bun ? `bun-${process.versions.bun}` : `node-${process.version}`,
         workload:
           "production request logger + runWithCapture/fake fetch + logger stream taps + saveCallLog",
         clients,
