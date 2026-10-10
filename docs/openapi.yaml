@@ -2284,6 +2284,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ImageGenerationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "410":
+          description: The requested image provider has been retired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: The request body exceeds the configured size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "499":
+          description: The client cancelled provider-scoped image generation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
 
   /api/v1/audio/speech:
     post:
@@ -57583,6 +57612,10 @@ components:
         object:
           type: string
           example: model
+        created:
+          type: integer
+          format: int64
+          description: Unix timestamp in seconds when the model was added to the catalog.
         owned_by:
           type: string
         name:

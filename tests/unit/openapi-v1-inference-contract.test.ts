@@ -7,6 +7,7 @@ import * as yaml from "js-yaml";
 type Schema = {
   $ref?: string;
   type?: string | string[];
+  format?: string;
   const?: unknown;
   enum?: unknown[];
   maxLength?: number;
@@ -377,6 +378,10 @@ test("specialty inference operations document route and upstream error responses
       ["400", "401", "402", "403", "429", "500", "503", "default"],
     ],
     ["/api/v1/rerank", ["400", "401", "403", "429", "500", "503", "default"]],
+    [
+      "/api/v1/providers/{provider}/images/generations",
+      ["400", "401", "403", "410", "413", "429", "499", "500", "503", "default"],
+    ],
     ["/api/v1/images/edits", ["400", "401", "403", "410", "413", "429", "500", "503", "default"]],
   ] as const;
 
@@ -446,6 +451,12 @@ test("specialty inference operations document route and upstream error responses
   assert.match(imageEditRoute, /HTTP_STATUS\.RATE_LIMITED/);
   assert.match(embeddingService, /HTTP_STATUS\.PAYMENT_REQUIRED/);
   assert.match(embeddingService, /HTTP_STATUS\.RATE_LIMITED/);
+});
+
+test("shared OpenAI-compatible model rows declare their Unix creation timestamp", () => {
+  const created = openapi.components.schemas.Model.properties?.created;
+  assert.equal(created?.type, "integer");
+  assert.equal(created?.format, "int64");
 });
 
 test("remaining media contracts describe inputs, auth, failures, catalog fields, and telemetry", () => {
