@@ -93,9 +93,17 @@ export function markSharedBlocked(key: string, untilMs: number): void {
   if (!runtime.__omniSharedCoordinator) throw new Error("Shared coordination is not initialized");
   runtime.__omniSharedCoordinator!.block(key, untilMs);
 }
+export function getSharedBlocksUntil(keys: readonly string[]): Map<string, number> {
+  if (!runtime.__omniSharedCoordinator) throw new Error("Shared coordination is not initialized");
+  return runtime.__omniSharedCoordinator!.blockUntilMany(keys);
+}
 export function unblockShared(key: string): void {
   if (!runtime.__omniSharedCoordinator) throw new Error("Shared coordination is not initialized");
   runtime.__omniSharedCoordinator!.unblock(key);
+}
+export function unblockSharedPrefix(prefix: string): void {
+  if (!runtime.__omniSharedCoordinator) throw new Error("Shared coordination is not initialized");
+  runtime.__omniSharedCoordinator!.unblockPrefix(prefix);
 }
 export function getSharedCoordinationReadiness() {
   return runtime.__omniSharedCoordinator?.readiness() ?? null;

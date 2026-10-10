@@ -289,14 +289,49 @@ export class SqliteCoordinator {
   }
   block(resource: string, untilMs: number): void {
     if (!resource || !Number.isFinite(untilMs)) throw new Error("Invalid cooldown");
+    // Respect caller-supplied clocks (also used by deterministic coordinator tests) while
+    // opportunistically removing old model/account cooldown keys during real operation.
+    this.db
+      .prepare("DELETE FROM coordination_blocks WHERE until_ms<=?")
+      .run(Math.min(Date.now(), untilMs));
     this.db
       .prepare(
         "INSERT INTO coordination_blocks VALUES (?,?) ON CONFLICT(resource) DO UPDATE SET until_ms=MAX(until_ms,excluded.until_ms)"
       )
       .run(resource, untilMs);
   }
+  blockUntil(resource: string, now = Date.now()): number | null {
+    if (!resource) return null;
+    const until = Number(
+      this.db.prepare("SELECT until_ms FROM coordination_blocks WHERE resource=?").get(resource)
+        ?.until_ms ?? 0
+    );
+    return until > now ? until : null;
+  }
+  blockUntilMany(resources: readonly string[], now = Date.now()): Map<string, number> {
+    const keys = [...new Set(resources.filter(Boolean))];
+    if (!keys.length) return new Map();
+    const placeholders = keys.map(() => "?").join(",");
+    const rows = this.db
+      .prepare(
+        `SELECT resource,until_ms FROM coordination_blocks WHERE resource IN (${placeholders})`
+      )
+      .all(...keys);
+    const blocked = new Map<string, number>();
+    for (const row of rows) {
+      const until = Number(row.until_ms);
+      if (until > now) blocked.set(String(row.resource), until);
+    }
+    return blocked;
+  }
   unblock(resource: string): void {
     this.db.prepare("DELETE FROM coordination_blocks WHERE resource=?").run(resource);
+  }
+  unblockPrefix(prefix: string): void {
+    if (!prefix) return;
+    this.db
+      .prepare("DELETE FROM coordination_blocks WHERE substr(resource,1,?)=?")
+      .run(prefix.length, prefix);
   }
   runtimeCounts(now = Date.now()) {
     const rows = this.db

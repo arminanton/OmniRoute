@@ -27,6 +27,7 @@ export interface ChatCoreExecutorResult {
   transport?: string;
   _executionCredentials?: Record<string, unknown>;
   _accountSemaphoreRelease?: (completed?: boolean) => void;
+  _localAdmissionFailure?: { code: string; message: string };
 }
 
 export interface ProviderExecutionPolicy {
@@ -386,6 +387,25 @@ export async function runProviderExecutionPipeline(
 
     const after = assertLease(policy, connection, wire.currentModel);
     if (after) return after;
+
+    // Local admission rejection is not an upstream 429. Preserve its typed result so the
+    // caller can try another account without recording an Antigravity/model cooldown twice.
+    if (attempt._localAdmissionFailure) {
+      return {
+        kind: "error",
+        result: {
+          success: false,
+          status: attempt.response.status,
+          response: attempt.response,
+          error: attempt._localAdmissionFailure.message,
+          errorCode: attempt._localAdmissionFailure.code,
+          errorType: "account_semaphore_capacity",
+        },
+        providerUsage: null,
+        model: wire.currentModel,
+        connectionId: currentConnectionId(connection),
+      };
+    }
 
     const status = attempt.response.status;
     if (isRuntimePolicyResponse(attempt.response) || (status >= 200 && status < 300)) {

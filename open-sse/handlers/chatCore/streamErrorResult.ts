@@ -15,7 +15,9 @@ export function isSemaphoreCapacityError(error: unknown): error is Error & { cod
     !!error &&
     typeof error === "object" &&
     ((error as { code?: unknown }).code === "SEMAPHORE_TIMEOUT" ||
-      (error as { code?: unknown }).code === "SEMAPHORE_QUEUE_FULL")
+      (error as { code?: unknown }).code === "SEMAPHORE_QUEUE_FULL" ||
+      (error as { code?: unknown }).code === "SEMAPHORE_MODEL_COOLDOWN" ||
+      (error as { code?: unknown }).code === "SEMAPHORE_COORDINATION_UNHEALTHY")
   );
 }
 

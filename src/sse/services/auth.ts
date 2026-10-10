@@ -24,6 +24,8 @@ import {
   touchConnectionLastUsed,
   clearConnectionErrorIfUnchanged,
 } from "@/lib/db/providers";
+import { blockAdmissionResourceUntil } from "@omniroute/open-sse/services/accountSemaphore.ts";
+import { buildAntigravityModelCooldownKey } from "@omniroute/open-sse/services/coordination/antigravityModelCooldown.ts";
 import { getDbInstance } from "@/lib/db/core";
 import { getRecentEgressIpForConnection, EGRESS_IP_LOOKUP_WINDOW_MS } from "@/lib/db/proxyLogs";
 import { validateApiKey } from "@/lib/db/apiKeys";
@@ -2938,7 +2940,8 @@ export async function markAccountUnavailable(
         return { shouldFallback: true, cooldownMs: 0 };
       }
 
-      const usesExactAntigravityLock = provider === "antigravity";
+      const usesExactAntigravityLock =
+        typeof provider === "string" && resolveProviderId(provider) === "antigravity";
       const quotaScope = usesExactAntigravityLock
         ? "model"
         : getQuotaScopeLabelForProvider(provider, model);
@@ -2977,6 +2980,21 @@ export async function markAccountUnavailable(
           ),
         }
       );
+      if (usesExactAntigravityLock) {
+        const activeAdmissionKey = buildAntigravityModelCooldownKey(connectionId, model, "active");
+        const effectiveLock = getModelLockoutInfo(provider, connectionId, model);
+        const effectiveCooldownMs = Math.max(0, effectiveLock?.remainingMs ?? lockout.cooldownMs);
+        if (activeAdmissionKey && effectiveCooldownMs > 0) {
+          try {
+            await blockAdmissionResourceUntil(activeAdmissionKey, Date.now() + effectiveCooldownMs);
+          } catch (error) {
+            log.warn(
+              "AUTH",
+              `Could not publish Antigravity model cooldown to shared admission for ${connectionId.slice(0, 8)}: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        }
+      }
       // Update last error for observability (without changing terminal status)
       updateProviderConnection(connectionId, {
         lastErrorType: reason,

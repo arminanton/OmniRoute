@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { SqliteCoordinator } from "../../open-sse/services/coordination/sqliteCoordinator.ts";
+import { buildAntigravityModelCooldownKey } from "../../open-sse/services/coordination/antigravityModelCooldown.ts";
 test("separate processes share atomic permits, FIFO, expiry and fences", () => {
   const dir = mkdtempSync(join(tmpdir(), "omni-coordination-"));
   const file = join(dir, "permits.sqlite");
@@ -74,6 +75,74 @@ test("shared cooldown cannot be shortened and cap disagreement remains conservat
   } finally {
     a.close();
     b.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity model cooldown is shared by workers and scoped to one account/model tuple", () => {
+  const dir = mkdtempSync(join(tmpdir(), "omni-ag-model-cooldown-"));
+  const file = join(dir, "c.sqlite");
+  const owner = new SqliteCoordinator(file, "owner");
+  const follower = new SqliteCoordinator(file, "follower");
+  try {
+    const blocked = buildAntigravityModelCooldownKey(
+      "synthetic-account",
+      "gemini-3.8-flash-high",
+      "active"
+    );
+    const sameAlias = buildAntigravityModelCooldownKey(
+      "synthetic-account",
+      " GEMINI-3.8-FLASH-HIGH ",
+      "active"
+    );
+    const siblingModel = buildAntigravityModelCooldownKey(
+      "synthetic-account",
+      "claude-sonnet-4-6",
+      "active"
+    );
+    const siblingAccount = buildAntigravityModelCooldownKey(
+      "another-account",
+      "gemini-3.8-flash-high",
+      "active"
+    );
+    const pending = buildAntigravityModelCooldownKey(
+      "synthetic-account",
+      "gemini-3.8-flash-high",
+      "pending"
+    );
+    assert.ok(blocked && siblingModel && siblingAccount && pending);
+    assert.equal(sameAlias, blocked);
+    const until = Date.now() + 60_000;
+    owner.block(blocked, until);
+    assert.equal(follower.blockUntil(blocked), until);
+    assert.deepEqual([...follower.blockUntilMany([blocked, siblingModel])], [[blocked, until]]);
+    const child = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx/esm",
+        "--input-type=module",
+        "-e",
+        `import {SqliteCoordinator} from './open-sse/services/coordination/sqliteCoordinator.ts'; const c=new SqliteCoordinator(process.env.TEST_COORDINATION_DB,'child'); console.log(c.blockUntil(process.env.TEST_COOLDOWN_KEY)); c.close();`,
+      ],
+      {
+        encoding: "utf8",
+        env: { ...process.env, TEST_COORDINATION_DB: file, TEST_COOLDOWN_KEY: blocked },
+      }
+    );
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(child.stdout.trim(), String(until));
+    assert.equal(follower.blockUntil(siblingModel), null);
+    assert.equal(follower.blockUntil(siblingAccount), null);
+    owner.block(pending, until);
+    owner.unblockPrefix("cooldown:active:v1:");
+    assert.equal(follower.blockUntil(blocked), null);
+    assert.equal(follower.blockUntil(pending), until);
+    owner.unblockPrefix("cooldown:pending:v1:");
+    assert.equal(follower.blockUntil(pending), null);
+  } finally {
+    owner.close();
+    follower.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -425,7 +425,15 @@ import {
   initializeRateLimits,
 } from "../services/rateLimitManager.ts";
 import * as localLimiterErrors from "../services/rateLimitManager/errors.ts";
-import { markBlocked as markAccountSemaphoreBlocked } from "../services/accountSemaphore.ts";
+import {
+  blockAdmissionResourceUntil,
+  getAdmissionResourcesBlockedUntil,
+  markBlocked as markAccountSemaphoreBlocked,
+} from "../services/accountSemaphore.ts";
+import {
+  ANTIGRAVITY_MODEL_COOLDOWN_BRIDGE_MS,
+  buildAntigravityModelCooldownKey,
+} from "../services/coordination/antigravityModelCooldown.ts";
 import {
   lockModel,
   lockModelIfPerModelQuota,
@@ -488,6 +496,7 @@ import { getProactiveCompressionRatio } from "@/lib/db/compression";
 type ChatCoreExecutorResult = ReturnType<typeof normalizeExecutorResult> & {
   _executionCredentials?: Record<string, unknown>;
   _accountSemaphoreRelease?: (completed?: boolean) => void;
+  _localAdmissionFailure?: { code: string; message: string };
 };
 
 /**
@@ -498,6 +507,14 @@ type ChatCoreExecutorResult = ReturnType<typeof normalizeExecutorResult> & {
  * the whole destructure to a typed object.
  */
 type VideoBridgeLogParam = { observed: boolean; redaction: VideoBridgeLogRedactionEntry[] } | null;
+
+const LOCAL_ADMISSION_FAILURE = Symbol("omniroute.local-admission-failure");
+
+function readLocalAdmissionFailure(value: unknown): (Error & { code: string }) | null {
+  if (!value || typeof value !== "object") return null;
+  const error = (value as { [LOCAL_ADMISSION_FAILURE]?: unknown })[LOCAL_ADMISSION_FAILURE];
+  return isSemaphoreCapacityError(error) ? error : null;
+}
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -3264,12 +3281,27 @@ async function handleChatCoreOwned({
             const providerConcurrency =
               resilienceSettings.providerQuotaOverrides[canonicalProviderKey]
                 ?.providerConcurrency ?? 0;
+            const antigravityModelCooldownKeys =
+              canonicalProviderKey === "antigravity"
+                ? {
+                    pending: buildAntigravityModelCooldownKey(
+                      attemptConnectionId,
+                      modelToCall,
+                      "pending"
+                    ),
+                    active: buildAntigravityModelCooldownKey(
+                      attemptConnectionId,
+                      modelToCall,
+                      "active"
+                    ),
+                  }
+                : null;
 
             let attemptSignal: AbortSignal | null | undefined = streamController.signal;
             const acquireAttemptPermit = async () => {
               const endWait = getRequestTransportTelemetry()?.wait("admission");
               try {
-                return await acquireConcurrencyGates(
+                const release = await acquireConcurrencyGates(
                   [
                     {
                       key: "global",
@@ -3288,6 +3320,25 @@ async function handleChatCoreOwned({
                     onLeaseLost: () => streamController.abort(),
                   }
                 );
+                try {
+                  const cooldownKeys = [
+                    antigravityModelCooldownKeys?.pending,
+                    antigravityModelCooldownKeys?.active,
+                  ].filter((key): key is string => Boolean(key));
+                  const cooldowns = await getAdmissionResourcesBlockedUntil(cooldownKeys);
+                  for (const [key, blockedUntil] of cooldowns) {
+                    if (blockedUntil && blockedUntil > Date.now()) {
+                      throw Object.assign(
+                        new Error("Antigravity model is cooling down on this account"),
+                        { code: "SEMAPHORE_MODEL_COOLDOWN" }
+                      );
+                    }
+                  }
+                  return release;
+                } catch (error) {
+                  release();
+                  throw error;
+                }
               } finally {
                 endWait?.();
               }
@@ -3342,7 +3393,14 @@ async function handleChatCoreOwned({
                         attemptSignal?.throwIfAborted();
                         trace("inside_rate_limit", { connectionId: attemptConnectionId });
                         updatePendingScope(pendingScope, { stage: "waiting_account_slot" });
-                        currentPermitRelease = await acquireAttemptPermit();
+                        try {
+                          currentPermitRelease = await acquireAttemptPermit();
+                        } catch (error) {
+                          if (isSemaphoreCapacityError(error)) {
+                            return { [LOCAL_ADMISSION_FAILURE]: error };
+                          }
+                          throw error;
+                        }
                         admittedAt = Date.now();
                         trace("post_semaphore");
                         updatePendingScope(pendingScope, { stage: "rate_limit_slot_acquired" });
@@ -3392,11 +3450,67 @@ async function handleChatCoreOwned({
                   );
                 }
               );
+              const localAdmissionFailure = readLocalAdmissionFailure(rawExecutorResult);
+              if (localAdmissionFailure) {
+                appendRequestLog({
+                  model,
+                  provider,
+                  connectionId,
+                  status: `FAILED ${localAdmissionFailure.code}`,
+                }).catch(() => {});
+                const failureMessage = localAdmissionFailure.message || "Admission rejected";
+                persistAttemptLogs({
+                  status: HTTP_STATUS.RATE_LIMITED,
+                  error: failureMessage,
+                  providerRequest: finalBody || translatedBody,
+                  clientResponse: buildErrorBody(HTTP_STATUS.RATE_LIMITED, failureMessage),
+                  claudeCacheMeta: claudePromptCacheLogMeta,
+                  cacheSource: "upstream",
+                });
+                persistFailureUsage(HTTP_STATUS.RATE_LIMITED, localAdmissionFailure.code);
+                const result = stream
+                  ? createStreamingErrorResult(
+                      HTTP_STATUS.RATE_LIMITED,
+                      failureMessage,
+                      localAdmissionFailure.code
+                    )
+                  : createErrorResult(HTTP_STATUS.RATE_LIMITED, failureMessage);
+                return {
+                  response: result.response,
+                  url: "",
+                  headers: {},
+                  transformedBody: null,
+                  _executionCredentials: execCreds,
+                  _localAdmissionFailure: {
+                    code: localAdmissionFailure.code,
+                    message: failureMessage,
+                  },
+                };
+              }
               const res = normalizeExecutorResult(rawExecutorResult);
               attemptStatus = res.response.status;
               if (isRuntimePolicyResponse(res.response)) {
                 releaseAccountSemaphore();
                 return { ...res, _executionCredentials: execCreds };
+              }
+              if (
+                attemptStatus === HTTP_STATUS.RATE_LIMITED &&
+                antigravityModelCooldownKeys?.pending
+              ) {
+                // The caller records the exact cooldown after Core returns. Publish a short
+                // model-scoped bridge first so already-queued work cannot dispatch in between.
+                try {
+                  await blockAdmissionResourceUntil(
+                    antigravityModelCooldownKeys.pending,
+                    Date.now() + ANTIGRAVITY_MODEL_COOLDOWN_BRIDGE_MS
+                  );
+                } catch (error) {
+                  log?.warn?.("ADMISSION", "Could not publish Antigravity model cooldown bridge", {
+                    connectionId: attemptConnectionId,
+                    model: modelToCall,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
               }
               trace("post_executor", { status: res?.response?.status });
 
@@ -4465,6 +4579,13 @@ async function handleChatCoreOwned({
 
       pipelineRecovered = true;
       currentModel = pipelineOutcome.model;
+      if (
+        pipelineOutcome.kind === "error" &&
+        pipelineOutcome.result.errorType === "account_semaphore_capacity"
+      ) {
+        trackPendingRequest(model, provider, connectionId, false);
+        return pipelineOutcome.result;
+      }
       if (pipelineOutcome.kind === "error") {
         if (isRuntimePolicyResponse(pipelineOutcome.result.response)) {
           trackPendingRequest(model, provider, connectionId, false);

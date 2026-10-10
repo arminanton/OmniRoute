@@ -59,6 +59,12 @@ import {
 } from "./antigravityQuotaFamily.ts";
 import { persistAntigravityFamilyCooldownIfQuota } from "./antigravityFamilyCooldown.ts";
 import {
+  blockAdmissionResourceUntil,
+  unblockAdmissionResource,
+  unblockAdmissionResourcePrefix,
+} from "./accountSemaphore.ts";
+import { buildAntigravityModelCooldownKey } from "./coordination/antigravityModelCooldown.ts";
+import {
   classifyGeminiQuotaMetricFromText,
   isRpdExhausted,
   isRpmExhausted,
@@ -670,6 +676,20 @@ export async function recordCoreOwnedAntigravityQuotaState({
       reason: "quota_exhausted",
     });
   }
+  const activeAdmissionKey = buildAntigravityModelCooldownKey(connectionId, model, "active");
+  if (activeAdmissionKey) {
+    const effectiveLock = getModelLockoutInfo(provider, connectionId, model);
+    const effectiveCooldownMs = Math.max(0, effectiveLock?.remainingMs ?? lockout.cooldownMs);
+    if (effectiveCooldownMs > 0) {
+      try {
+        await blockAdmissionResourceUntil(activeAdmissionKey, Date.now() + effectiveCooldownMs);
+      } catch (error) {
+        console.warn(
+          `[provider] Could not publish Antigravity model cooldown for ${connectionId.slice(0, 8)}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  }
   return { cooldownMs: lockout.cooldownMs, failureCount: lockout.failureCount };
 }
 
@@ -935,11 +955,16 @@ export function clearModelLock(
   model: string | null | undefined
 ): boolean {
   if (!model) return false;
-  return exactModelLock.clearMultiKeyLock(
+  const cleared = exactModelLock.clearMultiKeyLock(
     modelLockouts,
     modelFailureState,
     getModelLockKeys(provider, connectionId, model)
   );
+  if (getCanonicalLockProvider(provider) === "antigravity") {
+    const activeAdmissionKey = buildAntigravityModelCooldownKey(connectionId, model, "active");
+    if (activeAdmissionKey) unblockAdmissionResource(activeAdmissionKey);
+  }
+  return cleared;
 }
 
 /**
@@ -1054,6 +1079,8 @@ export function decayModelFailureCount(
 export function clearAllModelLockouts(): void {
   modelLockouts.clear();
   modelFailureState.clear();
+  unblockAdmissionResourcePrefix("cooldown:active:v1:");
+  unblockAdmissionResourcePrefix("cooldown:pending:v1:");
 }
 
 /**

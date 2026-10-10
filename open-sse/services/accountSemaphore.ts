@@ -325,9 +325,102 @@ export function markBlocked(key: string, until: Date | string | number): void {
         process.env.OMNI_COORDINATION_UNHEALTHY = "true";
       });
   }
+  setLocalBlockUntil(key, untilMs);
+}
+
+function setLocalBlockUntil(key: string, untilMs: number): void {
   const gate = ensureGate(key, gates.get(key)?.maxConcurrency ?? 1);
   clearCleanupTimer(gate);
-  gate.blockedUntil = untilMs;
+  gate.blockedUntil = Math.max(gate.blockedUntil ?? 0, untilMs);
+}
+
+function getLocalBlockUntil(key: string, now = Date.now()): number | null {
+  const gate = gates.get(key);
+  if (!gate?.blockedUntil) return null;
+  if (gate.blockedUntil <= now) {
+    gate.blockedUntil = null;
+    cleanupGateIfIdle(key);
+    return null;
+  }
+  return gate.blockedUntil;
+}
+
+/** Publish a model-scoped cooldown before releasing the request's account lease. */
+export async function blockAdmissionResourceUntil(key: string, untilMs: number): Promise<void> {
+  if (!key || !Number.isFinite(untilMs) || untilMs <= Date.now()) return;
+  setLocalBlockUntil(key, untilMs);
+  if (process.env.OMNI_SHARED_ADMISSION !== "true") return;
+  try {
+    const { markSharedBlocked } = await import("./coordination/sharedSemaphore.ts");
+    markSharedBlocked(key, untilMs);
+  } catch (error) {
+    // A failed durable publication must not make this process dispatch through the cooldown.
+    process.env.OMNI_COORDINATION_UNHEALTHY = "true";
+    throw error;
+  }
+}
+
+/** Read local and durable cooldown state after the request has left its queue. */
+export async function getAdmissionResourcesBlockedUntil(
+  keys: readonly string[]
+): Promise<Map<string, number>> {
+  const uniqueKeys = [...new Set(keys.filter(Boolean))];
+  const blocked = new Map<string, number>();
+  for (const key of uniqueKeys) {
+    const local = getLocalBlockUntil(key);
+    if (local != null) blocked.set(key, local);
+  }
+  if (process.env.OMNI_SHARED_ADMISSION !== "true") return blocked;
+  try {
+    const { getSharedBlocksUntil } = await import("./coordination/sharedSemaphore.ts");
+    for (const [key, shared] of getSharedBlocksUntil(uniqueKeys)) {
+      blocked.set(key, Math.max(blocked.get(key) ?? 0, shared));
+    }
+    return blocked;
+  } catch (error) {
+    process.env.OMNI_COORDINATION_UNHEALTHY = "true";
+    throw Object.assign(new Error("Shared coordination unavailable; refusing model dispatch"), {
+      code: "SEMAPHORE_COORDINATION_UNHEALTHY",
+      cause: error,
+    });
+  }
+}
+
+/** Clear a durable model cooldown after the model succeeds or an operator resets it. */
+export function unblockAdmissionResource(key: string): void {
+  const gate = gates.get(key);
+  if (gate) {
+    gate.blockedUntil = null;
+    drainQueues();
+    cleanupGateIfIdle(key);
+  }
+  if (process.env.OMNI_SHARED_ADMISSION !== "true") return;
+  void import("./coordination/sharedSemaphore.ts")
+    .then(({ getSharedCoordinationReadiness, unblockShared }) => {
+      if (getSharedCoordinationReadiness()) unblockShared(key);
+    })
+    .catch(() => {
+      process.env.OMNI_COORDINATION_UNHEALTHY = "true";
+    });
+}
+
+/** Reset all durable blocks in an isolated resource namespace. */
+export function unblockAdmissionResourcePrefix(prefix: string): void {
+  if (!prefix) return;
+  for (const [key, gate] of gates) {
+    if (!key.startsWith(prefix)) continue;
+    gate.blockedUntil = null;
+    drainQueues();
+    cleanupGateIfIdle(key);
+  }
+  if (process.env.OMNI_SHARED_ADMISSION !== "true") return;
+  void import("./coordination/sharedSemaphore.ts")
+    .then(({ getSharedCoordinationReadiness, unblockSharedPrefix }) => {
+      if (getSharedCoordinationReadiness()) unblockSharedPrefix(prefix);
+    })
+    .catch(() => {
+      process.env.OMNI_COORDINATION_UNHEALTHY = "true";
+    });
 }
 
 export function unblock(key: string): void {
