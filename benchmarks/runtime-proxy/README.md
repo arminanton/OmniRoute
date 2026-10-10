@@ -406,7 +406,7 @@ atomic lease operations. This first Rust slice accepts only static gates; it rej
 requirements rather than silently applying a different cap. Use a dedicated local POSIX volume for
 coordination, never NFS or the application data DB.
 
-### SQLite quota bucket storage probe
+### SQLite quota bucket storage and sliding-window math probe
 
 Run the raw bucket-storage interoperability test with:
 
@@ -417,9 +417,14 @@ cargo test --manifest-path benchmarks/runtime-proxy/Cargo.toml --test quota_buck
 The test asks TypeScript to migrate a temporary `DATA_DIR`, then alternates actual
 `quotaConsumption.ts` writes/reads with Rust writes/reads on that same temporary SQLite file. The
 Rust adapter refuses to create the table and checks the migration-defined columns and composite key
-before using the documented UPSERT. It covers only `(api_key_id, dimension_key, bucket_index)` row
-storage and current/previous bucket reads. It does not select SQLite versus Redis, read key/account
-policy, resolve pools/plans, calculate fair-share, or enforce quota decisions.
+before using the documented UPSERT. Shared `fixtures/quota-sliding-window-v1.json` vectors cover
+empty rows, fractional consumption, window start/midpoint/last-millisecond/next-boundary timestamps,
+and the hourly, five-hour, daily, weekly, and monthly windows. A controlled `Date.now()` drives the
+real `SqliteQuotaStore.peek/consume`; Rust reads those rows, applies its explicit timestamp/window
+formula, writes a fractional delta, and the TypeScript store reads the result back. This proves
+current/previous-bucket selection and sliding-window arithmetic for the fixture cases. It does not
+select SQLite versus Redis, read key/account policy, resolve pools/plans, calculate fair-share, or
+enforce quota decisions.
 
 ### Quota fair-share decision vectors
 

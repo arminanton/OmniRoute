@@ -42,6 +42,30 @@ pub struct BucketPair {
     pub prev: f64,
 }
 
+impl BucketPair {
+    /// Apply OmniRoute's two-bucket sliding-window formula to a pair read from SQLite.
+    ///
+    /// The caller supplies the timestamp and window size so this benchmark-only port can be
+    /// compared deterministically with `SqliteQuotaStore.peek/consume`. `div_euclid` matches
+    /// TypeScript's `Math.floor(nowMs / windowMs)` for both positive and negative timestamps.
+    pub fn effective(self, now_ms: i64, window_ms: i64) -> Result<f64, QuotaBucketError> {
+        if window_ms <= 0 {
+            return Err(QuotaBucketError::Invalid(
+                "quota window must be a positive number of milliseconds".into(),
+            ));
+        }
+        let current_bucket_start_ms = now_ms
+            .div_euclid(window_ms)
+            .checked_mul(window_ms)
+            .ok_or_else(|| QuotaBucketError::Invalid("quota bucket timestamp overflow".into()))?;
+        let elapsed_ms = now_ms
+            .checked_sub(current_bucket_start_ms)
+            .ok_or_else(|| QuotaBucketError::Invalid("quota elapsed time overflow".into()))?;
+        let weight = 1.0 - elapsed_ms as f64 / window_ms as f64;
+        Ok(self.prev * weight + self.curr)
+    }
+}
+
 pub struct SqliteQuotaBucketStore {
     db: Mutex<Connection>,
 }

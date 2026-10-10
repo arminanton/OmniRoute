@@ -119,6 +119,190 @@ fn rust_and_typescript_share_migration_defined_quota_bucket_rows() {
     );
 }
 
+#[test]
+fn rust_sliding_window_math_matches_typescript_store_on_migrated_sqlite_rows() {
+    let data_dir = TemporaryDataDirectory::new();
+    let db_path = data_dir.database_path();
+    let fixture_path = Path::new(MANIFEST_DIR).join("fixtures/quota-sliding-window-v1.json");
+    let fixture_bytes = fs::read(&fixture_path).expect("read shared sliding-window vectors");
+    let vectors: Vec<Value> = serde_json::from_slice(&fixture_bytes).expect("parse vectors");
+
+    // TypeScript owns database initialization, writes each pair through the real quota helper,
+    // then evaluates SqliteQuotaStore.peek/consume with a deterministic Date.now().
+    let seeded = run_typescript(
+        &data_dir.0,
+        r#"
+          const fs = await import("node:fs");
+          const { SqliteQuotaStore } = await import("./src/lib/quota/sqliteQuotaStore.ts");
+          const { WINDOW_MS } = await import("./src/lib/quota/dimensions.ts");
+          const vectors = JSON.parse(fs.readFileSync(process.env.TEST_EFFECTIVE_FIXTURE, "utf8"));
+          const originalNow = Date.now;
+          const store = new SqliteQuotaStore();
+          const results = [];
+          try {
+            for (const vector of vectors) {
+              if (WINDOW_MS[vector.window] !== vector.windowMs) {
+                throw new Error(`window size drift for ${vector.window}`);
+              }
+              const dimension = { poolId: "fixture-pool", unit: "tokens", window: vector.window };
+              const dimensionKey = `${dimension.poolId}:${dimension.unit}:${dimension.window}`;
+              const apiKeyId = `fixture-effective-${vector.id}`;
+              const currentBucket = Math.floor(vector.nowMs / vector.windowMs);
+              if (vector.curr !== null) {
+                quota.incrementBucket(apiKeyId, dimensionKey, currentBucket, vector.curr, vector.nowMs);
+              }
+              if (vector.prev !== null) {
+                quota.incrementBucket(apiKeyId, dimensionKey, currentBucket - 1, vector.prev, vector.nowMs);
+              }
+              Date.now = () => vector.nowMs;
+              const beforePair = quota.getPair(apiKeyId, dimensionKey, currentBucket);
+              const before = await store.peek(apiKeyId, dimension);
+              const consumed = vector.consumeDelta === null
+                ? null
+                : await store.consume(apiKeyId, dimension, vector.consumeDelta);
+              const afterPair = quota.getPair(apiKeyId, dimensionKey, currentBucket);
+              const after = await store.peek(apiKeyId, dimension);
+              results.push({ id: vector.id, apiKeyId, dimensionKey, currentBucket, beforePair, before, consumed, afterPair, after });
+            }
+          } finally {
+            Date.now = originalNow;
+            core.resetDbInstance();
+          }
+          console.log("RESULT:" + JSON.stringify(results));
+        "#,
+    );
+    let seeded_rows = seeded.as_array().expect("TypeScript result array");
+    assert_eq!(seeded_rows.len(), vectors.len());
+
+    // Rust reads the exact TypeScript-created rows and evaluates the same timestamp/window.
+    // It then applies another fractional delta and TypeScript observes those Rust-written rows.
+    let rust = SqliteQuotaBucketStore::open_existing(&db_path).expect("open TS-migrated DB");
+    for (vector, result) in vectors.iter().zip(seeded_rows.iter()) {
+        let id = vector["id"].as_str().expect("vector id");
+        let window_ms = vector["windowMs"].as_i64().expect("window size");
+        let now_ms = vector["nowMs"].as_i64().expect("timestamp");
+        let current_bucket = now_ms.div_euclid(window_ms);
+        let api_key_id = result["apiKeyId"].as_str().expect("seeded API key ID");
+        let dimension_key = result["dimensionKey"].as_str().expect("dimension key");
+        assert_eq!(
+            result["currentBucket"].as_i64(),
+            Some(current_bucket),
+            "{id}"
+        );
+
+        let before_pair = pair_from_json(&result["beforePair"]);
+        let expected_peek = vector["expectedPeek"].as_f64().expect("expected peek");
+        assert_close(
+            &format!("{id}: TypeScript peek"),
+            result["before"].as_f64().unwrap(),
+            expected_peek,
+        );
+        assert_close(
+            &format!("{id}: Rust formula on TypeScript pair"),
+            before_pair.effective(now_ms, window_ms).unwrap(),
+            expected_peek,
+        );
+
+        let after_pair = rust
+            .get_pair(api_key_id, dimension_key, current_bucket)
+            .expect("read TypeScript bucket rows");
+        assert_pair_close(
+            &format!("{id}: Rust reads TypeScript pair"),
+            after_pair,
+            pair_from_json(&result["afterPair"]),
+        );
+        let expected_after_consume = vector["expectedAfterConsume"]
+            .as_f64()
+            .expect("expected consume result");
+        if vector["consumeDelta"].is_null() {
+            assert!(
+                result["consumed"].is_null(),
+                "{id}: unexpected TypeScript consume result"
+            );
+        } else {
+            assert_close(
+                &format!("{id}: TypeScript consume return"),
+                result["consumed"].as_f64().expect("consume return value"),
+                expected_after_consume,
+            );
+        }
+        assert_close(
+            &format!("{id}: TypeScript result after consume"),
+            result["after"].as_f64().unwrap(),
+            expected_after_consume,
+        );
+        assert_close(
+            &format!("{id}: Rust formula after TypeScript consume"),
+            after_pair.effective(now_ms, window_ms).unwrap(),
+            expected_after_consume,
+        );
+
+        let rust_delta = vector["rustDelta"].as_f64().expect("Rust delta");
+        rust.increment_bucket(
+            api_key_id,
+            dimension_key,
+            current_bucket,
+            rust_delta,
+            now_ms,
+        )
+        .expect("write Rust fractional delta");
+        let rust_pair = rust
+            .get_pair(api_key_id, dimension_key, current_bucket)
+            .expect("read Rust-updated pair");
+        assert_close(
+            &format!("{id}: Rust formula after Rust increment"),
+            rust_pair.effective(now_ms, window_ms).unwrap(),
+            vector["expectedAfterRust"]
+                .as_f64()
+                .expect("expected Rust result"),
+        );
+    }
+    drop(rust);
+
+    let observed_by_typescript = run_typescript(
+        &data_dir.0,
+        r#"
+          const fs = await import("node:fs");
+          const { SqliteQuotaStore } = await import("./src/lib/quota/sqliteQuotaStore.ts");
+          const vectors = JSON.parse(fs.readFileSync(process.env.TEST_EFFECTIVE_FIXTURE, "utf8"));
+          const originalNow = Date.now;
+          const store = new SqliteQuotaStore();
+          const results = [];
+          try {
+            for (const vector of vectors) {
+              Date.now = () => vector.nowMs;
+              const dimension = { poolId: "fixture-pool", unit: "tokens", window: vector.window };
+              const apiKeyId = `fixture-effective-${vector.id}`;
+              results.push({ id: vector.id, actual: await store.peek(apiKeyId, dimension) });
+            }
+          } finally {
+            Date.now = originalNow;
+            core.resetDbInstance();
+          }
+          console.log("RESULT:" + JSON.stringify(results));
+        "#,
+    );
+    let observed = observed_by_typescript
+        .as_array()
+        .expect("TypeScript reread array");
+    for vector in vectors.iter() {
+        let id = vector["id"].as_str().expect("vector id");
+        let actual = observed
+            .iter()
+            .find(|result| result["id"].as_str() == Some(id))
+            .expect("TypeScript observed each vector")["actual"]
+            .as_f64()
+            .expect("TypeScript effective value");
+        assert_close(
+            &format!("{id}: TypeScript formula after Rust increment"),
+            actual,
+            vector["expectedAfterRust"]
+                .as_f64()
+                .expect("expected Rust result"),
+        );
+    }
+}
+
 fn run_typescript(data_dir: &Path, source: &str) -> Value {
     let script = format!(
         "import * as core from './src/lib/db/core.ts';\n\
@@ -141,6 +325,10 @@ fn run_typescript(data_dir: &Path, source: &str) -> Value {
         .env("DATA_DIR", data_dir)
         .env("TEST_API_KEY_ID", API_KEY_ID)
         .env("TEST_DIMENSION", DIMENSION)
+        .env(
+            "TEST_EFFECTIVE_FIXTURE",
+            Path::new(MANIFEST_DIR).join("fixtures/quota-sliding-window-v1.json"),
+        )
         .env("OMNIROUTE_SKIP_DB_HEALTHCHECK", "1")
         .output()
         .expect("launch TypeScript quota-storage process");
@@ -164,4 +352,28 @@ fn pair(curr: f64, prev: f64) -> quota_bucket_store::BucketPair {
 fn assert_pair(value: &Value, curr: f64, prev: f64) {
     assert_eq!(value["curr"].as_f64(), Some(curr));
     assert_eq!(value["prev"].as_f64(), Some(prev));
+}
+
+fn pair_from_json(value: &Value) -> quota_bucket_store::BucketPair {
+    pair(
+        value["curr"].as_f64().expect("current bucket value"),
+        value["prev"].as_f64().expect("previous bucket value"),
+    )
+}
+
+fn assert_pair_close(
+    label: &str,
+    actual: quota_bucket_store::BucketPair,
+    expected: quota_bucket_store::BucketPair,
+) {
+    assert_close(&format!("{label}: curr"), actual.curr, expected.curr);
+    assert_close(&format!("{label}: prev"), actual.prev, expected.prev);
+}
+
+fn assert_close(label: &str, actual: f64, expected: f64) {
+    let tolerance = 1e-9_f64.max(expected.abs() * 1e-12);
+    assert!(
+        actual.is_finite() && (actual - expected).abs() <= tolerance,
+        "{label}: expected {expected:.15}, got {actual:.15} (tolerance {tolerance})"
+    );
 }
