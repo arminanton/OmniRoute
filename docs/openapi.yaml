@@ -28670,9 +28670,26 @@ paths:
       tags:
         - Skills
       summary: "GET skills"
+      description: >-
+        Requires `requireManagementAuth()`: in protected profiles this accepts a management-scoped
+        Bearer credential, dashboard session, local CLI token, or trusted loopback internal-service
+        token. Unlocked installs may allow anonymous access. The auth helper also accepts a
+        management-scoped Anthropic `x-api-key` (with its Anthropic request marker) or Google
+        `x-goog-api-key`.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Paginated installed skills with the active provider and defaults. Skill handler code is executable and sensitive.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillListResponse" }
   /api/skills/{id}:
     parameters:
       - name: id
@@ -28685,109 +28702,282 @@ paths:
       tags:
         - Skills
       summary: "DELETE skills › <id>"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept management-scoped Bearer or
+        supported management API-key headers, a dashboard session, a local CLI token, or a trusted
+        loopback internal-service token. Unlocked installs may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Skill deletion result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillMutationResponse" }
     put:
       operationId: putApiSkillsById
       tags:
         - Skills
       summary: "PUT skills › <id>"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept management-scoped Bearer or
+        supported management API-key headers, a dashboard session, a local CLI token, or a trusted
+        loopback internal-service token. Unlocked installs may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Partial skill state update; omitted fields were not changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillUpdateResponse" }
   /api/skills/collect/chaos:
     post:
       operationId: postApiSkillsCollectChaos
       tags:
         - Skills
       summary: "POST skills › collect › chaos"
+      description: >-
+        Requires an explicit Bearer API key even when login is disabled. The deployment environment
+        key is accepted as full access; other keys must have Chaos Mode enabled. This endpoint is
+        also marked local-only by the route policy.
+      security:
+        - ChaosModeApiKeyBearerAuth: []
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Results from the requested parallel or collaborative model run. Task and model contents may contain user data.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillsChaosResponse" }
   /api/skills/collect/detect:
     get:
       operationId: getApiSkillsCollectDetect
       tags:
         - Skills
       summary: "GET skills › collect › detect"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept management-scoped Bearer or
+        supported management API-key headers, a dashboard session, a local CLI token, or a trusted
+        loopback internal-service token. Unlocked installs may allow anonymous access. Route policy
+        restricts this endpoint to the local tier.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Detected local CLI tools and candidate repository skills. Command paths may reveal host details.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillsCollectDetectResponse" }
   /api/skills/collect/install:
     post:
       operationId: postApiSkillsCollectInstall
       tags:
         - Skills
       summary: "POST skills › collect › install"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept management-scoped Bearer or
+        supported management API-key headers, a dashboard session, a local CLI token, or a trusted
+        loopback internal-service token. Unlocked installs may allow anonymous access. Route policy
+        restricts this endpoint to the local tier.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Per-target install plan/results, including partial failures and destination paths.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillsCollectInstallResponse" }
   /api/skills/executions:
     get:
       operationId: getApiSkillsExecutions
       tags:
         - Skills
       summary: "GET skills › executions"
+      description: >-
+        Uses `isAuthenticated()`. When authentication is required, accepts a dashboard session or
+        management-scoped API key; management API keys may use Bearer, the Anthropic `x-api-key`
+        form, or `x-goog-api-key`. Unlocked standalone installs may allow anonymous access. This
+        legacy gate does not independently accept scoped access tokens or loopback machine tokens.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Paginated skill execution history. Inputs, outputs, and session identifiers can contain user data.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillExecutionsListResponse" }
     post:
       operationId: postApiSkillsExecutions
       tags:
         - Skills
       summary: "POST skills › executions"
+      description: >-
+        Uses `isAuthenticated()`. When authentication is required, accepts a dashboard session or
+        management-scoped API key; management API keys may use Bearer, the Anthropic `x-api-key`
+        form, or `x-goog-api-key`. Unlocked standalone installs may allow anonymous access. This
+        legacy gate does not independently accept scoped access tokens or loopback machine tokens.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Result of executing a skill. Input and output may contain user data.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillExecutionCreateResponse" }
   /api/skills/install:
     post:
       operationId: postApiSkillsInstall
       tags:
         - Skills
       summary: "POST skills › install"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept management-scoped Bearer or
+        supported management API-key headers, a dashboard session, a local CLI token, or a trusted
+        loopback internal-service token. Unlocked installs may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Skill registry install result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillInstallResponse" }
   /api/skills/marketplace:
     get:
       operationId: getApiSkillsMarketplace
       tags:
         - Skills
       summary: "GET skills › marketplace"
+      description: >-
+        Uses `isAuthenticated()`. When authentication is required, accepts a dashboard session or
+        management-scoped API key; management API keys may use Bearer, the Anthropic `x-api-key`
+        form, or `x-goog-api-key`. Unlocked standalone installs may allow anonymous access. This
+        legacy gate does not independently accept scoped access tokens or loopback machine tokens.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: >-
+            Search results. An empty query returns locally defined popular entries; a non-empty query
+            passes through the SkillsMP result value without runtime shape validation, so the schema
+            intentionally leaves `skills` unconstrained. This route returns JSON, not SSE.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillMarketplaceSearchResponse" }
   /api/skills/marketplace/install:
     post:
       operationId: postApiSkillsMarketplaceInstall
       tags:
         - Skills
       summary: "POST skills › marketplace › install"
+      description: >-
+        Uses `isAuthenticated()`: protected profiles accept a dashboard session or management-
+        scoped API key (Bearer, Anthropic `x-api-key`, or Google `x-goog-api-key`). Unlocked
+        standalone installs may allow anonymous access; the legacy helper does not directly accept
+        `oma_live_` access tokens or loopback CLI/internal tokens.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Skill marketplace install result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillInstallResponse" }
   /api/skills/skillssh:
     get:
       operationId: getApiSkillsSkillssh
       tags:
         - Skills
       summary: "GET skills › skillssh"
+      description: >-
+        Uses `isAuthenticated()`: protected profiles accept a dashboard session or management-
+        scoped API key (Bearer, Anthropic `x-api-key`, or Google `x-goog-api-key`). Unlocked
+        standalone installs may allow anonymous access; the legacy helper does not directly accept
+        `oma_live_` access tokens or loopback CLI/internal tokens.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Search results from skills.sh.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillsShSearchResponse" }
   /api/skills/skillssh/install:
     post:
       operationId: postApiSkillsSkillsshInstall
       tags:
         - Skills
       summary: "POST skills › skillssh › install"
+      description: >-
+        Uses `isAuthenticated()`: protected profiles accept a dashboard session or management-
+        scoped API key (Bearer, Anthropic `x-api-key`, or Google `x-goog-api-key`). Unlocked
+        standalone installs may allow anonymous access; the legacy helper does not directly accept
+        `oma_live_` access tokens or loopback CLI/internal tokens.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Skill installation result from skills.sh.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillInstallResponse" }
   /api/sync/bundle:
     get:
       operationId: getApiSyncBundle
@@ -35170,54 +35360,154 @@ paths:
       tags:
         - Version manager
       summary: "GET version manager › check update"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept a management-scoped Bearer
+        credential, dashboard session, local CLI token, or trusted loopback internal-service token.
+        Unlocked installs may allow anonymous access. The helper also accepts scoped Anthropic and
+        Google management API-key headers.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Current and latest CLIProxy versions and whether an update is available.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionManagerCheckUpdateResponse" }
   /api/version-manager/install:
     post:
       operationId: postApiVersionManagerInstall
       tags:
         - Version manager
       summary: "POST version manager › install"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept a management-scoped Bearer
+        credential, dashboard session, local CLI token, or trusted loopback internal-service token.
+        Unlocked installs may allow anonymous access. The helper also accepts scoped Anthropic and
+        Google management API-key headers.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Installation result. The installation path is host-sensitive.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionManagerInstallResponse" }
   /api/version-manager/restart:
     post:
       operationId: postApiVersionManagerRestart
       tags:
         - Version manager
       summary: "POST version manager › restart"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept a management-scoped Bearer
+        credential, dashboard session, local CLI token, or trusted loopback internal-service token.
+        Unlocked installs may allow anonymous access. The helper also accepts scoped Anthropic and
+        Google management API-key headers.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: CLIProxy supervisor restart result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionManagerProcessResponse" }
   /api/version-manager/start:
     post:
       operationId: postApiVersionManagerStart
       tags:
         - Version manager
       summary: "POST version manager › start"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept a management-scoped Bearer
+        credential, dashboard session, local CLI token, or trusted loopback internal-service token.
+        Unlocked installs may allow anonymous access. The helper also accepts scoped Anthropic and
+        Google management API-key headers.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: CLIProxy supervisor start result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionManagerProcessResponse" }
   /api/version-manager/status:
     get:
       operationId: getApiVersionManagerStatus
       tags:
         - Version manager
       summary: "GET version manager › status"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept a management-scoped Bearer
+        credential, dashboard session, local CLI token, or trusted loopback internal-service token.
+        Unlocked installs may allow anonymous access. The helper also accepts scoped Anthropic and
+        Google management API-key headers.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Safe version-manager status rows with credentials and configuration overrides omitted.
+          headers:
+            Cache-Control:
+              description: Status may include host filesystem paths and is never cacheable.
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionManagerStatusResponse" }
   /api/version-manager/stop:
     post:
       operationId: postApiVersionManagerStop
       tags:
         - Version manager
       summary: "POST version manager › stop"
+      description: >-
+        Requires `requireManagementAuth()`: protected profiles accept a management-scoped Bearer
+        credential, dashboard session, local CLI token, or trusted loopback internal-service token.
+        Unlocked installs may allow anonymous access. The helper also accepts scoped Anthropic and
+        Google management API-key headers.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: CLIProxy supervisor stop result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionManagerStopResponse" }
   /api/vnc-session:
     get:
       operationId: getApiVncSession
@@ -35561,6 +35851,15 @@ components:
         Bearer API key whose metadata includes `manage` or `admin` scope. Legacy database-backup
         handlers that call `isAuthenticated()` validate these API keys and dashboard sessions when
         authentication is required; they do not validate `oma_live_` access tokens in that mode.
+    ChaosModeApiKeyBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: OmniRoute API key
+      description: >-
+        Explicit Bearer API key required by POST `/api/skills/collect/chaos`. A database-backed
+        key must have Chaos Mode enabled; the configured deployment environment key is accepted
+        with full access. Dashboard sessions, `oma_live_` access tokens, and anonymous requests do
+        not satisfy this route's handler-level check.
     ManagementAnthropicApiKeyAuth:
       type: apiKey
       in: header
@@ -41422,6 +41721,342 @@ components:
           type: string
           enum: [not_installed, permission_denied, already_running, timeout, network, unknown]
       additionalProperties: false
+    VersionManagerCheckUpdateResponse:
+      type: object
+      required: [current, latest, updateAvailable]
+      properties:
+        current: { type: [string, "null"] }
+        latest: { type: [string, "null"] }
+        updateAvailable: { type: boolean }
+      additionalProperties: false
+    VersionManagerInstallResponse:
+      type: object
+      required: [success, installedVersion, installPath, durationMs]
+      properties:
+        success: { type: boolean, const: true }
+        installedVersion: { type: string }
+        installPath:
+          type: string
+          description: Absolute host installation path; treat as sensitive operational data.
+          x-sensitive: true
+        durationMs: { type: number, minimum: 0 }
+      additionalProperties: false
+    VersionManagerProcessResponse:
+      type: object
+      required: [success, pid, port]
+      properties:
+        success: { type: boolean, const: true }
+        pid: { type: [integer, "null"] }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+      additionalProperties: false
+    VersionManagerStopResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+      additionalProperties: false
+    VersionManagerStatusRow:
+      type: object
+      description: >-
+        Safe projection of a version-manager database row. apiKey, managementKey, and
+        configOverrides are omitted. Returned filesystem paths remain sensitive.
+      required:
+        [id, tool, currentVersion, installedVersion, pinnedVersion, binaryPath, status, pid, port,
+         autoUpdate, autoStart, autoRestartAdopted, lastHealthCheck, lastUpdateCheck, healthStatus,
+         errorMessage, createdAt, updatedAt, logsBufferPath, providerExpose, lastSyncAt]
+      properties:
+        id: { type: integer }
+        tool: { type: string }
+        currentVersion: { type: [string, "null"] }
+        installedVersion: { type: [string, "null"] }
+        pinnedVersion: { type: [string, "null"] }
+        binaryPath:
+          type: [string, "null"]
+          description: Host filesystem path; sensitive operational data.
+          x-sensitive: true
+        status: { type: string }
+        pid: { type: [integer, "null"] }
+        port: { type: integer }
+        autoUpdate: { type: boolean }
+        autoStart: { type: boolean }
+        autoRestartAdopted: { type: boolean }
+        lastHealthCheck: { type: [string, "null"] }
+        lastUpdateCheck: { type: [string, "null"] }
+        healthStatus: { type: string, enum: [healthy, unhealthy, unknown] }
+        errorMessage: { type: [string, "null"] }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        logsBufferPath:
+          type: [string, "null"]
+          description: Host filesystem path; sensitive operational data.
+          x-sensitive: true
+        providerExpose: { type: boolean }
+        lastSyncAt: { type: [string, "null"] }
+      additionalProperties: false
+    VersionManagerStatusResponse:
+      type: array
+      items: { $ref: "#/components/schemas/VersionManagerStatusRow" }
+    SkillSchemaDefinition:
+      type: object
+      additionalProperties: true
+      description: Skill-defined input or output schema map; values are provider/skill-defined.
+    SkillRecord:
+      type: object
+      required: [id, apiKeyId, name, version, description, schema, handler, enabled, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        apiKeyId:
+          type: string
+          description: Identifier of the API key that owns the skill.
+          x-sensitive: true
+        name: { type: string }
+        version: { type: string }
+        description: { type: string }
+        schema:
+          type: object
+          required: [input, output]
+          properties:
+            input: { $ref: "#/components/schemas/SkillSchemaDefinition" }
+            output: { $ref: "#/components/schemas/SkillSchemaDefinition" }
+          additionalProperties: false
+        handler:
+          type: string
+          description: Executable handler source; sensitive and must not be exposed in public logs.
+          x-sensitive: true
+        enabled: { type: boolean }
+        mode: { type: string, enum: [on, off, auto] }
+        sourceProvider: { type: string, enum: [skillsmp, skillssh, local] }
+        tags: { type: array, items: { type: string } }
+        installCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+      additionalProperties: false
+    SkillListResponse:
+      type: object
+      required: [data, total, page, limit, totalPages, skills, provider, popularDefaults]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/SkillRecord" } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1 }
+        totalPages: { type: integer, minimum: 0 }
+        skills: { type: array, items: { $ref: "#/components/schemas/SkillRecord" } }
+        provider: { type: string, enum: [skillsmp, skillssh] }
+        popularDefaults: { type: array, items: { type: string } }
+      additionalProperties: false
+    SkillMutationResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+      additionalProperties: false
+    SkillUpdateResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+        enabled: { type: boolean }
+        mode: { type: string, enum: [on, off, auto] }
+      additionalProperties: false
+    SkillsChaosModelResult:
+      type: object
+      required: [providerId, providerName, modelId, status, content, durationMs]
+      properties:
+        providerId: { type: string }
+        providerName: { type: string }
+        modelId: { type: string }
+        status: { type: string, enum: [success, error, skipped] }
+        content:
+          type: [string, "null"]
+          description: Model output may contain user-provided task material.
+          x-sensitive: true
+        error: { type: string }
+        durationMs: { type: number, minimum: 0 }
+      additionalProperties: false
+    SkillsChaosResponse:
+      type: object
+      required: [task, mode, startedAt, totalProviders, totalResults, models]
+      properties:
+        task:
+          type: string
+          description: User-provided task content; sensitive.
+          x-sensitive: true
+        mode: { type: string, enum: [parallel, collaborative] }
+        startedAt: { type: string }
+        totalProviders: { type: integer, minimum: 0 }
+        totalResults: { type: integer, minimum: 0 }
+        models: { type: array, items: { $ref: "#/components/schemas/SkillsChaosModelResult" } }
+        summary:
+          type: string
+          description: Aggregated model output may contain user data; sensitive.
+          x-sensitive: true
+      additionalProperties: false
+    SkillsCollectDetectedTool:
+      type: object
+      required: [installed, runnable, command, reason]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean }
+        command:
+          type: [string, "null"]
+          description: Resolved local executable command/path; sensitive host detail.
+          x-sensitive: true
+        reason: { type: [string, "null"] }
+      additionalProperties: false
+    SkillsCollectMatchedSkill:
+      type: object
+      required: [toolId, toolName, skillName, repo, htmlUrl, score, stars, description]
+      properties:
+        toolId: { type: string }
+        toolName: { type: string }
+        skillName: { type: string }
+        repo: { type: string }
+        htmlUrl: { type: string }
+        score: { type: number }
+        stars: { type: integer }
+        description: { type: string }
+      additionalProperties: false
+    SkillsCollectDetectResponse:
+      type: object
+      required: [tools, installedToolIds, matchedSkills, totalSkills, totalMatched]
+      properties:
+        tools:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/SkillsCollectDetectedTool" }
+        installedToolIds: { type: array, items: { type: string } }
+        matchedSkills: { type: array, items: { $ref: "#/components/schemas/SkillsCollectMatchedSkill" } }
+        totalSkills: { type: integer, minimum: 0 }
+        totalMatched: { type: integer, minimum: 0 }
+        searchErrors: { type: array, items: { type: string } }
+      additionalProperties: false
+    SkillsCollectInstallPlannedResult:
+      type: object
+      required: [target, ok, action, destDir, note]
+      properties:
+        target: { type: string }
+        ok: { type: boolean, const: true }
+        action: { type: string, const: planned }
+        destDir:
+          type: string
+          description: Destination on the host filesystem; sensitive operational data.
+          x-sensitive: true
+        note: { type: string }
+      additionalProperties: false
+    SkillsCollectInstallErrorResult:
+      type: object
+      required: [target, ok, action, error]
+      properties:
+        target: { type: string }
+        ok: { type: boolean, const: false }
+        action: { type: string, const: error }
+        error: { type: string }
+      additionalProperties: false
+    SkillsCollectInstallResponse:
+      type: object
+      required: [ok, repoName, skillName, results]
+      properties:
+        ok: { type: boolean }
+        repoName: { type: string }
+        skillName: { type: string }
+        results:
+          type: array
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/SkillsCollectInstallPlannedResult"
+              - $ref: "#/components/schemas/SkillsCollectInstallErrorResult"
+      additionalProperties: false
+    SkillExecutionRecord:
+      type: object
+      required: [id, skillId, apiKeyId, sessionId, input, output, status, errorMessage, durationMs, createdAt]
+      properties:
+        id: { type: string }
+        skillId: { type: string }
+        apiKeyId: { type: string, x-sensitive: true }
+        sessionId: { type: string, x-sensitive: true }
+        input:
+          type: object
+          additionalProperties: true
+          x-sensitive: true
+        output:
+          type: [object, "null"]
+          additionalProperties: true
+          description: Skill output may contain user data.
+          x-sensitive: true
+        status: { type: string, enum: [pending, running, success, error, timeout] }
+        errorMessage: { type: [string, "null"] }
+        durationMs: { type: [number, "null"] }
+        createdAt: { type: string, format: date-time }
+      additionalProperties: false
+    SkillExecutionsListResponse:
+      type: object
+      required: [data, total, page, limit, totalPages]
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/SkillExecutionRecord" } }
+        total: { type: integer, minimum: 0 }
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1 }
+        totalPages: { type: integer, minimum: 0 }
+      additionalProperties: false
+    SkillExecutionCreateResponse:
+      type: object
+      required: [execution]
+      properties:
+        execution: { $ref: "#/components/schemas/SkillExecutionRecord" }
+      additionalProperties: false
+    SkillInstallResponse:
+      type: object
+      required: [success, id]
+      properties:
+        success: { type: boolean, const: true }
+        id: { type: string }
+      additionalProperties: false
+    SkillMarketplacePopularItem:
+      type: object
+      required: [name, description, installCount]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        installCount: { type: integer, const: 0 }
+      additionalProperties: false
+    SkillMarketplacePopularResponse:
+      type: object
+      required: [skills]
+      properties:
+        skills: { type: array, items: { $ref: "#/components/schemas/SkillMarketplacePopularItem" } }
+      additionalProperties: false
+    SkillMarketplaceProviderResponse:
+      type: object
+      description: SkillsMP response pass-through; the handler does not validate its payload shape.
+      required: [skills]
+      properties:
+        skills:
+          description: Arbitrary upstream SkillsMP `skills` value, passed through without validation.
+          x-sensitive: true
+      additionalProperties: false
+    SkillMarketplaceSearchResponse:
+      anyOf:
+        - $ref: "#/components/schemas/SkillMarketplacePopularResponse"
+        - $ref: "#/components/schemas/SkillMarketplaceProviderResponse"
+      description: >-
+        Empty query produces known local popular items; a non-empty query passes through an
+        unvalidated SkillsMP value. The variants can overlap, so this is anyOf rather than oneOf.
+    SkillsShItem:
+      type: object
+      required: [id, skillId, name, installs, source]
+      properties:
+        id: { type: string }
+        skillId: { type: string }
+        name: { type: string }
+        installs: { type: integer, minimum: 0 }
+        source: { type: string }
+      additionalProperties: false
+    SkillsShSearchResponse:
+      type: object
+      required: [skills]
+      properties:
+        skills: { type: array, items: { $ref: "#/components/schemas/SkillsShItem" } }
+      additionalProperties: false
+
     AgentSkill:
       type: object
       description: >-
