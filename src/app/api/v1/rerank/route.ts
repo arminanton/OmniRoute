@@ -72,6 +72,9 @@ async function postHandler(request, context) {
   try {
     rawBody = await request.json();
   } catch {
+    if (request.signal.aborted) {
+      return errorResponse(499, "Rerank request cancelled");
+    }
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body");
   }
 
@@ -84,6 +87,9 @@ async function postHandler(request, context) {
   // Enforce API key policies (model restrictions + budget limits)
   const policy = await enforceApiKeyPolicy(request, body.model);
   if (policy.rejection) return policy.rejection;
+  if (request.signal.aborted) {
+    return errorResponse(499, "Rerank request cancelled");
+  }
 
   // Load local provider_nodes for rerank routing (localhost only)
   let localProviders: ReturnType<typeof buildDynamicRerankProvider>[] = [];
@@ -169,9 +175,13 @@ async function postHandler(request, context) {
         connectionId: (credentials as { connectionId?: string } | null)?.connectionId || null,
         apiKeyId: policy.apiKeyInfo?.id || null,
         apiKeyName: policy.apiKeyInfo?.name || null,
+        signal: request.signal,
       });
       if (response?.ok) {
         await clearRecoveredProviderState(credentials);
+      }
+      if (request.signal.aborted) {
+        return errorResponse(499, "Rerank request cancelled");
       }
       return response;
     } finally {
@@ -208,6 +218,7 @@ async function postHandler(request, context) {
       const token = credentials?.apiKey || credentials?.accessToken;
       const startTime = Date.now();
       try {
+        request.signal.throwIfAborted();
         let res = await fetch(localProvider.baseUrl, {
           method: "POST",
           headers: {
@@ -221,10 +232,15 @@ async function postHandler(request, context) {
             top_n: body.top_n || body.documents.length,
             return_documents: body.return_documents !== false,
           }),
+          signal: request.signal,
         });
+        if (request.signal.aborted) {
+          return errorResponse(499, "Rerank request cancelled");
+        }
 
         // Some local providers (e.g. Infinity, TEI) mount at /rerank rather than /v1/rerank
         if (res.status === 404 && localProvider.baseUrl.endsWith("/v1/rerank")) {
+          request.signal.throwIfAborted();
           const fallbackUrl = localProvider.baseUrl.replace(/\/v1\/rerank$/, "/rerank");
           try {
             const fallbackRes = await fetch(fallbackUrl, {
@@ -240,17 +256,27 @@ async function postHandler(request, context) {
                 top_n: body.top_n || body.documents.length,
                 return_documents: body.return_documents !== false,
               }),
+              signal: request.signal,
             });
+            if (request.signal.aborted) {
+              return errorResponse(499, "Rerank request cancelled");
+            }
             if (fallbackRes.ok || fallbackRes.status !== 404) {
               res = fallbackRes;
             }
           } catch {
+            if (request.signal.aborted) {
+              return errorResponse(499, "Rerank request cancelled");
+            }
             // retain original 404 response if fallback fetch fails
           }
         }
 
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
+          if (request.signal.aborted) {
+            return errorResponse(499, "Rerank request cancelled");
+          }
           const errorMessage =
             errData.message || errData.detail || `Provider returned HTTP ${res.status}`;
           saveCallLog({
@@ -278,6 +304,9 @@ async function postHandler(request, context) {
         }
 
         const data = await res.json();
+        if (request.signal.aborted) {
+          return errorResponse(499, "Rerank request cancelled");
+        }
         const latencyMs = Date.now() - startTime;
         saveCallLog({
           method: "POST",
@@ -314,6 +343,9 @@ async function postHandler(request, context) {
           headers,
         });
       } catch (err: any) {
+        if (request.signal.aborted) {
+          return errorResponse(499, "Rerank request cancelled");
+        }
         saveCallLog({
           method: "POST",
           path: "/v1/rerank",

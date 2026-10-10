@@ -377,7 +377,7 @@ test("specialty inference operations document route and upstream error responses
       "/api/v1/providers/{provider}/embeddings",
       ["400", "401", "402", "403", "429", "500", "503", "default"],
     ],
-    ["/api/v1/rerank", ["400", "401", "403", "429", "500", "503", "default"]],
+    ["/api/v1/rerank", ["400", "401", "403", "429", "499", "500", "503", "default"]],
     [
       "/api/v1/providers/{provider}/images/generations",
       ["400", "401", "403", "410", "413", "429", "499", "500", "503", "default"],

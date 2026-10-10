@@ -188,6 +188,7 @@ function buildAuthHeader(providerConfig, token) {
  * @param {boolean} [options.return_documents] - Whether to include document text in results
  * @param {Object} options.credentials - Provider credentials { apiKey, accessToken }
  * @param {string} [options.connectionId] - Connection ID for per-connection proxy resolution
+ * @param {AbortSignal} [options.signal] - Caller cancellation signal
  * @returns {Response}
  */
 /** @returns {Promise<unknown>} */
@@ -202,6 +203,7 @@ export async function handleRerank({
   apiKeyId = null,
   apiKeyName = null,
   resolvedProvider = null,
+  signal,
 }) {
   const startTime = Date.now();
   if (!model) return errorResponse(400, "model is required");
@@ -211,8 +213,7 @@ export async function handleRerank({
   }
 
   const { provider: providerId, model: modelId } = parseRerankModel(model);
-  const providerConfig =
-    resolvedProvider || (providerId ? getRerankProvider(providerId) : null);
+  const providerConfig = resolvedProvider || (providerId ? getRerankProvider(providerId) : null);
 
   if (!providerConfig) {
     const availableProviders = Object.keys(RERANK_PROVIDERS).join(", ");
@@ -265,15 +266,23 @@ export async function handleRerank({
         ...buildAuthHeader(providerConfig, token),
       },
       body: JSON.stringify(requestBody),
+      signal,
     });
 
   try {
+    signal?.throwIfAborted();
     const res = connectionId
       ? await runWithProxyContext(proxyInfo?.proxy || null, doFetch)
       : await doFetch();
+    if (signal?.aborted) {
+      return errorResponse(499, "Rerank request cancelled");
+    }
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
+      if (signal?.aborted) {
+        return errorResponse(499, "Rerank request cancelled");
+      }
       const errorMessage =
         errData.message || errData.error?.message || `Provider returned HTTP ${res.status}`;
       saveCallLog({
@@ -294,6 +303,9 @@ export async function handleRerank({
     }
 
     const data = await res.json();
+    if (signal?.aborted) {
+      return errorResponse(499, "Rerank request cancelled");
+    }
     const result = transformResponseFromProvider(providerConfig, data, {
       documents,
       top_n: top_n || documents.length,
@@ -301,7 +313,9 @@ export async function handleRerank({
     });
 
     const searchUnits = Number(result?.meta?.billed_units?.search_units) || 0;
-    const costUsd = await calculateModalCost("rerank", effectiveProviderId, modelId, { searchUnits });
+    const costUsd = await calculateModalCost("rerank", effectiveProviderId, modelId, {
+      searchUnits,
+    });
 
     saveCallLog({
       method: "POST",
@@ -328,6 +342,9 @@ export async function handleRerank({
     });
     return new Response(JSON.stringify(result), { status: 200, headers });
   } catch (err) {
+    if (signal?.aborted) {
+      return errorResponse(499, "Rerank request cancelled");
+    }
     return errorResponse(500, `Rerank request failed: ${err.message}`);
   }
 }
