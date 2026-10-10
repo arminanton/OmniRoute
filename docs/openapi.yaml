@@ -2403,6 +2403,13 @@ paths:
           $ref: "#/components/responses/InferenceForbidden"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "499":
+          description: >-
+            The request abort signal cancelled speech generation before an audio response was
+            returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
         "500":
