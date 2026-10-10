@@ -6,6 +6,23 @@ import { getSupervisor } from "@/lib/services/registry";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
 
+type VersionManagerStatusRow = Awaited<ReturnType<typeof getVersionManagerStatus>>[number];
+type VersionManagerStatusResponseRow = Omit<
+  VersionManagerStatusRow,
+  "apiKey" | "managementKey" | "configOverrides"
+>;
+
+const PRIVATE_STATUS_FIELDS = new Set<string>(["apiKey", "managementKey", "configOverrides"]);
+const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
+
+function toVersionManagerStatusResponse(
+  row: VersionManagerStatusRow
+): VersionManagerStatusResponseRow {
+  return Object.fromEntries(
+    Object.entries(row).filter(([key]) => !PRIVATE_STATUS_FIELDS.has(key))
+  ) as VersionManagerStatusResponseRow;
+}
+
 export async function GET(request: Request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
@@ -30,12 +47,14 @@ export async function GET(request: Request) {
       };
     });
 
-    return NextResponse.json(enriched);
+    return NextResponse.json(enriched.map(toVersionManagerStatusResponse), {
+      headers: NO_STORE_HEADERS,
+    });
   } catch (error) {
     const message = sanitizeErrorMessage(
       error instanceof Error ? error.message : "Failed to get status"
     );
     console.error("[version-manager] status error:", message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500, headers: NO_STORE_HEADERS });
   }
 }
