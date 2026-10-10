@@ -16454,11 +16454,11 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: HAR file (JSON)
+          x-sensitive: true
           content:
             application/json:
               schema:
-                type: object
-                description: HAR 1.2 format
+                $ref: "#/components/schemas/TrafficInspectorHarFile"
           headers:
             Content-Disposition:
               schema: { type: string }
@@ -16996,11 +16996,11 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: HAR file for this session
+          x-sensitive: true
           content:
             application/json:
               schema:
-                type: object
-                description: HAR 1.2 format
+                $ref: "#/components/schemas/TrafficInspectorHarFile"
           headers:
             Content-Disposition:
               schema: { type: string }
@@ -53686,6 +53686,148 @@ components:
           enum: [stop, rename]
         name:
           type: string
+
+    TrafficInspectorHarFile:
+      type: object
+      description: >-
+        HAR 1.2 export generated from Traffic Inspector records. Request and response
+        headers and bodies are passed through the secret masker before export.
+      required: [log]
+      properties:
+        log: { $ref: "#/components/schemas/TrafficInspectorHarLog" }
+      additionalProperties: false
+
+    TrafficInspectorHarLog:
+      type: object
+      required: [version, creator, entries]
+      properties:
+        version: { type: string, const: "1.2" }
+        creator: { $ref: "#/components/schemas/TrafficInspectorHarCreator" }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/TrafficInspectorHarEntry" }
+      additionalProperties: false
+
+    TrafficInspectorHarCreator:
+      type: object
+      required: [name, version]
+      properties:
+        name: { type: string, const: "OmniRoute Traffic Inspector" }
+        version: { type: string }
+      additionalProperties: false
+
+    TrafficInspectorHarNameValue:
+      type: object
+      required: [name, value]
+      properties:
+        name: { type: string }
+        value: { type: string, description: Secret-like values are masked before export. }
+      additionalProperties: false
+
+    TrafficInspectorHarPostData:
+      type: object
+      required: [mimeType, text]
+      properties:
+        mimeType: { type: string }
+        text: { type: string, description: Secret-like values are masked before export. }
+      additionalProperties: false
+
+    TrafficInspectorHarContent:
+      type: object
+      required: [size, mimeType]
+      properties:
+        size: { type: integer, minimum: 0 }
+        mimeType: { type: string }
+        text:
+          type: string
+          description: Present only when the captured response body was available; secrets are masked.
+      additionalProperties: false
+
+    TrafficInspectorHarRequest:
+      type: object
+      required: [method, url, httpVersion, headers, queryString, cookies, headersSize, bodySize]
+      properties:
+        method: { type: string }
+        url: { type: string }
+        httpVersion: { type: string, const: "HTTP/1.1" }
+        headers:
+          type: array
+          items: { $ref: "#/components/schemas/TrafficInspectorHarNameValue" }
+        queryString:
+          type: array
+          maxItems: 0
+          description: Query parameters are currently retained only in the serialized URL.
+          items: { $ref: "#/components/schemas/TrafficInspectorHarNameValue" }
+        cookies:
+          type: array
+          maxItems: 0
+          description: Cookie parsing is not currently emitted by this exporter.
+          items: { $ref: "#/components/schemas/TrafficInspectorHarNameValue" }
+        headersSize: { type: integer, const: -1 }
+        bodySize: { type: integer, minimum: 0 }
+        postData: { $ref: "#/components/schemas/TrafficInspectorHarPostData" }
+      additionalProperties: false
+
+    TrafficInspectorHarResponse:
+      type: object
+      required:
+        [status, statusText, httpVersion, headers, cookies, content, redirectURL, headersSize, bodySize]
+      properties:
+        status:
+          type: integer
+          description: Zero is emitted when the captured state has no numeric HTTP status.
+        statusText: { type: string, enum: ["", in-flight, error] }
+        httpVersion: { type: string, const: "HTTP/1.1" }
+        headers:
+          type: array
+          items: { $ref: "#/components/schemas/TrafficInspectorHarNameValue" }
+        cookies:
+          type: array
+          maxItems: 0
+          description: Cookie parsing is not currently emitted by this exporter.
+          items: { $ref: "#/components/schemas/TrafficInspectorHarNameValue" }
+        content: { $ref: "#/components/schemas/TrafficInspectorHarContent" }
+        redirectURL: { type: string, const: "" }
+        headersSize: { type: integer, const: -1 }
+        bodySize: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    TrafficInspectorHarCache:
+      type: object
+      description: The exporter does not currently emit cache metadata.
+      maxProperties: 0
+      additionalProperties: false
+
+    TrafficInspectorHarTimings:
+      type: object
+      required: [send, wait, receive]
+      properties:
+        send: { type: number, const: 0 }
+        wait: { type: number, minimum: 0 }
+        receive:
+          type: number
+          description: Total latency minus upstream latency; may be negative if source timings disagree.
+      additionalProperties: false
+
+    TrafficInspectorHarEntry:
+      type: object
+      required: [startedDateTime, time, request, response, cache, timings, _source, _omniRouteId]
+      properties:
+        startedDateTime: { type: string, format: date-time }
+        time: { type: number, minimum: 0 }
+        request: { $ref: "#/components/schemas/TrafficInspectorHarRequest" }
+        response: { $ref: "#/components/schemas/TrafficInspectorHarResponse" }
+        cache: { $ref: "#/components/schemas/TrafficInspectorHarCache" }
+        timings: { $ref: "#/components/schemas/TrafficInspectorHarTimings" }
+        _source: { $ref: "#/components/schemas/CaptureSource" }
+        _agent: { type: string }
+        _detectedKind: { $ref: "#/components/schemas/DetectedKind" }
+        _contextKey: { type: string }
+        _sessionId: { type: string }
+        _annotation: { type: string }
+        _note: { type: string }
+        _omniRouteId: { type: string, format: uuid }
+      additionalProperties: false
     QuotaPool:
       type: object
       description: >-
