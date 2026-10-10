@@ -38584,7 +38584,7 @@ paths:
           description: Malformed JSON, invalid skill fields, or an empty update payload.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/SkillOperationErrorResponse" }
+              schema: { $ref: "#/components/schemas/OperationErrorResponse" }
         "413":
           description: Request body exceeds the configured API body-size limit.
           content:
@@ -46986,6 +46986,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/VersionManagerCheckUpdateResponse" }
+        "400":
+          description: The requested tool name is unsupported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Checking for updates failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/version-manager/install:
     post:
       operationId: postApiVersionManagerInstall
@@ -47011,6 +47027,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/VersionManagerInstallResponse" }
+        "400":
+          description: Malformed JSON, invalid install options, or unsupported tool.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OperationErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Installing CLIProxyAPI failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/version-manager/restart:
     post:
       operationId: postApiVersionManagerRestart
@@ -47036,6 +47073,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/VersionManagerProcessResponse" }
+        "409":
+          description: CLIProxyAPI is not installed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Restarting CLIProxyAPI failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/version-manager/start:
     post:
       operationId: postApiVersionManagerStart
@@ -47061,6 +47119,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/VersionManagerProcessResponse" }
+        "409":
+          description: CLIProxyAPI is not installed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Starting CLIProxyAPI failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/version-manager/status:
     get:
       operationId: getApiVersionManagerStatus
@@ -47090,6 +47169,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/VersionManagerStatusResponse" }
+        "500":
+          description: Reading the CLIProxyAPI service status failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/version-manager/stop:
     post:
       operationId: postApiVersionManagerStop
@@ -47115,6 +47205,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/VersionManagerStopResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Stopping CLIProxyAPI failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/vnc-session:
     get:
       operationId: getApiVncSession
@@ -54429,8 +54535,8 @@ components:
         - { $ref: "#/components/schemas/ApiErrorResponse" }
         - { $ref: "#/components/schemas/StringErrorResponse" }
         - { $ref: "#/components/schemas/DirectValidationErrorResponse" }
-    SkillOperationErrorResponse:
-      description: Skill operations return a nested message/string error or a direct validation object depending on the route.
+    OperationErrorResponse:
+      description: Operations may return a nested message, a string error, or a direct validation object depending on the route.
       oneOf:
         - { $ref: "#/components/schemas/ApiErrorResponse" }
         - { $ref: "#/components/schemas/StringErrorResponse" }

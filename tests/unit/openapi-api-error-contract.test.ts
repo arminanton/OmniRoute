@@ -204,7 +204,7 @@ test("skill endpoints describe validation, auth, installation, and upstream mark
     ["/api/skills/{id}", "delete", "404", "StringErrorResponse"],
     ["/api/skills/{id}", "delete", "413", "ApiErrorResponse"],
     ["/api/skills/{id}", "delete", "500", "StringErrorResponse"],
-    ["/api/skills/{id}", "put", "400", "SkillOperationErrorResponse"],
+    ["/api/skills/{id}", "put", "400", "OperationErrorResponse"],
     ["/api/skills/{id}", "put", "413", "ApiErrorResponse"],
     ["/api/skills/{id}", "put", "500", "StringErrorResponse"],
     ["/api/skills/collect/chaos", "post", "400", "ApiErrorResponse"],
@@ -304,6 +304,42 @@ test("plugin management routes document validation, not-found, body-limit, and a
   ];
 
   for (const [route, method, status, schema] of pluginErrors) {
+    assertResponse(route, method, status, schema);
+  }
+  for (const [route, method] of managementOperations) {
+    const responses = operation(route, method).responses;
+    assert.equal(responses["401"]?.$ref, "#/components/responses/ManagementAuthenticationRequired");
+    assert.equal(responses["403"]?.$ref, "#/components/responses/ManagementInvalidToken");
+    assert.equal(responses["503"]?.$ref, "#/components/responses/ManagementAuthUnavailable");
+  }
+});
+
+test("version-manager operations describe validation, service, auth, and body-limit failures", () => {
+  const cases: Array<[string, string, string, string]> = [
+    ["/api/version-manager/check-update", "get", "400", "StringErrorResponse"],
+    ["/api/version-manager/check-update", "get", "500", "StringErrorResponse"],
+    ["/api/version-manager/install", "post", "400", "OperationErrorResponse"],
+    ["/api/version-manager/install", "post", "413", "ApiErrorResponse"],
+    ["/api/version-manager/install", "post", "500", "StringErrorResponse"],
+    ["/api/version-manager/restart", "post", "409", "StringErrorResponse"],
+    ["/api/version-manager/restart", "post", "413", "ApiErrorResponse"],
+    ["/api/version-manager/restart", "post", "500", "StringErrorResponse"],
+    ["/api/version-manager/start", "post", "409", "StringErrorResponse"],
+    ["/api/version-manager/start", "post", "413", "ApiErrorResponse"],
+    ["/api/version-manager/start", "post", "500", "StringErrorResponse"],
+    ["/api/version-manager/status", "get", "500", "StringErrorResponse"],
+    ["/api/version-manager/stop", "post", "413", "ApiErrorResponse"],
+    ["/api/version-manager/stop", "post", "500", "StringErrorResponse"],
+  ];
+  const managementOperations: Array<[string, string]> = [
+    ["/api/version-manager/check-update", "get"],
+    ["/api/version-manager/install", "post"],
+    ["/api/version-manager/restart", "post"],
+    ["/api/version-manager/start", "post"],
+    ["/api/version-manager/status", "get"],
+    ["/api/version-manager/stop", "post"],
+  ];
+  for (const [route, method, status, schema] of cases) {
     assertResponse(route, method, status, schema);
   }
   for (const [route, method] of managementOperations) {
