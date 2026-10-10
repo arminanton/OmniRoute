@@ -1634,6 +1634,11 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "499":
+          description: The client cancelled the search request. Any shared upstream attempt is cancelled after its last waiter leaves.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           $ref: "#/components/responses/InternalError"
         "502":
@@ -17806,6 +17811,11 @@ paths:
           $ref: "#/components/responses/ServiceUnavailable"
         "504":
           description: Asynchronous OCR operation did not complete before the polling limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "499":
+          description: The client cancelled the OCR request. Synchronous provider work is aborted; the route retains account admission while polling an accepted Azure operation.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
@@ -45061,6 +45071,13 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "429":
           $ref: "#/components/responses/RateLimited"
+        "499":
+          description: The client cancelled the request; active provider work and account admission are released.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
         default:
           description: Provider, quota, or upstream failure; status varies by selected provider.
           content:

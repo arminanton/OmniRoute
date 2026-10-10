@@ -16,6 +16,7 @@ const ocrRoute = await import("../../src/app/api/v1/ocr/route.ts");
 
 const originalFetch = globalThis.fetch;
 let connectionId = "";
+let azureConnectionId = "";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -25,14 +26,15 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function ocrRequest() {
+function ocrRequest(signal?: AbortSignal, model = "mistral/mistral-ocr-latest") {
   return new Request("http://localhost/v1/ocr", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      model: "mistral/mistral-ocr-latest",
+      model,
       document: { type: "document_url", document_url: "https://example.com/sample.pdf" },
     }),
+    signal,
   });
 }
 
@@ -48,6 +50,21 @@ test.before(async () => {
     providerSpecificData: { quotaPreflightEnabled: false },
   });
   connectionId = (connection as { id: string }).id;
+
+  const azureConnection = await providersDb.createProviderConnection({
+    provider: "azure-document-intelligence",
+    authType: "apikey",
+    name: "ocr-azure-occupancy",
+    apiKey: "ocr-azure-occupancy-key",
+    isActive: true,
+    testStatus: "active",
+    maxConcurrent: 1,
+    providerSpecificData: {
+      baseUrl: "https://ocr-azure.example.test",
+      quotaPreflightEnabled: false,
+    },
+  });
+  azureConnectionId = (azureConnection as { id: string }).id;
   readCache.invalidateDbCache("connections");
 });
 
@@ -99,4 +116,97 @@ test("OCR releases selected account occupancy after an upstream failure", async 
   const response = await responsePromise;
   assert.equal(response.status, 503);
   assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 0);
+});
+
+test("cancelled synchronous Mistral OCR aborts upstream and releases its account slot", async () => {
+  const controller = new AbortController();
+  const started = deferred<AbortSignal | null | undefined>();
+  globalThis.fetch = (async (_url, init = {}) => {
+    assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 1);
+    started.resolve(init.signal);
+    return new Promise<Response>((_resolve, reject) => {
+      init.signal?.addEventListener(
+        "abort",
+        () => reject(new DOMException("The operation was aborted", "AbortError")),
+        { once: true }
+      );
+    });
+  }) as typeof fetch;
+
+  const responsePromise = ocrRoute.POST(ocrRequest(controller.signal));
+  const upstreamSignal = await started.promise;
+  assert.ok(upstreamSignal, "the synchronous provider fetch receives a cancellation signal");
+  assert.equal(upstreamSignal.aborted, false);
+  controller.abort();
+
+  const response = await responsePromise;
+  assert.equal(response.status, 499);
+  assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 0);
+});
+
+test("a pre-aborted OCR request is rejected before provider dispatch or account reservation", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let upstreamCalls = 0;
+  globalThis.fetch = (async () => {
+    upstreamCalls += 1;
+    return Response.json({ pages: [] });
+  }) as typeof fetch;
+
+  const response = await ocrRoute.POST(ocrRequest(controller.signal));
+
+  assert.equal(response.status, 499);
+  assert.equal(upstreamCalls, 0);
+  assert.equal(occupancy.getAccountRequestInFlightCount(connectionId), 0);
+});
+
+test("Azure OCR finishes polling an accepted operation after disconnect, then releases its slot", async () => {
+  const controller = new AbortController();
+  const firstPollStarted = deferred<void>();
+  const firstPollResponse = deferred<Response>();
+  let pollCount = 0;
+  let settled = false;
+
+  globalThis.fetch = (async (input, init = {}) => {
+    const url = String(input);
+    assert.equal(occupancy.getAccountRequestInFlightCount(azureConnectionId), 1);
+    if (url.includes(":analyze?")) {
+      assert.equal(init.signal, undefined, "caller abort must not cancel Azure submit");
+      return new Response(null, {
+        status: 202,
+        headers: { "Operation-Location": "https://ocr-azure.example.test/operations/accepted-1" },
+      });
+    }
+    if (url === "https://ocr-azure.example.test/operations/accepted-1") {
+      pollCount += 1;
+      assert.equal(init.signal, undefined, "caller abort must not cancel accepted-task polling");
+      if (pollCount === 1) {
+        firstPollStarted.resolve();
+        return firstPollResponse.promise;
+      }
+      return Response.json({
+        status: "succeeded",
+        analyzeResult: { content: "recognized after disconnect", pages: [{}] },
+      });
+    }
+    throw new Error(`Unexpected Azure OCR URL: ${url}`);
+  }) as typeof fetch;
+
+  const responsePromise = ocrRoute
+    .POST(ocrRequest(controller.signal, "azure-document-intelligence/prebuilt-read"))
+    .then((response) => {
+      settled = true;
+      return response;
+    });
+  await firstPollStarted.promise;
+  assert.equal(occupancy.getAccountRequestInFlightCount(azureConnectionId), 1);
+
+  controller.abort();
+  assert.equal(settled, false, "the accepted task remains owned until polling settles");
+  firstPollResponse.resolve(Response.json({ status: "running" }));
+
+  const response = await responsePromise;
+  assert.equal(response.status, 499);
+  assert.equal(pollCount, 2, "polling continues until Azure reports a terminal state");
+  assert.equal(occupancy.getAccountRequestInFlightCount(azureConnectionId), 0);
 });

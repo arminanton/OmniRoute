@@ -36,16 +36,16 @@ import { buildJinaSearchRequest, extractJinaSearchItems } from "./search/jinaSea
 import * as xSearch from "./search/xSearch.ts";
 import * as xquikSearch from "./search/xquikSearch.ts";
 import * as anysearchSearch from "./search/anysearchSearch.ts";
-import { freeWebSearch } from "../services/freeWebSearch.ts";
 import { saveCallLog } from "@/lib/usageDb";
 import { safeOutboundFetch } from "@/shared/network/safeOutboundFetch";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
-import { sanitizeErrorMessage } from "../utils/error.ts";
 import { isValidContext7LibraryId } from "../executors/context7-fetch.ts";
 import { resolveSearchProxy, executeProviderFetch } from "./search/searchProxy.ts";
 import { formatSearchProviderFailure } from "./search/providerFailure.ts";
+import { runWithSearchAccountAdmission } from "./search/accountAdmission.ts";
+import { tryDuckDuckGoFreeProvider } from "./search/duckduckgoFree.ts";
 
 export interface SearchResult {
   title: string;
@@ -90,6 +90,8 @@ interface SearchHandlerResult {
   success: boolean;
   status?: number;
   error?: string;
+  /** Admission failures are terminal and should not be retried through provider fallback. */
+  terminal?: boolean;
   data?: SearchResponse;
 }
 
@@ -118,6 +120,8 @@ interface SearchHandlerOptions {
   /** Connection ID (proxy resolution + call-log attribution) and API key ID (per-key proxy). */
   connectionId?: string;
   apiKeyId?: string;
+  /** Producer-owned cancellation signal from the shared search cache. */
+  signal?: AbortSignal;
 }
 
 // ── Constants ────────────────────────────────────────────────────────────
@@ -1252,7 +1256,9 @@ async function tryZaiMCPProvider(
   providerSpecificData: Record<string, unknown> | undefined,
   startTime: number,
   globalStartTime: number,
-  log?: any
+  log?: any,
+  signal?: AbortSignal,
+  admissionSignal?: AbortSignal
 ): Promise<SearchHandlerResult> {
   const { query, searchType, maxResults } = params;
 
@@ -1260,6 +1266,10 @@ async function tryZaiMCPProvider(
   const timeout = Math.min(config.timeoutMs, Math.max(remainingGlobal, 1000));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
+  const upstreamSignals = [controller.signal];
+  if (signal) upstreamSignals.push(signal);
+  if (admissionSignal) upstreamSignals.push(admissionSignal);
+  const upstreamSignal = AbortSignal.any(upstreamSignals);
 
   try {
     const normalized = await zaiSearchExecute({
@@ -1267,7 +1277,7 @@ async function tryZaiMCPProvider(
       query,
       token,
       params: { ...params, token, providerSpecificData },
-      signal: controller.signal,
+      signal: upstreamSignal,
     });
     clearTimeout(timer);
 
@@ -1307,6 +1317,17 @@ async function tryZaiMCPProvider(
     };
   } catch (err: any) {
     clearTimeout(timer);
+    // Only the producer's cancellation means all shared search waiters have
+    // left. A timeout-controller abort remains a provider failure (504).
+    throwIfSearchAborted(signal);
+    if (admissionSignal?.aborted) {
+      return {
+        success: false,
+        status: 503,
+        error: "Provider account capacity admission was lost during search",
+        terminal: true,
+      };
+    }
 
     const isTimeout = err.name === "AbortError";
     if (log) {
@@ -1437,6 +1458,7 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
     log,
     connectionId,
     apiKeyId,
+    signal,
   } = options;
   const startTime = Date.now();
 
@@ -1529,7 +1551,8 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
         startTime,
         log,
         alternateCredentials?.connectionId,
-        apiKeyId
+        apiKeyId,
+        signal
       );
     }
     return {
@@ -1547,10 +1570,13 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
     startTime,
     log,
     connectionId,
-    apiKeyId
+    apiKeyId,
+    signal
   );
 
+  throwIfSearchAborted(signal);
   if (result.success) return result;
+  if (result.terminal) return result;
 
   // 5. Failover to alternate (only for retriable errors and auto-select mode)
   if (
@@ -1574,112 +1600,16 @@ export async function handleSearch(options: SearchHandlerOptions): Promise<Searc
       startTime,
       log,
       alternateCredentials?.connectionId,
-      apiKeyId
+      apiKeyId,
+      signal
     );
 
+    throwIfSearchAborted(signal);
     if (fallbackResult.success) return fallbackResult;
+    if (fallbackResult.terminal) return fallbackResult;
   }
 
   return result;
-}
-
-/**
- * Free DuckDuckGo lite provider — no API key, HTML scraping (free-claude-code port).
- * Dedicated path because the lite endpoint returns HTML, not the JSON the generic
- * tryProvider() flow expects. See open-sse/services/freeWebSearch.ts.
- */
-async function tryDuckDuckGoFreeProvider(
-  config: SearchProviderConfig,
-  params: Omit<SearchRequestParams, "token">,
-  startTime: number,
-  globalStartTime: number,
-  log?: {
-    info?: (tag: string, message: string) => void;
-    error?: (tag: string, message: string) => void;
-  } | null
-): Promise<SearchHandlerResult> {
-  const { query, searchType, maxResults } = params;
-  const remainingGlobal = GLOBAL_TIMEOUT_MS - (Date.now() - globalStartTime);
-  const timeout = Math.min(config.timeoutMs, Math.max(remainingGlobal, 1000));
-
-  if (log) {
-    log.info?.("SEARCH", `${config.id} | query: "${query.slice(0, 80)}" | type: ${searchType}`);
-  }
-
-  const requestBody = {
-    query: query.slice(0, 200),
-    search_type: searchType,
-    max_results: maxResults,
-  };
-
-  try {
-    const freeResults = await freeWebSearch(query, maxResults, timeout);
-    const now = new Date().toISOString();
-    const results = freeResults
-      .slice(0, maxResults)
-      .map((r, idx) =>
-        makeResult(config.id, { title: r.title, url: r.url, snippet: r.snippet }, idx, now)
-      );
-    const duration = Date.now() - startTime;
-
-    saveCallLog({
-      method: config.method,
-      path: "/v1/search",
-      status: 200,
-      model: config.id,
-      provider: config.id,
-      duration,
-      requestType: "search",
-      tokens: { prompt_tokens: 0, completion_tokens: 0 },
-      requestBody,
-      responseBody: { results_count: results.length, cached: false },
-    }).catch(() => {
-      /* non-critical — logging must not block search response */
-    });
-
-    return {
-      success: true,
-      data: {
-        provider: config.id,
-        query,
-        results,
-        answer: null,
-        usage: { queries_used: 1, search_cost_usd: 0 },
-        metrics: {
-          response_time_ms: duration,
-          upstream_latency_ms: duration,
-          total_results_available: results.length,
-        },
-        errors: [],
-      },
-    };
-  } catch (err) {
-    const duration = Date.now() - startTime;
-    const message = sanitizeErrorMessage(err);
-    if (log) {
-      log.error?.("SEARCH", `${config.id} error: ${message}`);
-    }
-
-    saveCallLog({
-      method: config.method,
-      path: "/v1/search",
-      status: 502,
-      model: config.id,
-      provider: config.id,
-      duration,
-      requestType: "search",
-      error: message.slice(0, 500),
-      requestBody,
-    }).catch(() => {
-      /* non-critical */
-    });
-
-    return {
-      success: false,
-      status: 502,
-      error: `DuckDuckGo free search failed: ${message}`,
-    };
-  }
 }
 
 async function tryProvider(
@@ -1689,13 +1619,10 @@ async function tryProvider(
   globalStartTime: number,
   log?: any,
   connectionId?: string,
-  apiKeyId?: string
+  apiKeyId?: string,
+  producerSignal?: AbortSignal
 ): Promise<SearchHandlerResult> {
-  const startTime = Date.now();
-  const providerSpecificData =
-    credentials?.providerSpecificData && typeof credentials.providerSpecificData === "object"
-      ? credentials.providerSpecificData
-      : undefined;
+  throwIfSearchAborted(producerSignal);
   const token = credentials.apiKey || credentials.accessToken || undefined;
 
   if (config.authType !== "none" && !token) {
@@ -1706,11 +1633,64 @@ async function tryProvider(
     };
   }
 
-  const { query, searchType, maxResults } = params;
-
+  // Keyless fallback search has no selected provider account to reserve.
   if (config.id === "duckduckgo-free") {
-    return tryDuckDuckGoFreeProvider(config, params, startTime, globalStartTime, log);
+    return tryDuckDuckGoFreeProvider({
+      config,
+      params,
+      startTime: Date.now(),
+      globalStartTime,
+      globalTimeoutMs: GLOBAL_TIMEOUT_MS,
+      signal: producerSignal,
+      log,
+      makeResult,
+    });
   }
+
+  const attempt = await runWithSearchAccountAdmission({
+    provider: config.id,
+    credentials,
+    fallbackConnectionId: connectionId,
+    signal: producerSignal,
+    attempt: (admissionSignal) =>
+      tryProviderAttempt(
+        config,
+        params,
+        credentials,
+        globalStartTime,
+        log,
+        connectionId,
+        apiKeyId,
+        producerSignal,
+        admissionSignal
+      ),
+  });
+  if (!attempt.admitted) {
+    return { success: false, status: 503, error: attempt.error, terminal: true };
+  }
+  return attempt.value;
+}
+
+async function tryProviderAttempt(
+  config: SearchProviderConfig,
+  params: Omit<SearchRequestParams, "token">,
+  credentials: Record<string, any>,
+  globalStartTime: number,
+  log?: any,
+  connectionId?: string,
+  apiKeyId?: string,
+  producerSignal?: AbortSignal,
+  admissionSignal?: AbortSignal
+): Promise<SearchHandlerResult> {
+  throwIfSearchAborted(producerSignal);
+  const startTime = Date.now();
+  const providerSpecificData =
+    credentials?.providerSpecificData && typeof credentials.providerSpecificData === "object"
+      ? credentials.providerSpecificData
+      : undefined;
+  const token = credentials.apiKey || credentials.accessToken || undefined;
+
+  const { query, searchType, maxResults } = params;
 
   if (config.id === "zai-search" && token) {
     return tryZaiMCPProvider(
@@ -1720,7 +1700,9 @@ async function tryProvider(
       providerSpecificData,
       startTime,
       globalStartTime,
-      log
+      log,
+      producerSignal,
+      admissionSignal
     );
   }
 
@@ -1745,6 +1727,10 @@ async function tryProvider(
   const timeout = Math.min(config.timeoutMs, Math.max(remainingGlobal, 1000));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
+  const upstreamSignals = [controller.signal];
+  if (producerSignal) upstreamSignals.push(producerSignal);
+  if (admissionSignal) upstreamSignals.push(admissionSignal);
+  const upstreamSignal = AbortSignal.any(upstreamSignals);
 
   if (log) {
     log.info("SEARCH", `${config.id} | query: "${query.slice(0, 80)}" | type: ${searchType}`);
@@ -1757,6 +1743,9 @@ async function tryProvider(
     url,
     init,
     controller,
+    signal: upstreamSignal,
+    producerSignal,
+    admissionSignal,
     timer,
     query,
     searchType,
@@ -1768,4 +1757,10 @@ async function tryProvider(
     log,
     normalize: normalizeResponse,
   });
+}
+
+function throwIfSearchAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  if (signal.reason !== undefined) throw signal.reason;
+  throw new DOMException("The operation was aborted", "AbortError");
 }

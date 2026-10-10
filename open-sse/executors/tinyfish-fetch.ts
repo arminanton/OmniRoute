@@ -14,6 +14,10 @@
  */
 
 import { sanitizeErrorMessage, buildErrorBody } from "../utils/error.ts";
+import {
+  createWebFetchAbortScope,
+  createWebFetchCallerAbortError,
+} from "../utils/webFetchAbort.ts";
 import type { WebFetchResult, WebFetchFormat, WebFetchCredentials } from "../handlers/webFetch.ts";
 
 const TINYFISH_FETCH_URL = "https://api.fetch.tinyfish.ai";
@@ -28,6 +32,7 @@ interface TinyFishFetchOptions {
   format: WebFetchFormat;
   includeMetadata: boolean;
   credentials: WebFetchCredentials;
+  signal?: AbortSignal;
 }
 
 interface TinyFishResultEntry {
@@ -48,7 +53,7 @@ interface TinyFishErrorEntry {
  * Execute a TinyFish Fetch API request.
  */
 export async function tinyfishFetch(opts: TinyFishFetchOptions): Promise<WebFetchResult> {
-  const { url, format, includeMetadata, credentials } = opts;
+  const { url, format, includeMetadata, credentials, signal } = opts;
 
   if (!credentials.apiKey) {
     const body = buildErrorBody(401, "TinyFish API key required");
@@ -61,12 +66,7 @@ export async function tinyfishFetch(opts: TinyFishFetchOptions): Promise<WebFetc
     ttl: 0,
   };
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    const err = new Error(`tinyfish-fetch timeout after ${TINYFISH_TIMEOUT_MS}ms`);
-    err.name = "TimeoutError";
-    controller.abort(err);
-  }, TINYFISH_TIMEOUT_MS);
+  const abortScope = createWebFetchAbortScope(signal, TINYFISH_TIMEOUT_MS, "TinyFish");
 
   try {
     const response = await fetch(TINYFISH_FETCH_URL, {
@@ -76,11 +76,12 @@ export async function tinyfishFetch(opts: TinyFishFetchOptions): Promise<WebFetc
         "X-API-Key": credentials.apiKey,
       },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
 
     if (!response.ok) {
       const rawError = await response.text().catch(() => `HTTP ${response.status}`);
+      abortScope.throwIfAborted();
       const msg = sanitizeErrorMessage(`TinyFish error ${response.status}: ${rawError}`);
       const body = buildErrorBody(response.status, msg);
       return { success: false, status: response.status, error: body.error.message };
@@ -90,6 +91,7 @@ export async function tinyfishFetch(opts: TinyFishFetchOptions): Promise<WebFetc
       results?: TinyFishResultEntry[];
       errors?: TinyFishErrorEntry[];
     };
+    abortScope.throwIfAborted();
 
     const result = data.results?.[0];
 
@@ -121,7 +123,11 @@ export async function tinyfishFetch(opts: TinyFishFetchOptions): Promise<WebFetc
       },
     };
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (signal?.aborted) throw createWebFetchCallerAbortError(signal);
+    if (
+      abortScope.timedOut ||
+      (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+    ) {
       const body = buildErrorBody(504, "TinyFish request timed out");
       return { success: false, status: 504, error: body.error.message };
     }
@@ -130,6 +136,6 @@ export async function tinyfishFetch(opts: TinyFishFetchOptions): Promise<WebFetc
     const body = buildErrorBody(502, msg);
     return { success: false, status: 502, error: body.error.message };
   } finally {
-    clearTimeout(timeoutId);
+    abortScope.dispose();
   }
 }

@@ -10,6 +10,7 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const webFetchRoute = await import("../../src/app/api/v1/web/fetch/route.ts");
+const accountOccupancy = await import("../../open-sse/services/accountRequestOccupancy.ts");
 
 async function resetStorage() {
   core.resetDbInstance();
@@ -36,14 +37,26 @@ async function seedConnection(
   });
 }
 
-function postWebFetch(body: Record<string, unknown>) {
+function postWebFetch(body: Record<string, unknown>, signal?: AbortSignal) {
   return webFetchRoute.POST(
     new Request("http://localhost/api/v1/web/fetch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: "https://example.com", ...body }),
+      signal,
     })
   );
+}
+
+function pendingUntilAborted(signal: AbortSignal): Promise<Response> {
+  return new Promise((_resolve, reject) => {
+    const rejectAbort = () => reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    if (signal.aborted) {
+      rejectAbort();
+      return;
+    }
+    signal.addEventListener("abort", rejectAbort, { once: true });
+  });
 }
 
 interface WebFetchTestBody {
@@ -271,6 +284,115 @@ test("auto-select returns 400 when no web-fetch provider is configured", async (
 
   assert.equal(response.status, 400);
   assert.ok((body.error?.message ?? "").includes("No credentials configured"));
+});
+
+test("web-fetch returns 499 when the request body read fails after caller cancellation", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  let providerWasCalled = false;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    providerWasCalled = true;
+    throw new Error("cancelled request must not reach a provider");
+  }) as typeof fetch;
+
+  try {
+    const request = {
+      signal: controller.signal,
+      json: async () => {
+        throw new DOMException("The operation was aborted", "AbortError");
+      },
+    } as Request;
+    const response = await webFetchRoute.POST(request);
+
+    assert.equal(response.status, 499);
+    assert.equal(providerWasCalled, false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("caller cancellation aborts upstream, skips fallback, and releases account occupancy", async () => {
+  const firecrawl = await seedConnection("firecrawl", { apiKey: "fc-key" });
+  await seedConnection("jina-reader", { apiKey: "jina-key" });
+
+  let announceStarted!: () => void;
+  const upstreamStarted = new Promise<void>((resolve) => {
+    announceStarted = resolve;
+  });
+  let upstreamSignal: AbortSignal | null = null;
+  let jinaWasCalled = false;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (u.includes("api.firecrawl.dev")) {
+      upstreamSignal = (init as RequestInit).signal as AbortSignal;
+      assert.equal(accountOccupancy.getAccountRequestInFlightCount(firecrawl.id), 1);
+      announceStarted();
+      return pendingUntilAborted(upstreamSignal);
+    }
+    if (u.includes("r.jina.ai")) jinaWasCalled = true;
+    throw new Error(`unexpected fetch to ${u}`);
+  };
+
+  const controller = new AbortController();
+  try {
+    const responsePromise = postWebFetch({}, controller.signal);
+    await upstreamStarted;
+    controller.abort("client disconnected");
+    const response = await responsePromise;
+
+    assert.equal(response.status, 499);
+    assert.equal(upstreamSignal?.aborted, true);
+    assert.equal(jinaWasCalled, false, "caller cancellation must not trigger provider fallback");
+    assert.equal(accountOccupancy.getAccountRequestInFlightCount(firecrawl.id), 0);
+  } finally {
+    controller.abort();
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("fallback releases the failed provider occupancy before reserving the next provider", async () => {
+  const firecrawl = await seedConnection("firecrawl", { apiKey: "fc-key" });
+  const jina = await seedConnection("jina-reader", { apiKey: "jina-key" });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const u = String(url);
+    if (u.includes("api.firecrawl.dev")) {
+      assert.equal(accountOccupancy.getAccountRequestInFlightCount(firecrawl.id), 1);
+      return new Response(JSON.stringify({ error: "rate limited" }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (u.includes("r.jina.ai")) {
+      assert.equal(
+        accountOccupancy.getAccountRequestInFlightCount(firecrawl.id),
+        0,
+        "failed-provider reservation must be released before fallback starts"
+      );
+      assert.equal(accountOccupancy.getAccountRequestInFlightCount(jina.id), 1);
+      assert.ok((init as RequestInit).signal, "fallback fetch receives a cancellation signal");
+      return new Response(JSON.stringify({ data: { content: "jina content", links: [] } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    throw new Error(`unexpected fetch to ${u}`);
+  };
+
+  try {
+    const response = await postWebFetch({});
+    const body = await readJson(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(body.provider, "jina-reader");
+    assert.equal(accountOccupancy.getAccountRequestInFlightCount(firecrawl.id), 0);
+    assert.equal(accountOccupancy.getAccountRequestInFlightCount(jina.id), 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("route accepts a valid bare x-api-key when key enforcement is enabled", async () => {

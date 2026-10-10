@@ -20,6 +20,10 @@
  */
 
 import { sanitizeErrorMessage, buildErrorBody } from "../utils/error.ts";
+import {
+  createWebFetchAbortScope,
+  createWebFetchCallerAbortError,
+} from "../utils/webFetchAbort.ts";
 // Type-only import (erased at runtime): webFetch.ts imports context7Fetch
 // back from here, so a VALUE import would create a runtime cycle. Keep this
 // `import type` — adding a runtime import from webFetch.ts here reintroduces
@@ -56,6 +60,7 @@ interface Context7FetchOptions {
   url: string;
   includeMetadata: boolean;
   credentials: WebFetchCredentials;
+  signal?: AbortSignal;
 }
 
 /**
@@ -168,7 +173,7 @@ async function readBodyCapped(
  * Execute a Context7 docs fetch.
  */
 export async function context7Fetch(opts: Context7FetchOptions): Promise<WebFetchResult> {
-  const { url, includeMetadata, credentials } = opts;
+  const { url, includeMetadata, credentials, signal } = opts;
 
   const parsed = parseContext7LibraryUrl(url);
   if (!parsed) {
@@ -211,14 +216,13 @@ export async function context7Fetch(opts: Context7FetchOptions): Promise<WebFetc
     headers.Authorization = `Bearer ${credentials.apiKey}`;
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), CONTEXT7_TIMEOUT_MS);
+  const abortScope = createWebFetchAbortScope(signal, CONTEXT7_TIMEOUT_MS, "Context7");
 
   try {
     const response = await fetch(requestUrl, {
       method: "GET",
       headers,
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
 
     if (!response.ok) {
@@ -227,6 +231,7 @@ export async function context7Fetch(opts: Context7FetchOptions): Promise<WebFetc
       const { text: rawError } = await readBodyCapped(response, MAX_BODY_BYTES).catch(() => ({
         text: `HTTP ${response.status}`,
       }));
+      abortScope.throwIfAborted();
       const msg = sanitizeErrorMessage(
         `Context7 error ${response.status}: ${rawError.slice(0, 500)}`
       );
@@ -235,6 +240,7 @@ export async function context7Fetch(opts: Context7FetchOptions): Promise<WebFetc
     }
 
     const { text: content, truncated } = await readBodyCapped(response, MAX_BODY_BYTES);
+    abortScope.throwIfAborted();
 
     return {
       success: true,
@@ -257,7 +263,11 @@ export async function context7Fetch(opts: Context7FetchOptions): Promise<WebFetc
       },
     };
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (signal?.aborted) throw createWebFetchCallerAbortError(signal);
+    if (
+      abortScope.timedOut ||
+      (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+    ) {
       const body = buildErrorBody(504, "Context7 request timed out");
       return { success: false, status: 504, error: body.error.message };
     }
@@ -266,6 +276,6 @@ export async function context7Fetch(opts: Context7FetchOptions): Promise<WebFetc
     const body = buildErrorBody(502, msg);
     return { success: false, status: 502, error: body.error.message };
   } finally {
-    clearTimeout(timeoutId);
+    abortScope.dispose();
   }
 }

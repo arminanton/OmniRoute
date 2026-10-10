@@ -23,6 +23,10 @@ import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/acco
 
 export { resolveVertexOcrAccessToken };
 
+function cancelledResponse() {
+  return errorResponse(499, "OCR request cancelled");
+}
+
 /**
  * Custom-endpoint providers (e.g. azure-document-intelligence, vertex-deepseek-ocr) store the
  * connection's resource endpoint under providerSpecificData, not as a top-level credentials
@@ -69,10 +73,13 @@ export async function OPTIONS() {
  * Mistral OCR API compatible.
  */
 async function postHandler(request, context) {
+  if (request.signal.aborted) return cancelledResponse();
+
   let rawBody;
   try {
     rawBody = await request.json();
   } catch {
+    if (request.signal.aborted) return cancelledResponse();
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body");
   }
 
@@ -86,6 +93,7 @@ async function postHandler(request, context) {
 
   // Enforce API key policies (model restrictions + budget limits)
   const policy = await enforceApiKeyPolicy(request, model);
+  if (request.signal.aborted) return cancelledResponse();
   if (policy.rejection) return policy.rejection;
 
   const { provider } = parseOcrModel(model);
@@ -101,6 +109,7 @@ async function postHandler(request, context) {
   );
   const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
   try {
+    if (request.signal.aborted) return cancelledResponse();
     if (!credentials) {
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
@@ -111,14 +120,32 @@ async function postHandler(request, context) {
       return rateLimitedProviderResponse(resolvedProvider, credentials);
     }
 
-    const tokenReadyCredentials = await resolveVertexOcrAccessToken(resolvedProvider, credentials);
+    const tokenReadyCredentials = await resolveVertexOcrAccessToken(
+      resolvedProvider,
+      credentials,
+      request.signal
+    );
+    if (request.signal.aborted) return cancelledResponse();
     const ocrCredentials = resolveOcrCredentials(tokenReadyCredentials, resolvedProvider);
 
-    const response = await handleOcr({ body: { ...body, model }, credentials: ocrCredentials });
+    const response = await handleOcr({
+      body: { ...body, model },
+      credentials: ocrCredentials,
+      signal: request.signal,
+    });
+    // Azure's accepted operation is deliberately allowed to finish its in-process,
+    // attempt-bounded polling after a disconnect. Keep the account slot through
+    // that handler lifetime, then report cancellation. This is not a durable task
+    // owner and does not recover polling after a process restart.
+    if (request.signal.aborted) return cancelledResponse();
     if (response?.ok) {
       await clearRecoveredProviderState(credentials);
+      if (request.signal.aborted) return cancelledResponse();
     }
     return response;
+  } catch (error) {
+    if (request.signal.aborted) return cancelledResponse();
+    throw error;
   } finally {
     releaseAccountRequest();
   }

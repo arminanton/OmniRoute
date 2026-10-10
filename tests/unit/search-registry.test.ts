@@ -255,10 +255,12 @@ test("computeCacheKey is deterministic", () => {
   assert.equal(k1, k2);
 });
 
-test("computeCacheKey normalizes query (case, whitespace)", () => {
+test("computeCacheKey preserves query case while normalizing whitespace", () => {
   const k1 = computeCacheKey("Hello  World", "auto", "web", 5);
-  const k2 = computeCacheKey("hello world", "auto", "web", 5);
-  assert.equal(k1, k2);
+  const sameCase = computeCacheKey("Hello World", "auto", "web", 5);
+  const differentCase = computeCacheKey("hello world", "auto", "web", 5);
+  assert.equal(k1, sameCase);
+  assert.notEqual(k1, differentCase);
 });
 
 test("computeCacheKey differs by provider", () => {

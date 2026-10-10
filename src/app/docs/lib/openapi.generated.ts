@@ -43,7 +43,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/{omnirouteCatchAll}",
     method: "DELETE",
     summary: "Return JSON not-found for an unknown versioned API route",
-    description: "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
+    description:
+      "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
     tag: "V1 OmnirouteCatchAll",
     tags: ["V1 OmnirouteCatchAll"],
     requiresAuth: false,
@@ -53,7 +54,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/{omnirouteCatchAll}",
     method: "GET",
     summary: "Return JSON not-found for an unknown versioned API route",
-    description: "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
+    description:
+      "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
     tag: "V1 OmnirouteCatchAll",
     tags: ["V1 OmnirouteCatchAll"],
     requiresAuth: false,
@@ -63,7 +65,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/{omnirouteCatchAll}",
     method: "HEAD",
     summary: "Return the versioned API not-found response for HEAD",
-    description: "Returns the fallback 404 only after the central CLIENT_API policy evaluates this unknown path; anonymous requests pass only when `REQUIRE_API_KEY` is disabled.",
+    description:
+      "Returns the fallback 404 only after the central CLIENT_API policy evaluates this unknown path; anonymous requests pass only when `REQUIRE_API_KEY` is disabled.",
     tag: "V1 OmnirouteCatchAll",
     tags: ["V1 OmnirouteCatchAll"],
     requiresAuth: false,
@@ -73,7 +76,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/{omnirouteCatchAll}",
     method: "PATCH",
     summary: "Return JSON not-found for an unknown versioned API route",
-    description: "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
+    description:
+      "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
     tag: "V1 OmnirouteCatchAll",
     tags: ["V1 OmnirouteCatchAll"],
     requiresAuth: false,
@@ -83,7 +87,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/{omnirouteCatchAll}",
     method: "POST",
     summary: "Return JSON not-found for an unknown versioned API route",
-    description: "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
+    description:
+      "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
     tag: "V1 OmnirouteCatchAll",
     tags: ["V1 OmnirouteCatchAll"],
     requiresAuth: false,
@@ -93,7 +98,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/{omnirouteCatchAll}",
     method: "PUT",
     summary: "Return JSON not-found for an unknown versioned API route",
-    description: "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
+    description:
+      "The handler emits JSON 404 only; central CLIENT_API auth runs first. Anonymous access is conditional on `REQUIRE_API_KEY` being disabled, and malformed or invalid client credentials degrade to anonymous only in that disabled configuration.",
     tag: "V1 OmnirouteCatchAll",
     tags: ["V1 OmnirouteCatchAll"],
     requiresAuth: false,
@@ -103,7 +109,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/accounts/{id}/limits",
     method: "GET",
     summary: "Get registered-key issuance limits for an account",
-    description: "Returns configured issuance limits and current hourly/daily counters, or `limits: null` when no account override exists. Authentication is required when `REQUIRE_API_KEY` is enabled; otherwise anonymous requests are allowed.",
+    description:
+      "Returns configured issuance limits and current hourly/daily counters, or `limits: null` when no account override exists. Authentication is required when `REQUIRE_API_KEY` is enabled; otherwise anonymous requests are allowed.",
     tag: "V1 Accounts",
     tags: ["V1 Accounts"],
     requiresAuth: false,
@@ -113,7 +120,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/accounts/{id}/limits",
     method: "PUT",
     summary: "Set registered-key issuance limits for an account",
-    description: "Updates any supplied positive integer limit or sets it to null to remove that limit. Omitted fields are left unchanged. Authentication is required when `REQUIRE_API_KEY` is enabled.",
+    description:
+      "Updates any supplied positive integer limit or sets it to null to remove that limit. Omitted fields are left unchanged. Authentication is required when `REQUIRE_API_KEY` is enabled.",
     tag: "V1 Accounts",
     tags: ["V1 Accounts"],
     requiresAuth: false,
@@ -123,7 +131,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/agents/credentials",
     method: "GET",
     summary: "List masked cloud-agent provider credentials",
-    description: "Requires management authorization when authentication is enabled. Credential values are masked to their final four characters; raw API keys are never returned. Anonymous access is available only when management authentication is disabled for the instance.",
+    description:
+      "Requires management authorization when authentication is enabled. Credential values are masked to their final four characters; raw API keys are never returned. Anonymous access is available only when management authentication is disabled for the instance.",
     tag: "V1 Agents",
     tags: ["V1 Agents"],
     requiresAuth: false,
@@ -133,7 +142,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/agents/credentials",
     method: "POST",
     summary: "Save a cloud-agent provider credential",
-    description: "Stores the provider API key encrypted at rest. The response returns only its masked form. Requires management authorization when enabled; anonymous calls are accepted only in an instance configured without management authentication.",
+    description:
+      "Stores the provider API key encrypted at rest. The response returns only its masked form. Requires management authorization when enabled; anonymous calls are accepted only in an instance configured without management authentication.",
     tag: "V1 Agents",
     tags: ["V1 Agents"],
     requiresAuth: false,
@@ -143,7 +153,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/agents/health",
     method: "GET",
     summary: "Probe configured cloud-agent providers",
-    description: "Checks each registered provider with configured credentials and a five-second timeout. Individual connection failures are returned as provider rows with `connected: false`; management authorization is configuration-dependent.",
+    description:
+      "Checks each registered provider with configured credentials and a five-second timeout. Individual connection failures are returned as provider rows with `connected: false`; management authorization is configuration-dependent.",
     tag: "V1 Agents",
     tags: ["V1 Agents"],
     requiresAuth: false,
@@ -153,7 +164,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/agents/tasks",
     method: "DELETE",
     summary: "Delete a stored cloud-agent task",
-    description: "Deletes the task record by `id`; deletion is idempotent and does not cancel the external provider task.",
+    description:
+      "Deletes the task record by `id`; deletion is idempotent and does not cancel the external provider task.",
     tag: "V1 Agents",
     tags: ["V1 Agents"],
     requiresAuth: false,
@@ -163,7 +175,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/agents/tasks",
     method: "GET",
     summary: "List cloud-agent tasks",
-    description: "Returns serialized tasks. `limit` is parsed as an integer and clamped to 1–500; invalid or absent values use 50. If `provider` is present it takes precedence over `status`.",
+    description:
+      "Returns serialized tasks. `limit` is parsed as an integer and clamped to 1–500; invalid or absent values use 50. If `provider` is present it takes precedence over `status`.",
     tag: "V1 Agents",
     tags: ["V1 Agents"],
     requiresAuth: false,
@@ -213,7 +226,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/antigravity",
     method: "POST",
     summary: "Antigravity Cloud Code-compatible generation",
-    description: "Accepts the Antigravity IDE/cloudcode envelope, translates it to the configured target provider, and translates the result back into a Cloud Code response. Both the nested `{model, request:{...}}` envelope and the compatible direct `{model, contents, ...}` shape are accepted. Streaming requests return Cloud Code response envelopes as SSE `data` events; non-streaming requests return one JSON envelope.",
+    description:
+      "Accepts the Antigravity IDE/cloudcode envelope, translates it to the configured target provider, and translates the result back into a Cloud Code response. Both the nested `{model, request:{...}}` envelope and the compatible direct `{model, contents, ...}` shape are accepted. Streaming requests return Cloud Code response envelopes as SSE `data` events; non-streaming requests return one JSON envelope.",
     tag: "V1 Antigravity",
     tags: ["V1 Antigravity"],
     requiresAuth: false,
@@ -223,7 +237,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/api/chat",
     method: "POST",
     summary: "Ollama-compatible chat endpoint",
-    description: "Provides compatibility with Ollama's /api/chat format. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Provides compatibility with Ollama's /api/chat format. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Chat",
     tags: ["Chat"],
     requiresAuth: false,
@@ -233,7 +248,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/audio/speech",
     method: "POST",
     summary: "Generate speech audio",
-    description: "Text-to-speech endpoint. Routes to configured TTS providers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Text-to-speech endpoint. Routes to configured TTS providers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Audio",
     tags: ["Audio"],
     requiresAuth: false,
@@ -243,7 +259,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/audio/transcriptions",
     method: "POST",
     summary: "Transcribe audio",
-    description: "Audio-to-text transcription endpoint. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Audio-to-text transcription endpoint. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Audio",
     tags: ["Audio"],
     requiresAuth: false,
@@ -253,7 +270,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/audio/translations",
     method: "POST",
     summary: "Translate audio to English",
-    description: "OpenAI Whisper–compatible audio translation (multipart/form-data). Unlike `/api/v1/audio/transcriptions`, output is always English regardless of the source language. Success responses carry the `X-OmniRoute-*` cost-telemetry headers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "OpenAI Whisper–compatible audio translation (multipart/form-data). Unlike `/api/v1/audio/transcriptions`, output is always English regardless of the source language. Success responses carry the `X-OmniRoute-*` cost-telemetry headers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Audio",
     tags: ["Audio"],
     requiresAuth: false,
@@ -263,7 +281,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/auto-combo/{channel}/candidates",
     method: "GET",
     summary: "GET auto combo › <channel> › candidates",
-    description: "Returns the unfiltered provider/model/account candidates for this automatic-routing channel, including candidates currently blocked by a circuit breaker, cooldown, model lock, or strict-zero-cost policy. Blocked candidates remain in the list with their state flags so clients can inspect why they are not presently reachable. `channel` is `auto` or the suffix of a built-in `auto/*` model. An API key's per-connection exclusions are reflected when the request is authenticated with a key identity the handler can resolve.",
+    description:
+      "Returns the unfiltered provider/model/account candidates for this automatic-routing channel, including candidates currently blocked by a circuit breaker, cooldown, model lock, or strict-zero-cost policy. Blocked candidates remain in the list with their state flags so clients can inspect why they are not presently reachable. `channel` is `auto` or the suffix of a built-in `auto/*` model. An API key's per-connection exclusions are reflected when the request is authenticated with a key identity the handler can resolve.",
     tag: "V1 Auto-combo",
     tags: ["V1 Auto-combo"],
     requiresAuth: false,
@@ -273,7 +292,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/batches",
     method: "GET",
     summary: "List OpenAI-compatible batch jobs",
-    description: "Lists batches using cursor pagination. A dashboard session lists across all owners; an API key lists only batches whose owner is that exact key. A valid API key or dashboard session is required even when `REQUIRE_API_KEY` is disabled.",
+    description:
+      "Lists batches using cursor pagination. A dashboard session lists across all owners; an API key lists only batches whose owner is that exact key. A valid API key or dashboard session is required even when `REQUIRE_API_KEY` is disabled.",
     tag: "V1 Batches",
     tags: ["V1 Batches"],
     requiresAuth: true,
@@ -283,7 +303,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/batches",
     method: "POST",
     summary: "Create an asynchronous batch job",
-    description: "Creates a batch for an existing input file. This endpoint records and schedules an asynchronous job; it is not a multiplexed streaming API for interactive agent sessions. The input file must be unowned or owned by the same API key as the request. Dashboard sessions may list across owners, but batch creation still applies this input-file ownership check.",
+    description:
+      "Creates a batch for an existing input file. This endpoint records and schedules an asynchronous job; it is not a multiplexed streaming API for interactive agent sessions. The input file must be unowned or owned by the same API key as the request. Dashboard sessions may list across owners, but batch creation still applies this input-file ownership check.",
     tag: "V1 Batches",
     tags: ["V1 Batches"],
     requiresAuth: true,
@@ -293,7 +314,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/batches/{id}",
     method: "DELETE",
     summary: "Delete a terminal batch",
-    description: "Deletes the batch and its associated record only after it is completed, failed, cancelled, or expired. Nonterminal batches return 409. API keys may access their own or unowned batches; a batch owned by a different key is reported as not found. Dashboard sessions may access any owner's batch.",
+    description:
+      "Deletes the batch and its associated record only after it is completed, failed, cancelled, or expired. Nonterminal batches return 409. API keys may access their own or unowned batches; a batch owned by a different key is reported as not found. Dashboard sessions may access any owner's batch.",
     tag: "V1 Batches",
     tags: ["V1 Batches"],
     requiresAuth: true,
@@ -303,7 +325,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/batches/{id}",
     method: "GET",
     summary: "Get a batch job",
-    description: "Returns a batch owned by the API key or an unowned batch; batches owned by another API key are hidden as not found. Dashboard sessions may access batches across all owners.",
+    description:
+      "Returns a batch owned by the API key or an unowned batch; batches owned by another API key are hidden as not found. Dashboard sessions may access batches across all owners.",
     tag: "V1 Batches",
     tags: ["V1 Batches"],
     requiresAuth: true,
@@ -313,7 +336,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/batches/{id}/cancel",
     method: "POST",
     summary: "Request cancellation of a batch",
-    description: "Sets a nonterminal batch to `cancelling`; a batch already cancelling is returned unchanged. API keys may access their own or unowned batches; a batch owned by another key is hidden as not found. Dashboard sessions may cancel batches across all owners.",
+    description:
+      "Sets a nonterminal batch to `cancelling`; a batch already cancelling is returned unchanged. API keys may access their own or unowned batches; a batch owned by another key is hidden as not found. Dashboard sessions may cancel batches across all owners.",
     tag: "V1 Batches",
     tags: ["V1 Batches"],
     requiresAuth: true,
@@ -323,7 +347,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/batches/delete-completed",
     method: "DELETE",
     summary: "Delete completed batch jobs and their files",
-    description: "Deletes completed batches across all owners for a dashboard session, or only batches owned by the exact API key for an API-key caller. A valid API key or dashboard session is always required, including when inference-key enforcement is disabled. Referenced input/output/error files are deleted only when no remaining batch references them.",
+    description:
+      "Deletes completed batches across all owners for a dashboard session, or only batches owned by the exact API key for an API-key caller. A valid API key or dashboard session is always required, including when inference-key enforcement is disabled. Referenced input/output/error files are deleted only when no remaining batch references them.",
     tag: "V1 Batches",
     tags: ["V1 Batches"],
     requiresAuth: true,
@@ -333,7 +358,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/chat/completions",
     method: "POST",
     summary: "Create chat completion",
-    description: "OpenAI-compatible chat completions endpoint. Routes to configured providers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted. Client API-key headers and an authenticated dashboard session are also accepted.",
+    description:
+      "OpenAI-compatible chat completions endpoint. Routes to configured providers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted. Client API-key headers and an authenticated dashboard session are also accepted.",
     tag: "Chat",
     tags: ["Chat"],
     requiresAuth: false,
@@ -343,7 +369,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/classify",
     method: "POST",
     summary: "POST classify",
-    description: "Jina-compatible zero/few-shot text classification. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Jina-compatible zero/few-shot text classification. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "V1 Classify",
     tags: ["V1 Classify"],
     requiresAuth: false,
@@ -353,7 +380,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/combos",
     method: "GET",
     summary: "List public combo metadata",
-    description: "Returns public combo metadata without internal routing details. When `REQUIRE_API_KEY` is enabled, a valid Bearer API key or dashboard session is required; when disabled, anonymous reads are allowed.",
+    description:
+      "Returns public combo metadata without internal routing details. When `REQUIRE_API_KEY` is enabled, a valid Bearer API key or dashboard session is required; when disabled, anonymous reads are allowed.",
     tag: "V1 Combos",
     tags: ["V1 Combos"],
     requiresAuth: false,
@@ -363,7 +391,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/completions",
     method: "POST",
     summary: "POST completions",
-    description: "Legacy OpenAI Completions API. Accepts either `prompt` or chat `messages` and returns the legacy `text_completion` shape. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Legacy OpenAI Completions API. Accepts either `prompt` or chat `messages` and returns the legacy `text_completion` shape. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "V1 Completions",
     tags: ["V1 Completions"],
     requiresAuth: false,
@@ -373,7 +402,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/embeddings",
     method: "GET",
     summary: "List embedding models",
-    description: "Returns the OpenAI-compatible model list filtered to embedding models. Authentication follows the configured model-catalog access policy: anonymous access is available only when the catalog policy permits it; otherwise a valid API key or authenticated dashboard session is required.",
+    description:
+      "Returns the OpenAI-compatible model list filtered to embedding models. Authentication follows the configured model-catalog access policy: anonymous access is available only when the catalog policy permits it; otherwise a valid API key or authenticated dashboard session is required.",
     tag: "Embeddings",
     tags: ["Embeddings"],
     requiresAuth: false,
@@ -383,7 +413,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/embeddings",
     method: "POST",
     summary: "Create embeddings",
-    description: "Creates embeddings using a configured provider or combo. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Creates embeddings using a configured provider or combo. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Embeddings",
     tags: ["Embeddings"],
     requiresAuth: false,
@@ -393,7 +424,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/explain/routing",
     method: "GET",
     summary: "Routing explainability snapshot",
-    description: "Returns the most recent routing events (bounded in-memory ring buffer) plus the per-provider/model quality snapshot from `open-sse/services/routing`. Routing metadata only — never prompts, bodies, headers or credentials. Auth mirrors `/api/v1/combos`: a valid Bearer API key or a dashboard session; with `REQUIRE_API_KEY=false` anonymous reads are allowed.",
+    description:
+      "Returns the most recent routing events (bounded in-memory ring buffer) plus the per-provider/model quality snapshot from `open-sse/services/routing`. Routing metadata only — never prompts, bodies, headers or credentials. Auth mirrors `/api/v1/combos`: a valid Bearer API key or a dashboard session; with `REQUIRE_API_KEY=false` anonymous reads are allowed.",
     tag: "Telemetry",
     tags: ["Telemetry"],
     requiresAuth: false,
@@ -403,7 +435,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/files",
     method: "GET",
     summary: "List uploaded files",
-    description: "Cursor-paginated file metadata. API-key callers see only files owned by that exact key; unowned files are excluded from collection listings. Dashboard sessions see files across all owners. A valid API key or dashboard session is required even when `REQUIRE_API_KEY` is disabled.",
+    description:
+      "Cursor-paginated file metadata. API-key callers see only files owned by that exact key; unowned files are excluded from collection listings. Dashboard sessions see files across all owners. A valid API key or dashboard session is required even when `REQUIRE_API_KEY` is disabled.",
     tag: "V1 Files",
     tags: ["V1 Files"],
     requiresAuth: true,
@@ -413,7 +446,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/files",
     method: "POST",
     summary: "Upload a file",
-    description: "Uploads a file as multipart form data. `file` and `purpose` are required. The route accepts files up to 512 MiB; `expires_after` is applied only when the anchor is `created_at`.",
+    description:
+      "Uploads a file as multipart form data. `file` and `purpose` are required. The route accepts files up to 512 MiB; `expires_after` is applied only when the anchor is `created_at`.",
     tag: "V1 Files",
     tags: ["V1 Files"],
     requiresAuth: true,
@@ -423,7 +457,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/files/{id}",
     method: "DELETE",
     summary: "Delete a file",
-    description: "Soft-deletes a file and clears its stored content. API keys may access their own or unowned files; a file owned by another API key is hidden as not found. Dashboard sessions may delete files across all owners.",
+    description:
+      "Soft-deletes a file and clears its stored content. API keys may access their own or unowned files; a file owned by another API key is hidden as not found. Dashboard sessions may delete files across all owners.",
     tag: "V1 Files",
     tags: ["V1 Files"],
     requiresAuth: true,
@@ -433,7 +468,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/files/{id}",
     method: "GET",
     summary: "Get file metadata",
-    description: "Returns metadata for a file owned by the API key or an unowned file; files owned by another key are hidden as not found. Dashboard sessions may access files across all owners.",
+    description:
+      "Returns metadata for a file owned by the API key or an unowned file; files owned by another key are hidden as not found. Dashboard sessions may access files across all owners.",
     tag: "V1 Files",
     tags: ["V1 Files"],
     requiresAuth: true,
@@ -443,7 +479,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/files/{id}/content",
     method: "GET",
     summary: "Download file content",
-    description: "Returns raw content with the stored MIME type, or `application/octet-stream` when no type was stored. API keys may access their own or unowned files; a file owned by another key is hidden as not found. Dashboard sessions may download files across all owners.",
+    description:
+      "Returns raw content with the stored MIME type, or `application/octet-stream` when no type was stored. API keys may access their own or unowned files; a file owned by another key is hidden as not found. Dashboard sessions may download files across all owners.",
     tag: "V1 Files",
     tags: ["V1 Files"],
     requiresAuth: true,
@@ -453,7 +490,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/images/edits",
     method: "POST",
     summary: "POST images › edits",
-    description: "Creates an edited image using a provider-specific image-edit flow. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Creates an edited image using a provider-specific image-edit flow. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "V1 Images",
     tags: ["V1 Images"],
     requiresAuth: false,
@@ -463,7 +501,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/images/generations",
     method: "GET",
     summary: "List image-generation models",
-    description: "Returns the OpenAI-compatible model list filtered to image models. Authentication follows the configured model-catalog access policy: anonymous access is available only when the catalog policy permits it; otherwise a valid API key or authenticated dashboard session is required.",
+    description:
+      "Returns the OpenAI-compatible model list filtered to image models. Authentication follows the configured model-catalog access policy: anonymous access is available only when the catalog policy permits it; otherwise a valid API key or authenticated dashboard session is required.",
     tag: "Images",
     tags: ["Images"],
     requiresAuth: false,
@@ -473,7 +512,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/images/generations",
     method: "POST",
     summary: "Generate images",
-    description: "Generates images using a configured provider or combo. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Generates images using a configured provider or combo. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Images",
     tags: ["Images"],
     requiresAuth: false,
@@ -483,7 +523,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/images/upscale",
     method: "GET",
     summary: "GET images › upscale",
-    description: "Returns the instance's registered upscale models and their supported factors and controls. Authentication follows the CLIENT_API policy; anonymous access is available only when REQUIRE_API_KEY is disabled.",
+    description:
+      "Returns the instance's registered upscale models and their supported factors and controls. Authentication follows the CLIENT_API policy; anonymous access is available only when REQUIRE_API_KEY is disabled.",
     tag: "V1 Images",
     tags: ["V1 Images"],
     requiresAuth: false,
@@ -493,7 +534,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/images/upscale",
     method: "POST",
     summary: "POST images › upscale",
-    description: "Upscales an image using a configured provider. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Upscales an image using a configured provider. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "V1 Images",
     tags: ["V1 Images"],
     requiresAuth: false,
@@ -503,7 +545,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/issues/report",
     method: "POST",
     summary: "Report a key-issuer failure event",
-    description: "Requires an authenticated client or management session when login is enabled. If GitHub issue credentials are not configured, the event is logged locally and accepted with status 202. GitHub creation failures return status 207.",
+    description:
+      "Requires an authenticated client or management session when login is enabled. If GitHub issue credentials are not configured, the event is logged locally and accepted with status 202. GitHub creation failures return status 207.",
     tag: "V1 Issues",
     tags: ["V1 Issues"],
     requiresAuth: false,
@@ -513,7 +556,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxies",
     method: "DELETE",
     summary: "Delete a proxy registry entry",
-    description: "Deletes the proxy selected by required `id`. Set `force=1` to remove it despite assignments; without force, assigned proxies may be rejected. Requires management scope when auth is on.",
+    description:
+      "Deletes the proxy selected by required `id`. Set `force=1` to remove it despite assignments; without force, assigned proxies may be rejected. Requires management scope when auth is on.",
     tag: "V1 Management",
     tags: ["V1 Management"],
     requiresAuth: false,
@@ -523,7 +567,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxies",
     method: "GET",
     summary: "List or look up proxy registry entries",
-    description: "Lists proxies with username/password redacted, optionally looks up one proxy by `id`, or returns assignments using `where_used=1`. Pagination is clamped to limit 1–200 and offset 0 or greater. Management authorization is required when enabled; the list path is anonymous only when that auth mode is disabled.",
+    description:
+      "Lists proxies with username/password redacted, optionally looks up one proxy by `id`, or returns assignments using `where_used=1`. Pagination is clamped to limit 1–200 and offset 0 or greater. Management authorization is required when enabled; the list path is anonymous only when that auth mode is disabled.",
     tag: "V1 Management",
     tags: ["V1 Management"],
     requiresAuth: false,
@@ -533,7 +578,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxies",
     method: "PATCH",
     summary: "Update a proxy registry entry",
-    description: "Updates fields supplied in the request. An optional inline assignment updates the proxy and its assignment in the same operation. Mutation responses may expose stored proxy credentials in fields inherited from the proxy registry route.",
+    description:
+      "Updates fields supplied in the request. An optional inline assignment updates the proxy and its assignment in the same operation. Mutation responses may expose stored proxy credentials in fields inherited from the proxy registry route.",
     tag: "V1 Management",
     tags: ["V1 Management"],
     requiresAuth: false,
@@ -543,7 +589,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxies",
     method: "POST",
     summary: "Create a proxy registry entry",
-    description: "Creates a proxy, optionally with an inline assignment. Credentials are write-only in the request; the registry mutation response can contain stored credential fields.",
+    description:
+      "Creates a proxy, optionally with an inline assignment. Credentials are write-only in the request; the registry mutation response can contain stored credential fields.",
     tag: "V1 Management",
     tags: ["V1 Management"],
     requiresAuth: false,
@@ -553,7 +600,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxies/assignments",
     method: "GET",
     summary: "List proxy assignments or resolve one connection",
-    description: "Lists assignments using optional filters, or returns the effective resolution when `resolve_connection_id` is set. Pagination is clamped to limit 1–200 and offset ≥0.",
+    description:
+      "Lists assignments using optional filters, or returns the effective resolution when `resolve_connection_id` is set. Pagination is clamped to limit 1–200 and offset ≥0.",
     tag: "V1 Management",
     tags: ["V1 Management"],
     requiresAuth: false,
@@ -563,7 +611,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxies/assignments",
     method: "PUT",
     summary: "Replace one proxy assignment",
-    description: "Sets or clears an assignment. `scopeId` is required for provider, account, combo, or key scopes; `proxyId: null` clears the assignment. Runtime egress policy can reject the change.",
+    description:
+      "Sets or clears an assignment. `scopeId` is required for provider, account, combo, or key scopes; `proxyId: null` clears the assignment. Runtime egress policy can reject the change.",
     tag: "V1 Management",
     tags: ["V1 Management"],
     requiresAuth: false,
@@ -573,7 +622,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxies/bulk-assign",
     method: "PUT",
     summary: "Assign one proxy to multiple scopes",
-    description: "Applies an assignment to the selected scopes and returns updated/failed counts. For the `key` scope, storage normalizes the scope to `account`. Non-global scopes require at least one `scopeIds` entry; global scope applies once.",
+    description:
+      "Applies an assignment to the selected scopes and returns updated/failed counts. For the `key` scope, storage normalizes the scope to `account`. Non-global scopes require at least one `scopeIds` entry; global scope applies once.",
     tag: "V1 Management",
     tags: ["V1 Management"],
     requiresAuth: false,
@@ -583,7 +633,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxies/health",
     method: "GET",
     summary: "Get proxy health statistics",
-    description: "Reporting window is clamped to 1–720 hours; omitted or zero-like input uses 24 hours.",
+    description:
+      "Reporting window is clamped to 1–720 hours; omitted or zero-like input uses 24 hours.",
     tag: "V1 Management",
     tags: ["V1 Management"],
     requiresAuth: false,
@@ -593,7 +644,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxy-subscriptions",
     method: "GET",
     summary: "List proxy subscriptions",
-    description: "Lists all operator-supplied proxy subscription links. Also starts the background auto-refresh scheduler (idempotent) so enabled subscriptions stay in sync. Credentials embedded in `url` are redacted in the response.",
+    description:
+      "Lists all operator-supplied proxy subscription links. Also starts the background auto-refresh scheduler (idempotent) so enabled subscriptions stay in sync. Credentials embedded in `url` are redacted in the response.",
     tag: "Proxy Subscriptions",
     tags: ["Proxy Subscriptions"],
     requiresAuth: true,
@@ -603,7 +655,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxy-subscriptions",
     method: "POST",
     summary: "Create a proxy subscription",
-    description: "Creates a subscription record. If `mode` is `rule`, at least one entry in `ruleProviders` is required. `updateIntervalMinutes` defaults to 60 and `enabled` defaults to `false` when omitted or not exactly `true`.",
+    description:
+      "Creates a subscription record. If `mode` is `rule`, at least one entry in `ruleProviders` is required. `updateIntervalMinutes` defaults to 60 and `enabled` defaults to `false` when omitted or not exactly `true`.",
     tag: "Proxy Subscriptions",
     tags: ["Proxy Subscriptions"],
     requiresAuth: true,
@@ -613,7 +666,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxy-subscriptions/{id}",
     method: "DELETE",
     summary: "Delete a proxy subscription",
-    description: "Removes the subscription record and unbinds/drops its synced proxy_registry rows.",
+    description:
+      "Removes the subscription record and unbinds/drops its synced proxy_registry rows.",
     tag: "Proxy Subscriptions",
     tags: ["Proxy Subscriptions"],
     requiresAuth: true,
@@ -633,7 +687,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxy-subscriptions/{id}",
     method: "PATCH",
     summary: "Update a proxy subscription",
-    description: "Partial update — only fields present in the body are changed (name/url/mode/ruleProviders/localCoreEndpoint/updateIntervalMinutes/enabled).",
+    description:
+      "Partial update — only fields present in the body are changed (name/url/mode/ruleProviders/localCoreEndpoint/updateIntervalMinutes/enabled).",
     tag: "Proxy Subscriptions",
     tags: ["Proxy Subscriptions"],
     requiresAuth: true,
@@ -643,7 +698,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxy-subscriptions/{id}/nodes",
     method: "GET",
     summary: "Get a subscription's last-parsed node summary",
-    description: "Returns the last-parsed node list without re-fetching the (possibly slow) subscription URL.",
+    description:
+      "Returns the last-parsed node list without re-fetching the (possibly slow) subscription URL.",
     tag: "Proxy Subscriptions",
     tags: ["Proxy Subscriptions"],
     requiresAuth: true,
@@ -653,7 +709,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/management/proxy-subscriptions/{id}/refresh",
     method: "POST",
     summary: "Refresh a proxy subscription",
-    description: "Re-fetches and re-parses the subscription URL, syncs its nodes into `proxy_registry`, and (re)binds the pool.",
+    description:
+      "Re-fetches and re-parses the subscription URL, syncs its nodes into `proxy_registry`, and (re)binds the pool.",
     tag: "Proxy Subscriptions",
     tags: ["Proxy Subscriptions"],
     requiresAuth: true,
@@ -663,7 +720,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/me/status",
     method: "GET",
     summary: "GET me › status",
-    description: "Returns usage and budget information for the authenticated API key. The key must have the `self:usage` scope. When it also has `self:account-quota`, the response includes quota data for its allowed active provider connections; these quota fields are omitted otherwise.",
+    description:
+      "Returns usage and budget information for the authenticated API key. The key must have the `self:usage` scope. When it also has `self:account-quota`, the response includes quota data for its allowed active provider connections; these quota fields are omitted otherwise.",
     tag: "V1 Me",
     tags: ["V1 Me"],
     requiresAuth: true,
@@ -673,7 +731,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/messages",
     method: "POST",
     summary: "Create message (Anthropic-compatible)",
-    description: "Anthropic Messages API endpoint. Routes to configured providers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Anthropic Messages API endpoint. Routes to configured providers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Messages",
     tags: ["Messages"],
     requiresAuth: false,
@@ -683,7 +742,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/messages/count_tokens",
     method: "POST",
     summary: "Count tokens for a message",
-    description: "Uses provider-side token counting when available and falls back to a local estimate. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Uses provider-side token counting when available and falls back to a local estimate. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Messages",
     tags: ["Messages"],
     requiresAuth: false,
@@ -693,7 +753,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/models",
     method: "GET",
     summary: "List available models",
-    description: "Returns all models available across configured providers. The central CLIENT_API policy requires a valid client API credential (`Authorization: Bearer`, `x-api-key`, or `x-goog-api-key`) or dashboard session when `REQUIRE_API_KEY` is enabled. Separately, the model-catalog handler requires a valid client credential or dashboard session when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false. Anonymous access is possible only when both applicable gates are open; an invalid supplied API key can still be rejected by the model-catalog gate.",
+    description:
+      "Returns all models available across configured providers. The central CLIENT_API policy requires a valid client API credential (`Authorization: Bearer`, `x-api-key`, or `x-goog-api-key`) or dashboard session when `REQUIRE_API_KEY` is enabled. Separately, the model-catalog handler requires a valid client credential or dashboard session when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false. Anonymous access is possible only when both applicable gates are open; an invalid supplied API key can still be rejected by the model-catalog gate.",
     tag: "Models",
     tags: ["Models"],
     requiresAuth: false,
@@ -703,7 +764,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/models",
     method: "HEAD",
     summary: "Probe model catalog availability",
-    description: "Returns only headers; the model-list body is not generated for a HEAD probe. This operation passes through the central CLIENT_API policy (which takes precedence over the `/api/v1/` public-route prefix): a valid client API key or dashboard session is required when `REQUIRE_API_KEY` is enabled, otherwise anonymous access is allowed. The handler does not run the additional GET-only `requireAuthForModels` catalog check.",
+    description:
+      "Returns only headers; the model-list body is not generated for a HEAD probe. This operation passes through the central CLIENT_API policy (which takes precedence over the `/api/v1/` public-route prefix): a valid client API key or dashboard session is required when `REQUIRE_API_KEY` is enabled, otherwise anonymous access is allowed. The handler does not run the additional GET-only `requireAuthForModels` catalog check.",
     tag: "Models",
     tags: ["Models"],
     requiresAuth: false,
@@ -713,7 +775,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/models/{model}",
     method: "GET",
     summary: "GET models › <model>",
-    description: "Returns one model from the unified caller-visible catalog. The central CLIENT_API policy requires a valid client API key or dashboard session when `REQUIRE_API_KEY` is enabled. Additionally, the shared model-catalog handler requires a valid client API credential or dashboard session when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false. Anonymous access is therefore possible only when the applicable central and model-catalog gates are both open. No `oma_` management-token scope is consumed by this client-API route.",
+    description:
+      "Returns one model from the unified caller-visible catalog. The central CLIENT_API policy requires a valid client API key or dashboard session when `REQUIRE_API_KEY` is enabled. Additionally, the shared model-catalog handler requires a valid client API credential or dashboard session when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false. Anonymous access is therefore possible only when the applicable central and model-catalog gates are both open. No `oma_` management-token scope is consumed by this client-API route.",
     tag: "V1 Models",
     tags: ["V1 Models"],
     requiresAuth: false,
@@ -723,7 +786,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/models/{model}",
     method: "HEAD",
     summary: "Probe a model endpoint",
-    description: "Returns only headers and does not enumerate or serialize model details. The central CLIENT_API policy requires a valid client API key or dashboard session when `REQUIRE_API_KEY` is enabled; otherwise anonymous access is allowed. This HEAD handler does not call the model-catalog GET helper and therefore does not run its additional `requireAuthForModels` check.",
+    description:
+      "Returns only headers and does not enumerate or serialize model details. The central CLIENT_API policy requires a valid client API key or dashboard session when `REQUIRE_API_KEY` is enabled; otherwise anonymous access is allowed. This HEAD handler does not call the model-catalog GET helper and therefore does not run its additional `requireAuthForModels` check.",
     tag: "V1 Models",
     tags: ["V1 Models"],
     requiresAuth: false,
@@ -733,7 +797,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/moderations",
     method: "POST",
     summary: "Create moderation",
-    description: "Content moderation endpoint. Routes to configured moderation providers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Content moderation endpoint. Routes to configured moderation providers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Moderations",
     tags: ["Moderations"],
     requiresAuth: false,
@@ -743,7 +808,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/multimodal-embeddings",
     method: "GET",
     summary: "List embedding models (Jina multimodal-embeddings alias)",
-    description: "Same model-catalog authentication policy as GET /api/v1/embeddings. Anonymous access is available only when the configured catalog policy permits it.",
+    description:
+      "Same model-catalog authentication policy as GET /api/v1/embeddings. Anonymous access is available only when the configured catalog policy permits it.",
     tag: "Embeddings",
     tags: ["Embeddings"],
     requiresAuth: false,
@@ -753,7 +819,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/multimodal-embeddings",
     method: "POST",
     summary: "Create embeddings (Jina multimodal-embeddings alias)",
-    description: "Same handler as `POST /api/v1/embeddings`. Provided so Jina-compatible clients that call `/v1/multimodal-embeddings` do not receive HTTP 404 `unknown_route`. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Same handler as `POST /api/v1/embeddings`. Provided so Jina-compatible clients that call `/v1/multimodal-embeddings` do not receive HTTP 404 `unknown_route`. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Embeddings",
     tags: ["Embeddings"],
     requiresAuth: false,
@@ -763,7 +830,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/muse-code/models",
     method: "GET",
     summary: "GET muse code › models",
-    description: "Returns the Muse Code CLI model catalog, including its provider-specific metadata fields.",
+    description:
+      "Returns the Muse Code CLI model catalog, including its provider-specific metadata fields.",
     tag: "V1 Muse-code",
     tags: ["V1 Muse-code"],
     requiresAuth: false,
@@ -783,7 +851,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/music/generations",
     method: "POST",
     summary: "Generate music from a prompt",
-    description: "Uses a configured music provider. The model and non-empty prompt are required; additional fields are provider-specific. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests may be accepted.",
+    description:
+      "Uses a configured music provider. The model and non-empty prompt are required; additional fields are provider-specific. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests may be accepted.",
     tag: "V1 Music",
     tags: ["V1 Music"],
     requiresAuth: false,
@@ -793,7 +862,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/ocr",
     method: "POST",
     summary: "Document OCR",
-    description: "Multi-provider document OCR endpoint (Mistral OCR–compatible request and response shape). Accepts a JSON body referencing a document/image and returns extracted text. `model` selects the provider via a `provider/model` prefix (e.g. `mistral/mistral-ocr-latest`, `azure-document-intelligence/prebuilt-read`, `vertex-deepseek-ocr/deepseek-ocr-maas`); a bare model id (e.g. `mistral-ocr-latest`) resolves to its registered provider, and an omitted `model` defaults to Mistral. Azure Document Intelligence is asynchronous upstream — the handler polls the returned operation until it succeeds or fails before responding, so this endpoint can take longer to return for that provider. Success responses carry the `X-OmniRoute-*` cost-telemetry headers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Canonical path is `/api/v1/ocr`; `/v1/ocr` is a supported alias to the same handler. Multi-provider document OCR endpoint (Mistral OCR–compatible request and response shape). Accepts a JSON body referencing a document/image and returns extracted text. `model` selects the provider via a `provider/model` prefix (e.g. `mistral/mistral-ocr-latest`, `azure-document-intelligence/prebuilt-read`, `vertex-deepseek-ocr/deepseek-ocr-maas`); a bare model id (e.g. `mistral-ocr-latest`) resolves to its registered provider, and an omitted `model` defaults to Mistral. Azure Document Intelligence is asynchronous upstream — the handler polls the returned operation until it succeeds or fails before responding, so this endpoint can take longer to return for that provider. Success responses carry the `X-OmniRoute-*` cost-telemetry headers. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Images",
     tags: ["Images"],
     requiresAuth: false,
@@ -803,7 +873,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/provider-plugin-manifest",
     method: "GET",
     summary: "Provider plugin manifest",
-    description: "Returns the provider registry manifest augmented with currently exposed service-backend model IDs and capabilities; it contains no provider credentials. The ETag is calculated from this live manifest body; matching If-None-Match yields a 304, and successful responses are publicly cacheable for 60 seconds. The route has no handler-level auth and relies on central CLIENT_API policy (which takes precedence over the `/api/v1/` public-route prefix): a valid client API key or dashboard session is required when `REQUIRE_API_KEY` is enabled, otherwise anonymous access is allowed.",
+    description:
+      "Returns the provider registry manifest augmented with currently exposed service-backend model IDs and capabilities; it contains no provider credentials. The ETag is calculated from this live manifest body; matching If-None-Match yields a 304, and successful responses are publicly cacheable for 60 seconds. The route has no handler-level auth and relies on central CLIENT_API policy (which takes precedence over the `/api/v1/` public-route prefix): a valid client API key or dashboard session is required when `REQUIRE_API_KEY` is enabled, otherwise anonymous access is allowed.",
     tag: "Providers",
     tags: ["Providers"],
     requiresAuth: false,
@@ -813,7 +884,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/providers/{provider}/chat/completions",
     method: "POST",
     summary: "Create chat completion (provider-specific)",
-    description: "Routes to a specific provider by name. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Routes to a specific provider by name. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Chat",
     tags: ["Chat"],
     requiresAuth: false,
@@ -823,7 +895,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/providers/{provider}/embeddings",
     method: "POST",
     summary: "Create embeddings (provider-specific)",
-    description: "Creates embeddings through the named provider. An unqualified `model` is prefixed with this provider; a qualified model must belong to the named provider. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Creates embeddings through the named provider. An unqualified `model` is prefixed with this provider; a qualified model must belong to the named provider. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Embeddings",
     tags: ["Embeddings"],
     requiresAuth: false,
@@ -833,7 +906,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/providers/{provider}/images/generations",
     method: "POST",
     summary: "Generate images (provider-specific)",
-    description: "Generates images through the named provider. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Generates images through the named provider. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Images",
     tags: ["Images"],
     requiresAuth: false,
@@ -843,7 +917,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/providers/{provider}/limits",
     method: "GET",
     summary: "Get registered-key issuance limits for a provider",
-    description: "Returns configured issuance limits and current hourly/daily counters, or `limits: null` when no provider override exists. Authentication is required when `REQUIRE_API_KEY` is enabled; otherwise anonymous requests are allowed.",
+    description:
+      "Returns configured issuance limits and current hourly/daily counters, or `limits: null` when no provider override exists. Authentication is required when `REQUIRE_API_KEY` is enabled; otherwise anonymous requests are allowed.",
     tag: "V1 Providers",
     tags: ["V1 Providers"],
     requiresAuth: false,
@@ -853,7 +928,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/providers/{provider}/limits",
     method: "PUT",
     summary: "Set registered-key issuance limits for a provider",
-    description: "Updates any supplied positive integer limit or sets it to null to remove that limit. Omitted fields are left unchanged. Authentication is required when `REQUIRE_API_KEY` is enabled.",
+    description:
+      "Updates any supplied positive integer limit or sets it to null to remove that limit. Omitted fields are left unchanged. Authentication is required when `REQUIRE_API_KEY` is enabled.",
     tag: "V1 Providers",
     tags: ["V1 Providers"],
     requiresAuth: false,
@@ -863,7 +939,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/providers/{provider}/models",
     method: "GET",
     summary: "List models for a specific provider",
-    description: "Returns only models for the selected provider with provider prefixes removed. Registry-backed provider catalogs follow `requireAuthForModels`: when false, access may be anonymous; when enabled, a valid Bearer API key or authenticated dashboard session is required. Service-backend plugin IDs use their configured service catalog branch and do not pass through that API-key gate.",
+    description:
+      "Returns only models for the selected provider with provider prefixes removed. Registry-backed provider catalogs follow `requireAuthForModels`: when false, access may be anonymous; when enabled, a valid Bearer API key or authenticated dashboard session is required. Service-backend plugin IDs use their configured service catalog branch and do not pass through that API-key gate.",
     tag: "Models",
     tags: ["Models"],
     requiresAuth: false,
@@ -873,7 +950,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/providers/suggested-models",
     method: "GET",
     summary: "Suggested media models",
-    description: "Read-only server-side proxy to the public HuggingFace Hub models search API, used by the dashboard to suggest models for a media provider kind without exposing an HF token client-side. Never accepts or returns credentials.",
+    description:
+      "Read-only server-side proxy to the public HuggingFace Hub models search API, used by the dashboard to suggest models for a media provider kind without exposing an HF token client-side. Never accepts or returns credentials.",
     tag: "Providers",
     tags: ["Providers"],
     requiresAuth: false,
@@ -883,7 +961,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/quotas/check",
     method: "GET",
     summary: "GET quotas › check",
-    description: "Checks whether a registered provider/account quota permits issuing another key. Authentication follows the client API-key policy.",
+    description:
+      "Checks whether a registered provider/account quota permits issuing another key. Authentication follows the client API-key policy.",
     tag: "V1 Quotas",
     tags: ["V1 Quotas"],
     requiresAuth: false,
@@ -893,7 +972,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/registered-keys",
     method: "GET",
     summary: "List registered API keys with secrets masked",
-    description: "Lists registered keys filtered by provider/accountId. Raw key material is never returned by list or detail routes. Authentication is required when `REQUIRE_API_KEY` is enabled; otherwise anonymous access is allowed by this route.",
+    description:
+      "Lists registered keys filtered by provider/accountId. Raw key material is never returned by list or detail routes. Authentication is required when `REQUIRE_API_KEY` is enabled; otherwise anonymous access is allowed by this route.",
     tag: "V1 Registered-keys",
     tags: ["V1 Registered-keys"],
     requiresAuth: false,
@@ -903,7 +983,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/registered-keys",
     method: "POST",
     summary: "Issue a registered API key",
-    description: "Checks provider/account quotas before issue. The raw key is returned once and is never shown again; store it securely. `idempotencyKey` conflicts return 409 with existing masked metadata. Authentication follows the configured API-key policy.",
+    description:
+      "Checks provider/account quotas before issue. The raw key is returned once and is never shown again; store it securely. `idempotencyKey` conflicts return 409 with existing masked metadata. Authentication follows the configured API-key policy.",
     tag: "V1 Registered-keys",
     tags: ["V1 Registered-keys"],
     requiresAuth: false,
@@ -923,7 +1004,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/registered-keys/{id}",
     method: "GET",
     summary: "Get registered API key metadata",
-    description: "Returns masked metadata only; the raw key is available only from initial creation.",
+    description:
+      "Returns masked metadata only; the raw key is available only from initial creation.",
     tag: "V1 Registered-keys",
     tags: ["V1 Registered-keys"],
     requiresAuth: false,
@@ -933,7 +1015,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/registered-keys/{id}/revoke",
     method: "POST",
     summary: "Revoke a registered API key",
-    description: "Explicit revoke alias for clients that cannot issue DELETE; raw key material is never returned.",
+    description:
+      "Explicit revoke alias for clients that cannot issue DELETE; raw key material is never returned.",
     tag: "V1 Registered-keys",
     tags: ["V1 Registered-keys"],
     requiresAuth: false,
@@ -943,7 +1026,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/relay/chat/completions",
     method: "POST",
     summary: "POST relay › chat › completions",
-    description: "OpenAI-compatible serverless relay. A relay token is always required and may be supplied as an Authorization Bearer credential or with X-Relay-Token. The outer /api/v1 authentication policy may also require an OmniRoute API key or dashboard session when REQUIRE_API_KEY is enabled. Because Authorization is shared, send the relay token in X-Relay-Token when also sending an OmniRoute Bearer key; a relay Bearer token by itself works when the outer API-key requirement is disabled. The response is JSON for non-streaming requests and SSE when streaming is enabled.",
+    description:
+      "OpenAI-compatible serverless relay. A relay token is always required and may be supplied as an Authorization Bearer credential or with X-Relay-Token. The outer /api/v1 authentication policy may also require an OmniRoute API key or dashboard session when REQUIRE_API_KEY is enabled. Because Authorization is shared, send the relay token in X-Relay-Token when also sending an OmniRoute Bearer key; a relay Bearer token by itself works when the outer API-key requirement is disabled. The response is JSON for non-streaming requests and SSE when streaming is enabled.",
     tag: "V1 Relay",
     tags: ["V1 Relay"],
     requiresAuth: true,
@@ -953,7 +1037,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/relay/chat/completions/bifrost",
     method: "POST",
     summary: "POST relay › chat › completions › bifrost",
-    description: "OpenAI-compatible relay that forwards to the configured Bifrost sidecar. A relay token is always required and may be supplied as an Authorization Bearer credential or with X-Relay-Token. The outer /api/v1 authentication policy may also require an OmniRoute API key or dashboard session when REQUIRE_API_KEY is enabled. Because Authorization is shared, send the relay token in X-Relay-Token when also sending an OmniRoute Bearer key; a relay Bearer token by itself works when the outer API-key requirement is disabled. The sidecar route returns 503 when disabled or unconfigured, 502 when unreachable, and 504 on timeout. Provider error statuses are preserved with a normalized JSON error body.",
+    description:
+      "OpenAI-compatible relay that forwards to the configured Bifrost sidecar. A relay token is always required and may be supplied as an Authorization Bearer credential or with X-Relay-Token. The outer /api/v1 authentication policy may also require an OmniRoute API key or dashboard session when REQUIRE_API_KEY is enabled. Because Authorization is shared, send the relay token in X-Relay-Token when also sending an OmniRoute Bearer key; a relay Bearer token by itself works when the outer API-key requirement is disabled. The sidecar route returns 503 when disabled or unconfigured, 502 when unreachable, and 504 on timeout. Provider error statuses are preserved with a normalized JSON error body.",
     tag: "V1 Relay",
     tags: ["V1 Relay"],
     requiresAuth: true,
@@ -963,7 +1048,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/rerank",
     method: "POST",
     summary: "Rerank documents",
-    description: "Document reranking endpoint with Cohere-compatible results. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Document reranking endpoint with Cohere-compatible results. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Rerank",
     tags: ["Rerank"],
     requiresAuth: false,
@@ -973,7 +1059,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/responses",
     method: "POST",
     summary: "Create response (OpenAI Responses API)",
-    description: "OpenAI Responses API endpoint. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "OpenAI Responses API endpoint. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Responses",
     tags: ["Responses"],
     requiresAuth: false,
@@ -983,7 +1070,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/responses/{path}",
     method: "POST",
     summary: "POST responses › <path>",
-    description: "OpenAI Responses-compatible catch-all route. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "OpenAI Responses-compatible catch-all route. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "V1 Responses",
     tags: ["V1 Responses"],
     requiresAuth: false,
@@ -993,7 +1081,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/search",
     method: "GET",
     summary: "List search providers",
-    description: "Lists the search provider registry and each provider's supported search types; no credentials are returned. Despite `/api/v1/` also appearing in the public-route table, the route classifier selects CLIENT_API first, so the central `REQUIRE_API_KEY` policy applies: a valid client API key or dashboard session is required when enabled, and anonymous access is allowed only when that key requirement is disabled. There is no additional route-level auth check.",
+    description:
+      "Lists the search provider registry and each provider's supported search types; no credentials are returned. Despite `/api/v1/` also appearing in the public-route table, the route classifier selects CLIENT_API first, so the central `REQUIRE_API_KEY` policy applies: a valid client API key or dashboard session is required when enabled, and anonymous access is allowed only when that key requirement is disabled. There is no additional route-level auth check.",
     tag: "Search",
     tags: ["Search"],
     requiresAuth: false,
@@ -1003,17 +1092,19 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/search",
     method: "POST",
     summary: "Run a unified search",
-    description: "Searches the web, news, or X through a configured provider. Set `provider` to `xquik-search` to use Xquik for X search. The aliases `xquik` and `xquik_search` resolve to the same provider. AnySearch (`anysearch-search`, aliases `anysearch` / `anysearch_search`) provides free fallback-only web search.",
+    description:
+      "Canonical path is `/api/v1/search`; `/v1/search` is a supported alias to the same handler. Searches the web, news, or X through a configured provider. Registered request aliases are `jina-ai`, `jina`, `brave`, `serper`, `perplexity`, `exa`, `tavily`, `google-pse`, `linkup`, `ollama`, `searchapi`, `youcom`, `searxng`, `zai`, `duckduckgo`, `ctx7`, `c7`, `x_search`, `x`, `xquik`, `xquik_search`, `anysearch`, and `anysearch_search`. `x-search`, `x_search`, `x`, `xquik-search`, `xquik`, and `xquik_search` select X search regardless of `search_type`. AnySearch aliases select free fallback-only web search. The `synthesis` request field is reserved and currently ignored; `answer` remains null. Authentication is required when `REQUIRE_API_KEY` is enabled; otherwise anonymous requests are accepted. Client API-key headers and an authenticated dashboard session are also accepted.",
     tag: "Search",
     tags: ["Search"],
-    requiresAuth: true,
+    requiresAuth: false,
     hasRequestBody: true,
   },
   {
     path: "/api/v1/search/analytics",
     method: "GET",
     summary: "Get search request analytics",
-    description: "Returns call-log aggregates for search requests. API-key endpoint restrictions are enforced when an API key is used.",
+    description:
+      "Returns call-log aggregates for search requests. API-key endpoint restrictions are enforced when an API key is used.",
     tag: "V1 Search",
     tags: ["V1 Search"],
     requiresAuth: false,
@@ -1023,7 +1114,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/segment",
     method: "POST",
     summary: "POST segment",
-    description: "Jina-compatible text segmentation/tokenization. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Jina-compatible text segmentation/tokenization. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "V1 Segment",
     tags: ["V1 Segment"],
     requiresAuth: false,
@@ -1033,7 +1125,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/session-leases",
     method: "POST",
     summary: "Acquire, inspect, renew, or release an exclusive managed connection lease",
-    description: "Requires an API key with `lease:exclusive` and an explicit non-empty\n`allowedConnections` policy. The opaque owner is bound to the authenticated API key;\nthe lease owns an eligible connection, not a provider or model. Managed inference\nrequests present the owner and exact generation headers. A temporary foreign lease\noccupancy returns 429 `WAITING_FOR_CAPACITY` with `Retry-After`; when all eligible\nconnections are rate-limited or expired/ineligible, acquisition instead returns a generic\n`LEASE_ELIGIBILITY_UNAVAILABLE` error with 429. Acquire, renew, and release retain their\nconnection-free response shapes. The explicit status action is owner-, key-, and\ngeneration-fenced and returns only privacy-safe display metadata for an active binding.\n",
+    description:
+      "Requires an API key with `lease:exclusive` and an explicit non-empty\n`allowedConnections` policy. The opaque owner is bound to the authenticated API key;\nthe lease owns an eligible connection, not a provider or model. Managed inference\nrequests present the owner and exact generation headers. A temporary foreign lease\noccupancy returns 429 `WAITING_FOR_CAPACITY` with `Retry-After`; when all eligible\nconnections are rate-limited or expired/ineligible, acquisition instead returns a generic\n`LEASE_ELIGIBILITY_UNAVAILABLE` error with 429. Acquire, renew, and release retain their\nconnection-free response shapes. The explicit status action is owner-, key-, and\ngeneration-fenced and returns only privacy-safe display metadata for an active binding.\n",
     tag: "Session Leases",
     tags: ["Session Leases"],
     requiresAuth: true,
@@ -1043,7 +1136,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/speech-to-text",
     method: "POST",
     summary: "ElevenLabs speech-to-text",
-    description: "Streams the request body to `POST https://api.elevenlabs.io/v1/speech-to-text` using the stored `elevenlabs` provider credentials. `content-type` and `accept` are forwarded; the upstream body is relayed unchanged. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Streams the request body to `POST https://api.elevenlabs.io/v1/speech-to-text` using the stored `elevenlabs` provider credentials. `content-type` and `accept` are forwarded; the upstream body is relayed unchanged. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Audio",
     tags: ["Audio"],
     requiresAuth: false,
@@ -1053,7 +1147,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/text-to-speech/{voiceId}",
     method: "POST",
     summary: "ElevenLabs text-to-speech",
-    description: "Streams the request body to `POST https://api.elevenlabs.io/v1/text-to-speech/{voiceId}` using the stored `elevenlabs` provider credentials. `voiceId` must match `^[A-Za-z0-9_-]+$` or the request is rejected with 400 before any upstream call. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Streams the request body to `POST https://api.elevenlabs.io/v1/text-to-speech/{voiceId}` using the stored `elevenlabs` provider credentials. `voiceId` must match `^[A-Za-z0-9_-]+$` or the request is rejected with 400 before any upstream call. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Audio",
     tags: ["Audio"],
     requiresAuth: false,
@@ -1093,7 +1188,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/videos/generations",
     method: "POST",
     summary: "Generate a video",
-    description: "Uses a configured provider or video combo. The model is required; prompt requirements vary by the resolved provider/model and additional parameters are provider-specific. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests may be accepted.",
+    description:
+      "Uses a configured provider or video combo. The model is required; prompt requirements vary by the resolved provider/model and additional parameters are provider-specific. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests may be accepted.",
     tag: "V1 Videos",
     tags: ["V1 Videos"],
     requiresAuth: false,
@@ -1103,7 +1199,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/voices",
     method: "GET",
     summary: "List ElevenLabs voices",
-    description: "Proxies `GET https://api.elevenlabs.io/v1/voices` using the stored `elevenlabs` provider credentials (the caller never sends `xi-api-key`). The incoming query string is forwarded unchanged. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
+    description:
+      "Proxies `GET https://api.elevenlabs.io/v1/voices` using the stored `elevenlabs` provider credentials (the caller never sends `xi-api-key`). The incoming query string is forwarded unchanged. Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.",
     tag: "Audio",
     tags: ["Audio"],
     requiresAuth: false,
@@ -1113,7 +1210,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}",
     method: "GET",
     summary: "List grouped VS Code models at the token root",
-    description: "Alias for `GET /api/v1/vscode/{token}/models`. The path token is used as an API key only when explicit credential headers are absent. Model-catalog authentication follows the configured catalog access policy.",
+    description:
+      "Alias for `GET /api/v1/vscode/{token}/models`. The path token is used as an API key only when explicit credential headers are absent. Model-catalog authentication follows the configured catalog access policy.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1123,7 +1221,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}/api/chat",
     method: "POST",
     summary: "Create an Ollama-compatible chat response",
-    description: "Delegates to the Ollama-compatible chat route after adding the path token as a fallback API key and sanitizing VS Code-only request fields. Streaming JSON records are returned as newline-delimited `application/x-ndjson`; successful non-streaming replies may use the Ollama or OpenAI chat JSON shape.",
+    description:
+      "Delegates to the Ollama-compatible chat route after adding the path token as a fallback API key and sanitizing VS Code-only request fields. Streaming JSON records are returned as newline-delimited `application/x-ndjson`; successful non-streaming replies may use the Ollama or OpenAI chat JSON shape.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1133,7 +1232,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}/api/show",
     method: "POST",
     summary: "Show Ollama-compatible model metadata",
-    description: "Looks up a visible chat model in the authenticated catalog and returns Ollama model details. The request may identify a model through either `name` or `model`.",
+    description:
+      "Looks up a visible chat model in the authenticated catalog and returns Ollama model details. The request may identify a model through either `name` or `model`.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1143,7 +1243,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}/api/tags",
     method: "GET",
     summary: "List models in Ollama tags format",
-    description: "Returns the usable chat catalog as Ollama `/api/tags` records. When every active provider is Codex, the route prefers Codex models; reasoning and service-tier variants are included where supported.",
+    description:
+      "Returns the usable chat catalog as Ollama `/api/tags` records. When every active provider is Codex, the route prefers Codex models; reasoning and service-tier variants are included where supported.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1153,7 +1254,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}/api/version",
     method: "GET",
     summary: "Return the Ollama compatibility version",
-    description: "Returns the static Ollama-compatible version. The handler performs no auth check, but central CLIENT_API policy uses the path token as a client API key when `REQUIRE_API_KEY` is enabled; when disabled, anonymous access is permitted and the token is ignored by the handler.",
+    description:
+      "Returns the static Ollama-compatible version. The handler performs no auth check, but central CLIENT_API policy uses the path token as a client API key when `REQUIRE_API_KEY` is enabled; when disabled, anonymous access is permitted and the token is ignored by the handler.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1163,7 +1265,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}/chat/completions",
     method: "POST",
     summary: "Create an OpenAI-compatible chat completion",
-    description: "Delegates to `POST /api/v1/chat/completions` after applying VS Code request sanitization and translating supported service-tier model variants.",
+    description:
+      "Delegates to `POST /api/v1/chat/completions` after applying VS Code request sanitization and translating supported service-tier model variants.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1173,7 +1276,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}/combos",
     method: "GET",
     summary: "List combos for VS Code import",
-    description: "Returns the projected combo list in both `data` and the compatibility `combos` property. This handler reads the combo store directly and does not independently authenticate the path token; central CLIENT_API policy does validate it when `REQUIRE_API_KEY` is enabled, and anonymous access is allowed when that policy is disabled. The projection omits internal account IDs, weights, and routing labels.",
+    description:
+      "Returns the projected combo list in both `data` and the compatibility `combos` property. This handler reads the combo store directly and does not independently authenticate the path token; central CLIENT_API policy does validate it when `REQUIRE_API_KEY` is enabled, and anonymous access is allowed when that policy is disabled. The projection omits internal account IDs, weights, and routing labels.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1183,7 +1287,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}/models",
     method: "GET",
     summary: "List grouped VS Code models",
-    description: "Returns the unified chat catalog with grouped/family-first model identifiers and VS Code import metadata such as provider URL, token limits, capabilities, and supported reasoning efforts. Catalog access follows the configured model-catalog policy.",
+    description:
+      "Returns the unified chat catalog with grouped/family-first model identifiers and VS Code import metadata such as provider URL, token limits, capabilities, and supported reasoning efforts. Catalog access follows the configured model-catalog policy.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1193,7 +1298,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}/responses",
     method: "POST",
     summary: "Create an OpenAI Responses API response",
-    description: "Delegates to `POST /api/v1/responses` after VS Code request sanitization and service-tier variant translation. The response may be JSON or server-sent events.",
+    description:
+      "Delegates to `POST /api/v1/responses` after VS Code request sanitization and service-tier variant translation. The response may be JSON or server-sent events.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1203,7 +1309,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/{token}/v1/chat/completions",
     method: "POST",
     summary: "Create an OpenAI-compatible chat completion",
-    description: "Versioned-path alias that delegates to `POST /api/v1/chat/completions` after VS Code request sanitization and service-tier variant translation.",
+    description:
+      "Versioned-path alias that delegates to `POST /api/v1/chat/completions` after VS Code request sanitization and service-tier variant translation.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1223,7 +1330,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/combos/{token}",
     method: "GET",
     summary: "List combo models in VS Code catalog format",
-    description: "Returns the combo-only catalog with OpenAI-compatible list metadata. The central CLIENT_API policy validates client credentials when `REQUIRE_API_KEY` is enabled; the handler also applies the shared model-catalog gate when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false. The path token is copied to an API-key header for that handler check when no explicit credential is supplied. Anonymous access is possible only when both applicable gates are open. No `oma_` management-token scope is consumed.",
+    description:
+      "Returns the combo-only catalog with OpenAI-compatible list metadata. The central CLIENT_API policy validates client credentials when `REQUIRE_API_KEY` is enabled; the handler also applies the shared model-catalog gate when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false. The path token is copied to an API-key header for that handler check when no explicit credential is supplied. Anonymous access is possible only when both applicable gates are open. No `oma_` management-token scope is consumed.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1233,7 +1341,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/combos/{token}",
     method: "POST",
     summary: "Reject an unsupported POST to the combo base path",
-    description: "This base-path POST always returns 404; the compatibility route accepts POST only at the `/api/show` suffix. The handler does not independently authenticate the token, but central CLIENT_API policy validates the path token when `REQUIRE_API_KEY` is enabled. When that policy is disabled, the fallback 404 can be anonymous. The path token is sensitive.",
+    description:
+      "This base-path POST always returns 404; the compatibility route accepts POST only at the `/api/show` suffix. The handler does not independently authenticate the token, but central CLIENT_API policy validates the path token when `REQUIRE_API_KEY` is enabled. When that policy is disabled, the fallback 404 can be anonymous. The path token is sensitive.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1243,7 +1352,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/combos/{token}/{slug}",
     method: "GET",
     summary: "Read an Ollama-compatible combo endpoint",
-    description: "Returns static Ollama version metadata for `api/version`, or combo data for `api/tags` and the default catalog branch. Central CLIENT_API policy validates client credentials when `REQUIRE_API_KEY` is enabled; the version branch performs no handler auth. Catalog branches additionally call the shared model-catalog auth check when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false, using the path token as a credential fallback. Anonymous access is possible only when all applicable gates are open. The path token and combo catalog output are sensitive; no `oma_` management-token scope is used.",
+    description:
+      "Returns static Ollama version metadata for `api/version`, or combo data for `api/tags` and the default catalog branch. Central CLIENT_API policy validates client credentials when `REQUIRE_API_KEY` is enabled; the version branch performs no handler auth. Catalog branches additionally call the shared model-catalog auth check when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false, using the path token as a credential fallback. Anonymous access is possible only when all applicable gates are open. The path token and combo catalog output are sensitive; no `oma_` management-token scope is used.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1253,7 +1363,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/combos/{token}/{slug}",
     method: "POST",
     summary: "Return Ollama-compatible details for a combo",
-    description: "The `api/show` suffix accepts either `name` or `model` in the request body; unsupported suffixes return 404 before model lookup. Central CLIENT_API policy validates client credentials when `REQUIRE_API_KEY` is enabled. For `api/show`, the handler forwards the path token as an API-key fallback into the shared model-catalog auth gate when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false. Anonymous access requires all applicable gates to be open. Path tokens, the model selector, and returned catalog metadata are sensitive; this client-API route does not consume `oma_` management-token scopes.",
+    description:
+      "The `api/show` suffix accepts either `name` or `model` in the request body; unsupported suffixes return 404 before model lookup. Central CLIENT_API policy validates client credentials when `REQUIRE_API_KEY` is enabled. For `api/show`, the handler forwards the path token as an API-key fallback into the shared model-catalog auth gate when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly false. Anonymous access requires all applicable gates to be open. Path tokens, the model selector, and returned catalog metadata are sensitive; this client-API route does not consume `oma_` management-token scopes.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1263,7 +1374,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}",
     method: "GET",
     summary: "List provider-native model IDs at the raw token root",
-    description: "Alias for `GET /api/v1/vscode/raw/{token}/models`; it preserves provider-native IDs.",
+    description:
+      "Alias for `GET /api/v1/vscode/raw/{token}/models`; it preserves provider-native IDs.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1273,7 +1385,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}/api/chat",
     method: "POST",
     summary: "Create an Ollama-compatible chat response",
-    description: "Raw-ID alias of the Ollama-compatible chat endpoint. It delegates to the same chat handler; model IDs are passed through without the grouped catalog rewriting.",
+    description:
+      "Raw-ID alias of the Ollama-compatible chat endpoint. It delegates to the same chat handler; model IDs are passed through without the grouped catalog rewriting.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1283,7 +1396,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}/api/show",
     method: "POST",
     summary: "Show Ollama-compatible model metadata with raw IDs",
-    description: "Resolves `name` or `model` against the raw catalog and returns provider-native model IDs without grouped/family-first renaming.",
+    description:
+      "Resolves `name` or `model` against the raw catalog and returns provider-native model IDs without grouped/family-first renaming.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1293,7 +1407,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}/api/tags",
     method: "GET",
     summary: "List raw model IDs in Ollama tags format",
-    description: "Returns every usable chat model in Ollama `/api/tags` format, preserving provider-native model IDs and adding supported reasoning/service-tier variants.",
+    description:
+      "Returns every usable chat model in Ollama `/api/tags` format, preserving provider-native model IDs and adding supported reasoning/service-tier variants.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1303,7 +1418,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}/api/version",
     method: "GET",
     summary: "Return the Ollama compatibility version",
-    description: "Returns the static Ollama-compatible version. The handler performs no auth check, but central CLIENT_API policy uses the path token as a client API key when `REQUIRE_API_KEY` is enabled; when disabled, anonymous access is permitted and the token is ignored by the handler.",
+    description:
+      "Returns the static Ollama-compatible version. The handler performs no auth check, but central CLIENT_API policy uses the path token as a client API key when `REQUIRE_API_KEY` is enabled; when disabled, anonymous access is permitted and the token is ignored by the handler.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1313,7 +1429,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}/chat/completions",
     method: "POST",
     summary: "Create an OpenAI-compatible chat completion",
-    description: "Raw-ID alias of `POST /api/v1/chat/completions`; VS Code-specific sanitization and service-tier variant translation are still applied.",
+    description:
+      "Raw-ID alias of `POST /api/v1/chat/completions`; VS Code-specific sanitization and service-tier variant translation are still applied.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1323,7 +1440,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}/combos",
     method: "GET",
     summary: "List combos for raw VS Code import",
-    description: "Returns projected combo metadata in both `data` and `combos`. The route reads the combo store directly and does not independently authenticate the path token; central CLIENT_API policy validates it when `REQUIRE_API_KEY` is enabled and allows anonymous access when that policy is disabled. The projection omits internal account IDs, weights, and routing labels.",
+    description:
+      "Returns projected combo metadata in both `data` and `combos`. The route reads the combo store directly and does not independently authenticate the path token; central CLIENT_API policy validates it when `REQUIRE_API_KEY` is enabled and allows anonymous access when that policy is disabled. The projection omits internal account IDs, weights, and routing labels.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1333,7 +1451,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}/models",
     method: "GET",
     summary: "List provider-native model IDs for VS Code import",
-    description: "Returns the unified catalog with raw provider-native IDs and ungrouped model variants. Unlike the grouped route, it does not replace native IDs with family-first display IDs.",
+    description:
+      "Returns the unified catalog with raw provider-native IDs and ungrouped model variants. Unlike the grouped route, it does not replace native IDs with family-first display IDs.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1343,7 +1462,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}/responses",
     method: "POST",
     summary: "Create an OpenAI Responses API response",
-    description: "Raw-ID alias of `POST /api/v1/responses`; VS Code-specific sanitization and service-tier variant translation are applied before forwarding.",
+    description:
+      "Raw-ID alias of `POST /api/v1/responses`; VS Code-specific sanitization and service-tier variant translation are applied before forwarding.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1353,7 +1473,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/vscode/raw/{token}/v1/chat/completions",
     method: "POST",
     summary: "Create an OpenAI-compatible chat completion",
-    description: "Versioned-path raw-ID alias that delegates to `POST /api/v1/chat/completions` after VS Code request sanitization and service-tier variant translation.",
+    description:
+      "Versioned-path raw-ID alias that delegates to `POST /api/v1/chat/completions` after VS Code request sanitization and service-tier variant translation.",
     tag: "V1 Vscode",
     tags: ["V1 Vscode"],
     requiresAuth: false,
@@ -1373,7 +1494,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/web/fetch",
     method: "POST",
     summary: "Extract content from a URL",
-    description: "With no explicit provider, searches the configured provider pool and retries quota/rate-limit failures. Explicit-provider requests never fall back. Anonymous requests are accepted when REQUIRE_API_KEY is disabled.",
+    description:
+      "Canonical path is `/api/v1/web/fetch`; `/v1/web/fetch` is a supported alias to the same handler. With no explicit provider, searches the configured provider pool and retries quota/rate-limit failures. Explicit-provider requests never fall back. Anonymous requests are accepted when REQUIRE_API_KEY is disabled. Client API-key headers, Google API-key headers, and an authenticated dashboard session are also accepted. The gateway validates URL syntax but does not enforce an HTTP/HTTPS scheme; configured fetch providers may impose their own URL restrictions.",
     tag: "V1 Web",
     tags: ["V1 Web"],
     requiresAuth: false,
@@ -1383,7 +1505,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/ws",
     method: "GET",
     summary: "Chat completion over WebSocket (handshake + upgrade)",
-    description: "OpenAI-compatible chat over a WebSocket connection. `GET` with `?handshake=1` returns the connection descriptor (auth path, message protocol and live-event channels) as JSON; a plain `GET` without an Upgrade returns `426 Upgrade Required`. After upgrading, the client exchanges JSON frames — `{type:\"request\", id, payload:{model, messages}}` to start a completion and `{type:\"cancel\", id}` to abort it. A separate live channel (default port `LIVE_WS_PORT=20132`, path `/live-ws`) streams dashboard events on the `requests`, `combo` and `credentials` topics with a 15s heartbeat. Authentication accepts a valid API key in the Bearer header or the `api_key`, `token`, or `access_token` query parameter, or an authenticated dashboard session cookie. Query credentials must be API keys, not management access tokens. The handshake may be anonymous when WebSocket auth is disabled.",
+    description:
+      'OpenAI-compatible chat over a WebSocket connection. `GET` with `?handshake=1` returns the connection descriptor (auth path, message protocol and live-event channels) as JSON; a plain `GET` without an Upgrade returns `426 Upgrade Required`. After upgrading, the client exchanges JSON frames — `{type:"request", id, payload:{model, messages}}` to start a completion and `{type:"cancel", id}` to abort it. A separate live channel (default port `LIVE_WS_PORT=20132`, path `/live-ws`) streams dashboard events on the `requests`, `combo` and `credentials` topics with a 15s heartbeat. Authentication accepts a valid API key in the Bearer header or the `api_key`, `token`, or `access_token` query parameter, or an authenticated dashboard session cookie. Query credentials must be API keys, not management access tokens. The handshake may be anonymous when WebSocket auth is disabled.',
     tag: "Chat",
     tags: ["Chat"],
     requiresAuth: false,
@@ -1393,7 +1516,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1beta/models",
     method: "GET",
     summary: "List models (Gemini format)",
-    description: "Returns Gemini-compatible model metadata filtered to providers with active connections. Authentication follows the configured client/catalog policy; anonymous listing is allowed when policy permits it.",
+    description:
+      "Returns Gemini-compatible model metadata filtered to providers with active connections. Authentication follows the configured client/catalog policy; anonymous listing is allowed when policy permits it.",
     tag: "Models",
     tags: ["Models"],
     requiresAuth: false,
@@ -1403,7 +1527,8 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1beta/models/{path}",
     method: "POST",
     summary: "Gemini generateContent",
-    description: "Gemini-compatible generation endpoint. Use `:generateContent` for JSON or `:streamGenerateContent` for Gemini SSE chunks.",
+    description:
+      "Gemini-compatible generation endpoint. Use `:generateContent` for JSON or `:streamGenerateContent` for Gemini SSE chunks.",
     tag: "Models",
     tags: ["Models"],
     requiresAuth: false,

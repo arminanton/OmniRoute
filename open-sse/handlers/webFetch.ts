@@ -24,6 +24,7 @@ import { tavilyFetch } from "../executors/tavily-fetch.ts";
 import { tinyfishFetch } from "../executors/tinyfish-fetch.ts";
 import { nimbleFetch } from "../executors/nimble-fetch.ts";
 import { anysearchFetch } from "../executors/anysearch-fetch.ts";
+import { createWebFetchCallerAbortError } from "../utils/webFetchAbort.ts";
 
 export type WebFetchFormat = "markdown" | "html" | "links" | "screenshot";
 
@@ -62,7 +63,11 @@ export interface WebFetchResult {
 export interface WebFetchCredentials {
   apiKey?: string;
   baseUrl?: string;
-  providerSpecificData?: Record<string, unknown>;
+  providerSpecificData?: Record<string, unknown> | null;
+  /** Selected account identity used by the route's shared-capacity lease. */
+  connectionId?: string | null;
+  /** Optional per-connection concurrency limit used by shared admission. */
+  maxConcurrent?: number | null;
 }
 
 export const WEB_FETCH_PROVIDERS = Object.freeze([
@@ -108,7 +113,8 @@ export const ANONYMOUS_CAPABLE_WEB_FETCH_PROVIDERS: ReadonlySet<WebFetchProvider
 export async function handleWebFetch(
   req: WebFetchRequest,
   credentials: WebFetchCredentials,
-  resolvedProvider?: WebFetchProviderId
+  resolvedProvider?: WebFetchProviderId,
+  signal?: AbortSignal
 ): Promise<WebFetchResult> {
   const provider = resolvedProvider ?? req.provider ?? "firecrawl";
 
@@ -116,82 +122,96 @@ export async function handleWebFetch(
   const includeMetadata = req.include_metadata ?? false;
 
   try {
-    switch (provider) {
-      case "firecrawl":
-        return await firecrawlFetch({
-          url: req.url,
-          format,
-          depth: req.depth ?? 0,
-          waitForSelector: req.wait_for_selector,
-          includeMetadata,
-          credentials,
-        });
+    const result = await (async (): Promise<WebFetchResult> => {
+      switch (provider) {
+        case "firecrawl":
+          return await firecrawlFetch({
+            url: req.url,
+            format,
+            depth: req.depth ?? 0,
+            waitForSelector: req.wait_for_selector,
+            includeMetadata,
+            credentials,
+            signal,
+          });
 
-      case "jina-reader":
-        return await jinaReaderFetch({
-          url: req.url,
-          format,
-          includeMetadata,
-          credentials,
-        });
+        case "jina-reader":
+          return await jinaReaderFetch({
+            url: req.url,
+            format,
+            includeMetadata,
+            credentials,
+            signal,
+          });
 
-      case "tavily-search":
-        return await tavilyFetch({
-          url: req.url,
-          format,
-          includeMetadata,
-          credentials,
-        });
+        case "tavily-search":
+          return await tavilyFetch({
+            url: req.url,
+            format,
+            includeMetadata,
+            credentials,
+            signal,
+          });
 
-      case "tinyfish":
-        return await tinyfishFetch({
-          url: req.url,
-          format,
-          includeMetadata,
-          credentials,
-        });
-      case "anysearch-search":
-        return await anysearchFetch({
-          url: req.url,
-          format,
-          includeMetadata,
-          credentials,
-        });
+        case "tinyfish":
+          return await tinyfishFetch({
+            url: req.url,
+            format,
+            includeMetadata,
+            credentials,
+            signal,
+          });
+        case "anysearch-search":
+          return await anysearchFetch({
+            url: req.url,
+            format,
+            includeMetadata,
+            credentials,
+            signal,
+          });
 
-      case "nimble-search":
-        return await nimbleFetch({
-          url: req.url,
-          format,
-          includeMetadata,
-          credentials,
-        });
+        case "nimble-search":
+          return await nimbleFetch({
+            url: req.url,
+            format,
+            includeMetadata,
+            credentials,
+            signal,
+          });
 
-      case "context7":
-        // Context7 returns llms.txt text only: html/links/screenshot formats are
-        // unsupported, and the format field is validated/ignored below.
-        if (req.format && req.format !== "markdown") {
-          const body = buildErrorBody(
-            400,
-            `Provider 'context7' only supports format 'markdown' (llms.txt), got '${req.format}'`
-          );
-          return { success: false, status: 400, error: body.error.message };
+        case "context7":
+          // Context7 returns llms.txt text only: html/links/screenshot formats are
+          // unsupported, and the format field is validated/ignored below.
+          if (req.format && req.format !== "markdown") {
+            const body = buildErrorBody(
+              400,
+              `Provider 'context7' only supports format 'markdown' (llms.txt), got '${req.format}'`
+            );
+            return { success: false, status: 400, error: body.error.message };
+          }
+          return await context7Fetch({
+            url: req.url,
+            includeMetadata,
+            credentials,
+            signal,
+          });
+
+        default: {
+          const _exhaustive: never = provider;
+          return {
+            success: false,
+            status: 400,
+            error: `Unknown web fetch provider: ${_exhaustive}`,
+          };
         }
-        return await context7Fetch({
-          url: req.url,
-          includeMetadata,
-          credentials,
-        });
-
-      default: {
-        const _exhaustive: never = provider;
-        return {
-          success: false,
-          status: 400,
-          error: `Unknown web fetch provider: ${_exhaustive}`,
-        };
       }
-    }
+    })();
+    if (signal?.aborted) throw createWebFetchCallerAbortError(signal);
+    return result;
   } catch (err: unknown) {
+    // A disconnected caller is not a provider failure and must not be wrapped
+    // as a retryable 502 by fallback/cooldown handling.
+    if (signal?.aborted) throw createWebFetchCallerAbortError(signal);
     const msg =
       err instanceof Error ? sanitizeErrorMessage(err.message) : sanitizeErrorMessage(String(err));
     const body = buildErrorBody(502, msg);

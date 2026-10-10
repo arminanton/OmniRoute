@@ -11,6 +11,10 @@
  */
 
 import { sanitizeErrorMessage, buildErrorBody } from "../utils/error.ts";
+import {
+  createWebFetchAbortScope,
+  createWebFetchCallerAbortError,
+} from "../utils/webFetchAbort.ts";
 import type { WebFetchResult, WebFetchFormat, WebFetchCredentials } from "../handlers/webFetch.ts";
 
 const ANYSEARCH_EXTRACT_URL = "https://api.anysearch.com/v1/extract";
@@ -21,6 +25,7 @@ interface AnysearchFetchOptions {
   format: WebFetchFormat;
   includeMetadata: boolean;
   credentials: WebFetchCredentials;
+  signal?: AbortSignal;
 }
 
 /**
@@ -31,14 +36,9 @@ interface AnysearchFetchOptions {
 export async function anysearchFetch(opts: AnysearchFetchOptions): Promise<WebFetchResult> {
   // format is accepted but unused: AnySearch extract always returns markdown-ish text
   // (mirroring the context7 pattern of accepting the field without rejecting).
-  const { url, includeMetadata, credentials } = opts;
+  const { url, includeMetadata, credentials, signal } = opts;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    const err = new Error(`anysearch-fetch timeout after ${ANYSEARCH_TIMEOUT_MS}ms`);
-    err.name = "TimeoutError";
-    controller.abort(err);
-  }, ANYSEARCH_TIMEOUT_MS);
+  const abortScope = createWebFetchAbortScope(signal, ANYSEARCH_TIMEOUT_MS, "AnySearch");
 
   try {
     const response = await fetch(ANYSEARCH_EXTRACT_URL, {
@@ -48,17 +48,19 @@ export async function anysearchFetch(opts: AnysearchFetchOptions): Promise<WebFe
         ...(credentials.apiKey ? { Authorization: `Bearer ${credentials.apiKey}` } : {}),
       },
       body: JSON.stringify({ url }),
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
 
     if (!response.ok) {
       const rawError = await response.text().catch(() => `HTTP ${response.status}`);
+      abortScope.throwIfAborted();
       const msg = sanitizeErrorMessage(`AnySearch error ${response.status}: ${rawError}`);
       const body = buildErrorBody(response.status, msg);
       return { success: false, status: response.status, error: body.error.message };
     }
 
     const data = (await response.json()) as Record<string, unknown>;
+    abortScope.throwIfAborted();
 
     // Envelope: { code, message, data: { url, title, content } } - tolerate the
     // enveloped and flat shapes before giving up.
@@ -95,7 +97,11 @@ export async function anysearchFetch(opts: AnysearchFetchOptions): Promise<WebFe
       },
     };
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (signal?.aborted) throw createWebFetchCallerAbortError(signal);
+    if (
+      abortScope.timedOut ||
+      (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+    ) {
       const body = buildErrorBody(504, "AnySearch request timed out");
       return { success: false, status: 504, error: body.error.message };
     }
@@ -104,6 +110,6 @@ export async function anysearchFetch(opts: AnysearchFetchOptions): Promise<WebFe
     const body = buildErrorBody(502, msg);
     return { success: false, status: 502, error: body.error.message };
   } finally {
-    clearTimeout(timeoutId);
+    abortScope.dispose();
   }
 }

@@ -128,7 +128,8 @@ export function parseDuckDuckGoLite(rawHtml: string): FreeSearchResult[] {
 export async function freeWebSearch(
   query: string,
   maxResults = 5,
-  timeoutMs = 10_000
+  timeoutMs = 10_000,
+  signal?: AbortSignal
 ): Promise<FreeSearchResult[]> {
   const response = await safeOutboundFetch(DUCKDUCKGO_LITE_URL, {
     method: "POST",
@@ -143,6 +144,7 @@ export async function freeWebSearch(
     // so following a 3xx could reach an internal host. DDG lite answers POST with 200.
     allowRedirect: false,
     timeoutMs,
+    signal,
   });
 
   if (!response.ok) {

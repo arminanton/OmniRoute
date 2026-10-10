@@ -99,6 +99,13 @@ test("versioned inference and media endpoints use source-backed success schemas"
   assertRef(responseSchema("/api/v1/web/fetch", "post"), "WebFetchResponse");
 });
 
+test("search OpenAPI documents caller cancellation with the standard error envelope", () => {
+  assert.equal(
+    responseSchema("/api/v1/search", "post", "499").$ref,
+    "#/components/schemas/ApiErrorResponse"
+  );
+});
+
 test("versioned inference request schemas preserve route validation constraints", () => {
   const issue = openapi.components.schemas.V1IssueReportRequest;
   assert.deepEqual(issue.required, ["title"]);
@@ -184,7 +191,19 @@ test("OCR OpenAPI matches the transformed result, model constraints, auth, and s
       : declared;
     return responseComponent.content?.["application/json"]?.schema?.$ref;
   };
-  for (const status of ["400", "401", "402", "403", "429", "500", "502", "503", "504", "default"]) {
+  for (const status of [
+    "400",
+    "401",
+    "402",
+    "403",
+    "429",
+    "499",
+    "500",
+    "502",
+    "503",
+    "504",
+    "default",
+  ]) {
     assert.equal(
       resolveResponseSchema(status),
       "#/components/schemas/ApiErrorResponse",
@@ -192,9 +211,9 @@ test("OCR OpenAPI matches the transformed result, model constraints, auth, and s
     );
   }
   assert.equal(
-    ocr.responses?.["499"],
-    undefined,
-    "do not document cancellation before runtime support"
+    resolveResponseSchema("499"),
+    "#/components/schemas/ApiErrorResponse",
+    "OCR cancellation returns the documented JSON error schema"
   );
 });
 
@@ -220,6 +239,11 @@ test("web-fetch OpenAPI documents route auth alternatives and provider URL const
   assert.equal(url?.format, "uri");
   assert.match(url?.description || "", /does not enforce HTTP\/HTTPS/i);
   assert.equal(webFetch.responses?.["429"]?.$ref, "#/components/responses/RateLimited");
+  assert.equal(
+    webFetch.responses?.["499"]?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/ApiErrorResponse"
+  );
+  assert.equal(webFetch.responses?.["503"]?.$ref, "#/components/responses/ServiceUnavailable");
   assert.equal(
     webFetch.responses?.default?.content?.["application/json"]?.schema?.$ref,
     "#/components/schemas/ApiErrorResponse"

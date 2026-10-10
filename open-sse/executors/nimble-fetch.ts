@@ -12,6 +12,10 @@
  */
 
 import { sanitizeErrorMessage, buildErrorBody } from "../utils/error.ts";
+import {
+  createWebFetchAbortScope,
+  createWebFetchCallerAbortError,
+} from "../utils/webFetchAbort.ts";
 import { NIMBLE_CLIENT_SOURCE, NIMBLE_CLIENT_SOURCE_HEADER } from "../config/nimble.ts";
 import type { WebFetchResult, WebFetchFormat, WebFetchCredentials } from "../handlers/webFetch.ts";
 
@@ -78,13 +82,14 @@ interface NimbleFetchOptions {
   format: WebFetchFormat;
   includeMetadata: boolean;
   credentials: WebFetchCredentials;
+  signal?: AbortSignal;
 }
 
 /**
  * Execute a Nimble Extract request.
  */
 export async function nimbleFetch(opts: NimbleFetchOptions): Promise<WebFetchResult> {
-  const { url, format, includeMetadata, credentials } = opts;
+  const { url, format, includeMetadata, credentials, signal } = opts;
 
   if (!credentials.apiKey) {
     const body = buildErrorBody(401, "Nimble API key required");
@@ -106,12 +111,7 @@ export async function nimbleFetch(opts: NimbleFetchOptions): Promise<WebFetchRes
     render: "auto",
   };
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    const err = new Error(`nimble-fetch timeout after ${NIMBLE_TIMEOUT_MS}ms`);
-    err.name = "TimeoutError";
-    controller.abort(err);
-  }, NIMBLE_TIMEOUT_MS);
+  const abortScope = createWebFetchAbortScope(signal, NIMBLE_TIMEOUT_MS, "Nimble");
 
   try {
     const response = await fetch(NIMBLE_EXTRACT_URL, {
@@ -122,19 +122,21 @@ export async function nimbleFetch(opts: NimbleFetchOptions): Promise<WebFetchRes
         [NIMBLE_CLIENT_SOURCE_HEADER]: NIMBLE_CLIENT_SOURCE,
       },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
 
     if (!response.ok) {
       // Nimble returns a plain-text body on auth failures, so this must be
       // sanitized before it can reach a response.
       const rawError = await response.text().catch(() => `HTTP ${response.status}`);
+      abortScope.throwIfAborted();
       const msg = sanitizeErrorMessage(`Nimble error ${response.status}: ${rawError}`);
       const body = buildErrorBody(response.status, msg);
       return { success: false, status: response.status, error: body.error.message };
     }
 
     const payload = (await response.json()) as Record<string, unknown>;
+    abortScope.throwIfAborted();
 
     // A 200 can still carry a failed extraction — Extract reports the target's own
     // outcome in the envelope. Without this the caller would get an empty document
@@ -206,9 +208,11 @@ export async function nimbleFetch(opts: NimbleFetchOptions): Promise<WebFetchRes
       },
     };
   } catch (err: unknown) {
-    // The abort reason above is named "TimeoutError"; an external abort surfaces as
-    // "AbortError". Both must reach the 504 branch.
-    if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+    if (signal?.aborted) throw createWebFetchCallerAbortError(signal);
+    if (
+      abortScope.timedOut ||
+      (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+    ) {
       const body = buildErrorBody(504, "Nimble request timed out");
       return { success: false, status: 504, error: body.error.message };
     }
@@ -217,6 +221,6 @@ export async function nimbleFetch(opts: NimbleFetchOptions): Promise<WebFetchRes
     const body = buildErrorBody(502, msg);
     return { success: false, status: 502, error: body.error.message };
   } finally {
-    clearTimeout(timeoutId);
+    abortScope.dispose();
   }
 }

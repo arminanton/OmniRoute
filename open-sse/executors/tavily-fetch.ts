@@ -9,6 +9,10 @@
  */
 
 import { sanitizeErrorMessage, buildErrorBody } from "../utils/error.ts";
+import {
+  createWebFetchAbortScope,
+  createWebFetchCallerAbortError,
+} from "../utils/webFetchAbort.ts";
 import type { WebFetchResult, WebFetchFormat, WebFetchCredentials } from "../handlers/webFetch.ts";
 
 const TAVILY_EXTRACT_URL = "https://api.tavily.com/extract";
@@ -19,6 +23,7 @@ interface TavilyFetchOptions {
   format: WebFetchFormat;
   includeMetadata: boolean;
   credentials: WebFetchCredentials;
+  signal?: AbortSignal;
 }
 
 /**
@@ -26,7 +31,7 @@ interface TavilyFetchOptions {
  * Tavily Extract returns the raw content of a given URL.
  */
 export async function tavilyFetch(opts: TavilyFetchOptions): Promise<WebFetchResult> {
-  const { url, includeMetadata, credentials } = opts;
+  const { url, includeMetadata, credentials, signal } = opts;
 
   if (!credentials.apiKey) {
     const body = buildErrorBody(401, "Tavily API key required");
@@ -39,12 +44,7 @@ export async function tavilyFetch(opts: TavilyFetchOptions): Promise<WebFetchRes
     extract_depth: "basic",
   };
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => {
-    const err = new Error(`tavily-fetch timeout after ${TAVILY_TIMEOUT_MS}ms`);
-    err.name = "TimeoutError";
-    controller.abort(err);
-  }, TAVILY_TIMEOUT_MS);
+  const abortScope = createWebFetchAbortScope(signal, TAVILY_TIMEOUT_MS, "Tavily");
 
   try {
     const response = await fetch(TAVILY_EXTRACT_URL, {
@@ -54,17 +54,19 @@ export async function tavilyFetch(opts: TavilyFetchOptions): Promise<WebFetchRes
         Authorization: `Bearer ${credentials.apiKey}`,
       },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
 
     if (!response.ok) {
       const rawError = await response.text().catch(() => `HTTP ${response.status}`);
+      abortScope.throwIfAborted();
       const msg = sanitizeErrorMessage(`Tavily error ${response.status}: ${rawError}`);
       const body = buildErrorBody(response.status, msg);
       return { success: false, status: response.status, error: body.error.message };
     }
 
     const data = (await response.json()) as Record<string, unknown>;
+    abortScope.throwIfAborted();
 
     const results = data.results as Array<Record<string, unknown>> | null;
     const firstResult = results?.[0] ?? {};
@@ -93,7 +95,11 @@ export async function tavilyFetch(opts: TavilyFetchOptions): Promise<WebFetchRes
       },
     };
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (signal?.aborted) throw createWebFetchCallerAbortError(signal);
+    if (
+      abortScope.timedOut ||
+      (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+    ) {
       const body = buildErrorBody(504, "Tavily request timed out");
       return { success: false, status: 504, error: body.error.message };
     }
@@ -102,6 +108,6 @@ export async function tavilyFetch(opts: TavilyFetchOptions): Promise<WebFetchRes
     const body = buildErrorBody(502, msg);
     return { success: false, status: 502, error: body.error.message };
   } finally {
-    clearTimeout(timeoutId);
+    abortScope.dispose();
   }
 }

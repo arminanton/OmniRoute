@@ -123,6 +123,9 @@ async function postHandler(request: Request, context: unknown) {
   try {
     rawBody = await request.json();
   } catch {
+    if (request.signal.aborted) {
+      return errorResponse(499, "Search request cancelled");
+    }
     log.warn("SEARCH", "Invalid JSON body");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body");
   }
@@ -344,40 +347,53 @@ async function postHandler(request: Request, context: unknown) {
       time_range: body.time_range,
       content: body.content,
       provider_options: body.provider_options,
+      strict_filters: body.strict_filters,
+    },
+    {
+      apiKeyId: policy.apiKeyInfo?.id ?? null,
+      connectionId: credentials?.connectionId ?? null,
+      alternateProvider: alternateProviderId ?? null,
+      alternateConnectionId: alternateCredentials?.connectionId ?? null,
     }
   );
 
   const ttl = providerConfig.cacheTTLMs ?? SEARCH_CACHE_DEFAULT_TTL_MS;
 
   try {
-    const { data: searchResult, cached } = await getOrCoalesce(cacheKey, ttl, async () => {
-      const result = await handleSearch({
-        query: body.query,
-        provider: providerConfig.id,
-        maxResults: clampedMaxResults,
-        searchType: body.search_type,
-        country: body.country,
-        language: body.language,
-        timeRange: body.time_range,
-        offset: body.offset,
-        domainFilter: buildDomainFilter(body.filters),
-        contentOptions: body.content,
-        strictFilters: body.strict_filters,
-        providerOptions: body.provider_options,
-        credentials,
-        alternateProvider: alternateProviderId,
-        alternateCredentials,
-        log,
-        connectionId: credentials?.connectionId || undefined,
-        apiKeyId: policy.apiKeyInfo?.id || undefined,
-      });
+    const { data: searchResult, cached } = await getOrCoalesce(
+      cacheKey,
+      ttl,
+      async (producerSignal) => {
+        const result = await handleSearch({
+          query: body.query,
+          provider: providerConfig.id,
+          maxResults: clampedMaxResults,
+          searchType: body.search_type,
+          country: body.country,
+          language: body.language,
+          timeRange: body.time_range,
+          offset: body.offset,
+          domainFilter: buildDomainFilter(body.filters),
+          contentOptions: body.content,
+          strictFilters: body.strict_filters,
+          providerOptions: body.provider_options,
+          credentials,
+          alternateProvider: alternateProviderId,
+          alternateCredentials,
+          log,
+          connectionId: credentials?.connectionId || undefined,
+          apiKeyId: policy.apiKeyInfo?.id || undefined,
+          signal: producerSignal,
+        });
 
-      if (!result.success) {
-        throw new SearchError(result.error || "Search failed", result.status || 502);
-      }
+        if (!result.success) {
+          throw new SearchError(result.error || "Search failed", result.status || 502);
+        }
 
-      return result.data!;
-    });
+        return result.data!;
+      },
+      { signal: request.signal }
+    );
 
     // Record cost for budget tracking (skip cache hits — no provider cost)
     if (!cached && policy.apiKeyInfo?.id && searchResult.usage?.search_cost_usd > 0) {
@@ -400,6 +416,10 @@ async function postHandler(request: Request, context: unknown) {
       headers: { "Content-Type": "application/json", ...CORS_HEADERS },
     });
   } catch (err: any) {
+    if (request.signal.aborted) {
+      return errorResponse(499, "Search request cancelled");
+    }
+
     if (err instanceof SearchError) {
       const errorPayload = toJsonErrorPayload(err.message, "Search provider error");
       return new Response(JSON.stringify(errorPayload), {

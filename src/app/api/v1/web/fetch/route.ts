@@ -36,6 +36,8 @@ import {
   rateLimitedProviderResponse,
   type RateLimitedCredentials,
 } from "@/app/api/v1/_shared/rateLimit";
+import { reserveAccountRequest } from "@omniroute/open-sse/services/accountRequestOccupancy.ts";
+import { acquireConfiguredSharedAccountAdmission } from "@omniroute/open-sse/services/accountRequestAdmission.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -130,27 +132,110 @@ async function executeWithFallback(
   startProvider: WebFetchProviderId,
   startCredentials: WebFetchCredentials,
   allowFallback: boolean,
-  triedProviders: Set<WebFetchProviderId>
+  triedProviders: Set<WebFetchProviderId>,
+  signal?: AbortSignal
 ): Promise<WebFetchExecutionResult> {
   let provider = startProvider;
   let credentials = startCredentials;
-  let result = await handleWebFetch(reqBody, credentials, provider);
+  let result = await executeWebFetchAttempt(reqBody, credentials, provider, signal);
 
   if (!allowFallback) {
     return { result, provider, poolExhausted: false };
   }
 
   while (!result.success && isRetryableWebFetchStatus(provider, result.status)) {
+    if (signal?.aborted) {
+      return {
+        result: { success: false, status: 499, error: "Web-fetch request cancelled" },
+        provider,
+        poolExhausted: false,
+      };
+    }
     const next = await findNextFallbackProvider(triedProviders);
+    if (signal?.aborted) {
+      return {
+        result: { success: false, status: 499, error: "Web-fetch request cancelled" },
+        provider,
+        poolExhausted: false,
+      };
+    }
     if (!next) {
       return { result, provider, poolExhausted: true };
     }
     provider = next.providerId;
     credentials = next.credentials;
-    result = await handleWebFetch(reqBody, credentials, provider);
+    result = await executeWebFetchAttempt(reqBody, credentials, provider, signal);
   }
 
   return { result, provider, poolExhausted: false };
+}
+
+async function executeWebFetchAttempt(
+  reqBody: WebFetchExecutionInput,
+  credentials: WebFetchCredentials,
+  provider: WebFetchProviderId,
+  callerSignal?: AbortSignal
+): Promise<WebFetchResult> {
+  const selected = credentials as WebFetchCredentials & {
+    connectionId?: string | null;
+    maxConcurrent?: number | null;
+    providerSpecificData?: Record<string, unknown> | null;
+  };
+  const releaseAccountRequest = reserveAccountRequest(selected.connectionId);
+  let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
+  const cancellationResult = (): WebFetchResult | null => {
+    if (callerSignal?.aborted) {
+      return { success: false, status: 499, error: "Web-fetch request cancelled" };
+    }
+    if (sharedAdmission?.signal.aborted) {
+      return {
+        success: false,
+        status: 503,
+        error: "Provider account capacity lease was lost during web fetch",
+      };
+    }
+    return null;
+  };
+  try {
+    if (callerSignal?.aborted) {
+      return { success: false, status: 499, error: "Web-fetch request cancelled" };
+    }
+    try {
+      sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+        provider,
+        credentials: selected,
+        signal: callerSignal,
+      });
+    } catch (error) {
+      const admissionError = error as {
+        code?: string;
+        statusCode?: number;
+        message?: string;
+      };
+      if (admissionError.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+        return {
+          success: false,
+          status: callerSignal?.aborted ? 499 : admissionError.statusCode || 503,
+          error: admissionError.message || "Provider account capacity admission is unavailable",
+        };
+      }
+      throw error;
+    }
+
+    const signal = sharedAdmission?.signal ?? callerSignal;
+    signal?.throwIfAborted();
+    const result = await handleWebFetch(reqBody, credentials, provider, signal);
+    const cancellation = cancellationResult();
+    if (cancellation) return cancellation;
+    return result;
+  } catch (error) {
+    const cancellation = cancellationResult();
+    if (cancellation) return cancellation;
+    throw error;
+  } finally {
+    sharedAdmission?.release();
+    releaseAccountRequest();
+  }
 }
 
 type ResolvedWebFetchTarget =
@@ -264,6 +349,9 @@ export async function POST(request: Request) {
   try {
     rawBody = await request.json();
   } catch {
+    if (request.signal.aborted) {
+      return errorResponse(499, "Web-fetch request cancelled");
+    }
     log.warn("WEB_FETCH", "Invalid JSON body");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body");
   }
@@ -274,15 +362,25 @@ export async function POST(request: Request) {
   }
   const body = validation.data;
 
+  if (request.signal.aborted) {
+    return errorResponse(499, "Web-fetch request cancelled");
+  }
+
   const authRejection = await enforceClientApiRouteAuth(request);
   if (authRejection) return authRejection;
 
   // Enforce API key policies
   const policy = await enforceApiKeyPolicy(request, "web-fetch");
   if (policy.rejection) return policy.rejection;
+  if (request.signal.aborted) {
+    return errorResponse(499, "Web-fetch request cancelled");
+  }
 
   // Resolve provider + credentials (explicit provider never falls back; #8297)
   const target = await resolveWebFetchTarget(body.provider);
+  if (request.signal.aborted) {
+    return errorResponse(499, "Web-fetch request cancelled");
+  }
   if (!target.ok) return target.response;
 
   log.info("WEB_FETCH", `${target.provider} | ${body.url} | format=${body.format}`);
@@ -302,8 +400,13 @@ export async function POST(request: Request) {
     target.provider,
     target.credentials,
     !target.isExplicit,
-    target.tried
+    target.tried,
+    request.signal
   );
+
+  if (request.signal.aborted) {
+    return errorResponse(499, "Web-fetch request cancelled");
+  }
 
   if (poolExhausted) {
     return unavailableResponse(

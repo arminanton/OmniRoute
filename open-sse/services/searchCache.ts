@@ -16,18 +16,26 @@ interface CacheEntry<T> {
   expiresAt: number;
 }
 
+interface InflightEntry<T> {
+  controller: AbortController;
+  promise: Promise<T>;
+  waiters: number;
+  settled: boolean;
+}
+
 const cache = new Map<string, CacheEntry<unknown>>();
-const inflight = new Map<string, Promise<unknown>>();
+const inflight = new Map<string, InflightEntry<unknown>>();
 
 let hits = 0;
 let misses = 0;
 
 /**
  * Normalize a query for cache key computation.
- * NFKC normalization, lowercase, trim, collapse whitespace.
+ * NFKC normalization, trim, and collapse whitespace. Preserve case because
+ * provider operators or quoted/code searches may treat it as meaningful.
  */
 function normalizeQuery(query: string): string {
-  return query.normalize("NFKC").toLowerCase().trim().replace(/\s+/g, " ");
+  return query.normalize("NFKC").trim().replace(/\s+/g, " ");
 }
 
 /**
@@ -40,7 +48,13 @@ export function computeCacheKey(
   maxResults: number,
   country?: string,
   language?: string,
-  filters?: unknown
+  filters?: unknown,
+  executionScope?: {
+    apiKeyId?: string | null;
+    connectionId?: string | null;
+    alternateProvider?: string | null;
+    alternateConnectionId?: string | null;
+  }
 ): string {
   const normalized = normalizeQuery(query);
   const payload = JSON.stringify({
@@ -51,6 +65,16 @@ export function computeCacheKey(
     c: country || null,
     l: language || null,
     f: filters || null,
+    ...(executionScope
+      ? {
+          s: {
+            apiKeyId: executionScope.apiKeyId || null,
+            connectionId: executionScope.connectionId || null,
+            alternateProvider: executionScope.alternateProvider || null,
+            alternateConnectionId: executionScope.alternateConnectionId || null,
+          },
+        }
+      : {}),
   });
   return createHash("sha256").update(payload).digest("hex");
 }
@@ -86,14 +110,22 @@ function evictIfNeeded(): void {
  *
  * @param key - Cache key from computeCacheKey()
  * @param ttlMs - TTL in milliseconds (0 to bypass cache AND coalescing)
- * @param fetchFn - Function to execute on cache miss
+ * @param fetchFn - Function to execute on cache miss; receives the producer signal
+ * @param options.signal - This caller's cancellation signal. For coalesced work,
+ *   it detaches only this waiter and aborts the producer after the last waiter leaves.
  * @returns The cached or freshly fetched data
  */
 export async function getOrCoalesce<T>(
   key: string,
   ttlMs: number,
-  fetchFn: () => Promise<T>
+  fetchFn: (signal: AbortSignal) => Promise<T>,
+  options: { signal?: AbortSignal } = {}
 ): Promise<{ data: T; cached: boolean }> {
+  const waiterSignal = options.signal;
+  if (waiterSignal?.aborted) {
+    throw getAbortReason(waiterSignal);
+  }
+
   // When ttlMs === 0 the caller explicitly wants to bypass the cache.
   // Skip both the cache lookup AND the inflight-coalescing step so every
   // concurrent call gets its own independent upstream fetch.  Without this
@@ -101,7 +133,10 @@ export async function getOrCoalesce<T>(
   // { cached: true } even though caching was explicitly disabled.
   if (ttlMs <= 0) {
     misses++;
-    const data = await fetchFn();
+    // There is no shared producer for this path, so the caller's signal can
+    // be passed straight through. Keep an inert signal for legacy callers.
+    const signal = waiterSignal ?? new AbortController().signal;
+    const data = await fetchFn(signal);
     return { data, cached: false };
   }
 
@@ -113,28 +148,109 @@ export async function getOrCoalesce<T>(
   }
 
   // 2. Join inflight request if one exists (request coalescing)
-  const existing = inflight.get(key) as Promise<T> | undefined;
+  const existing = inflight.get(key) as InflightEntry<T> | undefined;
   if (existing) {
     hits++;
-    const data = await existing;
-    return { data, cached: true };
+    return await waitForEntry(key, existing, waiterSignal, true);
   }
 
   // 3. Cache miss — execute fetch
   misses++;
-  const promise = fetchFn();
-  inflight.set(key, promise);
+  const controller = new AbortController();
+  const entry: InflightEntry<T> = {
+    controller,
+    promise: Promise.resolve().then(() => fetchFn(controller.signal)),
+    waiters: 0,
+    settled: false,
+  };
 
-  try {
-    const data = await promise;
+  // Install the entry before any producer continuation runs. An abandoned,
+  // abort-ignoring producer may finish after a fresh retry has replaced it;
+  // only this exact entry may cache or remove itself.
+  inflight.set(key, entry as InflightEntry<unknown>);
+  entry.promise = entry.promise.then(
+    (data) => {
+      entry.settled = true;
+      if (!controller.signal.aborted) {
+        evictIfNeeded();
+        cache.set(key, { data, expiresAt: Date.now() + ttlMs });
+      }
+      if (inflight.get(key) === entry) {
+        inflight.delete(key);
+      }
+      return data;
+    },
+    (error: unknown) => {
+      entry.settled = true;
+      if (inflight.get(key) === entry) {
+        inflight.delete(key);
+      }
+      throw error;
+    }
+  );
 
-    evictIfNeeded();
-    cache.set(key, { data, expiresAt: Date.now() + ttlMs });
+  return await waitForEntry(key, entry, waiterSignal, false);
+}
 
-    return { data, cached: false };
-  } finally {
-    inflight.delete(key);
+function waitForEntry<T>(
+  key: string,
+  entry: InflightEntry<T>,
+  signal: AbortSignal | undefined,
+  cached: boolean
+): Promise<{ data: T; cached: boolean }> {
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    entry.waiters++;
+
+    const detach = () => {
+      entry.waiters--;
+      if (entry.waiters === 0 && !entry.settled) {
+        // Remove synchronously so a new caller starts a fresh producer even
+        // if this producer ignores AbortSignal and takes time to settle.
+        if (inflight.get(key) === entry) {
+          inflight.delete(key);
+        }
+        entry.controller.abort();
+      }
+    };
+
+    const settle = (callback: () => void) => {
+      if (finished) return;
+      finished = true;
+      signal?.removeEventListener("abort", onAbort);
+      detach();
+      callback();
+    };
+
+    const onAbort = () => {
+      settle(() => reject(getAbortReason(signal)));
+    };
+
+    if (signal) {
+      signal.addEventListener("abort", onAbort, { once: true });
+      // Cover an abort that races with listener registration.
+      if (signal.aborted) {
+        onAbort();
+      }
+    }
+
+    entry.promise.then(
+      (data) => settle(() => resolve({ data, cached })),
+      (error: unknown) => settle(() => reject(error))
+    );
+  });
+}
+
+function getAbortReason(signal: AbortSignal | undefined): unknown {
+  if (signal?.reason !== undefined) {
+    return signal.reason;
   }
+  if (typeof DOMException !== "undefined") {
+    return new DOMException("The operation was aborted", "AbortError");
+  }
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 /**

@@ -45,6 +45,8 @@ export interface ExecuteWebSearchInput {
   strict_filters?: boolean;
   apiKeyId?: string | null;
   log?: SearchLogger;
+  /** Caller-owned signal. Coalesced callers detach independently. */
+  signal?: AbortSignal;
 }
 
 export interface ExecuteWebSearchResult {
@@ -264,38 +266,53 @@ export async function executeWebSearch(
       filters: input.filters,
       offset: input.offset,
       time_range: input.time_range,
+      content: input.content,
+      provider_options: input.provider_options,
+      strict_filters: input.strict_filters,
+    },
+    {
+      apiKeyId: input.apiKeyId,
+      connectionId: credentials?.connectionId ?? null,
+      alternateProvider: alternateProviderId ?? null,
+      alternateConnectionId: alternateCredentials?.connectionId ?? null,
     }
   );
   const ttl = providerConfig.cacheTTLMs ?? SEARCH_CACHE_DEFAULT_TTL_MS;
 
-  const { data, cached } = await getOrCoalesce(cacheKey, ttl, async () => {
-    const result = await handleSearch({
-      query: input.query.trim(),
-      provider: providerConfig.id,
-      maxResults: clampedMaxResults,
-      searchType,
-      country: input.country,
-      language: input.language,
-      timeRange: input.time_range,
-      offset: input.offset,
-      domainFilter: buildDomainFilter(input.filters),
-      contentOptions: input.content,
-      strictFilters: input.strict_filters,
-      providerOptions: input.provider_options,
-      credentials,
-      alternateProvider: alternateProviderId,
-      alternateCredentials,
-      log,
-      connectionId: credentials?.connectionId || undefined,
-      apiKeyId: input.apiKeyId || undefined,
-    });
+  const { data, cached } = await getOrCoalesce(
+    cacheKey,
+    ttl,
+    async (producerSignal) => {
+      const result = await handleSearch({
+        query: input.query.trim(),
+        provider: providerConfig.id,
+        maxResults: clampedMaxResults,
+        searchType,
+        country: input.country,
+        language: input.language,
+        timeRange: input.time_range,
+        offset: input.offset,
+        domainFilter: buildDomainFilter(input.filters),
+        contentOptions: input.content,
+        strictFilters: input.strict_filters,
+        providerOptions: input.provider_options,
+        credentials,
+        alternateProvider: alternateProviderId,
+        alternateCredentials,
+        log,
+        connectionId: credentials?.connectionId || undefined,
+        apiKeyId: input.apiKeyId || undefined,
+        signal: producerSignal,
+      });
 
-    if (!result.success || !result.data) {
-      throw new WebSearchExecutionError(result.error || "Search failed", result.status || 502);
-    }
+      if (!result.success || !result.data) {
+        throw new WebSearchExecutionError(result.error || "Search failed", result.status || 502);
+      }
 
-    return result.data;
-  });
+      return result.data;
+    },
+    { signal: input.signal }
+  );
 
   if (!cached && input.apiKeyId && input.apiKeyId !== "local" && data.usage?.search_cost_usd > 0) {
     try {

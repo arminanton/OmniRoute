@@ -9,6 +9,10 @@
  */
 
 import { sanitizeErrorMessage, buildErrorBody } from "../utils/error.ts";
+import {
+  createWebFetchAbortScope,
+  createWebFetchCallerAbortError,
+} from "../utils/webFetchAbort.ts";
 import type { WebFetchResult, WebFetchFormat, WebFetchCredentials } from "../handlers/webFetch.ts";
 
 const JINA_READER_BASE = "https://r.jina.ai";
@@ -19,6 +23,7 @@ interface JinaReaderFetchOptions {
   format: WebFetchFormat;
   includeMetadata: boolean;
   credentials: WebFetchCredentials;
+  signal?: AbortSignal;
 }
 
 /**
@@ -26,7 +31,7 @@ interface JinaReaderFetchOptions {
  * Jina Reader uses a URL-based approach: GET https://r.jina.ai/<url>
  */
 export async function jinaReaderFetch(opts: JinaReaderFetchOptions): Promise<WebFetchResult> {
-  const { url, format, includeMetadata, credentials } = opts;
+  const { url, format, includeMetadata, credentials, signal } = opts;
 
   if (!credentials.apiKey) {
     const body = buildErrorBody(401, "Jina Reader API key required");
@@ -50,18 +55,18 @@ export async function jinaReaderFetch(opts: JinaReaderFetchOptions): Promise<Web
   const encodedUrl = encodeURIComponent(url);
   const requestUrl = `${JINA_READER_BASE}/${encodedUrl}`;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), JINA_TIMEOUT_MS);
+  const abortScope = createWebFetchAbortScope(signal, JINA_TIMEOUT_MS, "Jina Reader");
 
   try {
     const response = await fetch(requestUrl, {
       method: "GET",
       headers,
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
 
     if (!response.ok) {
       const rawError = await response.text().catch(() => `HTTP ${response.status}`);
+      abortScope.throwIfAborted();
       const msg = sanitizeErrorMessage(`Jina Reader error ${response.status}: ${rawError}`);
       const body = buildErrorBody(response.status, msg);
       return { success: false, status: response.status, error: body.error.message };
@@ -92,6 +97,7 @@ export async function jinaReaderFetch(opts: JinaReaderFetchOptions): Promise<Web
     } else {
       content = await response.text();
     }
+    abortScope.throwIfAborted();
 
     return {
       success: true,
@@ -105,7 +111,11 @@ export async function jinaReaderFetch(opts: JinaReaderFetchOptions): Promise<Web
       },
     };
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (signal?.aborted) throw createWebFetchCallerAbortError(signal);
+    if (
+      abortScope.timedOut ||
+      (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+    ) {
       const body = buildErrorBody(504, "Jina Reader request timed out");
       return { success: false, status: 504, error: body.error.message };
     }
@@ -114,6 +124,6 @@ export async function jinaReaderFetch(opts: JinaReaderFetchOptions): Promise<Web
     const body = buildErrorBody(502, msg);
     return { success: false, status: 502, error: body.error.message };
   } finally {
-    clearTimeout(timeoutId);
+    abortScope.dispose();
   }
 }

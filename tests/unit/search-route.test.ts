@@ -10,8 +10,23 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const searchRoute = await import("../../src/app/api/v1/search/route.ts");
+const { getCacheStats } = await import("../../open-sse/services/searchCache.ts");
+const { waitForCallLogSaves } = await import("../../src/lib/usage/callLogs.ts");
+const { flushProxyLogsSync } = await import("../../src/lib/proxyLogger.ts");
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 async function resetStorage() {
+  await waitForCallLogSaves(5000);
+  flushProxyLogsSync();
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   fs.mkdirSync(TEST_DATA_DIR, { recursive: true });
@@ -40,7 +55,9 @@ test.beforeEach(async () => {
   await resetStorage();
 });
 
-test.after(() => {
+test.after(async () => {
+  await waitForCallLogSaves(5000);
+  flushProxyLogsSync();
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -468,4 +485,149 @@ test("v1 search POST falls back to duckduckgo-free when no provider is configure
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("v1 search POST detaches one cancelled cache waiter without aborting shared upstream work", async () => {
+  await seedConnection("linkup-search", { apiKey: "linkup-cancel-test-key" });
+
+  const originalFetch = globalThis.fetch;
+  const upstreamStarted = deferred<AbortSignal>();
+  let completeUpstream: (() => void) | undefined;
+  let fetchCalls = 0;
+
+  globalThis.fetch = async (_url, init = {}) => {
+    fetchCalls++;
+    const upstreamSignal = init.signal as AbortSignal;
+    upstreamStarted.resolve(upstreamSignal);
+
+    return new Promise<Response>((resolve, reject) => {
+      const onAbort = () => reject(upstreamSignal.reason);
+      if (upstreamSignal.aborted) {
+        onAbort();
+        return;
+      }
+      upstreamSignal.addEventListener("abort", onAbort, { once: true });
+      completeUpstream = () => {
+        upstreamSignal.removeEventListener("abort", onAbort);
+        resolve(
+          new Response(
+            JSON.stringify({
+              results: [
+                {
+                  name: "Shared Linkup result",
+                  url: "https://example.com/shared-search-result",
+                  content: "The remaining waiter receives this result.",
+                  type: "web",
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          )
+        );
+      };
+    });
+  };
+
+  const query = `shared cancellation ${Date.now()}`;
+  const request = (signal: AbortSignal) =>
+    new Request("http://localhost/api/v1/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        provider: "linkup-search",
+        max_results: 1,
+        search_type: "web",
+      }),
+      signal,
+    });
+
+  try {
+    const firstController = new AbortController();
+    const firstResponsePromise = searchRoute.POST(request(firstController.signal));
+    const upstreamSignal = await upstreamStarted.promise;
+
+    const hitsBeforeSecondWaiter = getCacheStats().hits;
+    const secondController = new AbortController();
+    const secondResponsePromise = searchRoute.POST(request(secondController.signal));
+    const joinDeadline = Date.now() + 3_000;
+    while (getCacheStats().hits === hitsBeforeSecondWaiter && Date.now() < joinDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    assert.ok(
+      getCacheStats().hits > hitsBeforeSecondWaiter,
+      "the second request should join the first request's in-flight search"
+    );
+
+    firstController.abort();
+    const firstResponse = await firstResponsePromise;
+    assert.equal(
+      firstResponse.status,
+      499,
+      "the cancelled waiter should receive a client-cancel status"
+    );
+    assert.equal(
+      upstreamSignal.aborted,
+      false,
+      "the remaining waiter must keep producer work alive"
+    );
+
+    assert.ok(completeUpstream, "the shared upstream response should still be pending");
+    completeUpstream();
+    const secondResponse = await secondResponsePromise;
+    const body = (await secondResponse.json()) as any;
+
+    assert.equal(secondResponse.status, 200);
+    assert.equal(body.results[0].title, "Shared Linkup result");
+    assert.equal(fetchCalls, 1, "coalesced requests must make only one provider request");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("v1 search preserves a provider AbortError as 504 when the caller remains connected", async () => {
+  await seedConnection("linkup-search", { apiKey: "linkup-timeout-test-key" });
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new DOMException("provider request timed out", "AbortError");
+  };
+
+  try {
+    const response = await searchRoute.POST(
+      new Request("http://localhost/api/v1/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: `provider abort classification ${Date.now()}`,
+          provider: "linkup-search",
+          max_results: 1,
+          search_type: "web",
+        }),
+      })
+    );
+
+    assert.equal(
+      response.status,
+      504,
+      "provider-owned aborts must remain timeouts, not caller 499s"
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("v1 search returns 499 when body parsing fails after caller cancellation", async () => {
+  const controller = new AbortController();
+  controller.abort();
+  const request = {
+    signal: controller.signal,
+    json: async () => {
+      throw new DOMException("The operation was aborted", "AbortError");
+    },
+  } as Request;
+
+  const response = await searchRoute.POST(request);
+
+  assert.equal(response.status, 499);
 });

@@ -14,6 +14,10 @@
  */
 
 import { sanitizeErrorMessage, buildErrorBody } from "../utils/error.ts";
+import {
+  createWebFetchAbortScope,
+  createWebFetchCallerAbortError,
+} from "../utils/webFetchAbort.ts";
 import type { WebFetchResult, WebFetchFormat, WebFetchCredentials } from "../handlers/webFetch.ts";
 
 const FIRECRAWL_DEFAULT_BASE_URL = "https://api.firecrawl.dev";
@@ -24,7 +28,8 @@ function getFirecrawlBaseUrl(credentials?: WebFetchCredentials): string {
   const envBase = process.env.FIRECRAWL_BASE_URL?.trim();
   if (envBase) return envBase.replace(/\/+$/, "");
   const providerData = credentials?.providerSpecificData;
-  const credBase = typeof credentials?.baseUrl === "string" ? credentials.baseUrl : providerData?.baseUrl;
+  const credBase =
+    typeof credentials?.baseUrl === "string" ? credentials.baseUrl : providerData?.baseUrl;
   if (typeof credBase === "string" && credBase.trim()) {
     return credBase.trim().replace(/\/+$/, "");
   }
@@ -65,13 +70,14 @@ interface FirecrawlScrapeOptions {
   waitForSelector?: string;
   includeMetadata: boolean;
   credentials: WebFetchCredentials;
+  signal?: AbortSignal;
 }
 
 /**
  * Execute a Firecrawl scrape request.
  */
 export async function firecrawlFetch(opts: FirecrawlScrapeOptions): Promise<WebFetchResult> {
-  const { url, format, depth, waitForSelector, includeMetadata, credentials } = opts;
+  const { url, format, depth, waitForSelector, includeMetadata, credentials, signal } = opts;
 
   const baseUrl = getFirecrawlBaseUrl(credentials);
   const isDefaultBaseUrl = isDefaultFirecrawlBaseUrl(baseUrl);
@@ -105,13 +111,8 @@ export async function firecrawlFetch(opts: FirecrawlScrapeOptions): Promise<WebF
     requestBody.waitFor = waitForSelector;
   }
 
-  const controller = new AbortController();
   const firecrawlMs = getFirecrawlTimeoutMs();
-  const timeoutId = setTimeout(() => {
-    const err = new Error(`firecrawl-fetch timeout after ${firecrawlMs}ms`);
-    err.name = "TimeoutError";
-    controller.abort(err);
-  }, firecrawlMs);
+  const abortScope = createWebFetchAbortScope(signal, firecrawlMs, "Firecrawl");
 
   try {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -123,17 +124,19 @@ export async function firecrawlFetch(opts: FirecrawlScrapeOptions): Promise<WebF
       method: "POST",
       headers,
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
+      signal: abortScope.signal,
     });
 
     if (!response.ok) {
       const rawError = await response.text().catch(() => `HTTP ${response.status}`);
+      abortScope.throwIfAborted();
       const msg = sanitizeErrorMessage(`Firecrawl error ${response.status}: ${rawError}`);
       const body = buildErrorBody(response.status, msg);
       return { success: false, status: response.status, error: body.error.message };
     }
 
     const data = (await response.json()) as Record<string, unknown>;
+    abortScope.throwIfAborted();
 
     const scraped = (data.data as Record<string, unknown> | null) ?? {};
 
@@ -174,7 +177,11 @@ export async function firecrawlFetch(opts: FirecrawlScrapeOptions): Promise<WebF
       },
     };
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === "AbortError") {
+    if (signal?.aborted) throw createWebFetchCallerAbortError(signal);
+    if (
+      abortScope.timedOut ||
+      (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+    ) {
       const body = buildErrorBody(504, "Firecrawl request timed out");
       return { success: false, status: 504, error: body.error.message };
     }
@@ -183,6 +190,6 @@ export async function firecrawlFetch(opts: FirecrawlScrapeOptions): Promise<WebF
     const body = buildErrorBody(502, msg);
     return { success: false, status: 502, error: body.error.message };
   } finally {
-    clearTimeout(timeoutId);
+    abortScope.dispose();
   }
 }

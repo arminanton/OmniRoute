@@ -1,10 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, randomUUID } from "node:crypto";
 import {
   resolveOcrCredentials,
   resolveVertexOcrAccessToken,
 } from "../../src/app/api/v1/ocr/route.ts";
+
+const originalFetch = globalThis.fetch;
 
 // ── resolveOcrCredentials — vertex-deepseek-ocr project/location resolution ─
 // Mirrors the Azure DI pattern (providerSpecificData.baseUrl → top-level
@@ -136,6 +138,50 @@ test("resolveVertexOcrAccessToken exchanges a Service Account JSON apiKey for a 
     // apiKey is preserved (resolveOcrCredentials may still need it to derive the project).
     assert.equal(resolved.apiKey, saJson);
     assert.equal(calls.length, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("resolveVertexOcrAccessToken propagates caller cancellation to the OAuth exchange", async () => {
+  const { privateKey } = generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: "pkcs8", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  });
+  const saJson = JSON.stringify({
+    project_id: "proj-ocr-cancel",
+    private_key_id: "kid-ocr-cancel",
+    client_email: `svc-ocr-cancel-${randomUUID()}@example.iam`,
+    private_key: privateKey,
+  });
+  const controller = new AbortController();
+  let markStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+
+  globalThis.fetch = async (_url: string | URL | Request, options?: RequestInit) => {
+    assert.equal(options?.signal, controller.signal);
+    markStarted();
+    return new Promise<Response>((_resolve, reject) => {
+      options?.signal?.addEventListener(
+        "abort",
+        () => reject(new DOMException("The operation was aborted", "AbortError")),
+        { once: true }
+      );
+    });
+  };
+
+  try {
+    const tokenPromise = resolveVertexOcrAccessToken(
+      "vertex-deepseek-ocr",
+      { apiKey: saJson },
+      controller.signal
+    );
+    await started;
+    controller.abort();
+    await assert.rejects(tokenPromise, { name: "AbortError" });
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -84,11 +84,12 @@ export function resolveVertexOcrBaseUrl(credentials: {
  */
 export async function resolveVertexOcrAccessToken<
   T extends { apiKey?: string; accessToken?: string },
->(providerId: string, credentials: T): Promise<T> {
+>(providerId: string, credentials: T, signal?: AbortSignal): Promise<T> {
   if (providerId !== VERTEX_DEEPSEEK_OCR_PROVIDER_ID) return credentials;
   if (credentials.accessToken || !credentials.apiKey) return credentials;
   if (!looksLikeServiceAccountJson(credentials.apiKey)) return credentials;
-  const accessToken = await getAccessToken(parseSAFromApiKey(credentials.apiKey));
+  signal?.throwIfAborted();
+  const accessToken = await getAccessToken(parseSAFromApiKey(credentials.apiKey), signal);
   return { ...credentials, accessToken };
 }
 
@@ -111,6 +112,7 @@ export async function resolveVertexOcrAccessToken<
 export async function handleOcr({
   body,
   credentials,
+  signal,
   fetchImpl = fetch,
   sleepImpl = defaultSleep,
 }) {
@@ -147,11 +149,18 @@ export async function handleOcr({
 
   try {
     const transformation = getOcrTransformation(providerId);
+    const isAsyncProvider = typeof transformation.pollUrl === "function";
     const { url, init } = transformation.buildRequest({ baseUrl, token, body, modelId });
-    const res = await fetchImpl(url, init);
+    // A request that was already cancelled must not dispatch provider work. For
+    // Azure's submit endpoint, however, do not attach the caller signal: once a
+    // submit reaches the provider its acceptance may be ambiguous, and aborting
+    // it could orphan a remote operation that we then stop tracking.
+    signal?.throwIfAborted();
+    const res = await fetchImpl(url, isAsyncProvider ? init : { ...init, signal });
 
     if (!res.ok) {
       const errText = await res.text();
+      if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
       return buildSanitizedUpstreamErrorResponse({
         status: res.status,
         rawBody: errText,
@@ -165,9 +174,13 @@ export async function handleOcr({
     if (pollUrl) {
       const authHeader = buildAuthHeader(providerConfig.authHeader, token);
       data = await pollOcrOperation({ pollUrl, authHeader, fetchImpl, sleepImpl });
+      // Keep request ownership through terminal status or the bounded polling
+      // limit; never let the caller's abort signal abandon an accepted task.
+      if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
       if (data instanceof Response) return data;
     } else {
       data = await res.json();
+      if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
     }
 
     const parsed = transformation.parseResponse(data);
@@ -181,6 +194,7 @@ export async function handleOcr({
     });
     return new Response(JSON.stringify(parsed), { status: 200, headers });
   } catch (err) {
+    if (signal?.aborted) return errorResponse(499, "OCR request cancelled");
     const safeErrorMessage = sanitizeErrorMessage(err).trim() || "OCR request failed";
     console.error("[OCR]", safeErrorMessage);
     return errorResponse(500, "OCR request failed");

@@ -131,6 +131,7 @@ export interface ProviderFetchResult {
   success: boolean;
   status?: number;
   error?: string;
+  terminal?: boolean;
   data?: {
     provider: string;
     query: string;
@@ -158,6 +159,9 @@ export interface ExecuteProviderFetchParams {
   url: string;
   init: RequestInit;
   controller: AbortController;
+  signal?: AbortSignal;
+  producerSignal?: AbortSignal;
+  admissionSignal?: AbortSignal;
   timer: ReturnType<typeof setTimeout>;
   query: string;
   searchType: string;
@@ -186,6 +190,7 @@ export async function executeProviderFetch(
   p: ExecuteProviderFetchParams
 ): Promise<ProviderFetchResult> {
   const { config, url, init, controller, timer, query, searchType, maxResults, startTime } = p;
+  const signal = p.signal ?? controller.signal;
   const { connectionId, proxy, proxyLevel, log, normalize } = p;
   const emitEvent = (status: string) =>
     emitSearchProxyEvent(config.id, connectionId, proxy, proxyLevel, url, startTime, status);
@@ -204,9 +209,7 @@ export async function executeProviderFetch(
     });
 
   try {
-    const response = await fetchWithSearchProxy(proxy, () =>
-      fetch(url, { ...init, signal: controller.signal })
-    );
+    const response = await fetchWithSearchProxy(proxy, () => fetch(url, { ...init, signal }));
     clearTimeout(timer);
 
     if (!response.ok) {
@@ -267,6 +270,21 @@ export async function executeProviderFetch(
   } catch (err: unknown) {
     clearTimeout(timer);
     const error = err instanceof Error ? err : new Error(String(err));
+    // A cache producer is cancelled only after its final waiter detaches. Do
+    // not turn that cancellation into a provider timeout or persist a false
+    // upstream failure in call logs.
+    if (p.producerSignal?.aborted) {
+      throw p.producerSignal.reason ?? error;
+    }
+    if (p.admissionSignal?.aborted) {
+      return {
+        success: false,
+        status: 503,
+        error: "Provider account capacity admission was lost during search",
+        terminal: true,
+      };
+    }
+
     // Envelope-level provider failure surfaced by a normalizer (e.g. AnySearch
     // `{ code: -1 }`): not a transport fault. Quota signals map to 402 so
     // quota-aware failover treats them as exhausted; anything else is 502.
