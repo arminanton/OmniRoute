@@ -1855,6 +1855,34 @@ user-slice cgroup exposes CPU, memory and pids controllers but no I/O controller
 `IOReadBandwidthMax`/`IOWriteBandwidthMax` property was not enforceable. Best-effort I/O priority was
 applied to this build; actual storage pressure still had to be watched from host PSI and `iostat`.
 
+### Corrected standalone pruning rebuild (2026-10-10)
+
+A second build ran from 00:47:43 to 00:54:43 UTC and exited successfully after a failed isolated
+smoke test exposed a bad temporary trace exclusion. Adding `./.build/**/*` to
+`outputFileTracingExcludes` omitted a required Turbopack server chunk from standalone; that exclusion
+was removed before this rebuild. The corrected artifact contains the chunk under its runtime
+`.build/next/server` tree, keeps the copied `docs/` content, and completes the synthetic standalone
+Antigravity tool round-trip.
+
+The build ran with `CPUQuota=300%`, `MemoryHigh=15 GiB`, and `MemoryMax=16 GiB`; its cgroup peak was
+14,109,863,936 bytes (~13.15 GiB), host available RAM stayed at or above about 10 GiB, and root
+filesystem free space reached a low of 6.9 GiB before returning to 7.7 GiB. No OOM or host restart
+occurred. The standalone output is 1.9 GiB and the Next server tree is 1.6 GiB. The regenerable
+Next cache reached 4.3 GiB; it was then removed with the path-guarded cache-prune helper, restoring
+root free space from 7.7 GiB to 12 GiB. A later build must regenerate that cache. Next's
+`instrumentation` and `middleware` traces still pull repository-only
+benchmark/test trees despite route-level excludes; the build wrapper prunes traced `_tasks/`,
+`benchmarks/`, and `tests/` from standalone output after tracing. This saves the 569 MiB benchmark
+tree and 49 MiB tests tree while preserving `.build/next` runtime files and docs. The packaging
+prune does not reduce
+Turbopack's earlier whole-project analysis; the dynamic filesystem warnings remain and require
+separate work. [Next documents these excludes as route-glob filters applied to trace manifests.](https://nextjs.org/docs/app/api-reference/config/next-config-js/output)
+
+Validation passed: `tests/unit/build-next-isolated.test.ts` and `tests/unit/next-config.test.ts` (19/19),
+plus one complete synthetic standalone conversation (two mocked Antigravity turns, capture disabled,
+`SMOKE_EXIT=0`). The harness contacted only its local mock; no real provider credentials, canary
+image, or production deployment were involved.
+
 ## Remaining acceptance checks
 
 - Capture the management-only pressure sample on `GET /api/monitoring/health` with a credential

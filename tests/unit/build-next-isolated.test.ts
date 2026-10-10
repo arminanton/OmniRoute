@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   getTransientBuildPaths,
   movePath,
+  pruneRegenerableNextCache,
   pruneStandaloneArtifacts,
   resolveNextBuildEnv,
   syncStandaloneExtraModules,
@@ -161,19 +162,43 @@ test("getTransientBuildPaths only moves _tasks when explicitly enabled", () => {
   );
 });
 
-test("pruneStandaloneArtifacts removes traced _tasks from standalone output", async () => {
+test("pruneStandaloneArtifacts removes repository-only trees but keeps runtime output", async () => {
   await withTempDir(async (tempDir) => {
     // Layer 1 moved the Next distDir default to .build/next.
-    const tracedTaskFile = path.join(tempDir, ".build", "next", "standalone", "_tasks", "plan.md");
-    await fs.mkdir(path.dirname(tracedTaskFile), { recursive: true });
-    await fs.writeFile(tracedTaskFile, "transient planning artifact");
+    const standalone = path.join(tempDir, ".build", "next", "standalone");
+    const removedFiles = [
+      path.join(standalone, "_tasks", "plan.md"),
+      path.join(standalone, "benchmarks", "runtime-proxy", "target", "debug", "bench"),
+      path.join(standalone, "tests", "fixture.test.js"),
+    ];
+    const retainedFiles = [
+      path.join(standalone, ".build", "next", "server", "server.js"),
+      path.join(standalone, "docs", "README.md"),
+    ];
+    for (const file of [...removedFiles, ...retainedFiles]) {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "fixture");
+    }
 
     await pruneStandaloneArtifacts(tempDir);
 
-    assert.equal(
-      fsSync.existsSync(path.join(tempDir, ".build", "next", "standalone", "_tasks")),
-      false
-    );
+    for (const file of removedFiles) assert.equal(fsSync.existsSync(file), false, file);
+    for (const file of retainedFiles) assert.equal(fsSync.existsSync(file), true, file);
+  });
+});
+
+test("pruneRegenerableNextCache removes only the configured cache directory", async () => {
+  await withTempDir(async (tempDir) => {
+    const cacheFile = path.join(tempDir, ".build", "next", "cache", "webpack", "index.pack");
+    const serverFile = path.join(tempDir, ".build", "next", "server", "server.js");
+    await fs.mkdir(path.dirname(cacheFile), { recursive: true });
+    await fs.mkdir(path.dirname(serverFile), { recursive: true });
+    await fs.writeFile(cacheFile, "regenerable cache");
+    await fs.writeFile(serverFile, "runtime build output");
+
+    assert.equal(await pruneRegenerableNextCache(tempDir), true);
+    assert.equal(fsSync.existsSync(path.join(tempDir, ".build", "next", "cache")), false);
+    assert.equal(fsSync.existsSync(serverFile), true);
   });
 });
 

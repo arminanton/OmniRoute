@@ -240,7 +240,16 @@ export async function pruneStandaloneArtifacts(rootDir = projectRoot, fsImpl = f
       ? distDir
       : path.join(rootDir, process.env.NEXT_DIST_DIR || ".build/next");
   const standaloneRoot = path.join(resolvedDistDirForPrune, "standalone");
-  const pruneTargets = [path.join(standaloneRoot, "_tasks")];
+  // Dynamic filesystem tracing for instrumentation/middleware can bypass the
+  // per-route outputFileTracingExcludes pass. These repository-only trees are
+  // never runtime inputs and can contain compiled benchmark/test fixtures; the
+  // configured distDir under standalone/.build/next is runtime output and must
+  // remain intact.
+  const pruneTargets = [
+    path.join(standaloneRoot, "_tasks"),
+    path.join(standaloneRoot, "benchmarks"),
+    path.join(standaloneRoot, "tests"),
+  ];
 
   for (const targetPath of pruneTargets) {
     if (!(await exists(targetPath))) continue;
@@ -249,6 +258,29 @@ export async function pruneStandaloneArtifacts(rootDir = projectRoot, fsImpl = f
       `[build-next-isolated] Pruned standalone artifact: ${path.relative(rootDir, targetPath)}`
     );
   }
+}
+
+/** Remove only the regenerable Next cache when an operator needs to reclaim disk. */
+export async function pruneRegenerableNextCache(rootDir = projectRoot, fsImpl = fs) {
+  const requestedDistDir =
+    rootDir === projectRoot
+      ? distDir
+      : path.join(rootDir, process.env.NEXT_DIST_DIR || ".build/next");
+  const resolvedRoot = path.resolve(rootDir);
+  const cachePath = path.resolve(requestedDistDir, "cache");
+  if (!cachePath.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error("Refusing to prune a Next cache outside the project root");
+  }
+  if (!(await exists(cachePath))) return false;
+  const cacheStat = await fsImpl.lstat(cachePath);
+  if (!cacheStat.isDirectory() || cacheStat.isSymbolicLink()) {
+    throw new Error("Refusing to prune a Next cache that is not a real directory");
+  }
+  await fsImpl.rm(cachePath, { recursive: true, force: true });
+  console.log(
+    `[build-next-isolated] Pruned regenerable Next cache: ${path.relative(rootDir, cachePath)}`
+  );
+  return true;
 }
 
 export async function syncStandaloneNativeAssets(
