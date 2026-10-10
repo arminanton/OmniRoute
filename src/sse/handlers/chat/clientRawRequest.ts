@@ -53,6 +53,29 @@ export function buildClientRawRequest(
 }
 
 /**
+ * Release the producer-owned bounded body clone after a private overflow trace
+ * has accepted the exact wire bytes. Pending details are already normalized at
+ * this point and diagnostic-only call artifacts omit the body. Keep combo
+ * requests intact because the outer all-targets-failed path still logs it.
+ */
+export function releaseClientRawRequestBodyForPrivateCapture(
+  clientRawRequest: { body?: unknown } | null | undefined,
+  diagnosticOverflowOnly: boolean,
+  isCombo: boolean
+): boolean {
+  if (
+    !clientRawRequest ||
+    !diagnosticOverflowOnly ||
+    isCombo ||
+    clientRawRequest.body === undefined
+  ) {
+    return false;
+  }
+  clientRawRequest.body = undefined;
+  return true;
+}
+
+/**
  * #7360 follow-up: chatCore.ts's createStreamController (and, downstream,
  * withRateLimit/acquireAccountSemaphore) watches clientRawRequest.signal,
  * which is the original client signal merged with the current combo target's

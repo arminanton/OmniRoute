@@ -213,6 +213,7 @@ import {
   runWithCasGuard,
 } from "../services/tokenRefresh.ts";
 import { createRequestLogger } from "../utils/requestLogger.ts";
+import { releaseClientRawRequestBodyForPrivateCapture } from "@/sse/handlers/chat/clientRawRequest.ts";
 import { createPreparedRequestLogger, runWithCapture } from "../utils/providerRequestLogging.ts";
 import { summarizeToolSources } from "../utils/toolSources.ts";
 import { applyResponsesPreviousResponseIdPolicy } from "../utils/responsesStatePolicy.ts";
@@ -1354,6 +1355,11 @@ async function handleChatCoreOwned({
   // 0. Log client raw request; redact video cues on the producer-bounded snapshot.
   // See videoBridgeSnapshotRedaction.ts; reuse its already-isolated body.
   logClientRawRequestRedacted(reqLogger, clientRawRequest, videoBridgeObserved, true);
+  releaseClientRawRequestBodyForPrivateCapture(
+    clientRawRequest,
+    reqLogger.diagnosticOverflowOnly,
+    isCombo || comboStrategy !== null
+  );
   const reasoningRouteDecision =
     body && typeof body === "object"
       ? (body as Record<string, unknown>)._omnirouteReasoningRouteTrace

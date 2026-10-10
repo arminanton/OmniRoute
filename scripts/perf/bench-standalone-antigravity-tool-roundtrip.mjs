@@ -21,6 +21,9 @@
  * Override the isolated app CPU quota with --app-cpu-quota=N (1..4 cores; default 2).
  * Override app memory limits with --app-memory-high-gib=N and --app-memory-max-gib=N
  * (defaults 3/4 GiB) to test the resource guard at larger concurrency.
+ * Use --skip-cancellation-probe=true for saturated capture sweeps where the
+ * post-load probe itself may be shed by the resource guard; run the default
+ * cancellation probe separately at baseline load.
  * Set OMNIROUTE_KEEP_STANDALONE_E2E_FAILURES=1 to retain only failed-run scratch
  * for diagnosis. Successful runs always remove their temporary files.
  * This harness intentionally refuses to build the standalone artifact.
@@ -1051,9 +1054,18 @@ async function main() {
         "app-cpu-quota",
         "app-memory-high-gib",
         "app-memory-max-gib",
+        "skip-cancellation-probe",
       ].includes(key)
   );
   if (unknown.length) throw new Error(`Unknown options: ${unknown.join(", ")}`);
+  const skipCancellationProbe = options["skip-cancellation-probe"] === "true";
+  if (
+    options["skip-cancellation-probe"] !== undefined &&
+    options["skip-cancellation-probe"] !== "true" &&
+    options["skip-cancellation-probe"] !== "false"
+  ) {
+    throw new RangeError("--skip-cancellation-probe must be true or false");
+  }
 
   const captureMode = options.capture || process.env.OMNIROUTE_STANDALONE_CAPTURE || "none";
   if (!CAPTURE_MODES.has(captureMode))
@@ -1395,20 +1407,26 @@ async function main() {
     for (const phasesForSession of Object.values(stats.phases)) {
       assert.deepEqual(phasesForSession, ["tool", "answer"]);
     }
-    const postCancelStats = await runCancellationProbe(baseUrl, mock.url, keys.cancelApiKey.key);
-    assert.equal(postCancelStats.received, expectedRequests + 1);
-    assert.equal(
-      postCancelStats.providerResponsesCompleted,
-      expectedRequests,
-      "every normal synthetic upstream response must finish"
-    );
-    assert.equal(
-      postCancelStats.providerResponsesAborted,
-      1,
-      "the cancellation probe must interrupt exactly one synthetic upstream response"
-    );
-    assert.equal(postCancelStats.providerResponsesActive, 0);
-    assert.deepEqual(postCancelStats.errors, []);
+    if (!skipCancellationProbe) {
+      const postCancelStats = await runCancellationProbe(baseUrl, mock.url, keys.cancelApiKey.key);
+      assert.equal(postCancelStats.received, expectedRequests + 1);
+      assert.equal(
+        postCancelStats.providerResponsesCompleted,
+        expectedRequests,
+        "every normal synthetic upstream response must finish"
+      );
+      assert.equal(
+        postCancelStats.providerResponsesAborted,
+        1,
+        "the cancellation probe must interrupt exactly one synthetic upstream response"
+      );
+      assert.equal(postCancelStats.providerResponsesActive, 0);
+      assert.deepEqual(postCancelStats.errors, []);
+    } else {
+      assert.equal(stats.providerResponsesCompleted, expectedRequests);
+      assert.equal(stats.providerResponsesAborted, 0);
+      assert.equal(stats.providerResponsesActive, 0);
+    }
     const callLogWriterHealth = await readCallLogWriterHealth(baseUrl, keys.managementApiKey.key);
     console.error(
       `[standalone-antigravity-e2e] call_log_artifact_writer=${JSON.stringify(callLogWriterHealth)}`
@@ -1448,17 +1466,18 @@ async function main() {
     );
     assert.equal(audit.blockedDatagrams, 0, "the app attempted a forbidden UDP datagram");
     assert.ok(audit.preloadLocalTlsSelfChecks >= 1, "the loopback-only TLS fence was not checked");
+    const expectedProviderRequests = expectedRequests + (skipCancellationProbe ? 0 : 1);
     assert.equal(
       bridgeStats.providerRequests,
-      expectedRequests + 1,
+      expectedProviderRequests,
       "all synthetic Cloud Code stream requests must reach only the local TLS bridge"
     );
-    assert.equal(bridgeStats.upstreamResponsesStarted, expectedRequests + 1);
+    assert.equal(bridgeStats.upstreamResponsesStarted, expectedProviderRequests);
     assert.equal(bridgeStats.upstreamResponsesCompleted, expectedRequests);
-    assert.equal(bridgeStats.upstreamResponsesAborted, 1);
+    assert.equal(bridgeStats.upstreamResponsesAborted, skipCancellationProbe ? 0 : 1);
     assert.equal(bridgeStats.upstreamResponsesActive, 0);
     assert.equal(bridgeStats.clientResponsesCompleted, expectedRequests);
-    assert.equal(bridgeStats.clientResponsesAborted, 1);
+    assert.equal(bridgeStats.clientResponsesAborted, skipCancellationProbe ? 0 : 1);
     assert.equal(bridgeStats.clientResponsesActive, 0);
     assert.equal(bridgeStats.unexpectedRequests, 0, "the app requested an unexpected bridge path");
     assert.equal(bridgeStats.errors, 0, "the local TLS bridge encountered a proxy error");
@@ -1471,6 +1490,7 @@ async function main() {
         conversations: sessionCount,
         authenticatedRequests: expectedRequests,
         mockProviderRequests: stats.received,
+        cancellationProbe: skipCancellationProbe ? "skipped" : "passed",
         toolFollowups: Object.values(stats.phases).filter((value) => value[1] === "answer").length,
         profileCount: stats.profiles.length,
         selectedAccountConnections: artifactResult.accountConnections,

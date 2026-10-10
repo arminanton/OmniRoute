@@ -10,8 +10,10 @@ import {
 } from "../../open-sse/utils/providerRequestLogging.ts";
 import {
   buildClientRawRequest,
+  releaseClientRawRequestBodyForPrivateCapture,
   resolveDispatchClientRawRequest,
 } from "../../src/sse/handlers/chat/clientRawRequest.ts";
+import { getPendingById, trackPendingRequest } from "../../src/lib/usage/usageHistory.ts";
 import {
   hasDiagnosticClientJson,
   getDiagnosticClientBody,
@@ -293,38 +295,82 @@ test("private overflow mode stores complete wire bytes without duplicating reque
     body,
     true
   );
-  const log = await createRequestLogger(undefined, undefined, undefined, {
-    enabled: true,
-    provider: "antigravity",
-    diagnosticOverflowEligible: true,
-    diagnosticOverflowOnly: true,
-    diagnosticClientBody: () => serialized,
-  });
-  const trace = log.getDiagnosticOverflowTrace();
-  assert.ok(trace);
-
-  log.logClientRawRequest("/v1/chat/completions", body, { "content-type": "application/json" });
-  log.logOpenAIRequest(body);
-  log.logTargetRequest("https://synthetic.invalid/generate", {}, { request: body });
-  log.logProviderResponse(200, "OK", {}, { response: "large body" });
-  log.logConvertedResponse({ response: "large client body" });
-  log.appendProviderChunk("data: synthetic provider stream\n\n");
-
-  const pipeline = log.getPipelinePayloads() as Record<string, any>;
-  assert.equal(log.diagnosticOverflowOnly, true);
-  assert.equal(pipeline.diagnosticOverflowOnly, true);
-  assert.equal(pipeline.clientRawRequest.body, undefined);
-  assert.equal(pipeline.openaiRequest.body, undefined);
-  assert.equal(pipeline.providerRequest.body, undefined);
-  assert.equal(pipeline.providerResponse.body, undefined);
-  assert.equal(pipeline.clientResponse.body, undefined);
-  assert.ok(pipeline.streamChunks.provider.length > 0);
-
-  await trace!.finish();
-  assert.equal(
-    (await decoded(trace!.traceId, trace!.traceId, "client-request")).toString("utf8"),
-    serialized
+  const rawBodySnapshot = raw.body;
+  const pendingConnectionId = "private-capture-body-release-test";
+  const pendingId = trackPendingRequest(
+    "gemini-3.8-flash",
+    "antigravity",
+    pendingConnectionId,
+    true,
+    {
+      clientRequest: raw.body,
+    }
   );
+  assert.ok(pendingId);
+  try {
+    const pending = getPendingById().get(pendingId!);
+    const pendingBody = pending?.clientRequest as
+      { messages?: Array<{ content?: unknown }> } | undefined;
+    assert.notStrictEqual(pendingBody, rawBodySnapshot);
+    assert.ok(
+      typeof pendingBody?.messages?.[0]?.content === "string" &&
+        pendingBody.messages[0].content.length <= 1203,
+      "pending details keep only the bounded preview"
+    );
+    const log = await createRequestLogger(undefined, undefined, undefined, {
+      enabled: true,
+      provider: "antigravity",
+      diagnosticOverflowEligible: true,
+      diagnosticOverflowOnly: true,
+      diagnosticClientBody: () => serialized,
+    });
+    const trace = log.getDiagnosticOverflowTrace();
+    assert.ok(trace);
+
+    log.logClientRawRequest("/v1/chat/completions", body, { "content-type": "application/json" });
+    log.logOpenAIRequest(body);
+    log.logTargetRequest("https://synthetic.invalid/generate", {}, { request: body });
+    log.logProviderResponse(200, "OK", {}, { response: "large body" });
+    log.logConvertedResponse({ response: "large client body" });
+    log.appendProviderChunk("data: synthetic provider stream\n\n");
+
+    (raw as { effectiveInput?: unknown }).effectiveInput = body.messages;
+    assert.equal(
+      releaseClientRawRequestBodyForPrivateCapture(raw, log.diagnosticOverflowOnly, false),
+      true
+    );
+    assert.equal(raw.body, undefined);
+    assert.strictEqual((raw as { effectiveInput?: unknown }).effectiveInput, body.messages);
+    const comboClientRawRequest = { body };
+    assert.equal(
+      releaseClientRawRequestBodyForPrivateCapture(comboClientRawRequest, true, true),
+      false
+    );
+    assert.strictEqual(
+      comboClientRawRequest.body,
+      body,
+      "combo failures retain the body for the outer rejection artifact"
+    );
+    assert.equal(releaseClientRawRequestBodyForPrivateCapture({ body }, false, false), false);
+
+    const pipeline = log.getPipelinePayloads() as Record<string, any>;
+    assert.equal(log.diagnosticOverflowOnly, true);
+    assert.equal(pipeline.diagnosticOverflowOnly, true);
+    assert.equal(pipeline.clientRawRequest.body, undefined);
+    assert.equal(pipeline.openaiRequest.body, undefined);
+    assert.equal(pipeline.providerRequest.body, undefined);
+    assert.equal(pipeline.providerResponse.body, undefined);
+    assert.equal(pipeline.clientResponse.body, undefined);
+    assert.ok(pipeline.streamChunks.provider.length > 0);
+
+    await trace!.finish();
+    assert.equal(
+      (await decoded(trace!.traceId, trace!.traceId, "client-request")).toString("utf8"),
+      serialized
+    );
+  } finally {
+    trackPendingRequest("gemini-3.8-flash", "antigravity", pendingConnectionId, false);
+  }
 });
 
 test("403 removal and regional disposal retain independent complete attempt responses", async () => {

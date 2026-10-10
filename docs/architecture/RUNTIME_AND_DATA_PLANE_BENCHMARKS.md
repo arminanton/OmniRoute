@@ -971,16 +971,17 @@ synthetic TLS bridge/mock provider; no external provider credentials or requests
 tested 700,000-byte user contexts (about 3.5 MB request bodies), two completion turns per
 conversation, and private overflow capture where noted.
 
-| Conversations | Capture | Direct connections | App MemoryHigh/Max | Result                                                     | App cgroup evidence                                                           |
-| ------------: | ------- | -----------------: | ------------------ | ---------------------------------------------------------- | ----------------------------------------------------------------------------- |
-|            70 | private |                 32 | 3/4 GiB            | 30/100 client requests completed, then 502s                | 1.95 GiB peak; 0 high/max/OOM events; three captured EPIPE transport failures |
-|            70 | private |                 48 | 3/4 GiB            | 60/119 completed, then 502s/header timeouts                | 2.81 GiB peak; 0 high/max/OOM events                                          |
-|            70 | private |                 56 | 3/4 GiB            | 140/140 completed; 140 rows/artifacts/traces               | 3.22 GiB peak; 728 high events; 126 socket-memory throttles; no OOM           |
-|            70 | private |                 64 | 3/4 GiB            | 140/140 completed; 140 rows/artifacts/traces               | 3.22 GiB peak; 804 high events; 20 socket-memory throttles; no OOM            |
-|           100 | none    |                 64 | 3/4 GiB            | 200/200 completed at 200,000-byte contexts                 | 1.72 GiB peak; 0 high/OOM events                                              |
-|           100 | none    |                 64 | 3/4 GiB            | 200/200 completed at 700,000-byte contexts                 | 3.13 GiB peak; 0 high/OOM events                                              |
-|           100 | private |                 64 | 3/4 GiB            | Resource guard returned 503 after 178 successful responses | 3.22 GiB peak; 1,488 high events; 1,585 socket-memory throttles; no OOM       |
-|           100 | private |                100 | 5/6 GiB            | 200/200 completed; 200 rows/artifacts/traces               | 4.85 GiB peak; 0 high/max/OOM/socket-throttle events                          |
+| Conversations | Capture                                           | Direct connections | App MemoryHigh/Max | Result                                                      | App cgroup evidence                                                                    |
+| ------------: | ------------------------------------------------- | -----------------: | ------------------ | ----------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+|            70 | private                                           |                 32 | 3/4 GiB            | 30/100 client requests completed, then 502s                 | 1.95 GiB peak; 0 high/max/OOM events; three captured EPIPE transport failures          |
+|            70 | private                                           |                 48 | 3/4 GiB            | 60/119 completed, then 502s/header timeouts                 | 2.81 GiB peak; 0 high/max/OOM events                                                   |
+|            70 | private                                           |                 56 | 3/4 GiB            | 140/140 completed; 140 rows/artifacts/traces                | 3.22 GiB peak; 728 high events; 126 socket-memory throttles; no OOM                    |
+|            70 | private                                           |                 64 | 3/4 GiB            | 140/140 completed; 140 rows/artifacts/traces                | 3.22 GiB peak; 804 high events; 20 socket-memory throttles; no OOM                     |
+|           100 | none                                              |                 64 | 3/4 GiB            | 200/200 completed at 200,000-byte contexts                  | 1.72 GiB peak; 0 high/OOM events                                                       |
+|           100 | none                                              |                 64 | 3/4 GiB            | 200/200 completed at 700,000-byte contexts                  | 3.13 GiB peak; 0 high/OOM events                                                       |
+|           100 | private, pre-release body clone                   |                 64 | 3/4 GiB            | Resource guard returned 503 after 178 successful responses  | 3.22 GiB peak; 1,488 high events; 1,585 socket-memory throttles; no OOM                |
+|           100 | private, clone released; post-load cancel skipped |                 64 | 3/4 GiB            | 200/200 main turns; 200 ready artifacts and complete traces | 3,221,884,928 B peak (3.00 GiB); 2,248 high events; 1,349 socket throttles; no max/OOM |
+|           100 | private                                           |                100 | 5/6 GiB            | 200/200 completed; 200 rows/artifacts/traces                | 4.85 GiB peak; 0 high/max/OOM/socket-throttle events                                   |
 
 The 32- and 48-connection failures were captured as `TypeError: fetch failed`, cause `EPIPE`, on
 large Antigravity request attempts. They occurred after request dispatch began, so the generation
@@ -1002,7 +1003,21 @@ concurrency cap. The pool sweep indicates that 32 connections are too restrictiv
 large-body synthetic burst and that 56–100 can complete it, but a larger global pool can increase
 per-account pressure. Keep transport concurrency, per-account admission, and OmniRoute routing
 strategy as separate controls; do not use this mock result alone to raise a production pool or claim
-real-provider 429 safety.
+real-provider 429 safety. The 100-session post-release run completed the main 200 requests where the
+pre-release trial shed requests after 178; it skipped only the extra cancellation probe because the
+previous run showed the resource guard shedding that post-load probe. The harness still read all
+200 artifacts and complete request/response traces. A separate 70-session run passed with
+cancellation enabled. The cgroup peak remained at the 3 GiB soft boundary, so repeat matched trials
+before attributing the completion difference to releasing the body clone. The 100-session fixture
+still reports `accountConcurrencyCapVerified=false`.
+
+For direct requests only, after the pending preview has been normalized and a persisted private
+overflow trace is active, chatCore now releases the separate producer-owned `clientRawRequest.body`
+clone. The exact admitted bytes remain in the trace, diagnostic-only call artifacts omit the body,
+and `effectiveInput` is retained; combo attempts keep the clone for outer rejection logging. The
+focused diagnostic integration test verifies preview bounds, combo retention, and byte-identical
+private trace readback. The result is a limited single A/B, not proof that clone release alone
+prevented the 100-session resource shedding.
 
 ### Bun direct-route comparison at 100 sessions
 
