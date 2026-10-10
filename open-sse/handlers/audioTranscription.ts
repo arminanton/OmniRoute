@@ -87,6 +87,25 @@ function normalizeUploadExtension(name: string): string {
   return name.replace(/\.opus$/i, ".ogg");
 }
 
+function sleepWithSignal(ms: number, signal?: AbortSignal | null): Promise<void> {
+  if (!signal) return new Promise((resolve) => setTimeout(resolve, ms));
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
+}
+
 function getUploadedFileName(file: Blob & { name?: unknown }): string {
   return typeof file.name === "string" && file.name.length > 0
     ? normalizeUploadExtension(file.name)
@@ -138,6 +157,13 @@ export async function buildMultipartBody(
   return { body, contentType: "multipart/form-data; boundary=" + boundary };
 }
 
+/** Job-based providers may keep processing after the client drops its poll. */
+export function supportsSharedAudioTranscriptionAdmission(
+  provider: AudioProvider | null | undefined
+): boolean {
+  return Boolean(provider && provider.async !== true && provider.format !== "kie-audio");
+}
+
 /**
  * Infer a suitable Content-Type for Deepgram from the browser-provided MIME
  * type and the original filename.  Deepgram accepts `audio/*` and many raw
@@ -185,7 +211,8 @@ async function handleDeepgramTranscription(
   file,
   modelId,
   token,
-  formData?: FormData
+  formData?: FormData,
+  signal?: AbortSignal | null
 ) {
   const url = new URL(providerConfig.baseUrl);
   url.searchParams.set("model", modelId);
@@ -209,6 +236,7 @@ async function handleDeepgramTranscription(
       "Content-Type": resolveAudioContentType(file),
     },
     body: arrayBuffer,
+    signal: signal ?? undefined,
   });
 
   if (!res.ok) {
@@ -230,7 +258,7 @@ async function handleDeepgramTranscription(
 /**
  * Handle AssemblyAI transcription (async: upload file → submit → poll)
  */
-async function handleAssemblyAITranscription(providerConfig, file, modelId, token) {
+async function handleAssemblyAITranscription(providerConfig, file, modelId, token, signal) {
   const authHeaders = buildAuthHeaders(providerConfig, token);
 
   // Step 1: Upload the audio file
@@ -242,6 +270,7 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
       "Content-Type": "application/octet-stream",
     },
     body: arrayBuffer,
+    signal,
   });
 
   if (!uploadRes.ok) {
@@ -251,6 +280,12 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
   const { upload_url } = await uploadRes.json();
 
   // Step 2: Submit transcription request
+  // Once this dispatch begins the provider may create a durable remote job.
+  // A caller disconnect can no longer safely cancel local ownership because
+  // this adapter has no remote job-cancellation endpoint. Honor abort up to
+  // dispatch, then finish the bounded poll while the route keeps its local
+  // account reservation held.
+  signal?.throwIfAborted();
   const submitRes = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers: {
@@ -276,7 +311,7 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
-    await new Promise((r) => setTimeout(r, 2000));
+    await sleepWithSignal(2000);
 
     const pollRes = await fetch(pollUrl, { headers: authHeaders });
     if (!pollRes.ok) continue;
@@ -298,7 +333,7 @@ async function handleAssemblyAITranscription(providerConfig, file, modelId, toke
 /**
  * Handle Gladia transcription (async: upload file → submit pre-recorded job → poll result_url)
  */
-async function handleGladiaTranscription(providerConfig, file, modelId, token) {
+async function handleGladiaTranscription(providerConfig, file, modelId, token, signal) {
   const authHeaders = buildAuthHeaders(providerConfig, token);
 
   // Step 1: Upload the audio file (multipart/form-data)
@@ -307,6 +342,7 @@ async function handleGladiaTranscription(providerConfig, file, modelId, token) {
     method: "POST",
     headers: { ...authHeaders, "Content-Type": uploadCT },
     body: uploadBody,
+    signal,
   });
 
   if (!uploadRes.ok) {
@@ -316,6 +352,7 @@ async function handleGladiaTranscription(providerConfig, file, modelId, token) {
   const { audio_url } = await uploadRes.json();
 
   // Step 2: Submit the pre-recorded transcription job
+  signal?.throwIfAborted();
   const submitRes = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers: { ...authHeaders, "Content-Type": "application/json" },
@@ -336,7 +373,7 @@ async function handleGladiaTranscription(providerConfig, file, modelId, token) {
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
-    await new Promise((r) => setTimeout(r, 2000));
+    await sleepWithSignal(2000);
 
     const pollRes = await fetch(resultUrl, { headers: authHeaders });
     if (!pollRes.ok) continue;
@@ -359,7 +396,7 @@ async function handleGladiaTranscription(providerConfig, file, modelId, token) {
 /**
  * Handle Soniox transcription (async: upload file → create job → poll → get transcript)
  */
-async function handleSonioxTranscription(providerConfig, file, modelId, token) {
+async function handleSonioxTranscription(providerConfig, file, modelId, token, signal) {
   const authHeaders = buildAuthHeaders(providerConfig, token);
 
   const { body: uploadBody, contentType: uploadContentType } = await buildMultipartBody(file, {});
@@ -367,12 +404,14 @@ async function handleSonioxTranscription(providerConfig, file, modelId, token) {
     method: "POST",
     headers: { ...authHeaders, "Content-Type": uploadContentType },
     body: uploadBody,
+    signal,
   });
   if (!uploadRes.ok) {
     return upstreamErrorResponse(uploadRes, await uploadRes.text());
   }
   const fileId = (await uploadRes.json()).id;
 
+  signal?.throwIfAborted();
   const createRes = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers: { ...authHeaders, "Content-Type": "application/json" },
@@ -392,7 +431,7 @@ async function handleSonioxTranscription(providerConfig, file, modelId, token) {
   const start = Date.now();
   let completed = false;
   while (Date.now() - start < maxWait) {
-    await new Promise((r) => setTimeout(r, 2000));
+    await sleepWithSignal(2000);
     const pollRes = await fetch(statusUrl, { headers: authHeaders });
     if (!pollRes.ok) {
       continue;
@@ -432,13 +471,14 @@ async function handleSonioxTranscription(providerConfig, file, modelId, token) {
  * Handle Nvidia NIM transcription
  * Multipart POST, transform response to { text }
  */
-async function handleNvidiaTranscription(providerConfig, file, modelId, token) {
+async function handleNvidiaTranscription(providerConfig, file, modelId, token, signal) {
   const { body, contentType } = await buildMultipartBody(file, { model: modelId });
 
   const res = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers: { ...buildAuthHeaders(providerConfig, token), "Content-Type": contentType },
     body,
+    signal,
   });
 
   if (!res.ok) {
@@ -456,7 +496,7 @@ async function handleNvidiaTranscription(providerConfig, file, modelId, token) {
  * Handle HuggingFace Inference transcription
  * POST raw binary audio to {baseUrl}/{model_id}, returns { text }
  */
-async function handleHuggingFaceTranscription(providerConfig, file, modelId, token) {
+async function handleHuggingFaceTranscription(providerConfig, file, modelId, token, signal) {
   if (!isValidPathSegment(modelId)) {
     return errorResponse(400, "Invalid model ID");
   }
@@ -470,6 +510,7 @@ async function handleHuggingFaceTranscription(providerConfig, file, modelId, tok
       "Content-Type": resolveAudioContentType(file),
     },
     body: arrayBuffer,
+    signal,
   });
 
   if (!res.ok) {
@@ -498,12 +539,16 @@ function normalizeKieTranscriptionText(recordData: unknown): string {
   return "";
 }
 
-async function handleKieAudioTranscription(providerConfig, file, modelId, token) {
+async function handleKieAudioTranscription(providerConfig, file, modelId, token, signal) {
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
   const fileBuffer = await file.arrayBuffer();
   const fileBase64 = Buffer.from(fileBuffer).toString("base64");
   let data;
   try {
+    // Kie jobs outlive this HTTP request and the adapter has no remote cancel
+    // operation. Check abort before dispatch, then retain local occupancy while
+    // polling the accepted task to a terminal state.
+    signal?.throwIfAborted();
     data = await kieExecutor.createTask({
       baseUrl,
       token,
@@ -516,6 +561,7 @@ async function handleKieAudioTranscription(providerConfig, file, modelId, token)
       },
     });
   } catch (err: unknown) {
+    if (signal?.aborted) return errorResponse(499, "Transcription request cancelled");
     const status =
       typeof err === "object" && err !== null && "status" in err
         ? Number((err as { status?: unknown }).status) || 502
@@ -585,7 +631,7 @@ async function pollKieTranscriptionResult(baseUrl, modelId, taskId, token) {
  * (field "media"), avoiding AssemblyAI's separate upload step. Once the job
  * reaches a terminal state we fetch the plain-text transcript.
  */
-async function handleRevAiTranscription(providerConfig, file, modelId, token) {
+async function handleRevAiTranscription(providerConfig, file, modelId, token, signal) {
   const authHeaders = buildAuthHeaders(providerConfig, token);
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
 
@@ -593,6 +639,7 @@ async function handleRevAiTranscription(providerConfig, file, modelId, token) {
   const options = JSON.stringify({ transcriber: modelId });
   const { body, contentType } = await buildMultipartBody(file, { options }, "media");
 
+  signal?.throwIfAborted();
   const submitRes = await fetch(`${baseUrl}/jobs`, {
     method: "POST",
     headers: { ...authHeaders, "Content-Type": contentType },
@@ -611,7 +658,7 @@ async function handleRevAiTranscription(providerConfig, file, modelId, token) {
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
-    await new Promise((r) => setTimeout(r, 2000));
+    await sleepWithSignal(2000);
 
     const pollRes = await fetch(jobUrl, { headers: authHeaders });
     if (!pollRes.ok) continue;
@@ -677,7 +724,7 @@ async function pollSpeechmaticsJob(jobUrl, authHeaders) {
   const start = Date.now();
 
   while (Date.now() - start < maxWait) {
-    await new Promise((r) => setTimeout(r, 2000));
+    await sleepWithSignal(2000);
 
     const pollRes = await fetch(jobUrl, { headers: authHeaders });
     if (!pollRes.ok) continue;
@@ -705,7 +752,7 @@ async function pollSpeechmaticsJob(jobUrl, authHeaders) {
  * the requested transcription options. Streaming (real-time WebSocket) mode is
  * out of scope for v1 — this handler only implements batch (REST) transcription.
  */
-async function handleSpeechmaticsTranscription(providerConfig, file, modelId, token) {
+async function handleSpeechmaticsTranscription(providerConfig, file, modelId, token, signal) {
   const authHeaders = buildAuthHeaders(providerConfig, token);
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
 
@@ -716,6 +763,7 @@ async function handleSpeechmaticsTranscription(providerConfig, file, modelId, to
   });
   const { body, contentType } = await buildMultipartBody(file, { config }, "data_file");
 
+  signal?.throwIfAborted();
   const submitRes = await fetch(baseUrl, {
     method: "POST",
     headers: { ...authHeaders, "Content-Type": contentType },
@@ -756,6 +804,8 @@ export async function handleAudioTranscription({
   resolvedModel?: string | null;
   signal?: AbortSignal | null;
 }): Promise<Response> {
+  if (signal?.aborted) return errorResponse(499, "Transcription request cancelled");
+
   const model = formData.get("model");
   if (typeof model !== "string" || !model) {
     return errorResponse(400, "model is required");
@@ -828,9 +878,11 @@ export async function handleAudioTranscription({
         mimeType: uploadedType,
         prompt: typeof promptValue === "string" ? promptValue : undefined,
         language: typeof languageValue === "string" ? languageValue : undefined,
+        signal: signal ?? undefined,
       });
       return Response.json({ text }, { headers: { ...CORS_HEADERS } });
     } catch (err) {
+      if (signal?.aborted) return errorResponse(499, "Transcription request cancelled");
       const error = err as { message?: string; status?: number };
       return errorResponse(
         typeof error?.status === "number" ? error.status : 500,
@@ -840,43 +892,43 @@ export async function handleAudioTranscription({
   }
 
   if (providerConfig.format === "deepgram") {
-    return handleDeepgramTranscription(providerConfig, file, modelId, token, formData);
+    return handleDeepgramTranscription(providerConfig, file, modelId, token, formData, signal);
   }
 
   if (providerConfig.format === "assemblyai") {
-    return handleAssemblyAITranscription(providerConfig, file, modelId, token);
+    return handleAssemblyAITranscription(providerConfig, file, modelId, token, signal);
   }
 
   if (providerConfig.format === "gladia") {
-    return handleGladiaTranscription(providerConfig, file, modelId, token);
+    return handleGladiaTranscription(providerConfig, file, modelId, token, signal);
   }
 
   if (providerConfig.format === "soniox") {
-    return handleSonioxTranscription(providerConfig, file, modelId, token);
+    return handleSonioxTranscription(providerConfig, file, modelId, token, signal);
   }
 
   if (providerConfig.format === "nvidia-asr") {
-    return handleNvidiaTranscription(providerConfig, file, modelId, token);
+    return handleNvidiaTranscription(providerConfig, file, modelId, token, signal);
   }
 
   if (providerConfig.format === "huggingface-asr") {
-    return handleHuggingFaceTranscription(providerConfig, file, modelId, token);
+    return handleHuggingFaceTranscription(providerConfig, file, modelId, token, signal);
   }
 
   if (providerConfig.format === "kie-audio") {
-    return handleKieAudioTranscription(providerConfig, file, modelId, token);
+    return handleKieAudioTranscription(providerConfig, file, modelId, token, signal);
   }
 
   if (providerConfig.format === "rev-ai") {
-    return handleRevAiTranscription(providerConfig, file, modelId, token);
+    return handleRevAiTranscription(providerConfig, file, modelId, token, signal);
   }
 
   if (providerConfig.format === "speechmatics") {
-    return handleSpeechmaticsTranscription(providerConfig, file, modelId, token);
+    return handleSpeechmaticsTranscription(providerConfig, file, modelId, token, signal);
   }
 
   if (providerConfig.format === "openrouter-stt") {
-    return handleOpenRouterTranscription(providerConfig, file, modelId, token, formData);
+    return handleOpenRouterTranscription(providerConfig, file, modelId, token, formData, signal);
   }
 
   // Default: OpenAI/Groq/Qwen3-compatible multipart proxy
@@ -904,6 +956,7 @@ export async function handleAudioTranscription({
       method: "POST",
       headers: { ...buildAuthHeaders(providerConfig, token), "Content-Type": multipartCT },
       body: multipartBody,
+      signal: signal ?? undefined,
     });
 
     if (!res.ok) {
@@ -918,6 +971,7 @@ export async function handleAudioTranscription({
       headers: { "Content-Type": respContentType },
     });
   } catch (err) {
+    if (signal?.aborted) return errorResponse(499, "Transcription request cancelled");
     const error = err instanceof Error ? err : new Error(String(err));
     return errorResponse(500, `Transcription request failed: ${error.message}`);
   }

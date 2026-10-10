@@ -1,7 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-const { handleAudioTranscription } = await import("../../open-sse/handlers/audioTranscription.ts");
+const { handleAudioTranscription, supportsSharedAudioTranscriptionAdmission } =
+  await import("../../open-sse/handlers/audioTranscription.ts");
+
+test("shared transcription admission excludes remote-job providers that cannot be cancelled", () => {
+  assert.equal(supportsSharedAudioTranscriptionAdmission({ id: "openai" } as any), true);
+  assert.equal(
+    supportsSharedAudioTranscriptionAdmission({ id: "maxai", format: "maxai-stt" } as any),
+    true
+  );
+  assert.equal(
+    supportsSharedAudioTranscriptionAdmission({ id: "assemblyai", async: true } as any),
+    false
+  );
+  assert.equal(
+    supportsSharedAudioTranscriptionAdmission({ id: "kie", format: "kie-audio" } as any),
+    false
+  );
+});
 
 function buildFile(contents, name, type) {
   return new File([Buffer.from(contents)], name, { type });

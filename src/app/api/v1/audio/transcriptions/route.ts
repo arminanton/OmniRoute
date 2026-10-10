@@ -1,6 +1,9 @@
 // Allow up to five minutes for providers; multipart uploads retain the shared audio limit.
 export const maxDuration = 300;
-import { handleAudioTranscription } from "@omniroute/open-sse/handlers/audioTranscription.ts";
+import {
+  handleAudioTranscription,
+  supportsSharedAudioTranscriptionAdmission,
+} from "@omniroute/open-sse/handlers/audioTranscription.ts";
 import {
   getProviderCredentialsWithQuotaPreflight,
   clearRecoveredProviderState,
@@ -32,12 +35,26 @@ import { enforceClientApiRouteAuth } from "@/shared/utils/clientApiRouteAuth";
 import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { runtimePolicyErrorResponse } from "@omniroute/open-sse/utils/error.ts";
 import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
+import {
+  acquireConfiguredSharedAccountAdmission,
+  markAccountAdmissionFailureResponse,
+} from "@omniroute/open-sse/services/accountRequestAdmission.ts";
 import { runMaxaiConnectionTransport } from "@omniroute/open-sse/services/maxaiTransport.ts";
 import {
   MAX_BODY_BYTES_AUDIO,
   readRequestBodyWithLimit,
   RequestBodyTooLargeError,
 } from "@/shared/middleware/bodySizeGuard";
+
+function accountAdmissionUnavailableResponse(status: number, message: string): Response {
+  return markAccountAdmissionFailureResponse(errorResponse(status, message));
+}
+
+function releaseCredentialSelection(credentials: unknown): void {
+  const release = (credentials as { releaseAccountRequest?: unknown } | null)
+    ?.releaseAccountRequest;
+  if (typeof release === "function") (release as () => void)();
+}
 
 /** No generic proxy wrapper and no missing-account direct path. */
 async function runMaxaiTranscriptionTransport(
@@ -95,6 +112,7 @@ async function transcribeWithModel(
   startTime: number,
   request: Request
 ): Promise<Response> {
+  if (request.signal.aborted) return errorResponse(499, "Transcription request cancelled");
   // Combo targets must pass the same model restrictions as direct requests.
   const targetPolicy = await enforceApiKeyPolicy(request, modelStr);
   if (targetPolicy.rejection) return targetPolicy.rejection;
@@ -130,6 +148,10 @@ async function transcribeWithModel(
     credentials = await getProviderCredentialsWithQuotaPreflight(credentialKey, null, null, null, {
       reserveAccountRequest: true,
     });
+    if (request.signal.aborted) {
+      releaseCredentialSelection(credentials);
+      return errorResponse(499, "Transcription request cancelled");
+    }
     // Prefix match wins (`deepgram/nova-3` → native Deepgram). If that
     // provider has no credentials, retry gateways that list the same nested
     // model id (e.g. OpenRouter's `deepgram/nova-3`).
@@ -148,6 +170,10 @@ async function transcribeWithModel(
           null,
           { reserveAccountRequest: true }
         );
+        if (request.signal.aborted) {
+          releaseCredentialSelection(alternateCredentials);
+          return errorResponse(499, "Transcription request cancelled");
+        }
         if (alternateCredentials) {
           if (!isAllRateLimitedCredentials(alternateCredentials)) {
             provider = alternate.provider;
@@ -171,28 +197,78 @@ async function transcribeWithModel(
       );
     }
     if (isAllRateLimitedCredentials(credentials)) {
+      releaseCredentialSelection(credentials);
       return rateLimitedProviderResponse(provider, credentials);
     }
   }
 
+  if (request.signal.aborted) {
+    releaseCredentialSelection(credentials);
+    return errorResponse(499, "Transcription request cancelled");
+  }
+
   const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
+  const releaseReservations = () => {
+    sharedAdmission?.release();
+    releaseAccountRequest();
+  };
   try {
+    if (supportsSharedAudioTranscriptionAdmission(providerConfig)) {
+      const selectedProvider =
+        typeof (credentials as { provider?: unknown } | null)?.provider === "string"
+          ? (credentials as { provider: string }).provider
+          : providerConfig?.credentialProviderId || provider;
+      try {
+        sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+          provider: selectedProvider,
+          credentials,
+          signal: request.signal,
+        });
+      } catch (error) {
+        const admissionError = error as { code?: string; statusCode?: number; message?: string };
+        if (admissionError.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+          return accountAdmissionUnavailableResponse(
+            admissionError.statusCode || HTTP_STATUS.SERVICE_UNAVAILABLE,
+            admissionError.message || "Provider account capacity admission is unavailable"
+          );
+        }
+        throw error;
+      }
+    }
+
     const transcribe = () =>
       handleAudioTranscription({
         formData,
         credentials,
         resolvedProvider: providerConfig,
         resolvedModel,
-        signal: request.signal,
+        signal: sharedAdmission?.signal ?? request.signal,
       });
-    let response =
-      provider === "maxai"
-        ? await runMaxaiTranscriptionTransport(
-            credentials?.connectionId,
-            transcribe,
-            request.signal
-          )
-        : await transcribe();
+    let response: Response;
+    try {
+      response =
+        provider === "maxai"
+          ? await runMaxaiTranscriptionTransport(
+              credentials?.connectionId,
+              transcribe,
+              sharedAdmission?.signal ?? request.signal
+            )
+          : await transcribe();
+    } catch (error) {
+      if (request.signal.aborted || sharedAdmission?.signal.aborted) {
+        return errorResponse(499, "Transcription request cancelled");
+      }
+      throw error;
+    }
+    if (request.signal.aborted || sharedAdmission?.signal.aborted) {
+      try {
+        await response?.body?.cancel(request.signal.reason ?? sharedAdmission?.signal.reason);
+      } catch {
+        // A consumed/locked response body is already on its terminal path.
+      }
+      return errorResponse(499, "Transcription request cancelled");
+    }
     if (response?.ok) {
       await clearRecoveredProviderState(credentials);
       // No text body / playback duration available from the multipart upload, so
@@ -207,7 +283,7 @@ async function transcribeWithModel(
     }
     return response;
   } finally {
-    releaseAccountRequest();
+    releaseReservations();
   }
 }
 

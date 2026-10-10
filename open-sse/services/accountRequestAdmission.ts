@@ -1,6 +1,18 @@
 import { resolveQuotaIdentity } from "./quotaIdentity.ts";
 import { acquireMany } from "./accountSemaphore.ts";
 
+/** Internal control-flow marker for combo engines; it is never exposed as a response header. */
+const terminalAdmissionFailureResponses = new WeakSet<Response>();
+
+export function markAccountAdmissionFailureResponse(response: Response): Response {
+  terminalAdmissionFailureResponses.add(response);
+  return response;
+}
+
+export function isAccountAdmissionFailureResponse(response: Response): boolean {
+  return terminalAdmissionFailureResponses.has(response);
+}
+
 type AdmissionCredentials = {
   connectionId?: string | null;
   id?: string | null;
@@ -27,7 +39,8 @@ export async function acquireConfiguredSharedAccountAdmission(options: {
   if (process.env.OMNI_SHARED_ADMISSION !== "true") return null;
 
   const credentials = options.credentials;
-  const configuredCapacity = credentials?.maxConcurrent;
+  if (!credentials) return null;
+  const configuredCapacity = credentials.maxConcurrent;
   if (
     typeof configuredCapacity !== "number" ||
     !Number.isFinite(configuredCapacity) ||

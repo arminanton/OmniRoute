@@ -1,4 +1,5 @@
 import { classifyUpstreamPolicyRejection } from "../upstreamPolicyRejection.ts";
+import { isAccountAdmissionFailureResponse } from "../accountRequestAdmission.ts";
 /**
  * Retry loop for a combo target that already passed pre-dispatch gates.
  * Lift-as-is from combo.ts:1533–2616. Classify helpers live in
@@ -362,6 +363,13 @@ export async function executeTargetAttempt(opts: {
       effectiveComboStrategy: deps.strategy,
       failoverBeforeRetry: deps.config.failoverBeforeRetry,
     });
+
+    // Audio transcription returns this marker when a configured hard-cap lease
+    // could not be acquired. Do not let generic combo fallback dispatch an async
+    // job provider that is intentionally outside cancellable shared admission.
+    if (isAccountAdmissionFailureResponse(result)) {
+      return { ok: false, response: result };
+    }
 
     // Local network exhaustion is request-terminal. Preserve the exact response
     // before body parsing, health accounting, retry, target advance, or compression.

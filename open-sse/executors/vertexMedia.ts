@@ -227,9 +227,16 @@ export async function vertexGenerateSpeech(
 /** Gemini transcription (audio → text). `audioBase64` is the raw file bytes, base64-encoded. */
 export async function vertexTranscribe(
   credentials: VertexMediaCredentials,
-  options: { model: string; audioBase64: string; mimeType?: string; prompt?: string; language?: string }
+  options: {
+    model: string;
+    audioBase64: string;
+    mimeType?: string;
+    prompt?: string;
+    language?: string;
+    signal?: AbortSignal;
+  }
 ): Promise<string> {
-  const auth = await resolveVertexAuth(credentials);
+  const auth = await resolveVertexAuth(credentials, options.signal);
   const { url, headers } = buildModelRequest(auth, options.model, "generateContent");
   const instruction =
     options.prompt && options.prompt.trim().length > 0
@@ -248,7 +255,12 @@ export async function vertexTranscribe(
       },
     ],
   };
-  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    signal: options.signal,
+  });
   if (!res.ok) throw await vertexError(res);
   return extractText(await res.json());
 }

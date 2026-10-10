@@ -6,7 +6,14 @@ import { readFileSync } from "node:fs";
 import ts from "typescript";
 
 const routeUrl = new URL("../../src/app/api/v1/audio/transcriptions/route.ts", import.meta.url);
-const state = { events: [] as string[], connectionId: "selected", auth: false, policy: false };
+const state = {
+  events: [] as string[],
+  connectionId: "selected",
+  auth: false,
+  policy: false,
+  rateLimited: false,
+  reservations: 0,
+};
 const key = Symbol.for("omniroute.maxai-stt-route");
 Object.defineProperty(globalThis, key, { value: state, configurable: true });
 const prelude = 'const s = globalThis[Symbol.for("omniroute.maxai-stt-route")];';
@@ -29,19 +36,29 @@ const overrides = {
   };`,
   "@/app/api/v1/_shared/audioProviderNodes": "export const resolveDynamicAudioProviders = async () => [];",
   "@/sse/services/auth": `export const getProviderCredentialsWithQuotaPreflight = async () => {
-    s.events.push("credentials"); return {connectionId:s.connectionId, accessToken:"synthetic"};
+    s.events.push("credentials");
+    if (s.rateLimited) {
+      s.reservations++;
+      return {allRateLimited:true, connectionId:s.connectionId, releaseAccountRequest:() => {s.reservations--;}};
+    }
+    return {connectionId:s.connectionId, accessToken:"synthetic"};
   }; export const clearRecoveredProviderState = async () => {s.events.push("healthy");};`,
   "@omniroute/open-sse/services/maxaiTransport.ts": `export const runMaxaiConnectionTransport = async (id,run) => {
     s.events.push("transport:"+id); return run();
   };`,
-  "@omniroute/open-sse/handlers/audioTranscription.ts": `export const handleAudioTranscription = async input => {
+  "@omniroute/open-sse/handlers/audioTranscription.ts": `export const supportsSharedAudioTranscriptionAdmission = () => true;
+    export const handleAudioTranscription = async input => {
     s.events.push("transcribe"); if (!input.signal) throw new Error("missing signal");
     return Response.json({text:"fixture"});
   };`,
+  "@omniroute/open-sse/services/accountRequestAdmission.ts": `export const acquireConfiguredSharedAccountAdmission = async () => null;
+    export const markAccountAdmissionFailureResponse = response => response;`,
+  "@omniroute/open-sse/services/accountRequestLease.ts": `export const reserveSelectedAccountRequest = () => () => {};
+    export const releaseAccountRequestAfterResponseBody = response => response;`,
   "@/domain/omnirouteResponseMeta": "export const attachOmniRouteMetaToResponse = r => r;",
   "@/shared/utils/requestId": "export const generateRequestId = () => 'id';",
-  "@/app/api/v1/_shared/rateLimit": `export const isAllRateLimitedCredentials = () => false;
-    export const rateLimitedProviderResponse = () => {throw new Error("unexpected");};`,
+  "@/app/api/v1/_shared/rateLimit": `export const isAllRateLimitedCredentials = value => value?.allRateLimited === true;
+    export const rateLimitedProviderResponse = () => new Response("rate limited", {status:429});`,
 };
 for (const [name, source] of Object.entries(overrides)) mocks.set(name, source);
 const real = new Set([
@@ -61,7 +78,10 @@ function request() {
   data.set("file", new Blob(["synthetic"], {type:"audio/webm"}), "audio.webm");
   return new Request("http://localhost/api/v1/audio/transcriptions", {method:"POST",body:data});
 }
-test.beforeEach(() => {state.events=[];state.connectionId="selected";state.auth=false;state.policy=false;});
+test.beforeEach(() => {
+  state.events=[];state.connectionId="selected";state.auth=false;state.policy=false;
+  state.rateLimited=false;state.reservations=0;
+});
 test.after(() => {hooks.deregister();Reflect.deleteProperty(globalThis,key);});
 test("selected account transport surrounds transcription, then health recovery", async () => {
   const response = await route.POST(request()); assert.equal(response.status,200);
@@ -71,6 +91,13 @@ test("selected account transport surrounds transcription, then health recovery",
 test("no connection never falls through to direct transcription", async () => {
   state.connectionId=""; const response=await route.POST(request()); assert.equal(response.status,400);
   assert.equal(state.events.includes("transcribe"),false);assert.equal(state.events.includes("healthy"),false);
+});
+test("all-rate-limited selection releases its credential reservation", async () => {
+  state.rateLimited=true;
+  const response=await route.POST(request());
+  assert.equal(response.status,429);
+  assert.equal(state.reservations,0);
+  assert.equal(state.events.includes("transcribe"),false);
 });
 test("auth and model policy reject before provider selection", async () => {
   state.auth=true;assert.equal((await route.POST(request())).status,401);assert.deepEqual(state.events,["auth"]);

@@ -59,7 +59,8 @@ export async function handleOpenRouterTranscription(
   file: Blob & { name?: unknown },
   model: string | null,
   token: string | null,
-  formData: FormData
+  formData: FormData,
+  signal?: AbortSignal | null
 ): Promise<Response> {
   const body: Record<string, unknown> = {
     model,
@@ -93,6 +94,7 @@ export async function handleOpenRouterTranscription(
       method: "POST",
       headers: { ...buildAuthHeaders(provider, token), "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal: signal ?? undefined,
     });
     if (!res.ok) return upstreamErrorResponse(res, await res.text());
     return new Response(await res.text(), {
@@ -100,6 +102,7 @@ export async function handleOpenRouterTranscription(
       headers: { "Content-Type": res.headers.get("content-type") || "application/json" },
     });
   } catch (err) {
+    if (signal?.aborted) return errorResponse(499, "Transcription request cancelled");
     const error = err instanceof Error ? err : new Error(String(err));
     return errorResponse(500, `Transcription request failed: ${error.message}`);
   }
