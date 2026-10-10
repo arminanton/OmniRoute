@@ -588,3 +588,22 @@ test("returns bounded WAITING_FOR_CAPACITY without credential or owner disclosur
   assert.equal("connection" in body, false);
   assert.equal(attemptedExternalCalls, 0);
 });
+
+test("returns a generic eligibility 429 when every allowed connection is rate-limited", async () => {
+  const connection = await seedConnection(1);
+  await providersDb.updateProviderConnection(connection.id, {
+    rateLimitedUntil: new Date(Date.now() + 60_000).toISOString(),
+  });
+  const managed = await seedKey([connection.id]);
+
+  const response = await route.POST(
+    request(managed.key, { action: "acquire", model: "glm/glm-4.6" }, OWNER_A)
+  );
+
+  assert.equal(response.status, 429);
+  const body = await json(response);
+  assert.equal((body.error as { code?: string }).code, "LEASE_ELIGIBILITY_UNAVAILABLE");
+  assert.notEqual(body.state, "WAITING_FOR_CAPACITY");
+  assert.equal(response.headers.has("Retry-After"), false);
+  assert.equal(attemptedExternalCalls, 0);
+});

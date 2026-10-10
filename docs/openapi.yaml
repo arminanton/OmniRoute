@@ -344,9 +344,11 @@ paths:
         Requires an API key with `lease:exclusive` and an explicit non-empty
         `allowedConnections` policy. The opaque owner is bound to the authenticated API key;
         the lease owns an eligible connection, not a provider or model. Managed inference
-        requests present the owner and exact generation headers. Temporary foreign occupancy
-        returns 429 `WAITING_FOR_CAPACITY` with `Retry-After`. Acquire, renew, and release retain
-        their connection-free response shapes. The explicit status action is owner-, key-, and
+        requests present the owner and exact generation headers. A temporary foreign lease
+        occupancy returns 429 `WAITING_FOR_CAPACITY` with `Retry-After`; when all eligible
+        connections are rate-limited or expired/ineligible, acquisition instead returns a generic
+        `LEASE_ELIGIBILITY_UNAVAILABLE` error with 429. Acquire, renew, and release retain their
+        connection-free response shapes. The explicit status action is owner-, key-, and
         generation-fenced and returns only privacy-safe display metadata for an active binding.
       security:
         - BearerAuth: []
@@ -404,14 +406,20 @@ paths:
         "415":
           description: Lifecycle mutations require application/json
         "429":
-          description: Eligible managed connections are held by foreign active leases
+          description: >-
+            Either temporary lease occupancy (`WAITING_FOR_CAPACITY`, with `Retry-After`) or
+            rate-limited or expired/ineligible connections (`LEASE_ELIGIBILITY_UNAVAILABLE`, without a
+            guaranteed `Retry-After`).
           headers:
             Retry-After:
+              description: Seconds until an eligible connection lease may become available; only present for WAITING_FOR_CAPACITY.
               schema: { type: integer, minimum: 1, maximum: 3600 }
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ExclusiveConnectionLeaseCapacity"
+                oneOf:
+                  - $ref: "#/components/schemas/ExclusiveConnectionLeaseCapacity"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
   # --- Playground + Search Tools (plans 17+18) ---
   /api/playground/improve-prompt:
     post:
