@@ -16,6 +16,11 @@ const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-9router-r
 process.env.DATA_DIR = TEST_DATA_DIR;
 process.env.NODE_ENV = "test";
 process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
+// GET status consults the npm registry for a cached latest version. Keep this
+// focused route test offline and fail that optional lookup fast; the handler
+// already treats npm lookup failure as an unavailable latestVersion.
+const ORIGINAL_PATH = process.env.PATH;
+process.env.PATH = "";
 
 // Bootstrap DB and seed service row
 const core = await import("../../../../src/lib/db/core.ts");
@@ -45,6 +50,8 @@ function makeRequest(url: string, headers?: Record<string, string>): Request {
 }
 
 after(() => {
+  if (ORIGINAL_PATH === undefined) delete process.env.PATH;
+  else process.env.PATH = ORIGINAL_PATH;
   core.resetDbInstance();
   fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
@@ -54,6 +61,7 @@ describe("GET /api/services/9router/status", () => {
     const req = makeRequest("http://localhost/api/services/9router/status");
     const res = await GET(req);
     assert.equal(res.status, 200);
+    assert.equal(res.headers.get("Cache-Control"), null, "only the raw-key reveal is no-store");
     const body = await res.json();
     assert.ok("apiKeyMasked" in body, "should have apiKeyMasked");
     assert.ok(!("apiKeyPlain" in body), "should NOT have apiKeyPlain");
@@ -87,6 +95,7 @@ describe("GET /api/services/9router/status", () => {
     });
     const res = await GET(req);
     assert.equal(res.status, 200);
+    assert.equal(res.headers.get("Cache-Control"), "no-store");
     const body = await res.json();
     assert.ok(typeof body.apiKeyPlain === "string", "should have apiKeyPlain string");
     assert.ok(body.apiKeyPlain.startsWith("nr_"), "plain key should start with nr_");

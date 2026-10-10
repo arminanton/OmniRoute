@@ -67,7 +67,10 @@ export async function GET(request: Request = new Request("http://localhost/")): 
         /* best-effort */
       }
 
-      return Response.json({ ...base, apiKeyPlain: apiKey });
+      return Response.json(
+        { ...base, apiKeyPlain: apiKey },
+        { headers: { "Cache-Control": "no-store" } }
+      );
     }
 
     return Response.json(base);

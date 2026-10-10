@@ -101,6 +101,21 @@ const operations = [
   ["post", "/api/radar/offers/sync"],
   ["get", "/api/radar/referrals"],
   ["get", "/api/radar/settings"],
+  ["post", "/api/services/9router/rotate-key"],
+  ["post", "/api/services/9router/start"],
+  ["get", "/api/services/9router/status"],
+  ["post", "/api/services/9router/stop"],
+  ["post", "/api/services/9router/update"],
+  ["post", "/api/services/bifrost/auto-restart-adopted"],
+  ["post", "/api/services/bifrost/auto-start"],
+  ["post", "/api/services/bifrost/install"],
+  ["post", "/api/services/bifrost/restart"],
+  ["post", "/api/services/bifrost/start"],
+  ["get", "/api/services/bifrost/status"],
+  ["post", "/api/services/bifrost/stop"],
+  ["post", "/api/services/bifrost/update"],
+  ["get", "/api/services/cliproxy/accounts"],
+  ["post", "/api/services/cliproxy/auto-restart-adopted"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -115,7 +130,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 89 effective OpenAPI operations", () => {
+test("the audited batches declare all 104 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -413,6 +428,58 @@ test("Radar endpoints remain conditional MANAGEMENT routes with flag-order and c
   assert.match(operation("get", "/api/radar/settings").description, /masked key suffix.*raw supporter key is never returned/i);
   assert.match(operation("post", "/api/radar/intel/sync").description, /supporter key remains server-side/i);
   assert.match(operation("post", "/api/radar/offers/sync").description, /supporter key remains server-side/i);
+});
+
+test("embedded-service endpoints preserve the spawn-capable LOCAL_ONLY gate and admin access-token scope", () => {
+  for (const [method, route] of [
+    ["post", "/api/services/9router/rotate-key"],
+    ["post", "/api/services/9router/start"],
+    ["get", "/api/services/9router/status"],
+    ["post", "/api/services/9router/stop"],
+    ["post", "/api/services/9router/update"],
+    ["post", "/api/services/bifrost/auto-restart-adopted"],
+    ["post", "/api/services/bifrost/auto-start"],
+    ["post", "/api/services/bifrost/install"],
+    ["post", "/api/services/bifrost/restart"],
+    ["post", "/api/services/bifrost/start"],
+    ["get", "/api/services/bifrost/status"],
+    ["post", "/api/services/bifrost/stop"],
+    ["post", "/api/services/bifrost/update"],
+    ["get", "/api/services/cliproxy/accounts"],
+    ["post", "/api/services/cliproxy/auto-restart-adopted"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.equal(routeOperation["x-local-only"], true, `${method.toUpperCase()} ${route}`);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.match(routeOperation.description, /LOCAL_ONLY/);
+    assert.match(routeOperation.description, /loopback.*trusted private-LAN/i);
+    assert.match(routeOperation.description, /no remote manage-scope bypass/i);
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.match(routeOperation.description, /`oma_`.*`admin`.*`\/api\/services\/\*`/s);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+});
+
+test("9Router status scopes and no-store handling cover its explicit raw-key reveal branch", () => {
+  const status = operation("get", "/api/services/9router/status");
+  assert.match(status.description, /`reveal=key`.*`X-Reveal-Confirm: yes`/s);
+  assert.match(status.description, /confirmation gate, not authentication/i);
+  assert.equal(status["x-local-only"], true);
+  assert.equal(status.responses["200"]["x-sensitive"], true);
+  assert.equal(status.responses["200"].headers["Cache-Control"].schema.const, "no-store");
+  assert.ok(status.parameters.some((parameter: any) => parameter.name === "reveal" && parameter.in === "query"));
+  assert.ok(status.parameters.some((parameter: any) => parameter.name === "X-Reveal-Confirm" && parameter.in === "header"));
+  const extended = spec.components.schemas.ServiceStatusExtended;
+  const allOfObject = extended.allOf.find((part: any) => part.properties?.apiKeyPlain);
+  assert.equal(allOfObject.properties.apiKeyPlain["x-sensitive"], true);
+  assert.equal(allOfObject.properties.apiKeyPlain.readOnly, true);
+
+  const cliproxyAccounts = operation("get", "/api/services/cliproxy/accounts");
+  assert.equal(cliproxyAccounts.responses["200"]["x-sensitive"], true);
+  assert.equal(cliproxyAccounts.responses["200"].headers["Cache-Control"].schema.const, "no-store");
 });
 
 test("job history and MCP operational outputs are sensitive", () => {

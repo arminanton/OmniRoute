@@ -9037,10 +9037,23 @@ paths:
       summary: Start 9Router
       description: >-
         Spawns the 9Router process. Idempotent if already running.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. Within that boundary,
+        `requireLogin=false` permits anonymous local/LAN access; when locked, management credentials
+        are required and scoped `oma_` tokens need `admin` on `/api/services/*`. Process state and
+        metadata are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Service started (or already running)
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9048,7 +9061,22 @@ paths:
         "409":
           description: 9Router is not installed
         "503":
-          description: Start failed
+          description: Start failed or management authentication is temporarily unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
 
   /api/services/9router/stop:
     post:
@@ -9058,16 +9086,39 @@ paths:
       summary: Stop 9Router
       description: >-
         Gracefully stops 9Router (SIGTERM → 15 s → SIGKILL). Idempotent.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. Within that boundary,
+        `requireLogin=false` permits anonymous local/LAN access; when locked, management credentials
+        are required and scoped `oma_` tokens need `admin` on `/api/services/*`. Process state is
+        sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Service stopped
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatus"
-        "503":
-          description: Stop failed
+        "500":
+          description: Stop failed.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/9router/restart:
     post:
@@ -9094,7 +9145,19 @@ paths:
       summary: Update 9Router to a newer npm version
       description: >-
         Stops the service (if running), installs the newer npm version, then restarts.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. Within that boundary,
+        `requireLogin=false` permits anonymous local/LAN access; when locked, management credentials
+        are required and scoped `oma_` tokens need `admin` on `/api/services/*`.
+        The update changes installed code and may expose install paths/version metadata.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: false
         content:
@@ -9108,6 +9171,7 @@ paths:
       responses:
         "200":
           description: Update succeeded
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9123,6 +9187,16 @@ paths:
           description: Invalid request body
         "500":
           description: Update failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/9router/rotate-key:
     post:
@@ -9133,10 +9207,23 @@ paths:
       description: >-
         Generates a new API key, encrypts it at-rest, and restarts the service to
         apply it. The plaintext key is never returned.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. Within that boundary,
+        `requireLogin=false` permits anonymous local/LAN access; when locked, management credentials
+        are required and scoped `oma_` tokens need `admin` on `/api/services/*`. The key is
+        sensitive even though it is not included in this response.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Key rotated
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9148,6 +9235,16 @@ paths:
                     type: boolean
         "500":
           description: Rotation failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/9router/status:
     get:
@@ -9156,17 +9253,58 @@ paths:
       tags: [Embedded Services]
       summary: Get 9Router status
       description: >-
-        Returns combined live supervisor state and DB metadata.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Returns live supervisor and DB metadata including process ID/port, health, errors, versions,
+        policy flags, and the masked service API key. With `reveal=key`, the raw key is returned only
+        when the caller also sends `X-Reveal-Confirm: yes`; this header is a confirmation gate, not
+        authentication. The plaintext reveal response is `Cache-Control: no-store`. **LOCAL_ONLY** —
+        only loopback and trusted private-LAN peers pass the locality gate; this spawn-capable service
+        prefix has no remote manage-scope bypass. Within that boundary, `requireLogin=false` permits
+        anonymous local/LAN access; when locked, management credentials are required and scoped
+        `oma_` tokens need `admin` on `/api/services/*`. Status and credential data are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: reveal
+          in: query
+          required: false
+          description: Set to `key` to include the plaintext API key; still requires LOCAL_ONLY access.
+          schema: { type: string, enum: [key] }
+        - name: X-Reveal-Confirm
+          in: header
+          required: false
+          description: Must equal `yes` when `reveal=key`; this is not an authentication credential.
+          schema: { type: string, const: "yes" }
       responses:
         "200":
-          description: Status response
+          description: Status response; `reveal=key` includes the raw 9Router key only after the confirmation header.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              description: Returned as `no-store` on the plaintext-key reveal branch.
+              schema: { type: string, const: no-store }
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatusExtended"
         "500":
           description: Status read failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, auth scope is insufficient, or the reveal confirmation header is missing.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "404": { description: No 9Router API key exists to reveal. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/9router/auto-start:
     post:
@@ -9413,8 +9551,21 @@ paths:
       description: >-
         When enabled, an externally-adopted (not OmniRoute-spawned) CLIProxyAPI
         process is restarted under OmniRoute's own supervisor on the next
-        health-check cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        health-check cycle instead of being left as adopted-only. This stores
+        policy and does not itself restart the process. **LOCAL_ONLY** — only
+        loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. Within
+        that boundary, `requireLogin=false` permits anonymous local/LAN access;
+        when locked, management credentials are required and scoped `oma_` tokens
+        need `admin` on `/api/services/*`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -9432,6 +9583,16 @@ paths:
           description: Invalid request body
         "500":
           description: Update failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/mux/install:
     post:
@@ -9645,7 +9806,19 @@ paths:
       description: >-
         Installs the `@maximhq/bifrost` npm package under DATA_DIR/services/bifrost/.
         The package downloads the Go binary on first run. Accepts an optional `version`
-        field (semver or `latest`). **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        field (semver or `latest`). **LOCAL_ONLY** — only loopback and trusted private-LAN peers
+        pass the locality gate; this spawn-capable service prefix has no remote manage-scope bypass.
+        Within that boundary, `requireLogin=false` permits anonymous local/LAN access; when locked,
+        management credentials are required and scoped `oma_` tokens need `admin` on
+        `/api/services/*`. Install paths and version metadata are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: false
         content:
@@ -9659,6 +9832,7 @@ paths:
       responses:
         "200":
           description: Installation result
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9672,6 +9846,18 @@ paths:
                     type: string
                   durationMs:
                     type: number
+        "400": { description: Invalid install request body. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500": { description: Bifrost install failed. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/bifrost/start:
     post:
@@ -9679,16 +9865,47 @@ paths:
       x-local-only: true
       tags: [Embedded Services]
       summary: Start Bifrost
-      description: Starts the supervised Bifrost process. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+      description: >-
+        Starts the supervised Bifrost process. **LOCAL_ONLY** — only loopback and trusted
+        private-LAN peers pass the locality gate; this spawn-capable service prefix has no remote
+        manage-scope bypass. Within that boundary, `requireLogin=false` permits anonymous local/LAN
+        access; when locked, management credentials are required and scoped `oma_` tokens need
+        `admin` on `/api/services/*`. Process state and metadata are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Service status after start
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceSupervisorStatus"
         "409":
           description: Bifrost is not installed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          description: Bifrost start or management authentication failed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
 
   /api/services/bifrost/stop:
     post:
@@ -9696,14 +9913,39 @@ paths:
       x-local-only: true
       tags: [Embedded Services]
       summary: Stop Bifrost
-      description: Stops the supervised Bifrost process. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+      description: >-
+        Stops the supervised Bifrost process. **LOCAL_ONLY** — only loopback and trusted
+        private-LAN peers pass the locality gate; this spawn-capable service prefix has no remote
+        manage-scope bypass. Within that boundary, `requireLogin=false` permits anonymous local/LAN
+        access; when locked, management credentials are required and scoped `oma_` tokens need
+        `admin` on `/api/services/*`. Process state is sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Service status after stop
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/BifrostStopResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500": { description: Bifrost stop failed. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/bifrost/restart:
     post:
@@ -9711,16 +9953,47 @@ paths:
       x-local-only: true
       tags: [Embedded Services]
       summary: Restart Bifrost
-      description: Restarts the supervised Bifrost process. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+      description: >-
+        Restarts the supervised Bifrost process. **LOCAL_ONLY** — only loopback and trusted
+        private-LAN peers pass the locality gate; this spawn-capable service prefix has no remote
+        manage-scope bypass. Within that boundary, `requireLogin=false` permits anonymous local/LAN
+        access; when locked, management credentials are required and scoped `oma_` tokens need
+        `admin` on `/api/services/*`. Process state is sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Service status after restart
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceSupervisorStatus"
         "409":
           description: Bifrost is not installed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503":
+          description: Bifrost restart or management authentication failed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
 
   /api/services/bifrost/update:
     post:
@@ -9731,14 +10004,38 @@ paths:
       description: >-
         Updates Bifrost to the latest npm version. Stops the running process,
         installs the new version, and restarts if it was previously running.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. Within that boundary,
+        `requireLogin=false` permits anonymous local/LAN access; when locked, management credentials
+        are required and scoped `oma_` tokens need `admin` on `/api/services/*`. Version and process
+        metadata are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Update result
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/BifrostUpdateResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500": { description: Bifrost update failed. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/bifrost/status:
     get:
@@ -9746,14 +10043,40 @@ paths:
       x-local-only: true
       tags: [Embedded Services]
       summary: Get Bifrost status
-      description: Returns live and DB status for the supervised Bifrost service. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+      description: >-
+        Returns Bifrost live and DB status, including PID/port, health, errors, versions, and
+        policy metadata. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the
+        locality gate; this spawn-capable service prefix has no remote manage-scope bypass. Within
+        that boundary, `requireLogin=false` permits anonymous local/LAN access; when locked,
+        management credentials are required and scoped `oma_` tokens need `admin` on
+        `/api/services/*`. Process metadata is sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Bifrost service status
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/BifrostStatusResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500": { description: Bifrost status could not be read. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/bifrost/auto-start:
     post:
@@ -9763,7 +10086,19 @@ paths:
       summary: Toggle Bifrost auto-start
       description: >-
         When enabled, Bifrost starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        This updates the boot policy and does not start the service immediately. **LOCAL_ONLY** —
+        only loopback and trusted private-LAN peers pass the locality gate; this spawn-capable
+        service prefix has no remote manage-scope bypass. Within that boundary, `requireLogin=false`
+        permits anonymous local/LAN access; when locked, management credentials are required and
+        scoped `oma_` tokens need `admin` on `/api/services/*`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -9779,6 +10114,17 @@ paths:
           description: Auto-start flag updated
         "400":
           description: Invalid request body
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "500": { description: Auto-start setting could not be updated. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/bifrost/auto-restart-adopted:
     post:
@@ -9790,7 +10136,19 @@ paths:
         When enabled, an externally-adopted (not OmniRoute-spawned) Bifrost
         process is restarted under OmniRoute's own supervisor on the next
         health-check cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        This stores policy for adopted processes; it does not itself restart one. **LOCAL_ONLY** —
+        only loopback and trusted private-LAN peers pass the locality gate; this spawn-capable
+        service prefix has no remote manage-scope bypass. Within that boundary, `requireLogin=false`
+        permits anonymous local/LAN access; when locked, management credentials are required and
+        scoped `oma_` tokens need `admin` on `/api/services/*`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -9808,6 +10166,16 @@ paths:
           description: Invalid request body
         "500":
           description: Update failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/dario/install:
     post:
@@ -31013,9 +31381,25 @@ paths:
         - Services
       summary: "GET services › cliproxy › accounts"
       x-local-only: true
+      description: >-
+        Returns sanitized CLIProxy account-health details; raw authentication credentials are
+        omitted. The handler also calls `requireManagementAuth`. **LOCAL_ONLY** — only loopback and
+        trusted private-LAN peers pass the locality gate; the spawn-capable service prefix has no
+        remote manage-scope bypass. Within that boundary, `requireLogin=false` permits anonymous
+        local/LAN access; when locked, management credentials are required and scoped `oma_` tokens
+        need `admin` on `/api/services/*`. Account health and quota metadata are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Sanitized CLIProxy account health; raw auth credentials are omitted.
+          x-sensitive: true
           headers:
             Cache-Control:
               schema: { type: string, const: no-store }
@@ -31023,6 +31407,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CliproxyAccountHealthResult"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY, or the management identity lacks the required scope.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+                  - $ref: "#/components/schemas/StringErrorResponse"
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/services/cliproxy/provider-expose:
     post:
       operationId: postApiServicesCliproxyProviderExpose
@@ -51391,6 +51785,7 @@ components:
           nullable: true
 
     ServiceStatusExtended:
+      x-sensitive: true
       allOf:
         - $ref: "#/components/schemas/ServiceStatus"
         - type: object
@@ -51408,9 +51803,17 @@ components:
             apiKeyMasked:
               type: string
               nullable: true
+              x-sensitive: true
               description: >-
                 Masked API key preview (e.g. "nr_****abcd").
                 Present only for services that use an injected API key (9Router).
+            apiKeyPlain:
+              type: string
+              readOnly: true
+              x-sensitive: true
+              description: >-
+                Raw 9Router API key returned only by GET /api/services/9router/status?reveal=key
+                when X-Reveal-Confirm is exactly `yes`; this reveal response is no-store.
             autoStart:
               type: boolean
             providerExpose:
