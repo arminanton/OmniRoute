@@ -75,7 +75,11 @@ test("startCaptureMode wires the injected CA installer into the decrypt listener
   );
   assert.equal(status.running, true);
   assert.equal(status.onPort, 8443);
-  assert.equal(rec.options?.decrypt?.installCa, installCa, "installCa is passed through to decrypt");
+  assert.equal(
+    rec.options?.decrypt?.installCa,
+    installCa,
+    "installCa is passed through to decrypt"
+  );
   assert.equal(rec.options?.decrypt?.uninstallCa, uninstallCa, "uninstallCa is passed through");
 });
 
@@ -112,11 +116,22 @@ test("getCaptureStatus counts interceptions reported by the listener", async () 
   rec.options?.onIntercept?.({ destIp: "5.6.7.8", destPort: 443 });
   const status = getCaptureStatus();
   assert.equal(status.running, true);
+  assert.equal(typeof status.available, "boolean");
+  assert.equal(Number.isNaN(Date.parse(status.startedAt ?? "")), false);
   assert.equal(status.interceptCount, 2);
+  assert.equal(status.onPort, CFG.onPort);
+  assert.deepEqual(Object.keys(status).sort(), [
+    "available",
+    "interceptCount",
+    "onPort",
+    "running",
+    "startedAt",
+  ]);
 });
 
 test("getCaptureStatus reports not-running when idle", () => {
   const status = getCaptureStatus();
   assert.equal(status.running, false);
   assert.equal(typeof status.available, "boolean");
+  assert.deepEqual(Object.keys(status).sort(), ["available", "running"]);
 });

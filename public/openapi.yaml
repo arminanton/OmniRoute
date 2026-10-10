@@ -53134,8 +53134,17 @@ components:
 
     AgentBridgeTproxyStatus:
       type: object
-      description: Runtime transparent-proxy capture state.
-      additionalProperties: true
+      description: >-
+        Current decrypt-capable transparent-proxy capture state. Idle status omits the active-session
+        fields; running status includes the session start time, intercepted connection count, and listener port.
+      required: [running, available]
+      properties:
+        running: { type: boolean }
+        available: { type: boolean }
+        startedAt: { type: string, format: date-time }
+        interceptCount: { type: integer, minimum: 0 }
+        onPort: { type: integer, minimum: 1, maximum: 65535 }
+      additionalProperties: false
 
     AgentBridgeTproxyActionResponse:
       type: object
