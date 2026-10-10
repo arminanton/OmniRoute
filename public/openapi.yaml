@@ -9814,7 +9814,9 @@ paths:
         manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous local/LAN
         access; otherwise management authentication is required. `oma_` Access Tokens need `admin`
         on `/api/services/*`. Runtime policy mode `locked` blocks the embedded-service install
-        capability independently of request auth.
+        capability independently of request auth. Installer failures use the JSON error envelope;
+        permission denial may return 403, registry/network failure 503, timeout 504, and disk
+        exhaustion 507.
       security:
         - BearerAuth: []
         - ManagementGoogleApiKeyAuth: []
@@ -9834,23 +9836,34 @@ paths:
                 version:
                   type: string
                   default: latest
+                  pattern: "^[A-Za-z0-9][A-Za-z0-9._+-]*$"
       responses:
         "200":
           description: Install succeeded
           x-sensitive: true
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                  installedVersion:
-                    type: string
+              schema: { $ref: "#/components/schemas/ServiceInstallResponse" }
         "400":
           description: Invalid request body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           description: npm install failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "504":
+          description: npm install timed out.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "507":
+          description: Insufficient storage prevented npm install.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
@@ -9890,9 +9903,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ServiceStatus"
+                $ref: "#/components/schemas/MuxSupervisorStatusResponse"
         "409":
           description: Mux is not installed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           description: Start failed or runtime policy denied the service start capability.
           content:
@@ -9936,8 +9952,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ServiceStatus"
-        "500": { description: Stop failed. }
+                $ref: "#/components/schemas/MuxStopResponse"
+        "500":
+          description: Stop failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
@@ -9976,8 +9996,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ServiceStatus"
-        "409": { description: Mux is not installed. }
+                $ref: "#/components/schemas/MuxSupervisorStatusResponse"
+        "409":
+          description: Mux is not installed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
@@ -10014,31 +10038,19 @@ paths:
         - InternalServiceTokenAuth: []
         - {}
       x-sensitive: true
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                version:
-                  type: string
-                  default: latest
       responses:
         "200":
-          description: Update succeeded
+          description: No update was needed, or the latest package was installed successfully.
           x-sensitive: true
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  ok:
-                    type: boolean
-                  installedVersion:
-                    type: string
+                $ref: "#/components/schemas/ServiceVersionUpdateResponse"
         "500":
           description: Update failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
@@ -10080,14 +10092,18 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ServiceStatus"
+                $ref: "#/components/schemas/MuxServiceStatusResponse"
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
-        "500": { description: Status or latest-version lookup failed. }
+        "500":
+          description: Status or latest-version lookup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/mux/auto-start:
@@ -10127,6 +10143,14 @@ paths:
           description: Auto-start flag updated; no response body.
         "400":
           description: Invalid request body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Auto-start setting could not be saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
@@ -10175,8 +10199,14 @@ paths:
           description: Flag updated
         "400":
           description: Invalid request body
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           description: Update failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
@@ -10692,9 +10722,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ServiceStatus"
+                $ref: "#/components/schemas/DarioStopResponse"
         "500":
           description: Stop failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
           description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
@@ -10775,25 +10808,17 @@ paths:
       x-sensitive: true
       responses:
         "200":
-          description: Update result (no-op if already on the latest version)
+          description: No update was needed, or the latest npm package was installed successfully.
+          x-sensitive: true
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  updated:
-                    type: boolean
-                  installedVersion:
-                    type: string
-                  latestVersion:
-                    type: string
-                  oldVersion:
-                    type: string
-                    nullable: true
-                  newVersion:
-                    type: string
+                $ref: "#/components/schemas/ServiceVersionUpdateResponse"
         "500":
           description: Update failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
           x-sensitive: true
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403":
@@ -52736,6 +52761,121 @@ components:
       oneOf:
         - { $ref: "#/components/schemas/CliproxyUpdateCurrentResponse" }
         - { $ref: "#/components/schemas/CliproxyUpdateInstalledResponse" }
+
+    ServiceVersionUpdateCurrentResponse:
+      type: object
+      x-sensitive: true
+      required: [updated, installedVersion, latestVersion]
+      properties:
+        updated: { type: boolean, const: false }
+        installedVersion: { type: string }
+        latestVersion: { type: string }
+      additionalProperties: false
+
+    ServiceVersionUpdateAppliedResponse:
+      type: object
+      x-sensitive: true
+      required: [updated, oldVersion, newVersion]
+      properties:
+        updated: { type: boolean, const: true }
+        oldVersion: { type: [string, "null"] }
+        newVersion: { type: string }
+      additionalProperties: false
+
+    ServiceVersionUpdateResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/ServiceVersionUpdateCurrentResponse" }
+        - { $ref: "#/components/schemas/ServiceVersionUpdateAppliedResponse" }
+
+    MuxSupervisorStatusResponse:
+      type: object
+      x-sensitive: true
+      description: Live Mux supervisor state returned by start and restart.
+      required: [tool, state, pid, port, health, startedAt, lastError, adopted]
+      properties:
+        tool: { type: string, const: mux }
+        state:
+          type: string
+          enum: [not_installed, stopped, starting, running, stopping, error]
+        pid: { type: [integer, "null"] }
+        port: { type: integer }
+        health: { type: string, enum: [healthy, unhealthy, unknown] }
+        startedAt: { type: [string, "null"], format: date-time }
+        lastError: { type: [string, "null"] }
+        adopted: { type: boolean }
+      additionalProperties: false
+
+    MuxStoppedResponse:
+      type: object
+      x-sensitive: true
+      description: Returned when no Mux supervisor is registered.
+      required: [tool, state]
+      properties:
+        tool: { type: string, const: mux }
+        state: { type: string, const: stopped }
+      additionalProperties: false
+
+    MuxStopResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/MuxSupervisorStatusResponse" }
+        - { $ref: "#/components/schemas/MuxStoppedResponse" }
+
+    MuxServiceStatusResponse:
+      type: object
+      x-sensitive: true
+      description: Mux live supervisor and persisted version-manager status; no service token is returned.
+      required: [tool, state, pid, port, health, startedAt, lastError, installedVersion, latestVersion, updateAvailable, autoStart, adopted, autoRestartAdopted]
+      properties:
+        tool: { type: string, const: mux }
+        state: { type: string, description: Supervisor state, persisted service state, or `unknown`. }
+        pid: { type: [integer, "null"] }
+        port: { type: integer, minimum: 1 }
+        health: { type: string, description: Supervisor health state or the fallback `unknown`. }
+        startedAt: { type: [string, "null"], format: date-time }
+        lastError: { type: [string, "null"], x-sensitive: true }
+        installedVersion: { type: [string, "null"] }
+        latestVersion: { type: [string, "null"] }
+        updateAvailable: { type: boolean }
+        autoStart: { type: boolean }
+        adopted: { type: boolean }
+        autoRestartAdopted: { type: boolean }
+      additionalProperties: false
+
+    DarioSupervisorStatusResponse:
+      type: object
+      x-sensitive: true
+      description: Live Dario supervisor state returned by stop when the supervisor is registered.
+      required: [tool, state, pid, port, health, startedAt, lastError, adopted]
+      properties:
+        tool: { type: string, const: dario }
+        state:
+          type: string
+          enum: [not_installed, stopped, starting, running, stopping, error]
+        pid: { type: [integer, "null"] }
+        port: { type: integer }
+        health: { type: string, enum: [healthy, unhealthy, unknown] }
+        startedAt: { type: [string, "null"], format: date-time }
+        lastError: { type: [string, "null"] }
+        adopted: { type: boolean }
+      additionalProperties: false
+
+    DarioStoppedResponse:
+      type: object
+      x-sensitive: true
+      description: Returned when no Dario supervisor is registered.
+      required: [tool, state]
+      properties:
+        tool: { type: string, const: dario }
+        state: { type: string, const: stopped }
+      additionalProperties: false
+
+    DarioStopResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/DarioSupervisorStatusResponse" }
+        - { $ref: "#/components/schemas/DarioStoppedResponse" }
 
     DarioServiceStatusResponse:
       type: object
