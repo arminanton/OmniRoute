@@ -863,7 +863,7 @@ export const OPENAPI_ENDPOINTS: OpenApiEndpoint[] = [
     path: "/api/v1/providers/{provider}/models",
     method: "GET",
     summary: "List models for a specific provider",
-    description: "Returns only models for the selected provider with provider prefixes removed. Registry-backed provider catalogs follow `requireAuthForModels`: when false, access may be anonymous; when enabled, a valid Bearer API key or authenticated dashboard session is required. Service-backend plugin IDs use their configured service catalog branch and do not pass through that API-key gate.",
+    description: "Returns only models for the selected provider with provider prefixes removed. Registry-backed provider catalogs follow `requireAuthForModels`: when false, access may be anonymous; when enabled, a valid Bearer API key, `x-api-key`, `x-goog-api-key`, or authenticated dashboard session is required. Service-backend plugin IDs use their configured service catalog branch and do not pass through that model-catalog API-key gate.",
     tag: "Models",
     tags: ["Models"],
     requiresAuth: false,

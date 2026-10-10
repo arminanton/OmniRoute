@@ -1776,7 +1776,7 @@ paths:
         "401":
           $ref: "#/components/responses/InferenceUnauthorized"
         "502":
-          description: All upstream providers failed
+          $ref: "#/components/responses/InferenceProviderError"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
 
@@ -2072,6 +2072,16 @@ paths:
           $ref: "#/components/responses/InferenceUnauthorized"
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          description: The prompt-injection guard failed before provider dispatch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StringErrorResponse"
+        "502":
+          $ref: "#/components/responses/InferenceProviderError"
+        "504":
+          $ref: "#/components/responses/InferenceProviderError"
 
   /api/v1/embeddings:
     get:
@@ -2871,11 +2881,14 @@ paths:
       description: >-
         Returns only models for the selected provider with provider prefixes removed.
         Registry-backed provider catalogs follow `requireAuthForModels`: when false,
-        access may be anonymous; when enabled, a valid Bearer API key or authenticated
-        dashboard session is required. Service-backend plugin IDs use their configured
-        service catalog branch and do not pass through that API-key gate.
+        access may be anonymous; when enabled, a valid Bearer API key, `x-api-key`,
+        `x-goog-api-key`, or authenticated dashboard session is required. Service-backend
+        plugin IDs use their configured service catalog branch and do not pass through
+        that model-catalog API-key gate.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       parameters:
@@ -2908,6 +2921,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/models:
     get:
@@ -55478,6 +55495,18 @@ components:
           description: >-
             Optional delay in milliseconds between asynchronous job status checks. The provider
             adapter may clamp this to its supported range.
+        max_wait_ms:
+          type: integer
+          minimum: 1
+          description: >-
+            Vertex Veo compatibility alias for `timeout_ms`; applies only when routing to
+            Vertex Veo and is clamped to that provider's supported maximum.
+        maxWaitMs:
+          type: integer
+          minimum: 1
+          description: >-
+            Legacy camel-case Vertex Veo compatibility alias for `timeout_ms`; applies only
+            when routing to Vertex Veo and is clamped to that provider's supported maximum.
         negative_prompt: { type: string }
       additionalProperties: true
 
@@ -56676,7 +56705,7 @@ components:
       required: [messages]
       properties:
         model:
-          type: string
+          type: [string, "null"]
           description: >-
             Model to route to. Optional when `X-Route-Model` is supplied; that header takes
             precedence when both are present.

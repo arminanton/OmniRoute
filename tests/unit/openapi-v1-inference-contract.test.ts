@@ -152,6 +152,18 @@ test("versioned inference request schemas preserve route validation constraints"
     openapi.components.schemas.VideoGenerationRequest.properties?.poll_interval_ms?.minimum,
     1
   );
+  for (const alias of ["max_wait_ms", "maxWaitMs"]) {
+    assert.equal(
+      openapi.components.schemas.VideoGenerationRequest.properties?.[alias]?.type,
+      "integer",
+      `${alias} is a documented Vertex Veo timeout alias`
+    );
+    assert.equal(openapi.components.schemas.VideoGenerationRequest.properties?.[alias]?.minimum, 1);
+    assert.match(
+      openapi.components.schemas.VideoGenerationRequest.properties?.[alias]?.description ?? "",
+      /Vertex Veo.*alias for `timeout_ms`/i
+    );
+  }
 
   const webFetch = requestSchema("/api/v1/web/fetch", "post");
   assertRef(webFetch, "WebFetchRequest");
@@ -325,6 +337,10 @@ test("public inference contracts match route validation and auth error shapes", 
 
   assert.deepEqual(openapi.components.schemas.ChatCompletionRequest.required, ["messages"]);
   assert.equal(openapi.components.schemas.ChatCompletionRequest.properties?.messages?.minItems, 1);
+  assert.deepEqual(openapi.components.schemas.ChatCompletionRequest.properties?.model?.type, [
+    "string",
+    "null",
+  ]);
   assert.equal(
     chat.parameters?.find((parameter) => parameter.name === "X-Route-Model")?.in,
     "header"
@@ -363,10 +379,27 @@ test("public inference contracts match route validation and auth error shapes", 
   assert.ok(chat.responses?.["415"], "chat documents its JSON content-type rejection");
   assert.ok(messages.responses?.["415"], "messages documents its JSON content-type rejection");
   assert.ok(chat.responses?.["413"], "chat documents body/admission byte-limit rejection");
+  assert.equal(
+    chat.responses?.["502"]?.$ref,
+    "#/components/responses/InferenceProviderError",
+    "chat documents the JSON body returned for upstream failure"
+  );
   assert.ok(
     responses.responses?.["413"],
     "responses documents body/admission byte-limit rejection"
   );
+  assert.equal(
+    responses.responses?.["500"]?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/StringErrorResponse",
+    "responses documents the prompt-injection guard's string error body"
+  );
+  for (const status of ["502", "504"]) {
+    assert.equal(
+      responses.responses?.[status]?.$ref,
+      "#/components/responses/InferenceProviderError",
+      `responses documents the shared chat handler's HTTP ${status} JSON error`
+    );
+  }
   const providerChat = openapi.paths["/api/v1/providers/{provider}/chat/completions"]?.post;
   assert.ok(
     providerChat?.responses?.["400"],
@@ -400,6 +433,16 @@ test("public inference contracts match route validation and auth error shapes", 
   assert.match(responsesRoute, /Invalid JSON body/);
   assert.match(routingModel, /return headerModel \|\| body\.model/);
   assert.match(authzPipeline, /error:\s*\{\s*code: outcome\.code,\s*message: outcome\.message,/);
+});
+
+test("provider-scoped model catalog documents supported credentials and catalog failures", () => {
+  const operation = openapi.paths["/api/v1/providers/{provider}/models"]?.get;
+  assert.ok(operation);
+  const schemes = new Set(operation.security?.flatMap((requirement) => Object.keys(requirement)));
+  assert.ok(schemes.has("ClientApiKeyAuth"), "x-api-key is accepted by the model catalog");
+  assert.ok(schemes.has("GoogleApiKeyAuth"), "x-goog-api-key is accepted by the model catalog");
+  assert.equal(operation.responses?.["500"]?.$ref, "#/components/responses/InternalError");
+  assert.equal(operation.responses?.["503"]?.$ref, "#/components/responses/ServiceUnavailable");
 });
 
 test("moderation and rerank schemas match documented non-empty input constraints", () => {
