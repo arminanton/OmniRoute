@@ -188,12 +188,16 @@ test("POST /api/openapi/try documents its bounded management proxy contract", ()
 });
 
 test("configuration-gated model and routing catalogs document anonymous alternatives", () => {
-  const expected = [{ BearerAuth: [] }, { ManagementSessionAuth: [] }, {}];
-  for (const [pathStr, method] of [
-    ["/api/v1/models", "get"],
-    ["/api/v1/providers/{provider}/models", "get"],
-    ["/api/v1/explain/routing", "get"],
-  ] as const) {
+  const contracts = [
+    [
+      "/api/v1/models",
+      "get",
+      [{ BearerAuth: [] }, { ClientApiKeyAuth: [] }, { GoogleApiKeyAuth: [] }, { ManagementSessionAuth: [] }, {}],
+    ],
+    ["/api/v1/providers/{provider}/models", "get", [{ BearerAuth: [] }, { ManagementSessionAuth: [] }, {}]],
+    ["/api/v1/explain/routing", "get", [{ BearerAuth: [] }, { ManagementSessionAuth: [] }, {}]],
+  ] as const;
+  for (const [pathStr, method, expected] of contracts) {
     const operation = paths[pathStr]?.[method];
     assert.deepEqual(operation?.security, expected, `${method.toUpperCase()} ${pathStr}`);
   }

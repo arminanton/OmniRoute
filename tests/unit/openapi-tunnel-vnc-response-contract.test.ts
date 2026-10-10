@@ -9,12 +9,12 @@ const spec = yaml.load(
 ) as { paths: Record<string, Record<string, any>>; components: { schemas: Record<string, any> } };
 
 const routes = [
-  ["get", "/api/tunnels/tailscale/check", ["200", "401", "500"]],
-  ["post", "/api/tunnels/tailscale/disable", ["200", "400", "401", "500"]],
-  ["post", "/api/tunnels/tailscale/enable", ["200", "400", "401", "500"]],
-  ["post", "/api/tunnels/tailscale/install", ["200", "400", "401"]],
-  ["post", "/api/tunnels/tailscale/login", ["200", "400", "401", "500"]],
-  ["post", "/api/tunnels/tailscale/start-daemon", ["200", "400", "401", "500"]],
+  ["get", "/api/tunnels/tailscale/check", ["200", "401", "403", "500", "503"]],
+  ["post", "/api/tunnels/tailscale/disable", ["200", "400", "401", "403", "500", "503"]],
+  ["post", "/api/tunnels/tailscale/enable", ["200", "400", "401", "403", "500", "503"]],
+  ["post", "/api/tunnels/tailscale/install", ["200", "400", "401", "403", "503"]],
+  ["post", "/api/tunnels/tailscale/login", ["200", "400", "401", "403", "500", "503"]],
+  ["post", "/api/tunnels/tailscale/start-daemon", ["200", "400", "401", "403", "500", "503"]],
   ["get", "/api/vnc-session", ["200", "401", "403", "503"]],
   ["delete", "/api/vnc-session/{params}", ["200", "400", "401", "403", "500", "503"]],
   ["get", "/api/vnc-session/{params}", ["200", "400", "401", "403", "404", "503"]],
@@ -43,14 +43,58 @@ test("all audited Tailscale and VNC operations declare source-backed responses",
   }
 });
 
+test("public-safe tunnel error schema matches the implementation reason union", () => {
+  const schema = spec.components.schemas.PublicSafeTunnelErrorBody;
+  assert.deepEqual(schema.required, ["error", "reason"]);
+  assert.equal(schema.properties.error.type, "string");
+  assert.deepEqual(schema.properties.reason.enum, [
+    "not_installed",
+    "permission_denied",
+    "already_running",
+    "timeout",
+    "network",
+    "unknown",
+  ]);
+  assert.equal(schema.additionalProperties, false);
+
+  const source = fs.readFileSync(
+    path.join(process.cwd(), "src/lib/api/publicSafeTunnelError.ts"),
+    "utf8"
+  );
+  const reasonType = source.match(/export type PublicSafeTunnelErrorReason =([\s\S]*?);/);
+  assert.ok(reasonType, "implementation reason union should exist");
+  for (const reason of schema.properties.reason.enum) {
+    assert.match(reasonType[1], new RegExp(`"${reason}"`));
+  }
+});
+
 test("existing LOCAL_ONLY and auth declarations remain intact", () => {
   assert.equal(operation("get", "/api/tunnels/tailscale/check")["x-local-only"], undefined);
-  for (const [method, route] of routes.slice(1)) {
-    assert.equal(operation(method, route)["x-local-only"], true, `${method.toUpperCase()} ${route}`);
-    assert.equal(operation(method, route).security, undefined, `${method.toUpperCase()} ${route} security changed`);
+  const tailscaleSecurity = [
+    { ManagementApiKeyBearerAuth: [] },
+    { ManagementGoogleApiKeyAuth: [] },
+    { ManagementAnthropicApiKeyAuth: [] },
+    { ManagementSessionAuth: [] },
+    {},
+  ];
+  for (const [method, route] of routes.slice(0, 6)) {
+    assert.deepEqual(operation(method, route).security, tailscaleSecurity, `${method.toUpperCase()} ${route}`);
   }
-  for (const [method, route] of routes) {
-    assert.equal(operation(method, route).security, undefined, `${method.toUpperCase()} ${route} security changed`);
+  for (const [method, route] of routes.slice(1, 6)) {
+    assert.equal(operation(method, route)["x-local-only"], true, `${method.toUpperCase()} ${route}`);
+  }
+  const vncSecurity = [
+    { BearerAuth: [] },
+    { ManagementGoogleApiKeyAuth: [] },
+    { ManagementAnthropicApiKeyAuth: [] },
+    { ManagementSessionAuth: [] },
+    { LocalCliTokenAuth: [] },
+    { InternalServiceTokenAuth: [] },
+    {},
+  ];
+  for (const [method, route] of routes.slice(6)) {
+    assert.equal(operation(method, route)["x-local-only"], true, `${method.toUpperCase()} ${route}`);
+    assert.deepEqual(operation(method, route).security, vncSecurity, `${method.toUpperCase()} ${route}`);
   }
 });
 

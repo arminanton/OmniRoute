@@ -208,8 +208,8 @@ test("Command Code callback documents the sensitive payload, origin policy, and 
   const callback = spec.paths["/api/providers/command-code/auth/callback"]?.post;
   assert.ok(callback);
   assert.equal(spec.paths["/api/providers/command-code/auth/callback"]?.options, undefined);
-  assert.match(callback.description ?? "", /OPTIONS preflight/i);
-  assert.match(callback.description ?? "", /Access-Control-Allow-Origin/i);
+  assert.match(callback.description ?? "", /OPTIONS response.*browser preflight/i);
+  assert.match(callback.description ?? "", /CORS headers for allowed origins/i);
 
   const requestSchema = callback.requestBody?.content?.["application/json"]?.schema;
   assert.equal(requestSchema?.$ref, "#/components/schemas/CommandCodeAuthCallbackRequest");
@@ -226,12 +226,21 @@ test("Command Code callback documents the sensitive payload, origin policy, and 
     callback.responses?.["200"]?.content?.["application/json"]?.schema?.$ref,
     "#/components/schemas/CommandCodeAuthCallbackResponse"
   );
-  for (const status of ["400", "403", "413"]) {
+  for (const status of ["400", "413"]) {
     assert.equal(
       callback.responses?.[status]?.content?.["application/json"]?.schema?.$ref,
       "#/components/schemas/CommandCodeAuthCallbackErrorResponse"
     );
   }
+  assert.deepEqual(
+    callback.responses?.["403"]?.content?.["application/json"]?.schema?.oneOf
+      ?.map((branch: { $ref?: string }) => branch.$ref)
+      .sort(),
+    [
+      "#/components/schemas/ApiErrorResponse",
+      "#/components/schemas/CommandCodeAuthCallbackErrorResponse",
+    ].sort()
+  );
   assert.equal(
     spec.components.schemas.CommandCodeAuthCallbackResponse.properties?.apiKey,
     undefined,

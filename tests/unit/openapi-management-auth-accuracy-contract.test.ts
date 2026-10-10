@@ -87,10 +87,12 @@ test("legacy auth helpers document their narrower end-to-end credentials", () =>
     assert.ok((op.security ?? []).some((entry) => Object.keys(entry).length === 0));
     assert.equal(securityNames(op).includes("BearerAuth"), false);
     assert.match(op.description ?? "", /does not accept `oma_live_` access tokens/i);
-    assert.equal(
-      op.responses?.["401"]?.$ref,
-      "#/components/responses/ManagementAuthenticationRequired"
-    );
+    const unauthorized = op.responses?.["401"]?.content?.["application/json"]?.schema;
+    const unauthorizedRefs = unauthorized?.oneOf?.map((branch: any) => branch.$ref) ?? [];
+    assert.deepEqual(unauthorizedRefs.sort(), [
+      "#/components/schemas/ApiErrorResponse",
+      "#/components/schemas/StringErrorResponse",
+    ]);
     const forbidden = op.responses?.["403"];
     assert.ok(
       forbidden?.$ref === "#/components/responses/ManagementInvalidToken" ||

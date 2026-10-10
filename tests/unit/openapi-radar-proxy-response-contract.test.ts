@@ -65,7 +65,8 @@ test("Radar management scopes and non-local routing declarations are preserved",
     assert.equal(operation(method, pathname)["x-local-only"], undefined);
   }
   for (const [method, pathname] of [["post", "/api/radar/settings"], ["get", "/api/radar/status"], ["post", "/api/radar/sync"]]) {
-    assert.equal(operation(method, pathname).security, undefined, `${method.toUpperCase()} ${pathname} retains its existing auth declaration`);
+    assert.equal(operation(method, pathname).security.length, 7, `${method.toUpperCase()} ${pathname} retains management auth`);
+    assert.equal(operation(method, pathname)["x-local-only"], undefined);
   }
 });
 

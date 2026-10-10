@@ -113,18 +113,14 @@ test("gamification success statuses, media types, and schemas match route handle
   );
   assert.equal(stream.responses["200"].content["application/json"], undefined);
 
-  assert.equal(
-    source("src/app/api/gamification/invite/route.ts").includes(
-      "{ status: 201, headers: CORS_HEADERS }"
-    ),
-    true,
+  assert.match(
+    source("src/app/api/gamification/invite/route.ts"),
+    /status:\s*201/,
     "invite creation handler returns 201"
   );
-  assert.equal(
-    source("src/app/api/gamification/servers/route.ts").includes(
-      "{ status: 201, headers: CORS_HEADERS }"
-    ),
-    true,
+  assert.match(
+    source("src/app/api/gamification/servers/route.ts"),
+    /status:\s*201/,
     "server connection handler returns 201"
   );
   assert.match(

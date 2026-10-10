@@ -18,20 +18,20 @@ function operation(method: string, pathname: string) {
 
 const contracts = [
   ["post", "/api/radar/sync-all", ["200", "400", "401", "403", "404", "413", "500", "503"], "RadarSyncAllResponse"],
-  ["get", "/api/synced-available-models", ["200", "401", "500"], "SyncedAvailableModelsResponse"],
+  ["get", "/api/synced-available-models", ["200", "401", "403", "500", "503"], "SyncedAvailableModelsResponse"],
   ["get", "/api/system/env/repair", ["200", "401", "403", "503", "500"], "EnvRepairPlanResponse"],
   ["post", "/api/system/env/repair", ["200", "401", "403", "503", "500"], "EnvRepairApplyResponse"],
   ["post", "/api/telegram/update", ["200", "400", "401", "503"], "TelegramUpdateResponse"],
-  ["get", "/api/token-health", ["200", "500"], "TokenHealthResponse"],
-  ["post", "/api/translator/detect", ["200", "400", "500"], "TranslatorDetectResponse"],
-  ["get", "/api/translator/history", ["200", "500"], "TranslatorHistoryResponse"],
-  ["post", "/api/translator/send", ["200", "400", "500", "default"], null],
-  ["post", "/api/translator/transform-stream", ["200", "400", "500"], "TranslatorTransformStreamResponse"],
-  ["get", "/api/tunnels/cloudflared", ["200", "401", "500"], "CloudflaredTunnelStatus"],
-  ["post", "/api/tunnels/cloudflared", ["200", "400", "401", "500"], "CloudflaredTunnelActionResponse"],
-  ["get", "/api/tunnels/ngrok", ["200", "401", "500"], "NgrokTunnelStatus"],
-  ["post", "/api/tunnels/ngrok", ["200", "400", "401", "500"], "NgrokTunnelActionResponse"],
-  ["get", "/api/tunnels/tailscale", ["200", "401", "500"], "TailscaleTunnelStatus"],
+  ["get", "/api/token-health", ["200", "401", "403", "500", "503"], "TokenHealthResponse"],
+  ["post", "/api/translator/detect", ["200", "400", "401", "403", "500", "503"], "TranslatorDetectResponse"],
+  ["get", "/api/translator/history", ["200", "401", "403", "500", "503"], "TranslatorHistoryResponse"],
+  ["post", "/api/translator/send", ["200", "400", "401", "403", "500", "503", "default"], null],
+  ["post", "/api/translator/transform-stream", ["200", "400", "401", "403", "500", "503"], "TranslatorTransformStreamResponse"],
+  ["get", "/api/tunnels/cloudflared", ["200", "401", "403", "500", "503"], "CloudflaredTunnelStatus"],
+  ["post", "/api/tunnels/cloudflared", ["200", "400", "401", "403", "500", "503"], "CloudflaredTunnelActionResponse"],
+  ["get", "/api/tunnels/ngrok", ["200", "401", "403", "500", "503"], "NgrokTunnelStatus"],
+  ["post", "/api/tunnels/ngrok", ["200", "400", "401", "403", "500", "503"], "NgrokTunnelActionResponse"],
+  ["get", "/api/tunnels/tailscale", ["200", "401", "403", "500", "503"], "TailscaleTunnelStatus"],
 ] as const;
 
 test("all 15 implemented operations have source-backed statuses and typed success bodies", () => {
@@ -65,20 +65,38 @@ test("auth declarations are unchanged for auth-gated and intentionally open oper
     ["post", "/api/system/env/repair"],
   ]) assert.equal(operation(method, route).security.length, 5);
   assert.deepEqual(operation("post", "/api/telegram/update").security, []);
+  const managementSecurity = [
+    { BearerAuth: [] },
+    { ManagementGoogleApiKeyAuth: [] },
+    { ManagementAnthropicApiKeyAuth: [] },
+    { ManagementSessionAuth: [] },
+    { LocalCliTokenAuth: [] },
+    { InternalServiceTokenAuth: [] },
+    {},
+  ];
   for (const [method, route] of [
     ["post", "/api/radar/sync-all"],
-    ["get", "/api/synced-available-models"],
     ["get", "/api/token-health"],
     ["post", "/api/translator/detect"],
     ["get", "/api/translator/history"],
     ["post", "/api/translator/send"],
     ["post", "/api/translator/transform-stream"],
+  ]) assert.deepEqual(operation(method, route).security, managementSecurity, `${method} ${route}`);
+  const legacyManagementSecurity = [
+    { ManagementApiKeyBearerAuth: [] },
+    { ManagementGoogleApiKeyAuth: [] },
+    { ManagementAnthropicApiKeyAuth: [] },
+    { ManagementSessionAuth: [] },
+    {},
+  ];
+  for (const [method, route] of [
+    ["get", "/api/synced-available-models"],
     ["get", "/api/tunnels/cloudflared"],
     ["post", "/api/tunnels/cloudflared"],
     ["get", "/api/tunnels/ngrok"],
     ["post", "/api/tunnels/ngrok"],
     ["get", "/api/tunnels/tailscale"],
-  ]) assert.equal(operation(method, route).security, undefined, `${method} ${route}`);
+  ]) assert.deepEqual(operation(method, route).security, legacyManagementSecurity, `${method} ${route}`);
   assert.equal(operation("post", "/api/tunnels/cloudflared")["x-local-only"], true);
 });
 

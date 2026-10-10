@@ -96,7 +96,7 @@ test("public Codex ticket and OIDC callback flows remain public and mirrored", (
     spec.paths["/api/codex/connect/{token}"].post,
     spec.paths["/api/auth/oidc/callback"].get,
   ]) {
-    assert.equal(operation?.security, undefined);
+    assert.deepEqual(operation?.security ?? [], []);
   }
 
   assert.deepEqual(publicSpec, spec, "public OpenAPI artifact must mirror the canonical document");

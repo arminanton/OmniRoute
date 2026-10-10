@@ -705,17 +705,15 @@ paths:
                     - semantic
                   default: factual
                 sessionId:
-                  type: string
-                  nullable: true
+                  type: [string, "null"]
                 apiKeyId:
                   type: string
                 metadata:
                   type: object
                   additionalProperties: true
                 expiresAt:
-                  type: string
+                  type: [string, "null"]
                   format: date-time
-                  nullable: true
       responses:
         "201":
           description: Created memory entry
@@ -842,8 +840,7 @@ paths:
                   latencyMs:
                     type: number
                   error:
-                    type: string
-                    nullable: true
+                    type: [string, "null"]
         "401":
           $ref: "#/components/responses/Unauthorized"
   /api/memory/retrieve-preview:
@@ -926,24 +923,21 @@ paths:
                             - hybrid-rrf
                             - qdrant
                         vecScore:
-                          type: number
-                          nullable: true
+                          type: [number, "null"]
                         ftsScore:
-                          type: number
-                          nullable: true
+                          type: [number, "null"]
                   resolution:
                     type: object
                     properties:
                       embeddingSource:
-                        type: string
+                        type: [string, "null"]
                         enum:
                           - remote
                           - static
                           - transformers
-                        nullable: true
+                          - null
                       embeddingModel:
-                        type: string
-                        nullable: true
+                        type: [string, "null"]
                       vectorStore:
                         type: string
                         enum:
@@ -959,8 +953,7 @@ paths:
                       rerankApplied:
                         type: boolean
                       fallbackReason:
-                        type: string
-                        nullable: true
+                        type: [string, "null"]
                   totalTokensUsed:
                     type: integer
                   budgetMaxTokens:
@@ -1006,8 +999,7 @@ paths:
                               name:
                                 type: string
                               dimensions:
-                                type: integer
-                                nullable: true
+                                type: [integer, "null"]
         "401":
           $ref: "#/components/responses/Unauthorized"
   /api/memory/engine-status:
@@ -1040,18 +1032,16 @@ paths:
                     type: object
                     properties:
                       source:
-                        type: string
+                        type: [string, "null"]
                         enum:
                           - remote
                           - static
                           - transformers
-                        nullable: true
+                          - null
                       model:
-                        type: string
-                        nullable: true
+                        type: [string, "null"]
                       dimensions:
-                        type: integer
-                        nullable: true
+                        type: [integer, "null"]
                       available:
                         type: boolean
                       reason:
@@ -1088,25 +1078,20 @@ paths:
                       enabled:
                         type: boolean
                       healthy:
-                        type: boolean
-                        nullable: true
+                        type: [boolean, "null"]
                       latencyMs:
-                        type: number
-                        nullable: true
+                        type: [number, "null"]
                       error:
-                        type: string
-                        nullable: true
+                        type: [string, "null"]
                   rerank:
                     type: object
                     properties:
                       enabled:
                         type: boolean
                       provider:
-                        type: string
-                        nullable: true
+                        type: [string, "null"]
                       model:
-                        type: string
-                        nullable: true
+                        type: [string, "null"]
                       available:
                         type: boolean
                       reason:
@@ -6183,8 +6168,7 @@ paths:
                     type: string
                   description: Required (non-empty) when mode is "rule".
                 localCoreEndpoint:
-                  type: string
-                  nullable: true
+                  type: [string, "null"]
                 updateIntervalMinutes:
                   type: integer
                   default: 60
@@ -6257,8 +6241,7 @@ paths:
                   items:
                     type: string
                 localCoreEndpoint:
-                  type: string
-                  nullable: true
+                  type: [string, "null"]
                 updateIntervalMinutes:
                   type: integer
                 enabled:
@@ -6335,12 +6318,10 @@ paths:
                     type: string
                     enum: [ok, error, empty]
                   error:
-                    type: string
-                    nullable: true
+                    type: [string, "null"]
                   lastFetchedAt:
-                    type: string
+                    type: [string, "null"]
                     format: date-time
-                    nullable: true
                   nodes:
                     type: array
                     items: {}
@@ -6383,8 +6364,7 @@ paths:
                     type: string
                     enum: [ok, error, empty]
                   error:
-                    type: string
-                    nullable: true
+                    type: [string, "null"]
                   applied:
                     type: boolean
         "401":
@@ -11461,14 +11441,11 @@ paths:
                         name:
                           type: string
                         email:
-                          type: string
-                          nullable: true
+                          type: [string, "null"]
                         organizationType:
-                          type: string
-                          nullable: true
+                          type: [string, "null"]
                         organizationRateLimitTier:
-                          type: string
-                          nullable: true
+                          type: [string, "null"]
           x-sensitive: true
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
@@ -11527,8 +11504,7 @@ paths:
                   sourceConnectionId:
                     type: string
                   sourceEmail:
-                    type: string
-                    nullable: true
+                    type: [string, "null"]
           x-sensitive: true
         "400":
           description: Invalid request body, unsupported connection, or missing tokens
@@ -51879,8 +51855,7 @@ components:
         model:
           type: string
         system:
-          type: string
-          nullable: true
+          type: [string, "null"]
         params:
           type: object
           additionalProperties: true
@@ -51906,8 +51881,7 @@ components:
           type: string
           minLength: 1
         system:
-          type: string
-          nullable: true
+          type: [string, "null"]
         params:
           type: object
           additionalProperties: true
@@ -51922,8 +51896,7 @@ components:
         apiKeyId:
           type: string
         sessionId:
-          type: string
-          nullable: true
+          type: [string, "null"]
         type:
           type: string
           enum:
@@ -51946,9 +51919,8 @@ components:
           type: string
           format: date-time
         expiresAt:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         needsReindex:
           type: integer
           description: 1 if the vector for this memory is stale or missing
@@ -51983,8 +51955,7 @@ components:
             - auto
           description: Which embedding source to use. "auto" = remote > static > transformers.
         embeddingProviderModel:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Embedding provider/model in "provider/model" format (e.g. openai/text-embedding-3-small).
         transformersEnabled:
           type: boolean
@@ -51996,8 +51967,7 @@ components:
           type: boolean
           description: Enable reranking step (+200-500ms/req)
         rerankProviderModel:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Rerank provider/model in "provider/model" format
         vectorStore:
           type: string
@@ -52025,8 +51995,7 @@ components:
         hasApiKey:
           type: boolean
         apiKeyMasked:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: First 4 chars of the configured API key, or null
     QdrantHealthResult:
       type: object
@@ -52037,8 +52006,7 @@ components:
         latencyMs:
           type: number
         error:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Sanitized error message (no stack traces)
     QdrantEmbeddingModelOption:
       type: object
@@ -52661,12 +52629,10 @@ components:
         setup_completed:
           type: boolean
         last_started_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         last_error:
-          type: string
-          nullable: true
+          type: [string, "null"]
 
     AgentBridgeDetectionState:
       type: object
@@ -52979,9 +52945,8 @@ components:
         activeConnections:
           type: integer
         lastStartedAt:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
 
     AgentBridgeServerAction:
       type: object
@@ -53118,8 +53083,7 @@ components:
           additionalProperties:
             type: string
         requestBody:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Masked (secrets replaced with ***)
         requestSize:
           type: integer
@@ -53128,8 +53092,7 @@ components:
           additionalProperties:
             type: string
         responseBody:
-          type: string
-          nullable: true
+          type: [string, "null"]
         responseSize:
           type: integer
         status:
@@ -53138,41 +53101,31 @@ components:
             - type: string
               enum: [in-flight, error]
         proxyLatencyMs:
-          type: number
-          nullable: true
+          type: [number, "null"]
         upstreamLatencyMs:
-          type: number
-          nullable: true
+          type: [number, "null"]
         totalLatencyMs:
-          type: number
-          nullable: true
+          type: [number, "null"]
         error:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Sanitized error message (no stack traces)
         sourceModel:
-          type: string
-          nullable: true
+          type: [string, "null"]
         mappedModel:
-          type: string
-          nullable: true
+          type: [string, "null"]
         detectedKind:
           $ref: "#/components/schemas/DetectedKind"
         contextKey:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: 12-char SHA-256 hex of the system prompt (for conversation grouping)
           example: a3f9c2b1d5e4
         annotation:
-          type: string
-          nullable: true
+          type: [string, "null"]
         sessionId:
-          type: string
+          type: [string, "null"]
           format: uuid
-          nullable: true
         note:
-          type: string
-          nullable: true
+          type: [string, "null"]
           description: Informational note (e.g. TLS tunnel metadata)
 
     InspectorCustomHost:
@@ -53184,8 +53137,7 @@ components:
         enabled:
           type: boolean
         label:
-          type: string
-          nullable: true
+          type: [string, "null"]
         kind:
           type: string
           enum: [llm, app, custom]
@@ -53193,9 +53145,8 @@ components:
           type: string
           format: date-time
         last_seen_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
 
     InspectorCustomHostCreate:
       type: object
@@ -53209,8 +53160,7 @@ components:
           type: boolean
           default: true
         label:
-          type: string
-          nullable: true
+          type: [string, "null"]
         kind:
           type: string
           enum: [llm, app, custom]
@@ -53393,21 +53343,18 @@ components:
           type: string
           format: uuid
         name:
-          type: string
-          nullable: true
+          type: [string, "null"]
         started_at:
           type: string
           format: date-time
         ended_at:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         request_count:
           type: integer
         profile:
-          type: string
-          enum: [llm, custom, all]
-          nullable: true
+          type: [string, "null"]
+          enum: ["llm", "custom", "all", null]
 
     InspectorSessionStart:
       type: object
@@ -54174,8 +54121,7 @@ components:
           type: string
           enum: [not_installed, stopped, starting, running, stopping, error]
         pid:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
         port:
           type: integer
           example: 20130
@@ -54183,12 +54129,10 @@ components:
           type: string
           enum: [unknown, healthy, degraded]
         startedAt:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         lastError:
-          type: string
-          nullable: true
+          type: [string, "null"]
 
     ServiceStatusExtended:
       x-sensitive: true
@@ -54199,16 +54143,13 @@ components:
             Extended status including version metadata and (for 9Router) API key preview.
           properties:
             installedVersion:
-              type: string
-              nullable: true
+              type: [string, "null"]
             latestVersion:
-              type: string
-              nullable: true
+              type: [string, "null"]
             updateAvailable:
               type: boolean
             apiKeyMasked:
-              type: string
-              nullable: true
+              type: [string, "null"]
               x-sensitive: true
               description: >-
                 Masked API key preview (e.g. "nr_****abcd").
@@ -56869,33 +56810,27 @@ components:
           type: string
           enum: [global, rule]
         ruleProviders:
-          type: array
+          type: [array, "null"]
           items:
             type: string
-          nullable: true
         localCoreEndpoint:
-          type: string
-          nullable: true
+          type: [string, "null"]
         updateIntervalMinutes:
           type: integer
         lastFetchedAt:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         status:
           type: string
           enum: [ok, error, empty]
         error:
-          type: string
-          nullable: true
+          type: [string, "null"]
         lastNodes:
-          type: array
+          type: [array, "null"]
           items: {}
-          nullable: true
         lastErrorAt:
-          type: string
+          type: [string, "null"]
           format: date-time
-          nullable: true
         consecutiveFailures:
           type: integer
         createdAt:
@@ -57373,8 +57308,7 @@ components:
           type: integer
           minimum: 0
         maxConcurrent:
-          type: integer
-          nullable: true
+          type: [integer, "null"]
           minimum: 0
         priority:
           type: integer
@@ -60275,7 +60209,7 @@ components:
         active: { type: boolean, const: false }
         error:
           description: Sanitized error summary when the in-memory request failed.
-          nullable: true
+          type: [string, "null"]
         pipelinePayloads:
           $ref: "#/components/schemas/CallLogPipelinePayloads"
         hasPipelineDetails: { type: boolean, const: true }
@@ -74078,6 +74012,19 @@ components:
       properties:
         success: { type: boolean, const: true }
         transformed: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    PublicSafeTunnelErrorBody:
+      type: object
+      description: >-
+        Tunnel and MITM route errors expose a fixed operator-facing message and coarse reason only;
+        the underlying host or credential-bearing error is written to server logs.
+      required: [error, reason]
+      properties:
+        error: { type: string }
+        reason:
+          type: string
+          enum: [not_installed, permission_denied, already_running, timeout, network, unknown]
       additionalProperties: false
 
     CloudflaredTunnelStatus:

@@ -98,9 +98,19 @@ test("ACP agent routes retain LOCAL_ONLY and document their narrower legacy cred
   for (const method of ["get", "post", "delete"]) {
     const op = operation("/api/acp/agents", method);
     assert.equal(op["x-local-only"], true, `${method.toUpperCase()} ACP remains LOCAL_ONLY`);
+    const expectedSecurity =
+      method === "delete"
+        ? [
+            { ManagementApiKeyBearerAuth: [] },
+            { ManagementGoogleApiKeyAuth: [] },
+            { ManagementAnthropicApiKeyAuth: [] },
+            { ManagementSessionAuth: [] },
+            {},
+          ]
+        : [{ ManagementApiKeyBearerAuth: [] }, { ManagementSessionAuth: [] }, {}];
     assert.deepEqual(
       op.security,
-      [{ ManagementApiKeyBearerAuth: [] }, { ManagementSessionAuth: [] }, {}]
+      expectedSecurity
     );
     assert.doesNotMatch(securityNames(op).join(" "), /(^|\s)BearerAuth($|\s)/);
     assert.match(op.description ?? "", /does not accept `oma_live_` Access Tokens/i);

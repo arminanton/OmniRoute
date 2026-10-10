@@ -31,20 +31,20 @@ const successContracts = [
 
 const responseStatusContracts = [
   ["/api/health/ping", "get", ["200", "503"]],
-  ["/api/health/degradation", "get", ["200", "500"]],
+  ["/api/health/degradation", "get", ["200", "401", "403", "500", "503"]],
   ["/api/omniroute/status", "get", ["200", "401", "403", "500", "503"]],
-  ["/api/network/info", "get", ["200", "401"]],
-  ["/api/search/stats", "get", ["200", "401", "500"]],
-  ["/api/search/providers", "get", ["200", "401", "500"]],
+  ["/api/network/info", "get", ["200", "401", "403", "503"]],
+  ["/api/search/stats", "get", ["200", "401", "403", "500", "503"]],
+  ["/api/search/providers", "get", ["200", "401", "403", "500", "503"]],
   ["/api/session-pools", "get", ["200", "401", "403", "500", "503"]],
   ["/api/session-pools/{provider}", "get", ["200", "401", "403", "404", "500", "503"]],
   ["/api/resilience/model-cooldowns", "get", ["200", "401", "403", "500", "503"]],
   ["/api/resilience/model-cooldowns", "delete", ["200", "400", "401", "403", "500", "503"]],
   ["/api/analytics/auto-routing", "get", ["200", "401", "403", "503"]],
   ["/api/analytics/compression", "get", ["200", "401", "403", "500", "503"]],
-  ["/api/analytics/diversity", "get", ["200", "500"]],
-  ["/api/free-provider-rankings", "get", ["200", "400"]],
-  ["/api/tags", "get", ["200"]],
+  ["/api/analytics/diversity", "get", ["200", "401", "403", "500", "503"]],
+  ["/api/free-provider-rankings", "get", ["200", "400", "401", "403", "500", "503"]],
+  ["/api/tags", "get", ["200", "401", "403", "503"]],
 ] as const;
 
 const errorResponseContracts = [

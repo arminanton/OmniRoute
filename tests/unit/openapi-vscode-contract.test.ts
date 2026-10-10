@@ -110,7 +110,7 @@ test("VS Code grouped and raw model catalogs expose their concrete list shapes",
   );
 });
 
-test("Ollama-compatible VS Code routes distinguish authenticated catalog from static/list helpers", () => {
+test("Ollama-compatible VS Code routes document their helper schemas and centralized path-token API auth", () => {
   const showPath = "/api/v1/vscode/{token}/api/show";
   const show = operation(showPath, "post");
   pathToken(showPath, "post");
@@ -154,10 +154,10 @@ test("Ollama-compatible VS Code routes distinguish authenticated catalog from st
       responseSchema(pathTemplate, "get", "200")?.$ref,
       "#/components/schemas/VscodeOllamaVersionResponse"
     );
-    assert.equal(
+    assert.deepEqual(
       operation(pathTemplate, "get").security,
-      undefined,
-      "version handlers do not authenticate or use the token"
+      spec.paths["/api/v1/models"]?.get?.security,
+      "version handlers ignore the path token but follow the central CLIENT_API auth policy"
     );
   }
 
@@ -174,10 +174,10 @@ test("Ollama-compatible VS Code routes distinguish authenticated catalog from st
       responseSchema(pathTemplate, "get", "500")?.$ref,
       "#/components/schemas/StringErrorResponse"
     );
-    assert.equal(
+    assert.deepEqual(
       operation(pathTemplate, "get").security,
-      undefined,
-      "combo list reads the combo store directly"
+      spec.paths["/api/v1/models"]?.get?.security,
+      "combo list reads the combo store directly but follows the central CLIENT_API auth policy"
     );
   }
   assert.equal(

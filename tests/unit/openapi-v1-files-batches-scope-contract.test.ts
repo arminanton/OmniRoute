@@ -160,6 +160,6 @@ test("translator step-four response is a redacted display preview, separate from
   assert.match(preview.properties.body.description, /not sent by the preview operation/i);
 
   const send = operation("/api/translator/send", "post");
-  assert.match(send.responses?.["200"]?.description, /Provider response/);
+  assert.match(send.responses?.["200"]?.description, /provider response/i);
   assert.doesNotMatch(send.description ?? "", /redact/i);
 });

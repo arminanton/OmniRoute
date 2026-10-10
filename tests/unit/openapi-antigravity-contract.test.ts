@@ -218,8 +218,8 @@ test("Antigravity ZIP import and pasted remote-login blob document raw credentia
     ["displayName", "email", "id", "provider"].sort()
   );
   assert.equal(
-    paste.responses?.["401"]?.content?.["application/json"]?.schema?.$ref,
-    "#/components/schemas/StringErrorResponse"
+    paste.responses?.["401"]?.$ref,
+    "#/components/responses/ManagementAuthenticationRequired"
   );
 });
 
