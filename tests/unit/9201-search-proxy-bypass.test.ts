@@ -122,7 +122,15 @@ test("POST /v1/search sends a connection's provider request through its configur
   const getProxyRequests = installProxyResponseCounter();
 
   const response = await postSearch(`proxy probe red ${Date.now()}`);
-  const body = (await response.json()) as { results?: unknown[]; error?: unknown };
+  const body = (await response.json()) as {
+    id?: string;
+    provider?: string;
+    query?: string;
+    cached?: boolean;
+    answer?: unknown;
+    results?: Array<Record<string, any>>;
+    error?: unknown;
+  };
 
   assert.deepEqual(
     {
@@ -133,5 +141,29 @@ test("POST /v1/search sends a connection's provider request through its configur
     { status: 200, proxyRequests: 1, resultCount: 1 },
     JSON.stringify(body)
   );
+  assert.match(body.id || "", /^search-/);
+  assert.equal(body.provider, "serper-search");
+  assert.match(body.query || "", /^proxy probe red /);
+  assert.equal(body.cached, false);
+  assert.equal(body.answer, null);
+  assert.deepEqual(
+    {
+      content: body.results?.[0]?.content,
+      metadata: body.results?.[0]?.metadata,
+      provider_raw: body.results?.[0]?.provider_raw,
+      citation: body.results?.[0]?.citation,
+    },
+    {
+      content: null,
+      metadata: { author: null, language: null, source_type: null, image_url: null },
+      provider_raw: null,
+      citation: {
+        provider: "serper-search",
+        retrieved_at: body.results?.[0]?.citation?.retrieved_at,
+        rank: 1,
+      },
+    }
+  );
+  assert.ok(Number.isFinite(Date.parse(body.results?.[0]?.citation?.retrieved_at)));
   assert.equal(connectionId.length > 0, true);
 });

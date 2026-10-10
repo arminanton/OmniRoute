@@ -157,6 +157,7 @@ test("handleSearch normalizes Nimble results into the shared SearchResult shape"
     const data = result.data!;
     assert.equal(data.provider, "nimble-search");
     assert.equal(data.metrics.total_results_available, 2);
+    assert.equal(data.answer, null);
 
     const [first, second] = data.results;
     assert.equal(first.title, "Nimble — real-time web data");
@@ -165,6 +166,14 @@ test("handleSearch normalizes Nimble results into the shared SearchResult shape"
     assert.equal(first.position, 1);
     assert.equal(first.citation.provider, "nimble-search");
     assert.equal(first.citation.rank, 1);
+    assert.ok(Number.isFinite(Date.parse(first.citation.retrieved_at)));
+    assert.deepEqual(first.metadata, {
+      author: null,
+      language: null,
+      source_type: null,
+      image_url: null,
+    });
+    assert.equal(first.provider_raw, null);
     // `lite` depth: the snippet comes from `description`, and there is no full text.
     assert.equal(first.snippet, "Structured web data for AI applications.");
     assert.equal(first.content, null);
@@ -173,6 +182,13 @@ test("handleSearch normalizes Nimble results into the shared SearchResult shape"
     assert.equal(second.snippet, "Full page body captured at a deeper search depth.");
     assert.equal(second.content?.format, "text");
     assert.equal(second.content?.text, "Full page body captured at a deeper search depth.");
+    assert.deepEqual(second.metadata, {
+      author: null,
+      language: null,
+      source_type: null,
+      image_url: null,
+    });
+    assert.equal(second.provider_raw, null);
     assert.equal(
       second.content?.length,
       "Full page body captured at a deeper search depth.".length

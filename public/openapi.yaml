@@ -1554,68 +1554,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required: [id, provider, query, results, answer, usage, metrics, errors, cached]
-                properties:
-                  id:
-                    type: string
-                    pattern: ^search-
-                  provider:
-                    type: string
-                  query:
-                    type: string
-                  cached:
-                    type: boolean
-                  results:
-                    type: array
-                    items:
-                      type: object
-                      required: [title, url, snippet, position, citation]
-                      properties:
-                        title: { type: string }
-                        url: { type: string, format: uri }
-                        display_url: { type: string }
-                        snippet: { type: string }
-                        position: { type: integer, minimum: 1 }
-                        score:
-                          type: [number, "null"]
-                          minimum: 0
-                          maximum: 1
-                        published_at: { type: [string, "null"] }
-                        favicon_url: { type: [string, "null"], format: uri }
-                        citation:
-                          type: object
-                          required: [provider, retrieved_at, rank]
-                          properties:
-                            provider: { type: string }
-                            retrieved_at: { type: string, format: date-time }
-                            rank: { type: integer, minimum: 1 }
-                  answer:
-                    type: [object, "null"]
-                  usage:
-                    type: object
-                    required: [queries_used, search_cost_usd]
-                    properties:
-                      queries_used: { type: integer, minimum: 0 }
-                      search_cost_usd: { type: number, minimum: 0 }
-                      llm_tokens: { type: integer, minimum: 0 }
-                  metrics:
-                    type: object
-                    required: [response_time_ms, upstream_latency_ms, total_results_available]
-                    properties:
-                      response_time_ms: { type: number, minimum: 0 }
-                      upstream_latency_ms: { type: number, minimum: 0 }
-                      gateway_latency_ms: { type: number, minimum: 0 }
-                      total_results_available: { type: [integer, "null"], minimum: 0 }
-                  errors:
-                    type: array
-                    items:
-                      type: object
-                      required: [provider, code, message]
-                      properties:
-                        provider: { type: string }
-                        code: { type: string }
-                        message: { type: string }
+                $ref: "#/components/schemas/V1SearchResponse"
         "400":
           description: Invalid request, provider, credentials, or search type
         "401":
@@ -55128,6 +55067,125 @@ components:
           oneOf:
             - $ref: "#/components/schemas/V1RoutingOtelStats"
             - type: "null"
+      additionalProperties: false
+
+    V1SearchContent:
+      type: object
+      description: Full-page content attached when a search provider supplies it and content retrieval is requested.
+      required: [format, text, length]
+      properties:
+        format: { type: string }
+        text: { type: string }
+        length: { type: integer, minimum: 0, description: Character count of text. }
+      additionalProperties: false
+
+    V1SearchMetadata:
+      type: object
+      required: [author, language, source_type, image_url]
+      properties:
+        author: { type: [string, "null"] }
+        language: { type: [string, "null"] }
+        source_type: { type: [string, "null"] }
+        image_url: { type: [string, "null"] }
+      additionalProperties: false
+
+    V1SearchCitation:
+      type: object
+      required: [provider, retrieved_at, rank]
+      properties:
+        provider: { type: string }
+        retrieved_at: { type: string, format: date-time }
+        rank: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    V1SearchResult:
+      type: object
+      description: Normalized result shared by all configured search providers.
+      required:
+        [title, url, snippet, position, score, published_at, favicon_url, content, metadata, citation, provider_raw]
+      properties:
+        title: { type: string }
+        url:
+          type: string
+          format: uri-reference
+          description: Empty when the upstream search result contains no URL.
+        display_url:
+          type: string
+          description: Omitted when the normalized result has no URL.
+        snippet: { type: string }
+        position: { type: integer, minimum: 1 }
+        score: { type: [number, "null"], minimum: 0, maximum: 1 }
+        published_at: { type: [string, "null"] }
+        favicon_url: { type: [string, "null"] }
+        content:
+          oneOf:
+            - $ref: "#/components/schemas/V1SearchContent"
+            - type: "null"
+        metadata: { $ref: "#/components/schemas/V1SearchMetadata" }
+        citation: { $ref: "#/components/schemas/V1SearchCitation" }
+        provider_raw:
+          type: "null"
+          description: Reserved normalized field; current provider normalizers emit null.
+      additionalProperties: false
+
+    V1SearchAnswer:
+      type: object
+      required: [source, text, model]
+      properties:
+        source: { type: string }
+        text: { type: [string, "null"] }
+        model: { type: [string, "null"] }
+      additionalProperties: false
+
+    V1SearchUsage:
+      type: object
+      required: [queries_used, search_cost_usd]
+      properties:
+        queries_used: { type: integer, minimum: 0 }
+        search_cost_usd: { type: number, minimum: 0 }
+        llm_tokens: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    V1SearchMetrics:
+      type: object
+      required: [response_time_ms, upstream_latency_ms, total_results_available]
+      properties:
+        response_time_ms: { type: number, minimum: 0 }
+        upstream_latency_ms: { type: number, minimum: 0 }
+        gateway_latency_ms: { type: number, minimum: 0 }
+        total_results_available: { type: [integer, "null"], minimum: 0 }
+      additionalProperties: false
+
+    V1SearchError:
+      type: object
+      required: [provider, code, message]
+      properties:
+        provider: { type: string }
+        code: { type: string }
+        message: { type: string }
+      additionalProperties: false
+
+    V1SearchResponse:
+      type: object
+      description: Search-handler result with request identity and cache status added by the v1 route.
+      required: [id, provider, query, results, answer, usage, metrics, errors, cached]
+      properties:
+        id: { type: string, pattern: "^search-" }
+        provider: { type: string }
+        query: { type: string }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/V1SearchResult" }
+        answer:
+          oneOf:
+            - $ref: "#/components/schemas/V1SearchAnswer"
+            - type: "null"
+        usage: { $ref: "#/components/schemas/V1SearchUsage" }
+        metrics: { $ref: "#/components/schemas/V1SearchMetrics" }
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/V1SearchError" }
+        cached: { type: boolean }
       additionalProperties: false
 
     SearchAnalyticsResponse:
