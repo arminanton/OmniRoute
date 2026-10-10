@@ -21,6 +21,10 @@
  * Override the isolated app CPU quota with --app-cpu-quota=N (1..4 cores; default 2).
  * Override app memory limits with --app-memory-high-gib=N and --app-memory-max-gib=N
  * (defaults 3/4 GiB) to test the resource guard at larger concurrency.
+ * Set OMNIROUTE_STANDALONE_APP_EXECUTABLE to an absolute path to select only the
+ * application runtime; the mock provider and load client stay on this harness's Node runtime.
+ * The existing NODE_OPTIONS preload/heap flags are unchanged, so this selector alone does not
+ * establish Bun compatibility.
  * Use --skip-cancellation-probe=true for saturated capture sweeps where the
  * post-load probe itself may be shed by the resource guard; run the default
  * cancellation probe separately at baseline load.
@@ -254,11 +258,35 @@ function writeSystemdEnvironmentFile(filename, env) {
   fs.writeFileSync(filename, `${contents}\n`, { mode: 0o600, flag: "wx" });
 }
 
+export function resolveStandaloneAppRuntime({
+  env = process.env,
+  defaultExecutable = process.execPath,
+  inheritedPath = process.env.PATH,
+} = {}) {
+  const hasExecutableOverride = Object.hasOwn(env, "OMNIROUTE_STANDALONE_APP_EXECUTABLE");
+  const configuredExecutable = env.OMNIROUTE_STANDALONE_APP_EXECUTABLE?.trim();
+  if (hasExecutableOverride && !configuredExecutable) {
+    throw new Error("OMNIROUTE_STANDALONE_APP_EXECUTABLE must not be empty");
+  }
+  const executable = configuredExecutable || defaultExecutable;
+  if (!path.isAbsolute(executable)) {
+    throw new Error("OMNIROUTE_STANDALONE_APP_EXECUTABLE must be an absolute executable path");
+  }
+
+  const resolvedExecutable = path.resolve(executable);
+  const fallbackPath = "/usr/local/bin:/usr/bin:/bin";
+  const searchPath = [path.dirname(resolvedExecutable), inheritedPath || fallbackPath]
+    .filter(Boolean)
+    .join(path.delimiter);
+
+  return { executable: resolvedExecutable, searchPath };
+}
+
 function startStandaloneService({
   unit,
   standaloneDir,
   environmentFile,
-  nodePath,
+  appExecutable,
   appCpuQuota,
   appMemoryHighGiB,
   appMemoryMaxGiB,
@@ -276,7 +304,7 @@ function startStandaloneService({
     "--property=TasksMax=256",
     "--property=TimeoutStopSec=15s",
     "--property=RuntimeMaxSec=15min",
-    nodePath,
+    appExecutable,
     "dev/run-standalone.mjs",
   ];
   const result = spawnSync("systemd-run", args, {
@@ -1101,6 +1129,7 @@ async function main() {
   if (appMemoryMaxGiB <= appMemoryHighGiB) {
     throw new RangeError("app-memory-max-gib must be greater than app-memory-high-gib");
   }
+  const appRuntime = resolveStandaloneAppRuntime();
   const sessionCount = phases.reduce((total, count) => total + count, 0);
   const expectedRequests = sessionCount * 2;
   if (sessionCount > 202)
@@ -1286,6 +1315,7 @@ async function main() {
 
     const serviceEnv = {
       ...baseEnv,
+      PATH: appRuntime.searchPath,
       NODE_EXTRA_CA_CERTS: tlsCertificate.certificatePath,
       OMNIROUTE_TEST_CLOUDCODE_BRIDGE_PORT: String(tlsBridge.port),
       OMNIROUTE_PROXY_ECHO_URL: `${mock.url}/__echo`,
@@ -1298,7 +1328,7 @@ async function main() {
       unit: serviceUnit,
       standaloneDir,
       environmentFile: serviceEnvironmentFile,
-      nodePath: process.execPath,
+      appExecutable: appRuntime.executable,
       appCpuQuota,
       appMemoryHighGiB,
       appMemoryMaxGiB,

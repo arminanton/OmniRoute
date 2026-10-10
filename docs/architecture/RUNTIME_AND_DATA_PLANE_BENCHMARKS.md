@@ -1792,6 +1792,33 @@ and SQLite path only. The Bun Dockerfile does not build the TPROXY Node-API addo
 not exercise TPROXY; this remains an acceptance gap. The scratch source, `node_modules`, cache,
 runtime, and logs were removed after recording the run.
 
+#### Reusing a standalone artifact to compare Node and Bun runtime startup
+
+The standalone Antigravity HTTP harness accepts the test-only
+`OMNIROUTE_STANDALONE_APP_EXECUTABLE` absolute path to select the application executable launched
+inside its systemd service. The default remains the harness's `process.execPath`; the fake provider
+and load client continue to run under that Node executable. The service `PATH` is prefixed with the
+selected app executable's directory. This permits a runtime-only check against the same already-built
+standalone directory, without rebuilding it.
+
+For a first Bun smoke, use one conversation and no payload capture, then repeat with Node using the
+same artifact and limits:
+
+```bash
+OMNIROUTE_STANDALONE_APP_EXECUTABLE="$(command -v bun)" \
+ANTIGRAVITY_CAPTURE_SESSION_COUNTS=1 \
+OMNIROUTE_STANDALONE_CAPTURE=none \
+systemd-run --user --scope --property=MemoryMax=6G --property=CPUQuota=200% \
+  node --import tsx/esm scripts/perf/bench-standalone-antigravity-tool-roundtrip.mjs
+```
+
+The selector changes only the app executable. The harness still sets the Node-oriented
+`NODE_OPTIONS` heap flag and test fetch-preload for the service; their Bun behavior has not been
+verified. Therefore this is an executable-selection hook, not a claim that the standalone runtime is
+Bun-compatible. First confirm startup, the fake-upstream audit, successful request completion, and
+clean shutdown before increasing concurrency or enabling capture. If Bun needs different preload or
+heap settings, add and test a separate app-only test override rather than changing the Node default.
+
 A no-emit TypeScript check limited to the changed files still pulled in the broad `chat.ts` import
 graph. Node spent about 3 minutes at 1.5–1.6 CPU cores and hit its default 4 GiB V8 heap limit;
 there was no build artifact or typecheck result. This is separate from the earlier 5 GiB Next build

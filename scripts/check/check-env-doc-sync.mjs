@@ -237,6 +237,8 @@ const IGNORE_FROM_CODE = new Set([
   // Standalone E2E harness selection and failure-scratch retention controls.
   "OMNIROUTE_KEEP_STANDALONE_E2E_FAILURES",
   "OMNIROUTE_STANDALONE_CAPTURE",
+  // Test-only standalone harness selector for the app process; not server configuration.
+  "OMNIROUTE_STANDALONE_APP_EXECUTABLE",
   // Optional checksum sidecar for the transfer-oracle benchmark.
   "TRANSFER_ORACLE_SHA_FILE",
 ]);
