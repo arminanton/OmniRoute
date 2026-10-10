@@ -184,7 +184,7 @@ export function getCallLogArtifactWriterSnapshot(): CallLogArtifactWriterSnapsho
   };
 }
 
-function compactArtifactForFootprint(value: unknown): unknown {
+export function projectCallLogArtifactForQueue(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const source = value as Record<string, unknown>;
   if (!source.pipeline || typeof source.pipeline !== "object" || Array.isArray(source.pipeline)) {
@@ -395,7 +395,7 @@ export function estimateCallLogArtifactFootprint(value: unknown): CallLogArtifac
 export function reserveCallLogArtifactPreparation(
   rawPayloads: unknown
 ): CallLogArtifactReservation | null {
-  const estimate = estimateCallLogArtifactFootprint(compactArtifactForFootprint(rawPayloads));
+  const estimate = estimateCallLogArtifactFootprint(projectCallLogArtifactForQueue(rawPayloads));
   if (estimate.reason) {
     notePreparationRefusal("invalid_estimate");
     warnRateLimited(
@@ -1012,7 +1012,11 @@ export function writeCallArtifactAsync(
     return Promise.resolve(null);
   }
 
-  const estimate = estimateCallLogArtifactFootprint(compactArtifactForFootprint(artifact));
+  // Queue exactly the projected shape used by admission. Otherwise the estimate
+  // can account for compact body references and stream-text tables while
+  // postMessage still clones the original high-context payload.
+  const queuedArtifact = projectCallLogArtifactForQueue(artifact) as CallLogArtifact;
+  const estimate = estimateCallLogArtifactFootprint(queuedArtifact);
   const reservationState = preparationReservation
     ? reservationStates.get(preparationReservation)
     : undefined;
@@ -1043,7 +1047,7 @@ export function writeCallArtifactAsync(
   }
 
   return enqueueArtifact(
-    artifact,
+    queuedArtifact,
     reservationState?.estimatedBytes ?? estimate.estimatedBytes,
     "normal",
     preparationReservation ?? undefined

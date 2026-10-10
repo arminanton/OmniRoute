@@ -14,10 +14,12 @@ const {
   resolveCallLogArtifactWorker,
   estimateCallLogArtifactFootprint,
   getCallLogArtifactWriterSnapshot,
+  projectCallLogArtifactForQueue,
   reserveCallLogArtifactPreparation,
   releaseCallLogArtifactPreparation,
   writeDiagnosticOverflowStubAsync,
 } = await import("../../src/lib/usage/callLogArtifactWriter.ts");
+const { readCallArtifact } = await import("../../src/lib/usage/callLogArtifacts.ts");
 
 test.after(async () => {
   await closeCallLogArtifactWriter();
@@ -154,6 +156,60 @@ test("async worker writes call-log artifact and returns matching metadata", asyn
   assert.equal(result.sizeBytes, Buffer.byteLength(serialized));
   assert.match(result.sha256, /^[0-9a-f]{8}$/);
   assert.deepEqual(JSON.parse(serialized), artifact);
+});
+
+test("call-log queue projection reduces duplicate footprint and preserves readback", async () => {
+  const body = { messages: [{ role: "user", content: "context-".repeat(16_000) }] };
+  const response = { choices: [{ message: { content: "answer-".repeat(2_000) } }] };
+  const repeatedFrame = JSON.stringify({ choices: [{ delta: { content: "shared frame" } }] });
+  const stage = (value: unknown) => ({
+    timestamp: "2026-10-10T12:00:00.000Z",
+    url: "https://provider.example/v1/responses",
+    body: value,
+  });
+  const artifact = {
+    ...buildArtifact("worker-compacted-clone"),
+    schemaVersion: 10,
+    requestBody: body,
+    responseBody: response,
+    pipeline: {
+      clientRawRequest: stage(body),
+      openaiRequest: stage(body),
+      providerRequest: stage(body),
+      clientResponse: stage(response),
+      providerResponse: stage(response),
+      streamChunks: {
+        provider: Array.from({ length: 24 }, () => repeatedFrame),
+        openai: Array.from({ length: 24 }, () => repeatedFrame),
+        client: Array.from({ length: 24 }, () => repeatedFrame),
+      },
+      error: { message: "upstream failed", requestBody: body },
+    },
+  } as unknown as CallLogArtifact;
+
+  const queuedProjection = projectCallLogArtifactForQueue(artifact) as CallLogArtifact;
+  const rawFootprint = estimateCallLogArtifactFootprint(artifact);
+  const projectedFootprint = estimateCallLogArtifactFootprint(queuedProjection);
+  assert.equal(rawFootprint.reason, undefined);
+  assert.equal(projectedFootprint.reason, undefined);
+  assert.ok(projectedFootprint.estimatedBytes < rawFootprint.estimatedBytes / 2);
+  assert.equal(queuedProjection.requestBody, undefined);
+  assert.equal(queuedProjection.requestBodyRef, "pipeline.clientRawRequest.body");
+  assert.equal(
+    (queuedProjection.pipeline?.openaiRequest as Record<string, unknown>).bodyRef,
+    "pipeline.clientRawRequest.body"
+  );
+  assert.match(
+    String((queuedProjection.pipeline?.streamChunks as Record<string, unknown>).encoding),
+    /^omni-stream-chunk-text-table\//
+  );
+
+  const result = await writeCallArtifactAsync(artifact);
+  assert.ok(result);
+  assert.deepEqual(readCallArtifact(result.relPath), {
+    artifact,
+    state: "ready",
+  });
 });
 
 test("artifact footprint estimate bounds large strings, tool arrays, and sparse arrays", () => {
@@ -334,7 +390,7 @@ test("high-context Antigravity stage bodies use exact shared and aggregate reser
     error: { message: "upstream failed", requestBody: clientBody },
   });
 
-  // Mirror the exact reference projection made by compactArtifactForFootprint:
+  // Mirror the exact reference projection made by projectCallLogArtifactForQueue:
   // one canonical body plus two bounded stage references.
   const compactedSharedPayload = {
     ...sharedPayload,
