@@ -4133,6 +4133,7 @@
     "tierAll": "Усі",
     "tierAuth": "З автентифікацією",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Лише локально",
     "tierAlwaysProtected": "Завжди захищені",
     "tierPublic": "Публічні",
     "hideInternal": "Приховати внутрішні",

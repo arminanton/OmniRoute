@@ -339,7 +339,7 @@ Traffic Inspector pokazuje **cały przechwycony ruch HTTPS**, w tym nagłówki a
 
 | Control                       | Details                                                                                                                                    |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| **LOCAL_ONLY**                | Wszystkie trasy i endpoint WebSocket są tylko loopback (egzekwowane w `routeGuard.ts` przed auth)                                          |
+| **LOCAL_ONLY**                | Tier lokalności dopuszcza loopback/zaufaną prywatną sieć LAN i blokuje publiczne lub nieznane źródła przed auth (`routeGuard.ts`)           |
 | **Secret masking**            | `maskSecrets()` stosowane do wszystkich nagłówków i body przed `TrafficBuffer.push()` — domyślnie włączone (`INSPECTOR_MASK_SECRETS=true`) |
 | **Body size cap**             | Body > `INSPECTOR_MAX_BODY_KB` (domyślnie 1024 KB) są obcinane z notatką `"(truncated for performance)"`                                   |
 | **Sensitive header masking**  | `authorization`, `cookie`, `api-key`, `x-api-key`, `proxy-authorization` → `Bearer ***` w zakładce Headers; toggle „Show secrets”          |
@@ -422,7 +422,7 @@ Gdy bufor osiągnie `INSPECTOR_BUFFER_SIZE` (domyślnie 1000), nowe wpisy wypych
 
 ## §8 Referencja API
 
-Wszystkie trasy są `LOCAL_ONLY` (tylko loopback) i `SPAWN_CAPABLE` (komendy proxy systemowego). Zobacz `src/server/authz/routeGuard.ts`.
+Wszystkie trasy są `LOCAL_ONLY` i `SPAWN_CAPABLE` (komendy proxy systemowego). Tier lokalności dopuszcza bezpośredni loopback i zaufanych uczestników prywatnej sieci LAN, blokuje publiczne lub nieznane źródła przed auth, a następnie stosuje zwykłą politykę auth. Zobacz `src/server/authz/routeGuard.ts`.
 
 Base path: `/api/tools/traffic-inspector/`
 

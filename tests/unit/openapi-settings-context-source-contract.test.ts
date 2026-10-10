@@ -153,7 +153,7 @@ test("MITM operations document conditional auth, sensitive update inputs, and so
     ["POST", post],
   ] as const) {
     assertConditionalManagementAuth(op);
-    assert.equal(op["x-loopback-only"], true);
+    assert.equal(op["x-local-only"], true);
     assert.match(mitmFunctionSource(method), /requireManagementAuth\(request\)/);
   }
 

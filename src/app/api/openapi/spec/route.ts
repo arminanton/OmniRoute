@@ -8,6 +8,7 @@ import fs from "fs";
 import path from "path";
 import * as yaml from "js-yaml";
 import { sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import { isLocalOnlyPath } from "@/server/authz/routeGuard";
 
 let cachedSpec: { data: any; mtime: number } | null = null;
 const OPENAPI_SPEC_CANDIDATES = [
@@ -164,6 +165,7 @@ export async function GET() {
             exampleBody = generateExampleFromSchema(jsonBody.schema, raw.components?.schemas || {});
           }
 
+          const localOnly = isLocalOnlyPath(pathStr, method.toUpperCase());
           catalog.endpoints.push({
             method: method.toUpperCase(),
             path: pathStr,
@@ -175,7 +177,11 @@ export async function GET() {
             requestBody: spec.requestBody ? true : false,
             exampleBody,
             responses: Object.keys(spec.responses || {}),
-            loopbackOnly: spec["x-loopback-only"] === true,
+            localOnly,
+            strictLoopbackOnly: spec["x-loopback-only"] === true,
+            // Deprecated compatibility alias. `localOnly` is the canonical routeGuard tier;
+            // callers should use `strictLoopbackOnly` for literal loopback-only semantics.
+            loopbackOnly: localOnly,
             alwaysProtected: spec["x-always-protected"] === true,
             internal: spec["x-internal"] === true,
           });

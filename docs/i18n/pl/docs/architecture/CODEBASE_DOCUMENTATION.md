@@ -189,7 +189,7 @@ src/app/api/
 #### 3.1.2a `src/app/api/services/` — Zarządzanie Embedded Services
 
 Trasy do instalacji, startu, stopu i monitorowania 9Router oraz CLIProxyAPI.
-Wszystkie ścieżki są sklasyfikowane jako **LOCAL_ONLY** (tylko loopback, hard rule #17), bo
+Wszystkie ścieżki są sklasyfikowane jako **LOCAL_ONLY** (loopback i zaufani uczestnicy prywatnej sieci LAN; publiczni i nieznani zdalni uczestnicy są blokowani, hard rule #17), bo
 mogą wywołać `npm install` i uruchamiać procesy potomne.
 
 ```

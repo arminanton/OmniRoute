@@ -14,14 +14,15 @@ and evaluated before any other auth branch runs.
 
 ### Tier 1 — LOCAL_ONLY
 
-**Enforced by:** `isLocalOnlyPath(path)` → loopback host check
-**Bypass:** None by default. Narrow carve-out for paths in
-`LOCAL_ONLY_MANAGE_SCOPE_BYPASS_PREFIXES` when the request carries a valid
-API key with the `manage` scope (see [Manage-scope carve-out](#manage-scope-carve-out)).
+**Enforced by:** `isLocalOnlyPath(path)` → trusted peer-locality check (loopback or private LAN)
+**Bypass:** Local peers pass the source-locality gate by default. A narrow carve-out
+allows public remote callers to reach paths in `LOCAL_ONLY_MANAGE_SCOPE_BYPASS_PREFIXES`
+when the request carries an accepted management identity (see
+[Manage-scope carve-out](#manage-scope-carve-out)).
 
 These routes spawn child processes or execute runtime code. Exposing them to
-non-loopback traffic would allow an attacker who obtained a valid JWT (e.g.,
-via a Cloudflared/Ngrok tunnel) to trigger process spawning — a known CVE
+public or otherwise untrusted remote traffic would allow an attacker who obtained
+a valid JWT (e.g., via a Cloudflared/Ngrok tunnel) to trigger process spawning — a known CVE
 class ([GHSA-fhh6-4qxv-rpqj](https://github.com/advisories/GHSA-fhh6-4qxv-rpqj)).
 
 **What GHSA-fhh6-4qxv-rpqj is (the attack class):** a management/agent server
@@ -30,8 +31,9 @@ a proxy, `git`, `tar`, …). If that endpoint is reachable from off-host — bec
 the operator put OmniRoute behind an nginx/Cloudflare/Tailscale tunnel and a JWT
 leaked, or auth was misconfigured — the attacker turns "call an API" into "run a
 command on the host" (remote code execution). OmniRoute closes this by enforcing a
-**loopback host check unconditionally, before any auth check**, on every
-spawn-capable route: a leaked token over a tunnel still can't reach the spawn.
+**peer-locality check unconditionally, before any auth check**, on every
+spawn-capable route: direct loopback and trusted private-LAN peers pass this tier;
+public/unknown peers and forwarded tunnel clients do not.
 
 **The full LOCAL_ONLY set.** The authoritative source is
 `LOCAL_ONLY_API_PREFIXES` / `LOCAL_ONLY_API_PATTERNS` in
@@ -79,15 +81,17 @@ spawn-capable prefixes and fails CI if any is not classified local-only.
 
 #### Manage-scope carve-out
 
-A subset of LOCAL_ONLY paths MAY also be accessed from non-loopback if and
-only if the request carries an `Authorization: Bearer <api-key>` whose
-metadata includes the `manage` scope (or `admin`). The carve-out is gated
-explicitly per-path via `LOCAL_ONLY_MANAGE_SCOPE_BYPASS_PREFIXES` so the
-default for any new LOCAL_ONLY path remains strict-loopback. Unauthenticated
-requests and requests with non-manage keys are still rejected with
-`403 LOCAL_ONLY`.
+A subset of LOCAL_ONLY paths MAY also be accessed from public remote networks if
+and only if the request carries an `Authorization: Bearer <api-key>` whose
+metadata includes the `manage` scope (or `admin`), or an authenticated dashboard
+session. The carve-out is gated explicitly per-path via
+`LOCAL_ONLY_MANAGE_SCOPE_BYPASS_PREFIXES`; a new LOCAL_ONLY path defaults to
+loopback/private-LAN reachability and is not remotely reachable. Unauthenticated
+public-remote requests and requests without an allowed bypass identity are
+rejected with `403 LOCAL_ONLY`. Private-LAN requests pass the locality tier and
+then follow the route's normal authentication policy.
 
-Today the only bypassable prefix is `/api/mcp/`. `/api/cli-tools/runtime/` and
+Today the only public-remote bypassable prefix is `/api/mcp/`. `/api/cli-tools/runtime/` and
 `/api/services/` are intentionally excluded because they can spawn arbitrary
 subprocesses (`npm install`, `node`), which is the exact CVE class the
 LOCAL_ONLY tier exists to prevent.
@@ -105,25 +109,27 @@ for remote MCP-only callers who should not need broad management access.
 
 | Request                                             | Path                       | Result              |
 | --------------------------------------------------- | -------------------------- | ------------------- |
-| Non-loopback, no Bearer                             | `/api/mcp/*`               | 403 LOCAL_ONLY      |
-| Non-loopback, Bearer with `manage` scope            | `/api/mcp/*`               | Allow               |
-| Non-loopback, Bearer with `mcp:connect` scope       | `/api/mcp/*`               | Allow               |
-| Non-loopback, Bearer without `manage`/`mcp:connect` | `/api/mcp/*`               | 403 LOCAL_ONLY      |
-| Non-loopback, Bearer with `mcp:connect` scope       | `/api/cli-tools/runtime/*` | 403 LOCAL_ONLY      |
-| Non-loopback, Bearer with `manage` scope            | `/api/cli-tools/runtime/*` | 403 LOCAL_ONLY      |
-| Loopback, any/no Bearer                             | any LOCAL_ONLY             | Allow (gate passes) |
+| Public remote, no Bearer                             | `/api/mcp/*`               | 403 LOCAL_ONLY      |
+| Public remote, Bearer with `manage` scope            | `/api/mcp/*`               | Allow               |
+| Public remote, Bearer with `mcp:connect` scope       | `/api/mcp/*`               | Allow               |
+| Public remote, Bearer without `manage`/`mcp:connect` | `/api/mcp/*`               | 403 LOCAL_ONLY      |
+| Public remote, Bearer with `manage` scope            | `/api/cli-tools/runtime/*` | 403 LOCAL_ONLY      |
+| Trusted private LAN, requireLogin=false              | non-bypassable LOCAL_ONLY  | Auth-policy fall-through; may be anonymous |
+| Loopback, any/no Bearer                              | non-bypassable LOCAL_ONLY  | Auth-policy fall-through |
 
 #### Operator guidance & auditing
 
 If you run OmniRoute behind a reverse proxy or tunnel (nginx, Caddy, Cloudflare
-Tunnel, Tailscale, Ngrok), the loopback check still protects the spawn-capable
-routes above — a request whose client address is non-loopback is rejected with
-`403 LOCAL_ONLY` **before auth runs**, so a leaked JWT can't reach a spawn. Two
-operator responsibilities remain:
+Tunnel, Tailscale, Ngrok), the peer-locality check still protects the spawn-capable
+routes above — public and unknown peers are rejected with `403 LOCAL_ONLY`
+**before auth runs**, so a leaked JWT can't reach a spawn. Direct loopback and
+trusted private-LAN peers pass the locality gate; proxy-stamped requests are
+classified from the actual client rather than the proxy socket. Two operator
+responsibilities remain:
 
-- **Do not "fix" a 403 by forging the client IP as loopback.** Setting
-  `X-Forwarded-For: 127.0.0.1`, or a proxy that rewrites the source address to
-  loopback, re-opens exactly the RCE class this tier closes. Expose the
+- **Do not "fix" a 403 by forging the client IP as loopback or LAN.** Forwarding
+  headers are not trusted for locality. A proxy that stamps a remote client as a
+  local peer re-opens exactly the RCE class this tier closes. Expose the
   dashboard/API through the proxy — never the spawn-capable routes.
 - **Keep the manage-scope bypass minimal.** Only `/api/mcp/` is bypassable, and
   only with a `manage`-scoped API key. The `SPAWN_CAPABLE_PREFIXES` can never be
@@ -144,8 +150,9 @@ operator responsibilities remain:
   live LOCAL_ONLY prefix list, which prefixes are bypassable, and the compile-time
   spawn-capable ("cannot be made bypassable") set.
 - Grep your reverse-proxy / access logs for the prefixes above paired with a
-  non-loopback client address. Any such hit that returned `200` instead of
-  `403 LOCAL_ONLY` means the proxy is masking the real client IP — fix the proxy.
+  public/unknown client address. Trusted private-LAN and loopback hits may pass
+  this tier; a public-remote hit that returned `200` instead of `403 LOCAL_ONLY`
+  must be explained by the explicit `/api/mcp/` bypass or treated as a proxy/locality defect.
 - A `403 LOCAL_ONLY` in OmniRoute's logs for one of these paths is the guard
   working as intended, not an error to suppress.
 
@@ -179,8 +186,8 @@ configured. CLI tokens can authenticate these routes (loopback + valid HMAC).
 ```
 managementPolicy.evaluate(ctx)
   1. isLocalOnlyPath(path)?
-     → loopback                                  → fall through
-     → non-loopback, manage-scope Bearer
+     → loopback or trusted private LAN           → fall through
+     → public remote, manage-scope Bearer
         AND isLocalOnlyBypassableByManageScope   → allow (management_key)
      → otherwise                                  → reject 403 LOCAL_ONLY
   2. isInternalModelSyncRequest(ctx)?
@@ -239,7 +246,8 @@ vendor extension if the route is classified by `routeGuard.ts`:
 
 | routeGuard.ts classification  | YAML annotation            | Enforcement                                     |
 | ----------------------------- | -------------------------- | ----------------------------------------------- |
-| `LOCAL_ONLY_API_PREFIXES`     | `x-loopback-only: true`    | Blocked from non-loopback unconditionally       |
+| `LOCAL_ONLY_API_PREFIXES` and `LOCAL_ONLY_API_PATTERNS` | `x-local-only: true` | Loopback and trusted private-LAN peers only; remote/unknown peers are blocked |
+| Strict loopback handler gate  | `x-loopback-only: true`    | Direct loopback only; currently the five Video Bridge runtime/broker/drill-down operations |
 | `ALWAYS_PROTECTED_API_PATHS`  | `x-always-protected: true` | Auth required even with `requireLogin=false`    |
 | Internal admin/debug route    | `x-internal: true`         | Hidden from /dashboard/api-endpoints by default |
 | None (public / standard auth) | (no annotation needed)     | Standard `requireLogin`-controlled access       |
@@ -249,17 +257,19 @@ vendor extension if the route is classified by `routeGuard.ts`:
 Two scripts enforce consistency between YAML annotations and `routeGuard.ts`:
 
 - `scripts/check/check-openapi-coverage.mjs` — fails if coverage < 99%
-- `scripts/check/check-openapi-security-tiers.mjs` — fails if `x-loopback-only` or
-  `x-always-protected` annotations diverge from the compile-time constants
+- `scripts/check/check-openapi-security-tiers.mjs` — fails if `x-local-only` or
+  `x-always-protected` annotations diverge from the compile-time constants, and restricts
+  `x-loopback-only` to the strict-loopback allowlist
 
 Both scripts run in the pre-commit hook and in CI.
 
 ### False Positive Rule
 
-If `x-always-protected` or `x-loopback-only` is annotated on a route that is NOT in
-the `routeGuard.ts` constant, the coverage script fails. The fix is always to align the
-YAML to what `routeGuard.ts` actually enforces — not to add routes to `routeGuard.ts`
-without also implementing the enforcement logic.
+If `x-always-protected` or `x-local-only` is annotated on a route that is NOT in
+the corresponding `routeGuard.ts` constant, the coverage script fails. `x-loopback-only`
+is narrower and requires a direct loopback check in the route/handler as well as the
+routeGuard local-only tier. Align the YAML to implemented enforcement rather than adding
+annotations that claim stronger locality than the code guarantees.
 
 ---
 

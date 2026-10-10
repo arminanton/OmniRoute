@@ -161,6 +161,6 @@ Security tab), not in the proxy.
 
 ## See also
 
-- [Route Guard Tiers](./ROUTE_GUARD_TIERS.md) — loopback enforcement for
+- [Route Guard Tiers](./ROUTE_GUARD_TIERS.md) — local-peer enforcement for
   spawn-capable routes (a separate, complementary control).
 - [Authorization Guide](../architecture/AUTHZ_GUIDE.md) — the full auth pipeline.

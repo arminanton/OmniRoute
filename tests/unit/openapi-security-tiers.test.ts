@@ -11,20 +11,27 @@ const HTTP_METHODS = new Set(["get", "put", "post", "delete", "options", "head",
 const {
   LOCAL_ONLY_API_PREFIXES,
   LOCAL_ONLY_API_PATTERNS,
-  LOCAL_ONLY_API_GET_EXEMPTIONS,
+  isLocalOnlyPath,
   ALWAYS_PROTECTED_API_PATHS,
   ALWAYS_PROTECTED_API_PATTERNS,
 } = await import("../../src/server/authz/routeGuard.ts");
 
 const raw: any = yaml.load(fs.readFileSync(OPENAPI_PATH, "utf-8"));
 const paths: Record<string, any> = raw.paths || {};
+const STRICT_LOOPBACK_OPERATIONS = new Set([
+  "get /api/modality-bridge/video/runtime",
+  "post /api/modality-bridge/video/extract",
+  "get /api/modality-bridge/video/drilldown",
+  "post /api/modality-bridge/video/drilldown",
+  "delete /api/modality-bridge/video/drilldown",
+]);
 
-test("every x-loopback-only path matches a LOCAL_ONLY prefix or pattern in routeGuard.ts", () => {
+test("every x-local-only path matches a LOCAL_ONLY prefix or pattern in routeGuard.ts", () => {
   for (const [pathStr, methods] of Object.entries(paths)) {
     if (!methods || typeof methods !== "object") continue;
     for (const [method, spec] of Object.entries(methods as Record<string, any>)) {
       if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
-      if (spec?.["x-loopback-only"] !== true) continue;
+      if (spec?.["x-local-only"] !== true) continue;
       const matchesPrefix = (LOCAL_ONLY_API_PREFIXES as ReadonlyArray<string>).some(
         (prefix: string) => {
           const norm = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
@@ -39,47 +46,60 @@ test("every x-loopback-only path matches a LOCAL_ONLY prefix or pattern in route
       );
       assert.ok(
         matchesPrefix || matchesPattern,
-        `YAML path "${pathStr}" ${method.toUpperCase()} has x-loopback-only but is NOT in LOCAL_ONLY_API_PREFIXES ` +
-          `or LOCAL_ONLY_API_PATTERNS. Add it to routeGuard.ts or remove x-loopback-only.`
+        `YAML path "${pathStr}" ${method.toUpperCase()} has x-local-only but is NOT in LOCAL_ONLY_API_PREFIXES ` +
+          `or LOCAL_ONLY_API_PATTERNS. Add it to routeGuard.ts or remove x-local-only.`
       );
     }
   }
 });
 
-test("every routeGuard loopback-only operation is annotated in OpenAPI", () => {
+test("every routeGuard LOCAL_ONLY operation is annotated in OpenAPI", () => {
+  const localOnlyOperations: string[] = [];
+  const localTierOnlyOperations: string[] = [];
+  const strictLoopbackOperations: string[] = [];
+
   for (const [pathStr, methods] of Object.entries(paths)) {
     if (!pathStr.startsWith("/api/") || !methods || typeof methods !== "object") continue;
     const concretePath = pathStr.replace(/\{[^}]+\}/g, "sample-id");
-    const matchesPrefix = (LOCAL_ONLY_API_PREFIXES as ReadonlyArray<string>).some((prefix) => {
-      const normalized = prefix.endsWith("/") ? prefix.slice(0, -1) : prefix;
-      return concretePath === normalized || concretePath.startsWith(`${normalized}/`);
-    });
-    const matchesPattern = (LOCAL_ONLY_API_PATTERNS as ReadonlyArray<RegExp>).some((pattern) =>
-      pattern.test(concretePath)
-    );
-    if (!matchesPrefix && !matchesPattern) continue;
-
     for (const [method, operation] of Object.entries(methods as Record<string, any>)) {
       if (!HTTP_METHODS.has(method)) continue;
       if (!operation || typeof operation !== "object") continue;
-      const safeReadExempt =
-        ["get", "head", "options"].includes(method) &&
-        LOCAL_ONLY_API_GET_EXEMPTIONS.has(concretePath);
-      if (safeReadExempt) {
-        assert.notEqual(
-          operation["x-loopback-only"],
-          true,
-          `${method.toUpperCase()} ${pathStr} is explicitly exempted from LOCAL_ONLY`
-        );
-        continue;
-      }
+      const operationKey = `${method} ${pathStr}`;
+      const shouldBeLocalOnly = isLocalOnlyPath(concretePath, method);
+      const shouldBeStrictLoopback = STRICT_LOOPBACK_OPERATIONS.has(operationKey);
+
       assert.equal(
-        operation["x-loopback-only"],
-        true,
-        `${method.toUpperCase()} ${pathStr} is loopback-only in routeGuard.ts`
+        operation["x-local-only"] === true,
+        shouldBeLocalOnly,
+        `${method.toUpperCase()} ${pathStr} x-local-only must match routeGuard LOCAL_ONLY`
       );
+      assert.equal(
+        operation["x-loopback-only"] === true,
+        shouldBeStrictLoopback,
+        `${method.toUpperCase()} ${pathStr} strict loopback marker must match its source-backed allowlist`
+      );
+      if (shouldBeLocalOnly) localOnlyOperations.push(operationKey);
+      if (shouldBeLocalOnly && !shouldBeStrictLoopback) localTierOnlyOperations.push(operationKey);
+      if (shouldBeStrictLoopback) strictLoopbackOperations.push(operationKey);
     }
   }
+
+  assert.equal(
+    localOnlyOperations.length,
+    209,
+    "all current routeGuard LOCAL_ONLY operations are marked"
+  );
+  assert.equal(
+    localTierOnlyOperations.length,
+    204,
+    "204 operations use local-network-only semantics"
+  );
+  assert.equal(
+    strictLoopbackOperations.length,
+    5,
+    "exactly five Video Bridge operations require strict loopback"
+  );
+  assert.deepEqual([...strictLoopbackOperations].sort(), [...STRICT_LOOPBACK_OPERATIONS].sort());
 });
 
 test("GET /api/openapi/spec documents its conditional management auth contract", () => {
@@ -236,21 +256,28 @@ test("spec route catalog exposes vendor extension fields when endpoints are docu
       endpoints.push({
         method: method.toUpperCase(),
         path: pathStr,
-        loopbackOnly: spec["x-loopback-only"] === true,
+        localOnly: spec["x-local-only"] === true,
+        strictLoopbackOnly: spec["x-loopback-only"] === true,
         alwaysProtected: spec["x-always-protected"] === true,
         internal: spec["x-internal"] === true,
       });
     }
   }
 
-  // /api/mcp/sse and /api/shutdown are the canonical examples of loopback-only and
-  // always-protected tiers. The OpenAPI audit (#2701) intends to back-fill them
-  // with vendor extension annotations; until that backlog completes, only enforce
-  // the security tier WHEN the endpoint is documented. Adding the endpoint
-  // without the correct tier is still a regression and continues to fail.
+  // /api/mcp/sse is local-only. Video Bridge runtime is the canonical strict
+  // loopback example; its route also carries the broader local-tier marker.
   const mcpSse = endpoints.find((e) => e.path === "/api/mcp/sse" && e.method === "GET");
   if (mcpSse) {
-    assert.equal(mcpSse.loopbackOnly, true, "GET /api/mcp/sse must have loopbackOnly: true");
+    assert.equal(mcpSse.localOnly, true, "GET /api/mcp/sse must have x-local-only: true");
+    assert.equal(mcpSse.strictLoopbackOnly, false);
+  }
+
+  const videoRuntime = endpoints.find(
+    (e) => e.path === "/api/modality-bridge/video/runtime" && e.method === "GET"
+  );
+  if (videoRuntime) {
+    assert.equal(videoRuntime.localOnly, true);
+    assert.equal(videoRuntime.strictLoopbackOnly, true);
   }
 
   const shutdown = endpoints.find((e) => e.path === "/api/shutdown" && e.method === "POST");

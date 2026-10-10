@@ -57,7 +57,7 @@ test("fallback chain OpenAPI operations match route methods and central manageme
       `${method.toUpperCase()} must document the standalone requireLogin=false anonymous path`
     );
     assert.notEqual(op["x-always-protected"], true);
-    assert.notEqual(op["x-loopback-only"], true);
+    assert.notEqual(op["x-local-only"], true);
     assert.match(op.description ?? "", /requireLogin=false/);
     assert.match(op.description ?? "", /locked management/i);
 

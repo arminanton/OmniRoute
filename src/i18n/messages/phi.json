@@ -4133,6 +4133,7 @@
     "tierAll": "Lahat",
     "tierAuth": "Na-authenticate",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Lokal lang",
     "tierAlwaysProtected": "Palaging Protektado",
     "tierPublic": "Publiko",
     "hideInternal": "Itago ang Internal",

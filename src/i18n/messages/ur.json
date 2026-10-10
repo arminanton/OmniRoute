@@ -4133,6 +4133,7 @@
     "tierAll": "تمام",
     "tierAuth": "تصدیق شدہ",
     "tierLoopback": "لوپ بیک",
+    "tierLocalOnly": "صرف مقامی",
     "tierAlwaysProtected": "ہمیشہ محفوظ",
     "tierPublic": "عوامی",
     "hideInternal": "اندرونی چھپائیں",

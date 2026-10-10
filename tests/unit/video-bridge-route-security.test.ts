@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import * as yaml from "js-yaml";
 
 import { LOCAL_ONLY_API_PREFIXES, isLocalOnlyPath } from "../../src/server/authz/routeGuard.ts";
 import { SPAWN_CAPABLE_PREFIXES } from "../../src/shared/constants/spawnCapablePrefixes.ts";
@@ -207,12 +208,29 @@ test("configured base path preserves the exact self-hop without widening broker 
   }
 });
 
-test("OpenAPI marks both Video Bridge process routes loopback-only", () => {
-  const openapi = readFileSync("docs/openapi.yaml", "utf8");
-  for (const path of [`${PREFIX}runtime`, EXTRACT_PATH]) {
-    const start = openapi.indexOf(`  ${path}:`);
-    assert.notEqual(start, -1, `${path} missing from OpenAPI`);
-    assert.match(openapi.slice(start, start + 800), /x-loopback-only:\s*true/);
+test("OpenAPI marks all five strict Video Bridge operations as local-only and loopback-only", () => {
+  const openapi = yaml.load(readFileSync("docs/openapi.yaml", "utf8")) as any;
+  const strictOperations = [
+    { method: "get", path: `${PREFIX}runtime` },
+    { method: "post", path: EXTRACT_PATH },
+    { method: "get", path: `${PREFIX}drilldown` },
+    { method: "post", path: `${PREFIX}drilldown` },
+    { method: "delete", path: `${PREFIX}drilldown` },
+  ];
+  assert.equal(strictOperations.length, 5);
+  for (const { method, path } of strictOperations) {
+    const operation = openapi.paths?.[path]?.[method];
+    assert.ok(operation, `${method.toUpperCase()} ${path} missing from OpenAPI`);
+    assert.equal(
+      operation["x-local-only"],
+      true,
+      `${method.toUpperCase()} ${path} must retain LOCAL_ONLY`
+    );
+    assert.equal(
+      operation["x-loopback-only"],
+      true,
+      `${method.toUpperCase()} ${path} requires strict loopback`
+    );
   }
 });
 

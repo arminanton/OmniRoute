@@ -96,6 +96,6 @@ test("Volcengine Plan connect flows describe requests, session states, and outco
     [`${session}/resend`, "post"],
     [`${session}/status`, "get"],
   ]) {
-    assert.equal(spec.paths[pathname]?.[method]?.["x-loopback-only"], true);
+    assert.equal(spec.paths[pathname]?.[method]?.["x-local-only"], true);
   }
 });

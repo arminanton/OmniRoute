@@ -25,6 +25,11 @@ const routes = [
     method: "post",
     path: "/api/a2a/tasks/{id}/cancel",
   },
+  {
+    file: "src/app/api/a2a/tasks/history/route.ts",
+    method: "get",
+    path: "/api/a2a/tasks/history",
+  },
 ] as const;
 
 function operation(route: (typeof routes)[number]) {
@@ -52,9 +57,11 @@ function sourceOperations() {
 test("A2A task OpenAPI operations match the source routes and conditional auth posture", () => {
   const documented = new Set(routes.map(({ method, path }) => `${method} ${path}`));
   assert.deepEqual([...documented].sort(), [...sourceOperations()].sort());
-  assert.equal(documented.size, 4);
+  assert.equal(documented.size, 5);
 
-  for (const route of routes) {
+  for (const route of routes.filter(
+    (candidate) => !(candidate.path === "/api/a2a/tasks" && candidate.method === "post")
+  )) {
     const method = route.method.toUpperCase();
     const op = operation(route);
     assert.equal(classifyRoute(route.path, method).routeClass, "MANAGEMENT");
@@ -66,6 +73,8 @@ test("A2A task OpenAPI operations match the source routes and conditional auth p
       "ManagementSessionAuth",
       "LocalCliTokenAuth",
       "InternalServiceTokenAuth",
+      "ManagementGoogleApiKeyAuth",
+      "ManagementAnthropicApiKeyAuth",
     ]) {
       assert.ok(
         op.security?.some((entry: Record<string, unknown>) => scheme in entry),
@@ -80,9 +89,36 @@ test("A2A task OpenAPI operations match the source routes and conditional auth p
     assert.ok(op.responses?.["401"] && op.responses?.["403"] && op.responses?.["503"]);
   }
 
+  const create = operation(routes[1]);
+  assert.ok(
+    create.security?.some((entry: Record<string, unknown>) => "BearerAuth" in entry),
+    "POST must document its Authorization Bearer A2A key"
+  );
+  assert.equal(
+    create.security?.some(
+      (entry: Record<string, unknown>) =>
+        "ManagementGoogleApiKeyAuth" in entry || "ManagementAnthropicApiKeyAuth" in entry
+    ),
+    false,
+    "the route-local OMNIROUTE_API_KEY gate accepts only the exact Authorization Bearer value"
+  );
+  assert.match(create.description, /exact configured value as an Authorization Bearer token/i);
+  assert.match(create.description, /does not satisfy the extra A2A gate/i);
+  assert.match(
+    fs.readFileSync(path.join(ROOT, "src/app/api/a2a/tasks/route.ts"), "utf8"),
+    /authenticateA2A\(request\)/
+  );
+
   assert.match(operation(routes[0]).description, /owner-scoped/i);
   assert.match(operation(routes[0]).description, /before owner filtering/i);
   assert.match(operation(routes[1]).description, /OMNIROUTE_API_KEY/);
+
+  const history = operation(routes[4]);
+  assert.match(history.description, /REQUIRE_API_KEY/);
+  assert.match(history.description, /REQUIRE_API_KEY disabled/i);
+  assert.match(history.description, /requireLogin=false/);
+  assert.match(history.description, /local-first/i);
+  assert.match(history.description, /owner-scoped/i);
 });
 
 test("A2A task contracts describe sensitive task payloads, owner fields, and delegation validation", () => {

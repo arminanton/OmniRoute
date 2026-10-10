@@ -47,7 +47,7 @@ All five follow the same supervisory model:
 - OmniRoute installs them under `DATA_DIR/services/{name}/` (isolated from OmniRoute's own `package.json`)
 - OmniRoute spawns and monitors them as child processes
 - OmniRoute injects an ephemeral API key into the child's environment and rotates it without downtime (where applicable)
-- All management routes (`/api/services/*`) are **LOCAL_ONLY** — accessible only from loopback (hard rule #17)
+- All management routes (`/api/services/*`) are **LOCAL_ONLY** — the locality tier admits loopback and trusted private-LAN peers while blocking public/unknown remote peers (hard rule #17)
 
 ### Key decisions (from design plan)
 
@@ -79,7 +79,7 @@ All five follow the same supervisory model:
 └──────────────────────┬─────────────────────────────────────────────┘
                        │ HTTP (Next.js fetch)
 ┌──────────────────────▼─────────────────────────────────────────────┐
-│  Layer 2 — API (LOCAL_ONLY — loopback only)                        │
+│  Layer 2 — API (LOCAL_ONLY — loopback + trusted private LAN)        │
 │                                                                    │
 │  /api/services/9router/{install|start|stop|restart|update|         │
 │                          rotate-key|status|auto-start|logs}        │
@@ -209,8 +209,9 @@ race conditions when, for example, auto-start and a UI button fire simultaneousl
 
 ## 4. API reference
 
-All routes under `/api/services/` are **LOCAL_ONLY** (loopback only, hard rule #17).
-Non-loopback requests receive `403 LOCAL_ONLY` regardless of auth token.
+All routes under `/api/services/` are **LOCAL_ONLY** (hard rule #17): direct loopback
+and trusted private-LAN peers pass the locality check; public and unknown remote
+peers receive `403 LOCAL_ONLY`. Admitted peers still follow the normal auth policy.
 
 ### 4.1 9Router endpoints (11 routes)
 
@@ -534,19 +535,19 @@ Cloudflare/Ngrok tunnel cannot proxy into embedded services.
 ### LOCAL_ONLY enforcement (hard rule #17)
 
 All routes under `/api/services/` and `/dashboard/providers/services/*/embed/` are
-classified as LOCAL_ONLY in `src/server/authz/routeGuard.ts`. The loopback check
-runs unconditionally before any auth branch:
+classified as LOCAL_ONLY in `src/server/authz/routeGuard.ts`. The locality check
+runs before the auth branch and admits loopback plus trusted private-LAN peers:
 
 ```
 request arrives
   → isLocalOnlyPath(path)?
-      → non-loopback → 403 LOCAL_ONLY (always, before auth check)
-      → loopback    → fall through to normal auth
+      → public/unknown peer → 403 LOCAL_ONLY (before auth check)
+      → loopback/private LAN → fall through to normal auth
 ```
 
-This prevents a leaked JWT (e.g., via a tunnel) from triggering `npm install` or
-process spawning. See `docs/security/ROUTE_GUARD_TIERS.md` for the full tier
-matrix.
+This prevents a leaked JWT arriving over a public tunnel from triggering `npm install`
+or process spawning. Trusted private-LAN access remains subject to normal auth.
+See `docs/security/ROUTE_GUARD_TIERS.md` for the full tier matrix.
 
 ### API key injection
 

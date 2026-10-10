@@ -22,9 +22,9 @@ small built-in seed registry; an operator can point it at a custom remote
 registry URL, in which case the fetch is hardened by a DNS-resolving SSRF guard
 (see [Security](#security)).
 
-Every plugin route is **loopback-only** (Tier 1 — `LOCAL_ONLY`): plugins load
-and execute code in child processes, so the routes are unreachable from a
-non-loopback origin regardless of auth. See
+Every plugin route is Tier 1 — `LOCAL_ONLY`: direct loopback and trusted
+private-LAN peers pass the locality check, while public and unknown remote peers
+are blocked. Plugins load and execute code in child processes. See
 [`docs/security/ROUTE_GUARD_TIERS.md`](../security/ROUTE_GUARD_TIERS.md).
 
 ## How It Fits Together
@@ -88,8 +88,9 @@ body, `listMarketplacePlugins()` logs a warning and falls back to the seed list.
 ## REST API
 
 All endpoints require management auth (`requireManagementAuth`) **and** are
-loopback-only — `/api/plugins` and `/api/plugins/` are listed in
-`LOCAL_ONLY_API_PREFIXES` (`src/server/authz/routeGuard.ts`).
+`LOCAL_ONLY` — `/api/plugins` and `/api/plugins/` are listed in
+`LOCAL_ONLY_API_PREFIXES` (`src/server/authz/routeGuard.ts`). The locality tier
+admits loopback/trusted private-LAN peers and blocks public/unknown peers.
 
 | Endpoint                         | Method | Description                                         |
 | -------------------------------- | ------ | --------------------------------------------------- |
@@ -207,12 +208,13 @@ The dashboard "Marketplace" tab exposes a field for this URL (read back from
 
 ## Security
 
-### Route tier — loopback only
+### Route tier — local peers
 
 Plugins execute code in spawned child processes, so the entire `/api/plugins`
-surface is classified `LOCAL_ONLY` (Tier 1). Loopback enforcement runs
-unconditionally **before** any auth check, so a leaked management token reaching
-the box over a tunnel still cannot install, activate, or uninstall a plugin.
+surface is classified `LOCAL_ONLY` (Tier 1). The locality gate admits direct
+loopback and trusted private-LAN peers, and blocks public/unknown peers before
+the auth check. A leaked management token arriving over a public tunnel cannot
+install, activate, or uninstall a plugin.
 See [`docs/security/ROUTE_GUARD_TIERS.md`](../security/ROUTE_GUARD_TIERS.md) and
 Hard Rules #15 / #17.
 
@@ -257,7 +259,7 @@ silently falls back to the built-in seed registry and logs a warning.
 - **Optional integrity pin** — a manifest may declare an `integrity`
   (`sha256-<base64>`, SRI format) field. When present, the loader verifies the
   entry file hash at load time and refuses to activate on mismatch. It is
-  opt-in tamper-detection, **not** a security boundary — loopback-only routing
+  opt-in tamper-detection, **not** a security boundary — local-only routing
   and the permission model are the real boundaries.
 
 ## Manifest (`plugin.json`)
@@ -357,7 +359,7 @@ A per-plugin config page lives at `/dashboard/plugins/[name]/config`
 ## See Also
 
 - [`docs/security/ROUTE_GUARD_TIERS.md`](../security/ROUTE_GUARD_TIERS.md) —
-  why `/api/plugins` is loopback-only (Tier 1)
+  why `/api/plugins` is local-only (Tier 1)
 - [`docs/frameworks/SKILLS.md`](./SKILLS.md) — the related skills framework
   (`src/lib/skills/`); plugins may declare skills in their manifest
 - [`docs/frameworks/WEBHOOKS.md`](./WEBHOOKS.md) — event-driven outbound

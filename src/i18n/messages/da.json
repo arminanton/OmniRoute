@@ -4133,6 +4133,7 @@
     "tierAll": "Alle",
     "tierAuth": "Godkendt",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Kun lokalt",
     "tierAlwaysProtected": "Altid beskyttet",
     "tierPublic": "Offentlig",
     "hideInternal": "Skjul interne",

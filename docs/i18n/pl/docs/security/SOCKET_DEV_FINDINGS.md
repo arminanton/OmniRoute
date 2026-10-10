@@ -148,8 +148,9 @@ lokalnym dashboardzie.
 **Ochrony już na miejscu**:
 
 - Wszystkie trasy `/api/services/*` są LOCAL_ONLY zgodnie z
-  `src/server/authz/routeGuard.ts` (hard rule #17). Egzekwowanie loopback
-  następuje przed jakimkolwiek sprawdzeniem auth — wyciekły JWT nie może do nich dotrzeć.
+  `src/server/authz/routeGuard.ts` (hard rule #17). Kontrola lokalności dopuszcza
+  loopback/zaufaną prywatną sieć LAN i blokuje publiczne lub nieznane źródła przed auth;
+  wyciekły JWT z publicznego tunelu nie może do nich dotrzeć.
 - Wiersz DB 9router jest seedowany jako `status='not_installed', auto_start=0` (zob.
   `src/lib/db/migrations/071_services.sql:19`). Serwis **nie** startuje
   przy pierwszym uruchomieniu.

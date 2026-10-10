@@ -39,7 +39,7 @@ The active HTTP transport (`sse` or `streamable-http`) is selected by the `mcpTr
 
 ### Remote access (manage-scope bypass)
 
-`/api/mcp/*` is in the LOCAL_ONLY tier (`src/server/authz/routeGuard.ts`) — by default only loopback hosts (`localhost`, `127.0.0.1`, `::1`) can reach it. Since v3.8.2, non-loopback clients may connect if they present an `Authorization: Bearer <api-key>` whose key carries the `manage` scope. This is the only way to reach the remote MCP server through a tunnel, reverse proxy, or public hostname.
+`/api/mcp/*` is in the LOCAL_ONLY tier (`src/server/authz/routeGuard.ts`): direct loopback and trusted private-LAN peers pass the locality check, while public and unknown remote peers are blocked by default. Since v3.8.2, public/tunneled clients may connect when they present an `Authorization: Bearer <api-key>` whose key carries the `manage` scope. This is the supported way to reach the remote MCP server through a tunnel, reverse proxy, or public hostname.
 
 ```bash
 # Grant manage scope: open the dashboard API Keys page and toggle

@@ -4133,6 +4133,7 @@
     "tierAll": "Semua",
     "tierAuth": "Terautentikasi",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Hanya lokal",
     "tierAlwaysProtected": "Selalu Dilindungi",
     "tierPublic": "Publik",
     "hideInternal": "Sembunyikan Internal",

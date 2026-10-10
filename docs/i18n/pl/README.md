@@ -413,7 +413,7 @@ Wszystkie **19** strategii — łącz i dopasowuj na każdym kroku komba:
 
 </div>
 
-<img src="../../../docs/diagrams/privacy-local.svg" width="100%" alt="Prywatność i lokalne działanie — Twoje klucze, Twoja maszyna, Twoje dane; OmniRoute to lokalne proxy, które nigdy nie wysyła danych na zewnętrzne serwery. Jedenaście gwarancji: działa w 100% na Twoim sprzęcie (0 przeskoków do chmury), domyślnie zero telemetrii, zaszyfrowane dane uwierzytelniające (AES-256-GCM), brak konieczności zakładania konta czy rejestracji, wzmocniona bramka (ograniczanie zakresu kluczy API, filtrowanie IP, limity zapytań, ochrona przed wstrzykiwaniem promptów), trasy procesów wyłącznie na adresie pętli zwrotnej (loopback-only), oczyszczanie nagłówków wysyłanych do dostawców nadrzędnych, usuwanie danych osobowych (PII) ściśle na żądanie (opt-in), bezpieczne błędy, które nigdy nie ujawniają szczegółów wewnętrznych, lokalny dziennik audytu w Twojej własnej bazie SQLite oraz w pełni otwartoźródłowy kod na licencji MIT."/>
+<img src="../../../docs/diagrams/privacy-local.svg" width="100%" alt="Prywatność i lokalne działanie — Twoje klucze, Twoja maszyna, Twoje dane; OmniRoute to lokalne proxy, które nigdy nie wysyła danych na zewnętrzne serwery. Jedenaście gwarancji: działa w 100% na Twoim sprzęcie (0 przeskoków do chmury), domyślnie zero telemetrii, zaszyfrowane dane uwierzytelniające (AES-256-GCM), brak konieczności zakładania konta czy rejestracji, wzmocniona bramka (ograniczanie zakresu kluczy API, filtrowanie IP, limity zapytań, ochrona przed wstrzykiwaniem promptów), trasy uruchamiające procesy ograniczone przez tier LOCAL_ONLY (loopback i zaufana prywatna sieć LAN; ruch publiczny/nieznany blokowany domyślnie), oczyszczanie nagłówków wysyłanych do dostawców nadrzędnych, usuwanie danych osobowych (PII) ściśle na żądanie (opt-in), bezpieczne błędy, które nigdy nie ujawniają szczegółów wewnętrznych, lokalny dziennik audytu w Twojej własnej bazie SQLite oraz w pełni otwartoźródłowy kod na licencji MIT."/>
 
 <sub>📖 [Autoryzacja](../../../docs/architecture/AUTHZ_GUIDE.md) · [Barierki ochronne](../../../docs/security/GUARDRAILS.md) · [Zgodność](../../../docs/security/COMPLIANCE.md)</sub>
 
@@ -449,7 +449,7 @@ omniroute tokens create --name ci --scope read   # generuj węższe tokeny dla i
 omniroute contexts use default            # ← przełącz z powrotem na serwer lokalny
 ```
 
-Tokeny mają zakresy `read` / `write` / `admin`; trasy uruchamiające procesy pozostają ograniczone do pętli zwrotnej (loopback-only).
+Tokeny mają zakresy `read` / `write` / `admin`. Trasy uruchamiające procesy korzystają z tieru LOCAL_ONLY: kontrolę lokalności przechodzą loopback i zaufani uczestnicy prywatnej sieci LAN, a publiczne/nieznane źródła są domyślnie blokowane. `/api/mcp/*` ma wąski, jawny wyjątek zdalnego dostępu wymagający scope `manage`.
 <sub>📖 [Tryb zdalny](../../../docs/guides/REMOTE-MODE.md)</sub>
 
 <div align="center">

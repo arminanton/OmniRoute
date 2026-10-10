@@ -180,7 +180,7 @@ test("resilience read/write/reset and local connection snapshots return typed st
   );
 
   const connections = operation("/api/resilience/connections", "get");
-  assert.equal(connections["x-loopback-only"], true);
+  assert.equal(connections["x-local-only"], true);
   assertConditionalManagementAuth(connections);
   assert.equal(
     success("/api/resilience/connections", "get").$ref,

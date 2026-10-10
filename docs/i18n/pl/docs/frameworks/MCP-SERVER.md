@@ -39,7 +39,7 @@ Aktywny transport HTTP (`sse` lub `streamable-http`) wybiera ustawienie `mcpTran
 
 ### Dostęp zdalny (bypass scope manage)
 
-`/api/mcp/*` jest w warstwie LOCAL_ONLY (`src/server/authz/routeGuard.ts`) — domyślnie docierają do niego tylko hosty loopback (`localhost`, `127.0.0.1`, `::1`). Od v3.8.2 klienci spoza loopback mogą się łączyć, jeśli przedstawią `Authorization: Bearer <api-key>`, a klucz ma scope `manage`. To jedyny sposób na dostęp do zdalnego serwera MCP przez tunel, reverse proxy lub publiczną nazwę hosta.
+`/api/mcp/*` jest w warstwie LOCAL_ONLY (`src/server/authz/routeGuard.ts`): bezpośredni loopback i zaufani uczestnicy prywatnej sieci LAN przechodzą kontrolę lokalności, a publiczne i nieznane zdalne źródła są domyślnie blokowane. Od v3.8.2 klienci publiczni lub tunelowani mogą się łączyć z `Authorization: Bearer <api-key>`, jeśli klucz ma scope `manage`. To obsługiwany sposób dostępu do zdalnego serwera MCP przez tunel, reverse proxy lub publiczną nazwę hosta.
 
 ```bash
 # Grant manage scope: open the dashboard API Keys page and toggle

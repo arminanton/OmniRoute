@@ -4133,6 +4133,7 @@
     "tierAll": "Vše",
     "tierAuth": "Autentizováno",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Pouze místně",
     "tierAlwaysProtected": "Vždy chráněno",
     "tierPublic": "Veřejné",
     "hideInternal": "Skrýt interní",

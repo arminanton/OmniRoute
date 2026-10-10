@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Cross-references openapi.yaml x-loopback-only / x-always-protected annotations
+ * Cross-references openapi.yaml x-local-only / x-loopback-only /
+ * x-always-protected annotations
  * against the compile-time route-classification constants in
  * src/server/authz/routeGuard.ts.
  *
- * routeGuard classifies a loopback-only route through TWO mechanisms, and this
+ * routeGuard classifies a local-only route through TWO mechanisms, and this
  * checker must honor BOTH or it reports false positives (regression #12335):
  *
  *   1. LOCAL_ONLY_API_PREFIXES — flat string prefixes. One entry
@@ -15,9 +16,10 @@
  *      /api/providers/{id}/login), which a flat prefix cannot target without
  *      over-broadening the whole /api/providers/ subtree.
  *
- * A route is "covered" iff it matches a resolved prefix OR a pattern — exactly
- * the `isLocalOnlyPath()` runtime contract. Fails if any YAML annotation
- * disagrees with the routeGuard.ts constants.
+ * x-local-only is the routeGuard LOCAL_ONLY tier (loopback or trusted private
+ * LAN). x-loopback-only is a stricter route/handler-level property and is kept
+ * on the five Video Bridge operations that reject private-LAN peers too.
+ * Fails if the tier annotations disagree with their respective contracts.
  */
 
 import fs from "node:fs";
@@ -131,6 +133,13 @@ const LOCAL_ONLY_PATTERNS = parsePatterns("LOCAL_ONLY_API_PATTERNS");
 const LOCAL_ONLY_GET_EXEMPTIONS = new Set(parseStringSet("LOCAL_ONLY_API_GET_EXEMPTIONS"));
 const SAFE_METHODS = new Set(["get", "head", "options"]);
 const ALWAYS_PROTECTED_PATHS = parsePrefixes("ALWAYS_PROTECTED_API_PATHS");
+const STRICT_LOOPBACK_OPERATIONS = new Set([
+  "GET /api/modality-bridge/video/runtime",
+  "POST /api/modality-bridge/video/extract",
+  "GET /api/modality-bridge/video/drilldown",
+  "POST /api/modality-bridge/video/drilldown",
+  "DELETE /api/modality-bridge/video/drilldown",
+]);
 // isAlwaysProtectedPath() is ALSO two-armed (paths || patterns) — reading only the
 // path array repeated, on this half, the very bug #12350 fixed on the LOCAL_ONLY
 // half: the pattern-gated credential routes (…/{claude,codex}-auth/{export,
@@ -185,18 +194,31 @@ for (const [pathStr, methods] of Object.entries(paths)) {
   for (const [method, spec] of Object.entries(methods)) {
     if (!["get", "post", "put", "patch", "delete"].includes(method) || !spec) continue;
 
+    const operationId = `${method.toUpperCase()} ${pathStr}`;
     const methodExempt =
       SAFE_METHODS.has(method) && LOCAL_ONLY_GET_EXEMPTIONS.has(concretize(pathStr));
 
-    if (spec["x-loopback-only"] === true && methodExempt) {
+    if (spec["x-local-only"] === true && methodExempt) {
       errors.push(
-        `${method.toUpperCase()} ${pathStr}: has x-loopback-only but routeGuard explicitly ` +
-          `exempts this safe method`
+        `${operationId}: has x-local-only but routeGuard explicitly ` + `exempts this safe method`
       );
-    } else if (spec["x-loopback-only"] === true && !coveredByLocalOnly(pathStr)) {
+    } else if (spec["x-local-only"] === true && !coveredByLocalOnly(pathStr)) {
       errors.push(
-        `${method.toUpperCase()} ${pathStr}: has x-loopback-only but is NOT covered by ` +
+        `${operationId}: has x-local-only but is NOT covered by ` +
           `LOCAL_ONLY_API_PREFIXES or LOCAL_ONLY_API_PATTERNS`
+      );
+    }
+
+    const strictLoopbackRequired = STRICT_LOOPBACK_OPERATIONS.has(operationId);
+    if (spec["x-loopback-only"] === true && !strictLoopbackRequired) {
+      errors.push(`${operationId}: x-loopback-only is reserved for strict-loopback operations`);
+    }
+    if (strictLoopbackRequired && spec["x-loopback-only"] !== true) {
+      errors.push(`${operationId}: strict-loopback operation is missing x-loopback-only: true`);
+    }
+    if (spec["x-loopback-only"] === true && spec["x-local-only"] !== true) {
+      errors.push(
+        `${operationId}: strict loopback must also declare the routeGuard x-local-only tier`
       );
     }
 
@@ -209,31 +231,31 @@ for (const [pathStr, methods] of Object.entries(paths)) {
   }
 }
 
-// Reverse pass: every YAML operation covered by a LOCAL_ONLY prefix should carry
-// `x-loopback-only`, except safe methods for exact paths in the routeGuard
-// method-aware exemption set. Pattern-only routes are also guarded by the unit
-// test, since their dynamic segment can appear before the protected suffix.
+// Reverse pass: every YAML operation covered by a LOCAL_ONLY prefix or pattern
+// should carry x-local-only, except safe methods explicitly exempted by
+// routeGuard. Strict x-loopback-only remains an independent five-operation
+// subset checked above.
 const reverseWarnings = [];
 for (const [pathStr, methods] of Object.entries(paths)) {
   if (!methods || typeof methods !== "object") continue;
-  if (!matchesPrefix(concretize(pathStr))) continue;
+  if (!coveredByLocalOnly(pathStr)) continue;
   for (const [method, spec] of Object.entries(methods)) {
     if (!["get", "post", "put", "patch", "delete"].includes(method) || !spec) continue;
     const methodExempt =
       SAFE_METHODS.has(method) && LOCAL_ONLY_GET_EXEMPTIONS.has(concretize(pathStr));
     if (methodExempt) {
-      if (spec["x-loopback-only"] === true) {
+      if (spec["x-local-only"] === true) {
         errors.push(
           `${method.toUpperCase()} ${pathStr}: routeGuard exempts this safe method from ` +
-            `LOCAL_ONLY, so x-loopback-only must be absent`
+            `LOCAL_ONLY, so x-local-only must be absent`
         );
       }
       continue;
     }
-    if (spec["x-loopback-only"] !== true) {
+    if (spec["x-local-only"] !== true) {
       reverseWarnings.push(
         `${method.toUpperCase()} ${pathStr}: falls under LOCAL_ONLY_API_PREFIXES ` +
-          `but is missing x-loopback-only: true annotation`
+          `or LOCAL_ONLY_API_PATTERNS but is missing x-local-only: true annotation`
       );
     }
   }

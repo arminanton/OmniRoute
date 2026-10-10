@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Keep OpenAPI's x-loopback-only operation annotations aligned with routeGuard.
+// Keep OpenAPI's x-local-only operation annotations aligned with routeGuard.
 // Dry-run by default; pass --apply to insert missing annotations into docs/openapi.yaml.
 import fs from "node:fs";
 import os from "node:os";
@@ -14,7 +14,7 @@ const METHODS = new Set(["get", "put", "post", "delete", "options", "head", "pat
 
 // routeGuard imports server modules that can initialize SQLite. Keep this documentation tool
 // isolated from the operator's real database, even when run on the live host.
-const temporaryDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-openapi-loopback-"));
+const temporaryDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "omniroute-openapi-local-only-"));
 process.env.DATA_DIR = temporaryDataDir;
 process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
 process.on("exit", () => {
@@ -30,10 +30,9 @@ const missing = new Set();
 for (const [pathTemplate, pathItem] of Object.entries(paths)) {
   if (!pathTemplate.startsWith("/api/") || !pathItem || typeof pathItem !== "object") continue;
   const concretePath = pathTemplate.replace(/\{[^}]+\}/g, "loopback-segment");
-  if (!isLocalOnlyPath(concretePath)) continue;
   for (const [method, operation] of Object.entries(pathItem)) {
     if (!METHODS.has(method.toLowerCase()) || !operation || typeof operation !== "object") continue;
-    if (operation["x-loopback-only"] !== true) {
+    if (isLocalOnlyPath(concretePath, method) && operation["x-local-only"] !== true) {
       missing.add(`${method.toLowerCase()} ${pathTemplate}`);
     }
   }
@@ -50,15 +49,17 @@ for (const line of lines) {
   const pathMatch = insidePaths ? /^ {2}(\/[^\s:]+):\s*$/.exec(line) : null;
   if (pathMatch) currentPath = pathMatch[1];
   output.push(line);
-  const methodMatch = insidePaths ? /^ {4}(get|put|post|delete|options|head|patch|trace):\s*$/.exec(line) : null;
+  const methodMatch = insidePaths
+    ? /^ {4}(get|put|post|delete|options|head|patch|trace):\s*$/.exec(line)
+    : null;
   if (!currentPath || !methodMatch) continue;
   const key = `${methodMatch[1]} ${currentPath}`;
   if (!missing.has(key)) continue;
-  output.push("      x-loopback-only: true");
+  output.push("      x-local-only: true");
   inserted++;
 }
 
-console.log(`OpenAPI operations classified loopback-only and missing annotation: ${missing.size}`);
+console.log(`OpenAPI LOCAL_ONLY operations missing x-local-only: ${missing.size}`);
 if (!APPLY) {
   for (const operation of [...missing].sort().slice(0, 12)) console.log(`  - ${operation}`);
   if (missing.size > 12) console.log(`  … ${missing.size - 12} more`);
@@ -67,7 +68,9 @@ if (!APPLY) {
 }
 
 if (inserted !== missing.size) {
-  throw new Error(`Refusing partial update: found ${missing.size} operations but inserted ${inserted}`);
+  throw new Error(
+    `Refusing partial update: found ${missing.size} operations but inserted ${inserted}`
+  );
 }
 fs.writeFileSync(SPEC_PATH, output.join("\n"));
 console.log(`Annotated ${inserted} operations in docs/openapi.yaml`);

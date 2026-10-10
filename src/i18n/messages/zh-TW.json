@@ -4133,6 +4133,7 @@
     "tierAll": "全部",
     "tierAuth": "需認證",
     "tierLoopback": "迴環",
+    "tierLocalOnly": "僅限本機",
     "tierAlwaysProtected": "始終受保護",
     "tierPublic": "公開",
     "hideInternal": "隱藏內部端點",

@@ -4133,6 +4133,7 @@
     "tierAll": "Все",
     "tierAuth": "Аутентифицировано",
     "tierLoopback": "Циклический вызов",
+    "tierLocalOnly": "Только локально",
     "tierAlwaysProtected": "Всегда Защищено",
     "tierPublic": "Публичный",
     "hideInternal": "Скрыть внутренние",

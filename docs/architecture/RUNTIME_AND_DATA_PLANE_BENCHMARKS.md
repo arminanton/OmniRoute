@@ -32,12 +32,22 @@ an assumed performance winner. The main `/api/v1/chat/completions` route does no
 the Go sidecar is exposed through the relay endpoints.
 
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
-contract is still stronger on route coverage than schema completeness: 600 operations have success
-response content schemas and 552 have an operation-level `security` field; 545 list nonempty
-alternatives and 7 explicitly set an empty list. Of 987 operations with a
-non-`204` success status, 387 have no explicit response content; two are intentional bodyless `HEAD`
-probes, leaving 385 non-`HEAD` operations whose successful response shape remains undocumented.
-Twenty-eight operations have no declared `2xx` status, and 14 return only an intentional `204`. This
+contract is still stronger on route coverage than schema completeness: the deterministic inventory
+in [OPENAPI_CONTRACT_INVENTORY.md](OPENAPI_CONTRACT_INVENTORY.md) finds 983 body-bearing response
+candidates, of which 712 declare schemas on every non-`204` success response and 271 do not. The
+remaining 46 operations are accounted for explicitly: 16 are `204`-only, 28 declare no `2xx`, and
+two are bodyless `HEAD` probes with a `200` response. The 28 without `2xx` include eight redirects,
+one WebSocket upgrade, ten catch-all not-found operations, six bodyless `HEAD` catch-alls/artifact
+probes, and three error-only operations. This differs from the earlier 600/387 counts because those
+were an outdated snapshot and counted the two `HEAD` probes in the non-`204` denominator. The
+inventory also finds 708 operations with effective operation-level security declarations (700
+nonempty, eight explicitly public), 321 with no effective declaration, and 214 operations whose
+text signals conditional auth; all 214 now have a security declaration. The A2A persisted-history
+route lists the accepted API-key/management alternatives and scopes its anonymous alternative to
+the unlocked local-first configuration. The login/setup status GET explicitly declares public
+access for the unauthenticated setup screen. These counts measure OpenAPI declarations, not runtime
+authorization or schema semantic completeness.
+This
 pass added concrete schemas for provider-model lookup, pricing
 model catalogs, free-model budgets, conversation summaries, paginated conversation turns, the
 management log-detail route's in-flight/in-memory/persisted variants, the health route's public
@@ -161,10 +171,9 @@ the scoped CRUD schema, partial updates, cross-field validation, nullable simula
 the actual `201` create response. Model-alias settings now describe built-in/custom/merged maps,
 replace/add/remove bodies, persistence, and the self-healing GET behavior. The history-cleanup pass
 documents destructive scope, period choices, row/artifact counts, and each endpoint's distinct error
-behavior; its handlers are tested only against isolated temporary databases. The current spec
-inventory is 959 schemas, 600 success-body operations, and 552 security-field declarations (545
-nonempty); 387 non-`204` success operations have no explicit response content, including two
-intentional bodyless `HEAD` probes. The
+behavior; its handlers are tested only against isolated temporary databases. The then-current spec
+inventory was 959 schemas, 600 success-body operations, and 552 security-field declarations (545
+nonempty); the later deterministic inventory supersedes those response/security counts. The
 versioned read-contract pass now describes the public combo projection, auto-combo candidate state,
 scoped API-key self-status with optional quota branches, and the Muse Code model catalog. It also
 documents the correlation ID shape emitted by the authorization middleware. The Antigravity IDE/MITM
@@ -191,7 +200,7 @@ dashboard session, document owner-scoped versus session-wide access, and limit c
 cleanup to the caller's resources. Translator step-4 previews document redacted, display-only
 credentials; the separate send route remains unchanged.
 All 98 operations previously missing
-`x-loopback-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
+`x-local-only` under routeGuard's local-only prefixes are now annotated; the route-guard checker
 and unit test enforce those markers.
 
 ## Request path through the current monolith
@@ -820,6 +829,20 @@ dispatcher response-start timeout retries once with a fresh no-keep-alive dispat
 surfaces instead of falling through to native fetch, and a transient socket failure uses the fresh
 dispatcher. The timers/upstreams are controlled local fixtures; these tests do not establish that a
 real Google or OpenAI upstream will answer before the configured timeout.
+
+The Antigravity streaming request body now uses pull-driven UTF-8 encoding in bounded chunks instead
+of eagerly encoding the entire serialized JSON string into one `Uint8Array` at stream creation. A
+fresh isolated-process microbenchmark compared the old encoder and the current implementation with
+64 concurrent 3,499,998-byte Unicode bodies and a shared source string. The old path retained
+223,999,872 array-buffer bytes immediately; the new path retained zero additional array-buffer bytes
+before the first pull and 4,194,240 bytes after one pull per request. That is 219,805,632 fewer
+retained array-buffer bytes (98.13%, or 53.4× lower) for the encoder stage. The measurement excludes
+per-request serialization, Next routing, Undici buffering beyond one pulled chunk, provider I/O,
+stream tracing, and artifact writes; it is not a prediction of whole-process RSS savings. The
+benchmark runs each mode in a fresh process and uses a temporary `DATA_DIR`. Focused tests also
+verify byte-identical UTF-8 output across chunk boundaries, unchanged non-streaming bodies, and a
+fresh byte-identical body on the 403 retry. A matched standalone 70/100-session run with this encoder
+change is still pending.
 
 Run the capture variant with:
 
@@ -2008,7 +2031,9 @@ image, or production deployment were involved.
 - Before production routing, port and parity-test authentication, key revocation, connection/model
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
-- Continue the source audit for response schemas and conditional auth behavior. After the Claude,
-  Cline, and Droid CLI settings batches, 658 of 985 response-contract candidates are typed and 327
-  gaps remain; route coverage is 705/705. This count is a contract-coverage inventory, not proof
-  that all security conditions or response semantics have been verified.
+- Continue the source audit for response schemas and conditional auth behavior. The deterministic
+  inventory reports 712 of 983 body-bearing response candidates with declared schemas on every
+  non-`204` success (271 gaps); route coverage is 705/705. It also lists 321 operations with no
+  effective security declaration; all 214 operations whose text signals conditional auth now have
+  declarations. These are documentation review queues, not proof that handlers are insecure or
+  that the declared response schemas are semantically complete.

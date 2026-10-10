@@ -4133,6 +4133,7 @@
     "tierAll": "Hamısı",
     "tierAuth": "Autentifikasiya olunmuş",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Yalnızca yerel",
     "tierAlwaysProtected": "Həmişə Qorunan",
     "tierPublic": "İctimai",
     "hideInternal": "Daxililəri Gizlət",

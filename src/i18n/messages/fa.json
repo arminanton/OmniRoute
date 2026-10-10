@@ -4133,6 +4133,7 @@
     "tierAll": "همه",
     "tierAuth": "احراز هویت شده",
     "tierLoopback": "لوپ‌بک",
+    "tierLocalOnly": "فقط محلی",
     "tierAlwaysProtected": "همیشه محافظت‌شده",
     "tierPublic": "عمومی",
     "hideInternal": "پنهان کردن داخلی",

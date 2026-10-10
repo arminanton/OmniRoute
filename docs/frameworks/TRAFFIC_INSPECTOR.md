@@ -347,7 +347,7 @@ Traffic Inspector shows **all intercepted HTTPS traffic**, including authorizati
 
 | Control                       | Details                                                                                                                                               |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **LOCAL_ONLY**                | All routes and the WebSocket endpoint are loopback-only (enforced in `routeGuard.ts` before auth)                                                     |
+| **LOCAL_ONLY**                | The locality tier admits loopback/trusted private-LAN peers and blocks public/unknown peers before auth (`routeGuard.ts`)                              |
 | **Secret masking**            | Linear `maskSecret()` scanner redacts RFC 6750 Bearer credentials, provider-prefixed keys and long opaque tokens before `TrafficBuffer.push()`        |
 | **Body size cap**             | Bodies > `INSPECTOR_MAX_BODY_KB` (default 1024 KB) are truncated with `"(truncated for performance)"` notice                                          |
 | **Header sanitization**       | Names are lowercased; framing/hop-by-hop and proxy-auth headers are dropped; cookies are fully redacted; credential values delegate to `maskSecret()` |
@@ -430,7 +430,7 @@ When the buffer reaches `INSPECTOR_BUFFER_SIZE` (default 1000), new entries rota
 
 ## §8 API reference
 
-All routes are `LOCAL_ONLY` (loopback-only) and `SPAWN_CAPABLE` (system proxy commands). See `src/server/authz/routeGuard.ts`.
+All routes are `LOCAL_ONLY` and `SPAWN_CAPABLE` (system proxy commands). The locality tier admits direct loopback and trusted private-LAN peers, blocks public/unknown peers before auth, and then applies the normal auth policy. See `src/server/authz/routeGuard.ts`.
 
 Base path: `/api/tools/traffic-inspector/`
 

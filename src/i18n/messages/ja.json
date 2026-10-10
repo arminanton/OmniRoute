@@ -4133,6 +4133,7 @@
     "tierAll": "すべて",
     "tierAuth": "認証済み",
     "tierLoopback": "ループバック",
+    "tierLocalOnly": "ローカルのみ",
     "tierAlwaysProtected": "常時保護",
     "tierPublic": "公開",
     "hideInternal": "内部を非表示",

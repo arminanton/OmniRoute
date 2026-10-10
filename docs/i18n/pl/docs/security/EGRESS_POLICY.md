@@ -244,4 +244,4 @@ Gdy rozwiązany obiekt proxy niesie nie-`auto` `family`, `proxyConfigToUrl` dokl
 >
 > - [Proxy Guide](../ops/PROXY_GUIDE.md) — pełny system proxy: CRUD rejestru, 4-poziomowa rezolucja, rotacja, health checking, referencja API
 > - [Stealth Guide](./STEALTH_GUIDE.md) — warstwy fingerprint TLS i CLI fingerprint jadące na wierzchu proxy
-> - [Route Guard Tiers](./ROUTE_GUARD_TIERS.md) — egzekwowanie loopback dla tras tylko-lokalnych
+> - [Route Guard Tiers](./ROUTE_GUARD_TIERS.md) — kontrola lokalnych peerów dla tras tylko-lokalnych

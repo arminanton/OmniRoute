@@ -4133,6 +4133,7 @@
     "tierAll": "Tümü",
     "tierAuth": "Kimliği Doğrulanmış",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Yalnızca yerel",
     "tierAlwaysProtected": "Her Zaman Korumalı",
     "tierPublic": "Genel",
     "hideInternal": "Dahili Olanları Gizle",

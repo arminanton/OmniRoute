@@ -844,7 +844,10 @@ omniroute tokens create --name ci --scope read   # mint narrower tokens for othe
 omniroute contexts use default            # ← switch back to the local server
 ```
 
-Tokens are scoped `read` / `write` / `admin`; process-spawning routes stay loopback-only.
+Tokens are scoped `read` / `write` / `admin`. Process-spawning routes use the
+LOCAL_ONLY tier: loopback and trusted private-LAN peers pass its locality check,
+while public/unknown peers are blocked by default. `/api/mcp/*` has a narrow,
+explicit manage-scope remote-access carve-out.
 <sub>📖 [Remote Mode](docs/guides/REMOTE-MODE.md)</sub>
 
 <div align="left">

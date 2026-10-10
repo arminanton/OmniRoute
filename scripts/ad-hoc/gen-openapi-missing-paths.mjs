@@ -26,9 +26,8 @@ process.on("exit", () => {
   fs.rmSync(temporaryDataDir, { recursive: true, force: true });
 });
 
-const { isLocalOnlyPath, ALWAYS_PROTECTED_API_PATHS } = await import(
-  "../../src/server/authz/routeGuard.ts"
-);
+const { isLocalOnlyPath, ALWAYS_PROTECTED_API_PATHS } =
+  await import("../../src/server/authz/routeGuard.ts");
 
 const normalizeParams = (p) => p.replace(/\{[^}]+\}/g, "{}");
 
@@ -71,7 +70,9 @@ lines.push("");
 lines.push("  # --- Generated route inventory (docs audit follow-up) -----------------------");
 lines.push("  # These entries document implemented paths/methods; request and response");
 lines.push("  # schemas remain intentionally unspecified until verified from each handler.");
-lines.push("  # Regenerate with: node --import tsx/esm scripts/ad-hoc/gen-openapi-missing-paths.mjs --apply");
+lines.push(
+  "  # Regenerate with: node --import tsx/esm scripts/ad-hoc/gen-openapi-missing-paths.mjs --apply"
+);
 for (const [url, methods] of missing) {
   const tag = groupTag(url);
   if (!existingTags.has(tag.toLowerCase()) && !newTags.has(tag))
@@ -88,19 +89,22 @@ for (const [url, methods] of missing) {
       lines.push("          type: string");
     }
   }
-  const loopbackOnly = isLocalOnlyPath(url);
   const alwaysProtected = ALWAYS_PROTECTED_API_PATHS.includes(url);
   for (const method of methods.sort()) {
     lines.push(`    ${method.toLowerCase()}:`);
     lines.push(`      tags:`);
     lines.push(`        - ${tag}`);
     lines.push(`      summary: "${summaryFor(url, method)}"`);
-    lines.push("      description: Route is implemented; detailed request/response schema has not been verified yet.");
-    if (loopbackOnly || isLocalOnlyPath(url, method)) lines.push(`      x-loopback-only: true`);
+    lines.push(
+      "      description: Route is implemented; detailed request/response schema has not been verified yet."
+    );
+    if (isLocalOnlyPath(url, method)) lines.push(`      x-local-only: true`);
     if (alwaysProtected) lines.push(`      x-always-protected: true`);
     lines.push(`      responses:`);
     lines.push(`        default:`);
-    lines.push(`          description: Route-specific response; inspect the handler for status and body details.`);
+    lines.push(
+      `          description: Route-specific response; inspect the handler for status and body details.`
+    );
   }
 }
 

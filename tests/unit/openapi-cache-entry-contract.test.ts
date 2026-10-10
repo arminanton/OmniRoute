@@ -63,7 +63,7 @@ test("cache-entry operations match source and document legacy conditional manage
     assert.equal(classifyRoute(route, method.toUpperCase()).routeClass, "MANAGEMENT");
     assert.equal(isPublicApiRoute(route, method.toUpperCase()), false);
     assert.notEqual(op["x-always-protected"], true);
-    assert.notEqual(op["x-loopback-only"], true);
+    assert.notEqual(op["x-local-only"], true);
     assert.ok(
       op.security?.some((entry: Record<string, unknown>) => "ManagementApiKeyBearerAuth" in entry)
     );

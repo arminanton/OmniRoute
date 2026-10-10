@@ -1,8 +1,8 @@
 /**
  * GET /api/jobs
  *
- * List all registered jobs with their last run. LOCAL_ONLY - loopback enforced by
- * routeGuard's isLocalOnlyPath() before this handler runs.
+ * List all registered jobs with their last run. LOCAL_ONLY: routeGuard admits
+ * loopback/trusted private-LAN peers and blocks public/unknown peers before auth.
  *
  * Response: { data: JobDto[] } - DTO whitelist (no handler/timer, which are
  * non-serializable live objects).

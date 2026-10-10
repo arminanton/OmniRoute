@@ -41,7 +41,7 @@ test("AgentBridge and Traffic Inspector OpenAPI operations match source and decl
     const [method, ...pathParts] = id.split(" ");
     const route = pathParts.join(" ");
     const op = operation(route, method);
-    assert.equal(op["x-loopback-only"], true, `${id} must retain the route-guard tier marker`);
+    assert.equal(op["x-local-only"], true, `${id} must retain the route-guard tier marker`);
     assert.ok(op.responses?.["401"], `${id} must document configured management auth`);
     assert.ok(op.responses?.["403"], `${id} must document local-peer/scope rejection`);
     assert.ok(op.responses?.["503"], `${id} must document auth-backend failure`);

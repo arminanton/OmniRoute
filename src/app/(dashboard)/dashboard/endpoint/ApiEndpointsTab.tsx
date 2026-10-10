@@ -19,6 +19,9 @@ interface Endpoint {
   requestBody: boolean;
   exampleBody?: any;
   responses: string[];
+  localOnly?: boolean;
+  strictLoopbackOnly?: boolean;
+  /** @deprecated Use localOnly. Kept in the catalog response for older clients. */
   loopbackOnly?: boolean;
   alwaysProtected?: boolean;
   internal?: boolean;
@@ -57,12 +60,20 @@ export default function ApiEndpointsTab() {
   function EndpointBadges({ ep }: { ep: Endpoint }) {
     return (
       <div className="flex items-center gap-1 shrink-0">
-        {ep.loopbackOnly && (
+        {ep.localOnly && (
+          <span
+            className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-500 border border-indigo-500/30"
+            title={t("tierLocalOnly")}
+          >
+            {t("tierLocalOnly")}
+          </span>
+        )}
+        {ep.strictLoopbackOnly && (
           <span
             className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-500 border border-blue-500/30"
             title={t("badgeLoopbackTooltip")}
           >
-            {t("badgeLocal")}
+            {t("tierLoopback")}
           </span>
         )}
         {ep.alwaysProtected && (
@@ -93,7 +104,7 @@ export default function ApiEndpointsTab() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [showInternal, setShowInternal] = useState(false);
   const [securityTier, setSecurityTier] = useState<
-    "all" | "public" | "auth" | "loopback" | "always-protected"
+    "all" | "public" | "auth" | "local-only" | "loopback" | "always-protected"
   >("all");
 
   // Try It state
@@ -193,10 +204,11 @@ export default function ApiEndpointsTab() {
       const matchesTag = !selectedTag || ep.tags.includes(selectedTag);
       const matchesTier =
         securityTier === "all" ||
-        (securityTier === "loopback" && ep.loopbackOnly) ||
+        (securityTier === "local-only" && ep.localOnly) ||
+        (securityTier === "loopback" && ep.strictLoopbackOnly) ||
         (securityTier === "always-protected" && ep.alwaysProtected) ||
-        (securityTier === "auth" && ep.security && !ep.loopbackOnly && !ep.alwaysProtected) ||
-        (securityTier === "public" && !ep.security && !ep.loopbackOnly && !ep.alwaysProtected);
+        (securityTier === "auth" && ep.security && !ep.localOnly && !ep.alwaysProtected) ||
+        (securityTier === "public" && !ep.security && !ep.localOnly && !ep.alwaysProtected);
       return matchesEndpoint && matchesTag && matchesTier;
     });
   }, [catalog, search, selectedTag, showInternal, securityTier]);
@@ -450,7 +462,9 @@ export default function ApiEndpointsTab() {
             </div>
             {/* Security tier filter */}
             <div className="flex items-center gap-1 ml-1 border-l border-black/10 dark:border-white/10 pl-2 flex-wrap">
-              {(["all", "auth", "loopback", "always-protected", "public"] as const).map((tier) => (
+              {(
+                ["all", "auth", "local-only", "loopback", "always-protected", "public"] as const
+              ).map((tier) => (
                 <button
                   key={tier}
                   onClick={() => setSecurityTier(tier)}
@@ -465,11 +479,13 @@ export default function ApiEndpointsTab() {
                     ? t("tierAll")
                     : tier === "auth"
                       ? t("tierAuth")
-                      : tier === "loopback"
-                        ? t("tierLoopback")
-                        : tier === "always-protected"
-                          ? t("tierAlwaysProtected")
-                          : t("tierPublic")}
+                      : tier === "local-only"
+                        ? t("tierLocalOnly")
+                        : tier === "loopback"
+                          ? t("tierLoopback")
+                          : tier === "always-protected"
+                            ? t("tierAlwaysProtected")
+                            : t("tierPublic")}
                 </button>
               ))}
               <button

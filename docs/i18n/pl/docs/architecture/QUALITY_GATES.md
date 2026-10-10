@@ -399,7 +399,7 @@ kilka „oczywistych” merge’y okazało się ukrywać dług i **nie** jest cz
 
 ### Flip / decide (polityka operatora)
 
-- `check:openapi-security-tiers` (advisory) — ❌ **NIE da się czysto przełączyć.** Wychodzi z 0, ale ostrzega, że kilka tras `traffic-inspector` pod `LOCAL_ONLY_API_PREFIXES` nie ma adnotacji `x-loopback-only: true`. Wymuszenie wymaga najpierw dodania tych adnotacji do `openapi.yaml`.
+- `check:openapi-security-tiers` (advisory) — ❌ **NIE da się czysto przełączyć.** Wychodzi z 0, ale ostrzega, że kilka tras `traffic-inspector` pod `LOCAL_ONLY_API_PREFIXES` nie ma adnotacji `x-local-only: true`. Wymuszenie wymaga najpierw dodania tych adnotacji do `openapi.yaml`.
 - `typecheck:noimplicit:core` (advisory) — w dużej mierze subsumowany przez blocking ratchet `check:type-coverage`. Przełącz na ratchet albo usuń zbędny drugi pass `tsc`.
 - `test:vitest:ui` (advisory, 14 parked fails) — fix-and-block albo usuń; nie zostawiaj gnić.
 - `check:secrets` (gitleaks, blocking ratchet zamrożony na 3 udokumentowanych false-positives) — allowlist tych 3 do 0, albo zdegraduj do advisory. Nakłada się z natywnym secret-scanning GitHub + `check:public-creds`.

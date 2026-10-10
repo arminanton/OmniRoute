@@ -148,7 +148,7 @@ test("backup security reflects legacy handler behavior and unlocked access-token
     );
   }
 
-  assert.equal(spec.paths["/api/db-backups/exportAll"]?.get?.["x-loopback-only"], true);
+  assert.equal(spec.paths["/api/db-backups/exportAll"]?.get?.["x-local-only"], true);
   assert.match(
     spec.tags.find((tag) => tag.name === "Db backups")?.description ?? "",
     /requireLogin=false/

@@ -379,7 +379,7 @@ Wykrywanie używa ścieżek specyficznych dla OS i sprawdzeń binarnych (np. `co
 | --------------------------------- | ------------------------------------------------------------------------------------------ |
 | **#12** `sanitizeErrorMessage`    | Wszystkie błędy handlerów są sanityzowane przed odpowiedzią lub wpisem do bufora           |
 | **#13** Shell env-passing         | Edycje `/etc/hosts` używają opcji `env` — bez interpolacji stringów ścieżek                |
-| **#15 + #17** `isLocalOnlyPath()` | `/api/tools/agent-bridge/` jest LOCAL_ONLY + SPAWN_CAPABLE — loopback wymuszany przed auth |
+| **#15 + #17** `isLocalOnlyPath()` | `/api/tools/agent-bridge/` jest LOCAL_ONLY + SPAWN_CAPABLE — kontrola lokalności dopuszcza loopback/zaufaną prywatną sieć LAN i blokuje publiczne lub nieznane źródła przed auth |
 
 ### Lista bypass dla wrażliwych hostów
 
@@ -492,7 +492,7 @@ Jeśli AgentBridge przechwytuje, ale wszystkie żądania failują:
 
 ## §7 Referencja API
 
-Wszystkie trasy są `LOCAL_ONLY` (tylko loopback, wymuszane przed auth) i `SPAWN_CAPABLE`. Zob. `src/server/authz/routeGuard.ts`.
+Wszystkie trasy są `LOCAL_ONLY` i `SPAWN_CAPABLE`. Kontrola lokalności dopuszcza bezpośredni loopback i zaufanych uczestników prywatnej sieci LAN, blokuje publiczne lub nieznane źródła przed auth, a następnie stosuje zwykłą politykę auth. Zob. `src/server/authz/routeGuard.ts`.
 
 Base path: `/api/tools/agent-bridge/`
 

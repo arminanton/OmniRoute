@@ -22,9 +22,10 @@ rejestr seed; operator może wskazać własny zdalny URL rejestru — wtedy pobi
 jest utwardzone przez ochronę SSRF z resolucją DNS
 (zob. [Bezpieczeństwo](#bezpieczeństwo)).
 
-Każda trasa wtyczek jest **tylko loopback** (Tier 1 — `LOCAL_ONLY`): wtyczki ładują
-i wykonują kod w procesach potomnych, więc trasy są niedostępne z
-źródła spoza loopbacka niezależnie od uwierzytelnienia. Zob.
+Każda trasa wtyczek należy do Tier 1 — `LOCAL_ONLY`: bezpośredni loopback i
+zaufani uczestnicy prywatnej sieci LAN przechodzą kontrolę lokalności, a publiczne
+i nieznane zdalne źródła są blokowane. Wtyczki ładują i wykonują kod w procesach
+potomnych. Zob.
 [`docs/security/ROUTE_GUARD_TIERS.md`](../security/ROUTE_GUARD_TIERS.md).
 
 ## Jak to się składa
@@ -88,8 +89,9 @@ ciało odpowiedzi, `listMarketplacePlugins()` loguje ostrzeżenie i wraca do lis
 ## REST API
 
 Wszystkie endpointy wymagają management auth (`requireManagementAuth`) **oraz** są
-tylko loopback — `/api/plugins` i `/api/plugins/` są wymienione w
-`LOCAL_ONLY_API_PREFIXES` (`src/server/authz/routeGuard.ts`).
+`LOCAL_ONLY` — `/api/plugins` i `/api/plugins/` są wymienione w
+`LOCAL_ONLY_API_PREFIXES` (`src/server/authz/routeGuard.ts`). Tier lokalności
+dopuszcza loopback/zaufaną prywatną sieć LAN i blokuje publiczne/nieznane źródła.
 
 | Endpoint                         | Method | Description                                         |
 | -------------------------------- | ------ | --------------------------------------------------- |
@@ -188,12 +190,13 @@ Zakładka „Marketplace” w dashboardzie udostępnia pole na ten URL (odczytyw
 
 ## Bezpieczeństwo
 
-### Poziom trasy — tylko loopback
+### Poziom trasy — lokalni uczestnicy
 
 Wtyczki wykonują kod w spawn'owanych procesach potomnych, więc cała powierzchnia `/api/plugins`
-jest sklasyfikowana jako `LOCAL_ONLY` (Tier 1). Egzekwowanie loopbacka działa
-bezwarunkowo **przed** jakimkolwiek sprawdzeniem auth, więc wycieknięty token managementu
-docierający do maszyny przez tunel nadal nie może zainstalować, aktywować ani odinstalować wtyczki.
+jest sklasyfikowana jako `LOCAL_ONLY` (Tier 1). Kontrola lokalności dopuszcza
+bezpośredni loopback i zaufanych uczestników prywatnej sieci LAN, a publiczne lub
+nieznane źródła blokuje przed sprawdzeniem auth. Wycieknięty token managementu
+docierający przez publiczny tunel nie pozwala zainstalować, aktywować ani odinstalować wtyczki.
 Zob. [`docs/security/ROUTE_GUARD_TIERS.md`](../security/ROUTE_GUARD_TIERS.md) oraz
 Hard Rules #15 / #17.
 
@@ -337,7 +340,7 @@ Strona konfiguracji per-wtyczka jest pod `/dashboard/plugins/[name]/config`
 ## Zobacz też
 
 - [`docs/security/ROUTE_GUARD_TIERS.md`](../security/ROUTE_GUARD_TIERS.md) —
-  dlaczego `/api/plugins` jest tylko loopback (Tier 1)
+  dlaczego `/api/plugins` jest tylko-lokalne (Tier 1)
 - [`docs/frameworks/SKILLS.md`](./SKILLS.md) — powiązany framework skills
   (`src/lib/skills/`); wtyczki mogą deklarować skills w manifeście
 - [`docs/frameworks/WEBHOOKS.md`](./WEBHOOKS.md) — event-driven outbound

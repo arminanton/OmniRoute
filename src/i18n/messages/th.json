@@ -4133,6 +4133,7 @@
     "tierAll": "ทั้งหมด",
     "tierAuth": "ผ่านการตรวจสอบสิทธิ์แล้ว",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "เฉพาะในเครื่อง",
     "tierAlwaysProtected": "ได้รับการป้องกันเสมอ",
     "tierPublic": "สาธารณะ",
     "hideInternal": "ซ่อนระบบภายใน",

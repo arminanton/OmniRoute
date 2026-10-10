@@ -4133,6 +4133,7 @@
     "tierAll": "全部",
     "tierAuth": "需认证",
     "tierLoopback": "回环",
+    "tierLocalOnly": "仅限本地",
     "tierAlwaysProtected": "始终受保护",
     "tierPublic": "公开",
     "hideInternal": "隐藏内部端点",

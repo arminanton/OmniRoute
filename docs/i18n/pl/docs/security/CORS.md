@@ -160,6 +160,6 @@ zakładka Security), nie w proxy.
 
 ## Zobacz też
 
-- [Route Guard Tiers](./ROUTE_GUARD_TIERS.md) — egzekwowanie loopback dla
+- [Route Guard Tiers](./ROUTE_GUARD_TIERS.md) — kontrola lokalnych peerów dla
   route'ów spawn-capable (osobna, komplementarna kontrola).
 - [Authorization Guide](../architecture/AUTHZ_GUIDE.md) — pełny pipeline auth.

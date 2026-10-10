@@ -98,7 +98,7 @@ export const managementPolicy: RoutePolicy = {
       return allow({ kind: "management_key", id: "ws-bridge", label: "codex-ws-bridge-secret" });
     }
 
-    // Tier 1: local-only gate — block spawn-capable routes from non-loopback.
+    // Tier 1: local-only gate — block spawn-capable routes from public/unknown peers.
     //
     // Carve-out: a small allow-list of LOCAL_ONLY paths (see
     // LOCAL_ONLY_MANAGE_SCOPE_BYPASS_PREFIXES) is reachable from non-loopback
@@ -109,9 +109,9 @@ export const managementPolicy: RoutePolicy = {
     //   - the Dashboard UI itself (cookie session) render its MCP pages
     //     (/api/mcp/status, /api/mcp/tools) from a public hostname.
     //
-    // The strict-loopback default still applies to everything else (notably
-    // the subprocess-spawning /api/cli-tools/runtime/* surface, which is NOT
-    // in the bypass list).
+    // The loopback/private-LAN default still applies to everything else
+    // (notably the subprocess-spawning /api/cli-tools/runtime/* surface, which
+    // is NOT in the public-remote bypass list).
     //
     // Anonymous (no Bearer / invalid key / wrong scope / no session) requests
     // still hit the same 403 LOCAL_ONLY they did before.

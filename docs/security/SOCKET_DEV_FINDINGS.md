@@ -33,9 +33,10 @@ we will extend the attestation here.
   helpers used by the install paths.
 
 **Trigger**: user clicks "Enable MITM proxy" in the local dashboard at
-`/dashboard/cli-tools/mitm`. The route is loopback-only — see hard rule #17 in
-`CLAUDE.md` and `src/server/authz/routeGuard.ts::isLocalOnlyPath()`. A leaked
-JWT exposed via a tunnel **cannot** trigger this code path.
+`/dashboard/cli-tools/mitm`. The route is LOCAL_ONLY — see hard rule #17 in
+`CLAUDE.md` and `src/server/authz/routeGuard.ts::isLocalOnlyPath()`. Its locality
+gate admits loopback/trusted private-LAN peers and blocks public/unknown peers;
+a leaked JWT over a public tunnel **cannot** trigger this code path.
 
 **Privileged operations performed (per platform)**:
 
@@ -148,8 +149,9 @@ the local dashboard.
 **Already-in-place protections**:
 
 - All `/api/services/*` routes are LOCAL_ONLY per
-  `src/server/authz/routeGuard.ts` (hard rule #17). Loopback enforcement
-  happens before any auth check — a leaked JWT cannot reach them.
+  `src/server/authz/routeGuard.ts` (hard rule #17). The locality gate admits
+  loopback/trusted private-LAN peers and blocks public/unknown peers before auth;
+  a leaked JWT over a public tunnel cannot reach them.
 - The 9router DB row is seeded as `status='not_installed', auto_start=0` (see
   `src/lib/db/migrations/071_services.sql:19`). The service does **not** start
   on first launch.

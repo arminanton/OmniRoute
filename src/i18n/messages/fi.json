@@ -4133,6 +4133,7 @@
     "tierAll": "Kaikki",
     "tierAuth": "Todennettu",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Vain paikallinen",
     "tierAlwaysProtected": "Aina suojattu",
     "tierPublic": "Julkinen",
     "hideInternal": "Piilota sisäiset",

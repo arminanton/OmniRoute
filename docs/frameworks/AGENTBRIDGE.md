@@ -384,7 +384,7 @@ Detection uses OS-specific paths and binary checks (e.g., `code --list-extension
 | --------------------------------- | ---------------------------------------------------------------------------------------- |
 | **#12** `sanitizeErrorMessage`    | All handler errors are sanitized before response or buffer entry                         |
 | **#13** Shell env-passing         | `/etc/hosts` edits use `env` option — no string interpolation of paths                   |
-| **#15 + #17** `isLocalOnlyPath()` | `/api/tools/agent-bridge/` is LOCAL_ONLY + SPAWN_CAPABLE — loopback enforced before auth |
+| **#15 + #17** `isLocalOnlyPath()` | `/api/tools/agent-bridge/` is LOCAL_ONLY + SPAWN_CAPABLE — the locality gate admits loopback/trusted private LAN and blocks public/unknown peers before auth |
 
 ### Bypass list for sensitive hosts
 
@@ -497,7 +497,7 @@ If AgentBridge intercepts but all requests fail:
 
 ## §7 API reference
 
-All routes are `LOCAL_ONLY` (loopback-only, enforced before auth) and `SPAWN_CAPABLE`. See `src/server/authz/routeGuard.ts`.
+All routes are `LOCAL_ONLY` and `SPAWN_CAPABLE`. The locality gate admits direct loopback and trusted private-LAN peers, blocks public/unknown peers before auth, and then applies the normal auth policy. See `src/server/authz/routeGuard.ts`.
 
 Base path: `/api/tools/agent-bridge/`
 

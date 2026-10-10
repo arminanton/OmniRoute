@@ -95,8 +95,11 @@ Serwer wywnioskuje wymagany scope każdej trasy z metody HTTP
 (`/api/cli/tokens`, mutacje `/api/providers`, `/api/oauth`, `/api/services`, …).
 Token z niewystarczającym scope dostaje `403` z jasnym komunikatem.
 
-> Trasy uruchamiające procesy (`/api/services/*`, `/api/mcp/*`, …) pozostają
-> **tylko-loopback** — zdalny token nigdy do nich nie dotrze, niezależnie od scope.
+> Trasy uruchamiające procesy domyślnie korzystają z tieru **LOCAL_ONLY**:
+> loopback i zaufani uczestnicy prywatnej sieci LAN przechodzą kontrolę lokalności,
+> a publiczne/nieznane źródła są blokowane przed auth. Wąski wyjątek pozwala
+> `/api/mcp/*` przyjmować jawnie dozwolony zdalny credential z management scope;
+> inne trasy LOCAL_ONLY nie dziedziczą tego bypassu.
 
 ---
 

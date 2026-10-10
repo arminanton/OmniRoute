@@ -4133,6 +4133,7 @@
     "tierAll": "Всички",
     "tierAuth": "Удостоверени",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Само локално",
     "tierAlwaysProtected": "Винаги защитени",
     "tierPublic": "Публични",
     "hideInternal": "Скриване на вътрешните",

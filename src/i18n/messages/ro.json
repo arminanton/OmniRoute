@@ -4133,6 +4133,7 @@
     "tierAll": "Toate",
     "tierAuth": "Autentificat",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Doar local",
     "tierAlwaysProtected": "Întotdeauna protejat",
     "tierPublic": "Public",
     "hideInternal": "Ascunde interne",

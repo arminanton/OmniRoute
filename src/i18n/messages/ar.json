@@ -4133,6 +4133,7 @@
     "tierAll": "الكل",
     "tierAuth": "يتطلب المصادقة",
     "tierLoopback": "حلقة الرجوع",
+    "tierLocalOnly": "محلي فقط",
     "tierAlwaysProtected": "محمي دائمًا",
     "tierPublic": "عام",
     "hideInternal": "إخفاء النقاط الداخلية",

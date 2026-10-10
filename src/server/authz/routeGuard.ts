@@ -1,18 +1,19 @@
 /**
  * 3-tier route guard constants and helpers.
  *
- * Tier 1 — LOCAL_ONLY: accessible only from loopback. These routes spawn
- *   child processes; exposing them to non-local traffic is a known CVE class
- *   (GHSA-fhh6-4qxv-rpqj). Blocked unconditionally regardless of auth state.
+ * Tier 1 — LOCAL_ONLY: accessible from loopback and trusted private-LAN peers
+ *   with a direct connection. Reverse-proxy peers and unknown/public networks
+ *   are treated as remote. These routes spawn child processes; exposing them
+ *   to remote traffic is a known CVE class (GHSA-fhh6-4qxv-rpqj).
  *
  *   Carve-out: paths matching the live manage-scope bypass list (DB-stored,
- *   read via `getAuthzBypassSnapshot()`) MAY also be accessed from
- *   non-loopback if and only if the request carries an API key with the
+ *   read via `getAuthzBypassSnapshot()`) MAY also be accessed from public or
+ *   unknown remote peers if and only if the request carries an API key with the
  *   `manage` scope (or an authenticated dashboard session — see
  *   `policies/management.ts`). The bypass is opt-in per prefix and can be
  *   killed globally via the `localOnlyManageScopeBypassEnabled` setting.
  *   Unauthenticated requests to bypassable paths are still rejected with
- *   403 LOCAL_ONLY.
+ *   403 LOCAL_ONLY. Some operations impose an additional strict-loopback check.
  *
  * Tier 2 — ALWAYS_PROTECTED: auth is always required, even when
  *   requireLogin=false. Covers destructive / irreversible operations.
@@ -35,7 +36,7 @@ export const LOCAL_ONLY_API_PREFIXES: ReadonlyArray<string> = [
   "/api/cli-tools/runtime/",
   "/api/cli-tools/omp-settings", // spawns `which omp` to detect the CLI install (Hard Rules #15 + #17, #6318)
   "/api/cli-tools/letta-settings", // spawns `which letta` to detect the CLI install (Hard Rules #15 + #17, #6318)
-  "/api/cli-tools/grok-build-settings", // GET calls getCliRuntimeStatus("grok-build"), which spawns a child process to locate + healthcheck the `grok` binary — same transitive-spawn surface that classified /api/skills/collect/ (Hard Rules #15 + #17). Writing ~/.grok/config.toml is inherently a local-machine operation, so loopback-only costs no real capability.
+  "/api/cli-tools/grok-build-settings", // GET calls getCliRuntimeStatus("grok-build"), which spawns a child process to locate + healthcheck the `grok` binary — same transitive-spawn surface that classified /api/skills/collect/ (Hard Rules #15 + #17). Writing ~/.grok/config.toml is inherently a local-machine operation, so local-only costs no real capability.
   "/api/cli-tools/forge-settings", // spawns via getCliRuntimeStatus() to detect the `forge` CLI install (Hard Rules #15 + #17, #7263)
   "/api/cli-tools/jcode-settings", // spawns via getCliRuntimeStatus() to detect the `jcode` CLI install (Hard Rules #15 + #17, #7263)
   "/api/cli-tools/qwen-settings", // GET probes the local `qwen` binary; writes target ~/.qwen config files (Hard Rules #15 + #17)
@@ -61,12 +62,12 @@ export const LOCAL_ONLY_API_PREFIXES: ReadonlyArray<string> = [
   "/api/local/", // T-12: 1-click local service launchers (Redis today; spawns podman/docker) — loopback-enforced by isLocalRequestAllowed() in src/lib/security/localEndpoints.ts (Hard Rules #15 + #17)
   "/api/headroom/start", // Headroom token-saver proxy lifecycle: spawns headroom-ai python CLI (Hard Rules #15 + #17)
   "/api/headroom/stop", // Headroom token-saver proxy lifecycle: sends SIGTERM/SIGKILL to managed PID (Hard Rules #15 + #17)
-  "/api/jobs", // JobRegistry control (enable/disable/run-now) + run history - runtime job administration, loopback-only (Hard Rules #15 + #17)
+  "/api/jobs", // JobRegistry control (enable/disable/run-now) + run history - runtime job administration, local-only (Hard Rules #15 + #17)
   "/api/jobs/", // sub-paths: /api/jobs/:id/{runs,enable,disable,run-now} (the bare `/api/jobs` above matches the list route; this matches children)
   "/api/oauth/cursor/auto-import", // spawns execFile("which", argv-array-of-one-arg "cursor") to verify a local Cursor install before importing creds — RCE-via-tunnel surface (Hard Rules #15 + #17, found by 6A.8 route-guard gate). Specific path only: the rest of /api/oauth/ (browser redirect/callback flows) must stay remote-reachable. Note: this comment intentionally avoids a literal closing square bracket character — check-openapi-security-tiers.mjs's naive regex parser for this array stops at the first one it finds, silently truncating its view of every entry after this one.
-  "/api/oauth/kiro/auto-import", // reads host-local Kiro credential files (homedir kiro-cli data) — must reach the loopback-only gate, not the PUBLIC /api/oauth/ prefix (GHSA-wgwc-crjm-pmwv, GHSA-gxv4-955v-v6cm). Excluded from PUBLIC in publicApiRoutes.ts.
+  "/api/oauth/kiro/auto-import", // reads host-local Kiro credential files (homedir kiro-cli data) — must reach the LOCAL_ONLY gate, not the PUBLIC /api/oauth/ prefix (GHSA-wgwc-crjm-pmwv, GHSA-gxv4-955v-v6cm). Excluded from PUBLIC in publicApiRoutes.ts.
   "/api/skills/collect/", // Skill Collector CLI detection: GET .../detect probes getCliRuntimeStatus() per CLI_TOOL_IDS entry, which spawns a child process to check each tool — RCE-via-tunnel surface (Hard Rules #15 + #17, PR #6294 review).
-  "/api/discovery/", // Discovery tool (opt-in provider scanner): the scan route makes outbound probes to provider endpoints (SSRF-adjacent) and the whole surface is an admin research tool — strict-loopback only, no manage-scope bypass (NOT in LOCAL_ONLY_MANAGE_SCOPE_BYPASS_PREFIXES). See _tasks/features-v3.8.42/gaps/DISCOVERY_TOOL_DESIGN.md.
+  "/api/discovery/", // Discovery tool (opt-in provider scanner): the scan route makes outbound probes to provider endpoints (SSRF-adjacent) and the whole surface is an admin research tool — local-only, no manage-scope bypass (NOT in LOCAL_ONLY_MANAGE_SCOPE_BYPASS_PREFIXES). Public/unknown peers are blocked; trusted private-LAN peers pass the locality tier but still follow management auth.
   VNC_ROUTE_PREFIX, // #7892: /api/vnc-session/* spawns Docker containers via child_process.spawn (src/lib/vncSession/service.ts) — RCE-via-tunnel surface (Hard Rules #15 + #17), same CVE class (GHSA-fhh6-4qxv-rpqj).
   "/api/acp/agents", // ACP custom-agent registry: POST registers a client-chosen `binary`; GET / POST {action:"refresh"} runs detectInstalledAgents() -> execFileSync(probe.command, probe.args, { shell }) transitively (src/lib/acp/registry.ts) — RCE-via-tunnel surface (Hard Rules #15 + #17, #7948)
   "/api/resilience/connections", // Per-account resilience state. NOTE: prefix matching also gates future /api/resilience/connections-* paths.
@@ -87,9 +88,9 @@ export const LOCAL_ONLY_API_PREFIXES: ReadonlyArray<string> = [
  * this regex sees and what actually gets dispatched to the route handler.
  *
  *   - `POST /api/providers/{id}/login` launches a headful Playwright Chromium
- *     (a child process) to drive a web-cookie login. Loopback enforcement must
- *     happen unconditionally before any auth check (Hard Rules #15 + #17), so a
- *     leaked JWT via tunnel cannot trigger a browser spawn.
+ *     (a child process) to drive a web-cookie login. The local-only peer check
+ *     happens unconditionally before any auth check (Hard Rules #15 + #17), so
+ *     a leaked JWT from a public tunnel cannot trigger a browser spawn.
  *   - `POST /api/providers/{id}/refresh-cursor` nudges `cursor-agent`
  *     (`--list-models`/`status`, via `src/lib/cursor/renewal.ts`) as part of
  *     a manual Cursor session renewal attempt — the same RCE-via-tunnel

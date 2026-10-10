@@ -85,13 +85,13 @@ tags:
   - name: Embedded Services
     description: >-
       Install, start, stop, and monitor locally-running embedded services (9Router, CLIProxyAPI).
-      All routes are LOCAL_ONLY — accessible from loopback only (hard rule #17).
+      All routes are LOCAL_ONLY — accessible from loopback and trusted private-LAN peers; public and unknown remote peers are blocked (hard rule #17).
   - name: OAuth
     description: >-
       Provider OAuth management routes accept a dashboard session or a bearer credential with
       management scope when `requireLogin` is enabled. The anonymous security alternative reflects
       installations that explicitly disable login; it does not make these routes universally public.
-      Cursor and Kiro host-credential auto-import routes are additionally loopback-only. The
+      Cursor and Kiro host-credential auto-import routes are additionally LOCAL_ONLY. The
       single-use Codex connection ticket and OIDC callback are separate public flows.
   - name: System
     description: System management (restart, shutdown, backup)
@@ -123,9 +123,9 @@ tags:
       forwarded and unknown peers are treated as remote. Public remote manage-scope bypass is not
       allowed. On an admitted peer, a dashboard session or management-scoped Bearer credential is
       required when `requireLogin` or locked management policy is active; ordinary installs with
-      `requireLogin=false` may permit anonymous local access. The `x-loopback-only` extension marks
-      the route-guard tier; the accepted trusted-private-network ranges are broader than literal
-      loopback.
+      `requireLogin=false` may permit anonymous local access. The `x-local-only` extension marks
+      the route-guard tier, which admits loopback and trusted private-network peers. The stricter
+      `x-loopback-only` extension is reserved for operations that require a direct loopback peer.
       See docs/frameworks/AGENTBRIDGE.md.
   - name: Traffic Inspector
     description: >-
@@ -138,8 +138,9 @@ tags:
       remote manage-scope bypass is not allowed. On an admitted peer, a dashboard session or
       management-scoped Bearer credential is required when `requireLogin` or locked management
       policy is active; ordinary installs with `requireLogin=false` may permit anonymous local
-      access. The `x-loopback-only` extension marks the route-guard tier; accepted
-      trusted-private-network ranges are broader than literal loopback.
+      access. The `x-local-only` extension marks the route-guard tier, which admits loopback and
+      trusted private-network peers. The stricter `x-loopback-only` extension is reserved for
+      operations that require a direct loopback peer.
       See docs/frameworks/TRAFFIC_INSPECTOR.md.
 
   - name: A2a
@@ -3255,7 +3256,7 @@ paths:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - {}
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: Availability result
@@ -5601,6 +5602,7 @@ paths:
       description: >-
         Intentionally public read used by the login/setup UI. Returns the effective login requirement,
         browser-session state, password/OIDC setup flags, and supported Node/Bun runtime information.
+      security: []
       responses:
         "200":
           description: Login requirement, setup, password, OIDC, and session state
@@ -7417,13 +7419,13 @@ paths:
   /api/cli-tools/runtime/{toolId}:
     get:
       operationId: getApiCliToolsRuntimeByToolId
-      x-loopback-only: true
+      x-local-only: true
       tags: [CLI Tools]
       summary: Get runtime status for a CLI tool
       description: >-
-        Loopback-only management endpoint. Management authentication is required when management
+        LOCAL_ONLY management endpoint. Management authentication is required when management
         login is enabled; a valid local CLI token is also accepted from loopback, and deployments
-        that disable management login allow unauthenticated loopback access. `toolId` must be a
+        that disable management login allow unauthenticated local-peer access. `toolId` must be a
         canonical id from the CLI runtime catalog.
       security:
         - BearerAuth: []
@@ -7554,7 +7556,7 @@ paths:
   /api/cli-tools/antigravity-mitm:
     get:
       operationId: getApiCliToolsAntigravityMitm
-      x-loopback-only: true
+      x-local-only: true
       tags: [CLI Tools]
       summary: Get Antigravity MITM proxy settings
       security:
@@ -7580,7 +7582,7 @@ paths:
           $ref: "#/components/responses/ManagementInvalidToken"
     post:
       operationId: postApiCliToolsAntigravityMitm
-      x-loopback-only: true
+      x-local-only: true
       tags: [CLI Tools]
       summary: Update Antigravity MITM proxy settings
       security:
@@ -7626,7 +7628,7 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
     delete:
       operationId: deleteApiCliToolsAntigravityMitm
-      x-loopback-only: true
+      x-local-only: true
       tags: [CLI Tools]
       summary: Reset Antigravity MITM proxy settings
       security:
@@ -7674,7 +7676,7 @@ paths:
   /api/cli-tools/antigravity-mitm/alias:
     get:
       operationId: getApiCliToolsAntigravityMitmAlias
-      x-loopback-only: true
+      x-local-only: true
       tags: [CLI Tools]
       summary: Get Antigravity MITM alias configuration
       security:
@@ -7712,7 +7714,7 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
     put:
       operationId: putApiCliToolsAntigravityMitmAlias
-      x-loopback-only: true
+      x-local-only: true
       tags: [CLI Tools]
       summary: Update Antigravity MITM alias configuration
       security:
@@ -8647,19 +8649,19 @@ paths:
           description: OpenClaw CLI settings reset
 
   # ─── Embedded Services ─────────────────────────────────────────
-  # All routes LOCAL_ONLY (loopback only) — hard rule #17.
+  # LOCAL_ONLY admits loopback and trusted private-LAN peers; public/unknown peers are blocked.
   # See docs/frameworks/EMBEDDED-SERVICES.md for full reference.
 
   /api/services/9router/install:
     post:
       operationId: postApiServices9routerInstall
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Install 9Router from npm
       description: >-
         Installs the `9router` npm package under DATA_DIR/services/9router/.
         Uses execFile (no shell interpolation — hard rule #13).
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: false
         content:
@@ -8693,12 +8695,12 @@ paths:
   /api/services/9router/start:
     post:
       operationId: postApiServices9routerStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Start 9Router
       description: >-
         Spawns the 9Router process. Idempotent if already running.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service started (or already running)
@@ -8714,12 +8716,12 @@ paths:
   /api/services/9router/stop:
     post:
       operationId: postApiServices9routerStop
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Stop 9Router
       description: >-
         Gracefully stops 9Router (SIGTERM → 15 s → SIGKILL). Idempotent.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service stopped
@@ -8733,12 +8735,12 @@ paths:
   /api/services/9router/restart:
     post:
       operationId: postApiServices9routerRestart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Restart 9Router
       description: >-
         Equivalent to stop() then start() under the operation lock.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service restarted
@@ -8750,12 +8752,12 @@ paths:
   /api/services/9router/update:
     post:
       operationId: postApiServices9routerUpdate
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Update 9Router to a newer npm version
       description: >-
         Stops the service (if running), installs the newer npm version, then restarts.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: false
         content:
@@ -8788,13 +8790,13 @@ paths:
   /api/services/9router/rotate-key:
     post:
       operationId: postApiServices9routerRotateKey
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Rotate the 9Router API key
       description: >-
         Generates a new API key, encrypts it at-rest, and restarts the service to
         apply it. The plaintext key is never returned.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Key rotated
@@ -8813,12 +8815,12 @@ paths:
   /api/services/9router/status:
     get:
       operationId: getApiServices9routerStatus
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Get 9Router status
       description: >-
         Returns combined live supervisor state and DB metadata.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Status response
@@ -8832,12 +8834,12 @@ paths:
   /api/services/9router/auto-start:
     post:
       operationId: postApiServices9routerAutoStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle 9Router auto-start
       description: >-
         When enabled, 9Router starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -8864,14 +8866,14 @@ paths:
   /api/services/9router/auto-restart-adopted:
     post:
       operationId: postApiServices9routerAutoRestartAdopted
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle 9Router auto-restart-when-adopted
       description: >-
         When enabled, an externally-adopted (not OmniRoute-spawned) 9Router
         process is restarted under OmniRoute's own supervisor on the next
         health-check cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -8893,12 +8895,12 @@ paths:
   /api/services/cliproxy/install:
     post:
       operationId: postApiServicesCliproxyInstall
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Install CLIProxyAPI from npm
       description: >-
         Installs the CLIProxyAPI package under DATA_DIR/services/cliproxy/.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: false
         content:
@@ -8929,12 +8931,12 @@ paths:
   /api/services/cliproxy/start:
     post:
       operationId: postApiServicesCliproxyStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Start CLIProxyAPI
       description: >-
         Spawns the CLIProxyAPI process. Idempotent if already running.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service started
@@ -8950,12 +8952,12 @@ paths:
   /api/services/cliproxy/stop:
     post:
       operationId: postApiServicesCliproxyStop
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Stop CLIProxyAPI
       description: >-
         Gracefully stops CLIProxyAPI. Idempotent.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service stopped
@@ -8967,12 +8969,12 @@ paths:
   /api/services/cliproxy/restart:
     post:
       operationId: postApiServicesCliproxyRestart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Restart CLIProxyAPI
       description: >-
         stop() then start() under the operation lock.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service restarted
@@ -8984,12 +8986,12 @@ paths:
   /api/services/cliproxy/update:
     post:
       operationId: postApiServicesCliproxyUpdate
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Update CLIProxyAPI to a newer npm version
       description: >-
         Stops, installs newer version, restarts.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: false
         content:
@@ -9018,13 +9020,13 @@ paths:
   /api/services/cliproxy/status:
     get:
       operationId: getApiServicesCliproxyStatus
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Get CLIProxyAPI status
       description: >-
         Returns live supervisor state and DB metadata (no apiKeyMasked — CLIProxyAPI
         does not use an injected API key).
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Status response
@@ -9036,12 +9038,12 @@ paths:
   /api/services/cliproxy/auto-start:
     post:
       operationId: postApiServicesCliproxyAutoStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle CLIProxyAPI auto-start
       description: >-
         When enabled, CLIProxyAPI starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9068,14 +9070,14 @@ paths:
   /api/services/cliproxy/auto-restart-adopted:
     post:
       operationId: postApiServicesCliproxyAutoRestartAdopted
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle CLIProxyAPI auto-restart-when-adopted
       description: >-
         When enabled, an externally-adopted (not OmniRoute-spawned) CLIProxyAPI
         process is restarted under OmniRoute's own supervisor on the next
         health-check cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9097,12 +9099,12 @@ paths:
   /api/services/mux/install:
     post:
       operationId: postApiServicesMuxInstall
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Install Mux from npm
       description: >-
         Installs the `mux` npm package (coder/mux — local agent-orchestration
-        daemon) under DATA_DIR/services/mux/. **LOCAL_ONLY** — loopback only.
+        daemon) under DATA_DIR/services/mux/. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: false
         content:
@@ -9133,12 +9135,12 @@ paths:
   /api/services/mux/start:
     post:
       operationId: postApiServicesMuxStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Start Mux
       description: >-
         Spawns `mux server --host 127.0.0.1 --port <port>`. Idempotent if
-        already running. **LOCAL_ONLY** — loopback only.
+        already running. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service started
@@ -9154,12 +9156,12 @@ paths:
   /api/services/mux/stop:
     post:
       operationId: postApiServicesMuxStop
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Stop Mux
       description: >-
         Gracefully stops Mux. Idempotent.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service stopped
@@ -9171,12 +9173,12 @@ paths:
   /api/services/mux/restart:
     post:
       operationId: postApiServicesMuxRestart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Restart Mux
       description: >-
         stop() then start() under the operation lock.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service restarted
@@ -9188,12 +9190,12 @@ paths:
   /api/services/mux/update:
     post:
       operationId: postApiServicesMuxUpdate
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Update Mux to a newer npm version
       description: >-
         Stops, installs newer version, restarts.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: false
         content:
@@ -9222,12 +9224,12 @@ paths:
   /api/services/mux/status:
     get:
       operationId: getApiServicesMuxStatus
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Get Mux status
       description: >-
         Returns live supervisor state and DB metadata.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Status response
@@ -9239,12 +9241,12 @@ paths:
   /api/services/mux/auto-start:
     post:
       operationId: postApiServicesMuxAutoStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle Mux auto-start
       description: >-
         When enabled, Mux starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9271,14 +9273,14 @@ paths:
   /api/services/mux/auto-restart-adopted:
     post:
       operationId: postApiServicesMuxAutoRestartAdopted
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle Mux auto-restart-when-adopted
       description: >-
         When enabled, an externally-adopted (not OmniRoute-spawned) Mux
         process is restarted under OmniRoute's own supervisor on the next
         health-check cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9300,13 +9302,13 @@ paths:
   /api/services/bifrost/install:
     post:
       operationId: postApiServicesBifrostInstall
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Install Bifrost
       description: >-
         Installs the `@maximhq/bifrost` npm package under DATA_DIR/services/bifrost/.
         The package downloads the Go binary on first run. Accepts an optional `version`
-        field (semver or `latest`). **LOCAL_ONLY** — loopback only.
+        field (semver or `latest`). **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: false
         content:
@@ -9337,74 +9339,94 @@ paths:
   /api/services/bifrost/start:
     post:
       operationId: postApiServicesBifrostStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Start Bifrost
-      description: Starts the supervised Bifrost process. **LOCAL_ONLY** — loopback only.
+      description: Starts the supervised Bifrost process. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service status after start
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSupervisorStatus"
         "409":
           description: Bifrost is not installed
 
   /api/services/bifrost/stop:
     post:
       operationId: postApiServicesBifrostStop
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Stop Bifrost
-      description: Stops the supervised Bifrost process. **LOCAL_ONLY** — loopback only.
+      description: Stops the supervised Bifrost process. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service status after stop
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BifrostStopResponse"
 
   /api/services/bifrost/restart:
     post:
       operationId: postApiServicesBifrostRestart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Restart Bifrost
-      description: Restarts the supervised Bifrost process. **LOCAL_ONLY** — loopback only.
+      description: Restarts the supervised Bifrost process. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service status after restart
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceSupervisorStatus"
         "409":
           description: Bifrost is not installed
 
   /api/services/bifrost/update:
     post:
       operationId: postApiServicesBifrostUpdate
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Update Bifrost
       description: >-
         Updates Bifrost to the latest npm version. Stops the running process,
         installs the new version, and restarts if it was previously running.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Update result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BifrostUpdateResponse"
 
   /api/services/bifrost/status:
     get:
       operationId: getApiServicesBifrostStatus
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Get Bifrost status
-      description: Returns live and DB status for the supervised Bifrost service. **LOCAL_ONLY** — loopback only.
+      description: Returns live and DB status for the supervised Bifrost service. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Bifrost service status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BifrostStatusResponse"
 
   /api/services/bifrost/auto-start:
     post:
       operationId: postApiServicesBifrostAutoStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle Bifrost auto-start
       description: >-
         When enabled, Bifrost starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9424,14 +9446,14 @@ paths:
   /api/services/bifrost/auto-restart-adopted:
     post:
       operationId: postApiServicesBifrostAutoRestartAdopted
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle Bifrost auto-restart-when-adopted
       description: >-
         When enabled, an externally-adopted (not OmniRoute-spawned) Bifrost
         process is restarted under OmniRoute's own supervisor on the next
         health-check cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9453,13 +9475,13 @@ paths:
   /api/services/dario/install:
     post:
       operationId: postApiServicesDarioInstall
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Install Dario from npm
       description: >-
         Installs the `@askalf/dario` npm package (Claude-account-pool proxy) under
         DATA_DIR/services/dario/. Uses execFile (no shell interpolation — hard rule
-        #13). **LOCAL_ONLY** — loopback only.
+        #13). **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: false
         content:
@@ -9493,12 +9515,12 @@ paths:
   /api/services/dario/start:
     post:
       operationId: postApiServicesDarioStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Start Dario
       description: >-
         Spawns the Dario process. Idempotent if already running.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service started (or already running)
@@ -9514,13 +9536,13 @@ paths:
   /api/services/dario/stop:
     post:
       operationId: postApiServicesDarioStop
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Stop Dario
       description: >-
         Gracefully stops Dario. Idempotent — returns a stopped status even if no
         supervisor is currently tracking the process.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service stopped
@@ -9534,12 +9556,12 @@ paths:
   /api/services/dario/restart:
     post:
       operationId: postApiServicesDarioRestart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Restart Dario
       description: >-
         Equivalent to stop() then start() under the operation lock.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Service restarted
@@ -9555,7 +9577,7 @@ paths:
   /api/services/dario/update:
     post:
       operationId: postApiServicesDarioUpdate
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Update Dario to a newer npm version
       description: >-
@@ -9587,13 +9609,13 @@ paths:
   /api/services/dario/status:
     get:
       operationId: getApiServicesDarioStatus
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Get Dario status
       description: >-
         Returns combined live supervisor state and DB metadata, including the
         auto-start / auto-restart-adopted flags and whether an update is available.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Status response
@@ -9607,12 +9629,12 @@ paths:
   /api/services/dario/auto-start:
     post:
       operationId: postApiServicesDarioAutoStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle Dario auto-start
       description: >-
         When enabled, Dario starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9634,14 +9656,14 @@ paths:
   /api/services/dario/auto-restart-adopted:
     post:
       operationId: postApiServicesDarioAutoRestartAdopted
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Toggle Dario auto-restart-when-adopted
       description: >-
         When enabled, an externally-adopted (not OmniRoute-spawned) Dario process
         is restarted under OmniRoute's own supervisor on the next health-check
         cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9663,14 +9685,14 @@ paths:
   /api/services/dario/admin/login-start:
     post:
       operationId: postApiServicesDarioAdminLoginStart
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Start a Dario account-pool login (device-code style)
       description: >-
         Forwards to the running Dario instance's `POST /admin/login/start` using
         the stored admin token. The operator opens the returned `authorize_url`,
         approves in their own Claude account, then posts the displayed code to
-        `/admin/login-complete`. **LOCAL_ONLY** — loopback only.
+        `/admin/login-complete`. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: false
         content:
@@ -9707,13 +9729,13 @@ paths:
   /api/services/dario/admin/login-complete:
     post:
       operationId: postApiServicesDarioAdminLoginComplete
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Complete a Dario account-pool login
       description: >-
         Forwards to the running Dario instance's `POST /admin/login/complete`.
         On success the account becomes routable immediately (Dario hot-reloads
-        its pool). **LOCAL_ONLY** — loopback only.
+        its pool). **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9750,12 +9772,12 @@ paths:
   /api/services/dario/admin/accounts:
     get:
       operationId: getApiServicesDarioAdminAccounts
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: List Dario account-pool accounts
       description: >-
         Forwards to the running Dario instance's `GET /admin/accounts`.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Account list
@@ -9776,13 +9798,13 @@ paths:
           description: Dario did not respond or Dario is not running
     delete:
       operationId: deleteApiServicesDarioAdminAccounts
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Remove a Dario account-pool account
       description: >-
         Forwards to the running Dario instance's `DELETE /admin/accounts/<alias>`.
         The alias is taken from a `?alias=` query param or a `{ alias }` JSON body.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       parameters:
         - name: alias
           in: query
@@ -9820,13 +9842,13 @@ paths:
   /api/services/dario/admin/import-from-omniroute:
     get:
       operationId: getApiServicesDarioAdminImportFromOmniroute
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: List OmniRoute claude connections eligible for Dario import
       description: >-
         Returns eligible OmniRoute `claude` OAuth provider connections (metadata
         only — id/name/email/org tier, never tokens) so the UI can offer a picker
-        when more than one exists. **LOCAL_ONLY** — loopback only.
+        when more than one exists. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       responses:
         "200":
           description: Eligible connections
@@ -9857,14 +9879,14 @@ paths:
           description: Missing or invalid admin auth
     post:
       operationId: postApiServicesDarioAdminImportFromOmniroute
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Import an OmniRoute claude connection's OAuth tokens into Dario
       description: >-
         Writes the source connection's access/refresh token pair directly into
         Dario's own account-file store (`~/.dario/accounts/<alias>.json`), reusing
         the shared Claude Code OAuth client_id, then restarts the Dario supervisor
-        so it picks up the new account. **LOCAL_ONLY** — loopback only.
+        so it picks up the new account. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       requestBody:
         required: true
         content:
@@ -9907,14 +9929,14 @@ paths:
   /api/services/{name}/logs:
     get:
       operationId: getApiServicesByNameLogs
-      x-loopback-only: true
+      x-local-only: true
       tags: [Embedded Services]
       summary: Stream service logs via SSE
       description: >-
         Returns a Server-Sent Events stream from the service's in-memory ring buffer
         (5 MB, circular). Sends a `snapshot` event with historical lines first, then
         live `log` events, plus a `heartbeat` every 15 s.
-        **LOCAL_ONLY** — loopback only.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
       parameters:
         - name: name
           in: path
@@ -10200,7 +10222,7 @@ paths:
   /api/oauth/cursor/auto-import:
     get:
       operationId: getApiOauthCursorAutoImport
-      x-loopback-only: true
+      x-local-only: true
       tags: [OAuth]
       summary: Auto-import Cursor OAuth credentials
       description: Automatically detects and imports Cursor credentials from local config.
@@ -10263,7 +10285,7 @@ paths:
   /api/oauth/kiro/auto-import:
     get:
       operationId: getApiOauthKiroAutoImport
-      x-loopback-only: true
+      x-local-only: true
       tags: [OAuth]
       summary: Auto-import Kiro OAuth credentials
       description: Automatically detects and imports Kiro credentials from local config.
@@ -11306,7 +11328,7 @@ paths:
   /api/jobs:
     get:
       operationId: getApiJobs
-      x-loopback-only: true
+      x-local-only: true
       tags: [System]
       summary: List registered background jobs
       description: Local-only runtime administration. Returns each registered job and its latest run.
@@ -11326,7 +11348,7 @@ paths:
   /api/jobs/{id}/enable:
     post:
       operationId: postApiJobsByIdEnable
-      x-loopback-only: true
+      x-local-only: true
       tags: [System]
       summary: Enable a background job
       description: Local-only runtime administration. Enables the job and restarts its timer.
@@ -11357,7 +11379,7 @@ paths:
   /api/jobs/{id}/disable:
     post:
       operationId: postApiJobsByIdDisable
-      x-loopback-only: true
+      x-local-only: true
       tags: [System]
       summary: Disable a background job
       description: Local-only runtime administration. Disables the job and stops its timer.
@@ -11388,7 +11410,7 @@ paths:
   /api/jobs/{id}/run-now:
     post:
       operationId: postApiJobsByIdRunNow
-      x-loopback-only: true
+      x-local-only: true
       tags: [System]
       summary: Trigger a background job
       description: >-
@@ -11421,7 +11443,7 @@ paths:
   /api/jobs/{id}/runs:
     get:
       operationId: getApiJobsByIdRuns
-      x-loopback-only: true
+      x-local-only: true
       tags: [System]
       summary: Read background-job run history
       description: Local-only runtime administration. Returns newest-first run history for one job.
@@ -11910,7 +11932,7 @@ paths:
   /api/resilience/connections:
     get:
       operationId: getApiResilienceConnections
-      x-loopback-only: true
+      x-local-only: true
       tags: [System]
       summary: Inspect connection resilience state
       description: >-
@@ -12297,6 +12319,7 @@ paths:
   /api/modality-bridge/video/runtime:
     get:
       operationId: getApiModalityBridgeVideoRuntime
+      x-local-only: true
       x-loopback-only: true
       tags: [System]
       summary: Get Video Bridge runtime status
@@ -12314,6 +12337,7 @@ paths:
   /api/modality-bridge/video/extract:
     post:
       operationId: postApiModalityBridgeVideoExtract
+      x-local-only: true
       x-loopback-only: true
       tags: [System]
       summary: Extract bounded Video Bridge frames through the internal broker
@@ -12384,6 +12408,7 @@ paths:
   /api/modality-bridge/video/drilldown:
     get:
       operationId: getApiModalityBridgeVideoDrilldown
+      x-local-only: true
       x-loopback-only: true
       tags: [System]
       summary: Read a bounded Video Bridge drill-down slice
@@ -12427,6 +12452,7 @@ paths:
         "404": { description: Drill-down session or media key was not found }
     post:
       operationId: postApiModalityBridgeVideoDrilldown
+      x-local-only: true
       x-loopback-only: true
       tags: [System]
       summary: Store a bounded Video Bridge drill-down result
@@ -12498,6 +12524,7 @@ paths:
         "499": { description: Caller cancelled before the derivation was committed }
     delete:
       operationId: deleteApiModalityBridgeVideoDrilldown
+      x-local-only: true
       x-loopback-only: true
       tags: [System]
       summary: Delete a Video Bridge drill-down session
@@ -13319,7 +13346,7 @@ paths:
   /api/tools/agent-bridge/agents:
     get:
       operationId: getApiToolsAgentBridgeAgents
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13350,7 +13377,7 @@ paths:
   /api/tools/agent-bridge/state:
     get:
       operationId: getApiToolsAgentBridgeState
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13380,7 +13407,7 @@ paths:
   /api/tools/agent-bridge/server:
     post:
       operationId: postApiToolsAgentBridgeServer
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13425,7 +13452,7 @@ paths:
   /api/tools/agent-bridge/agents/{id}/dns:
     post:
       operationId: postApiToolsAgentBridgeAgentsByIdDns
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13478,7 +13505,7 @@ paths:
   /api/tools/agent-bridge/agents/{id}/mappings:
     get:
       operationId: getApiToolsAgentBridgeAgentsByIdMappings
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13510,7 +13537,7 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     put:
       operationId: putApiToolsAgentBridgeAgentsByIdMappings
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13555,7 +13582,7 @@ paths:
   /api/tools/agent-bridge/bypass:
     get:
       operationId: getApiToolsAgentBridgeBypass
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13581,7 +13608,7 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiToolsAgentBridgeBypass
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13618,7 +13645,7 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     delete:
       operationId: deleteApiToolsAgentBridgeBypass
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13656,7 +13683,7 @@ paths:
   /api/tools/agent-bridge/cert:
     get:
       operationId: getApiToolsAgentBridgeCert
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13682,7 +13709,7 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiToolsAgentBridgeCert
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13732,7 +13759,7 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     delete:
       operationId: deleteApiToolsAgentBridgeCert
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13774,7 +13801,7 @@ paths:
   /api/tools/agent-bridge/upstream-ca:
     get:
       operationId: getApiToolsAgentBridgeUpstreamCa
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13806,7 +13833,7 @@ paths:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiToolsAgentBridgeUpstreamCa
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13853,7 +13880,7 @@ paths:
   /api/tools/traffic-inspector/requests:
     get:
       operationId: getApiToolsTrafficInspectorRequests
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13907,7 +13934,7 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
     delete:
       operationId: deleteApiToolsTrafficInspectorRequests
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13927,7 +13954,7 @@ paths:
   /api/tools/traffic-inspector/requests/{id}:
     get:
       operationId: getApiToolsTrafficInspectorRequestsById
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -13963,7 +13990,7 @@ paths:
   /api/tools/traffic-inspector/requests/{id}/replay:
     post:
       operationId: postApiToolsTrafficInspectorRequestsByIdReplay
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14012,7 +14039,7 @@ paths:
   /api/tools/traffic-inspector/requests/{id}/annotation:
     put:
       operationId: putApiToolsTrafficInspectorRequestsByIdAnnotation
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14063,7 +14090,7 @@ paths:
   /api/tools/traffic-inspector/ws:
     get:
       operationId: getApiToolsTrafficInspectorWs
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14107,7 +14134,7 @@ paths:
   /api/tools/traffic-inspector/export.har:
     get:
       operationId: getApiToolsTrafficInspectorExportHar
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14170,7 +14197,7 @@ paths:
   /api/tools/traffic-inspector/hosts:
     get:
       operationId: getApiToolsTrafficInspectorHosts
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14196,7 +14223,7 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
     post:
       operationId: postApiToolsTrafficInspectorHosts
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14235,7 +14262,7 @@ paths:
   /api/tools/traffic-inspector/hosts/{host}:
     delete:
       operationId: deleteApiToolsTrafficInspectorHostsByHost
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14268,7 +14295,7 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
     patch:
       operationId: patchApiToolsTrafficInspectorHostsByHost
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14322,7 +14349,7 @@ paths:
   /api/tools/traffic-inspector/capture-modes:
     get:
       operationId: getApiToolsTrafficInspectorCaptureModes
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14351,7 +14378,7 @@ paths:
   /api/tools/traffic-inspector/capture-modes/http-proxy:
     post:
       operationId: postApiToolsTrafficInspectorCaptureModesHttpProxy
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14401,7 +14428,7 @@ paths:
   /api/tools/traffic-inspector/capture-modes/system-proxy:
     post:
       operationId: postApiToolsTrafficInspectorCaptureModesSystemProxy
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14441,7 +14468,7 @@ paths:
   /api/tools/traffic-inspector/capture-modes/tls-intercept:
     post:
       operationId: postApiToolsTrafficInspectorCaptureModesTlsIntercept
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14475,7 +14502,7 @@ paths:
   /api/tools/traffic-inspector/sessions:
     get:
       operationId: getApiToolsTrafficInspectorSessions
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14501,7 +14528,7 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
     post:
       operationId: postApiToolsTrafficInspectorSessions
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14541,7 +14568,7 @@ paths:
   /api/tools/traffic-inspector/sessions/{id}:
     get:
       operationId: getApiToolsTrafficInspectorSessionsById
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14579,7 +14606,7 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
     patch:
       operationId: patchApiToolsTrafficInspectorSessionsById
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14628,7 +14655,7 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
     delete:
       operationId: deleteApiToolsTrafficInspectorSessionsById
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14665,7 +14692,7 @@ paths:
   /api/tools/traffic-inspector/sessions/{id}/export.har:
     get:
       operationId: getApiToolsTrafficInspectorSessionsByIdExportHar
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -14712,7 +14739,7 @@ paths:
   /api/tools/traffic-inspector/internal/ingest:
     post:
       operationId: postApiToolsTrafficInspectorInternalIngest
-      x-loopback-only: true
+      x-local-only: true
       tags: [Traffic Inspector]
       summary: Internal ingest endpoint for server.cjs passthrough path
       description: >-
@@ -15938,6 +15965,8 @@ paths:
         install may allow anonymous access.
       security:
         - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
@@ -15984,11 +16013,14 @@ paths:
       description: >-
         Accepts only `conductor` and `conductor-cli-*` skills, extracts the latest user message as
         the task prompt, and delegates the repository task to the configured Conductor hub. If
-        `OMNIROUTE_API_KEY` is configured, this route additionally requires that exact value as an
-        Authorization Bearer token; the central management policy may independently require a
-        management identity according to login/locked settings. With no shared A2A key and an
-        unlocked `requireLogin=false` profile, the route may be anonymous. The request contains
-        prompt and repository data and should be treated as sensitive.
+        `OMNIROUTE_API_KEY` is configured, the route-local `authenticateA2A` gate additionally
+        requires the exact configured value as an Authorization Bearer token. In that mode, a
+        session, CLI token, or internal-service identity does not satisfy the extra A2A gate; the
+        central management policy may still require an additional identity according to locked/login
+        settings. If the shared A2A key is unset, the route-local gate is open and the central
+        management policy decides whether caller authentication is required. With no shared A2A key
+        and an unlocked `requireLogin=false` profile, the route may be anonymous. The request
+        contains prompt and repository data and should be treated as sensitive.
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -16056,6 +16088,8 @@ paths:
         `requireLogin=false` install may allow anonymous access to ownerless/keyless tasks.
       security:
         - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
@@ -16102,6 +16136,8 @@ paths:
         `requireLogin=false` install may allow anonymous access to ownerless/keyless tasks.
       security:
         - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
         - ManagementSessionAuth: []
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
@@ -16134,7 +16170,7 @@ paths:
       tags:
         - Acp
       summary: "DELETE acp › agents"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -16143,7 +16179,7 @@ paths:
       tags:
         - Acp
       summary: "GET acp › agents"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -16152,7 +16188,7 @@ paths:
       tags:
         - Acp
       summary: "POST acp › agents"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -16757,17 +16793,65 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › config"
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      parameters:
+        - name: baseUrl
+          in: query
+          required: false
+          schema: { type: string }
+        - name: apiKey
+          in: query
+          required: false
+          x-sensitive: true
+          description: API key used to generate the returned configs.
+          schema: { type: string, writeOnly: true, x-sensitive: true }
       responses:
         "200":
-          description: OK
+          x-sensitive: true
+          description: >-
+            Generated configurations can include the complete API key supplied in the query and must be handled as credential material.
     post:
       operationId: postApiCliToolsConfig
       tags:
         - Cli tools
       summary: "POST cli tools › config"
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toolId, apiKey]
+              properties:
+                toolId: { type: string, minLength: 1 }
+                baseUrl: { type: string }
+                apiKey: { type: string, minLength: 1, writeOnly: true, x-sensitive: true }
+                model: { type: string }
       responses:
         "200":
-          description: OK
+          x-sensitive: true
+          description: >-
+            Generated config text can include the complete API key supplied in the request and must be handled as credential material.
   /api/cli-tools/deepseek-tui-settings:
     delete:
       operationId: deleteApiCliToolsDeepseekTuiSettings
@@ -16899,7 +16983,17 @@ paths:
       tags:
         - Cli tools
       summary: "DELETE cli tools › forge settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -16908,16 +17002,38 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › forge settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
-          description: OK
+          x-sensitive: true
+          description: >-
+            Returns the local Forge TOML config, which may include a plaintext API key.
     post:
       operationId: postApiCliToolsForgeSettings
       tags:
         - Cli tools
       summary: "POST cli tools › forge settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -16927,7 +17043,17 @@ paths:
       tags:
         - Cli tools
       summary: "DELETE cli tools › grok build settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -16936,16 +17062,38 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › grok build settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
-          description: OK
+          x-sensitive: true
+          description: >-
+            Returns Grok Build local config-derived settings and filesystem paths; API-key values are redacted, but the remaining local configuration metadata is sensitive.
     post:
       operationId: postApiCliToolsGrokBuildSettings
       tags:
         - Cli tools
       summary: "POST cli tools › grok build settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -17004,7 +17152,17 @@ paths:
       tags:
         - Cli tools
       summary: "DELETE cli tools › jcode settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -17013,16 +17171,38 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › jcode settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
-          description: OK
+          x-sensitive: true
+          description: >-
+            Returns the local JCode TOML config, which may include a plaintext API key.
     post:
       operationId: postApiCliToolsJcodeSettings
       tags:
         - Cli tools
       summary: "POST cli tools › jcode settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -17068,7 +17248,17 @@ paths:
       tags:
         - Cli tools
       summary: "DELETE cli tools › letta settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -17077,16 +17267,38 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › letta settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
-          description: OK
+          x-sensitive: true
+          description: >-
+            Returns local Letta auth JSON, which may contain API keys and other credentials.
     post:
       operationId: postApiCliToolsLettaSettings
       tags:
         - Cli tools
       summary: "POST cli tools › letta settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -17123,7 +17335,17 @@ paths:
       tags:
         - Cli tools
       summary: "DELETE cli tools › omp settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -17132,16 +17354,38 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › omp settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
-          description: OK
+          x-sensitive: true
+          description: >-
+            Returns Oh My Pi config and auth data, including the configured API key.
     post:
       operationId: postApiCliToolsOmpSettings
       tags:
         - Cli tools
       summary: "POST cli tools › omp settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -17151,6 +17395,16 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › openclaw › auto order"
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
       responses:
         "200":
           description: OK
@@ -17236,7 +17490,17 @@ paths:
       tags:
         - Cli tools
       summary: "DELETE cli tools › qwen settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -17245,16 +17509,38 @@ paths:
       tags:
         - Cli tools
       summary: "GET cli tools › qwen settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
-          description: OK
+          x-sensitive: true
+          description: >-
+            Returns local Qwen Code settings and filesystem paths that may disclose sensitive configuration.
     post:
       operationId: postApiCliToolsQwenSettings
       tags:
         - Cli tools
       summary: "POST cli tools › qwen settings"
-      x-loopback-only: true
+      description: >-
+        Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -18142,7 +18428,7 @@ paths:
       tags:
         - Copilot
       summary: "POST copilot › chat"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -18244,7 +18530,7 @@ paths:
         summaries are redacted, but the raw database is not. This local-only operation is rejected
         in cloud mode. Authentication uses the legacy `isAuthenticated()` handler check described
         by the Db backups tag.
-      x-loopback-only: true
+      x-local-only: true
       x-always-protected: true
       security:
         - ManagementApiKeyBearerAuth: []
@@ -18429,7 +18715,7 @@ paths:
       tags:
         - Discovery
       summary: "GET discovery › results"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -18445,7 +18731,7 @@ paths:
       tags:
         - Discovery
       summary: "DELETE discovery › results › <id>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -18454,7 +18740,7 @@ paths:
       tags:
         - Discovery
       summary: "GET discovery › results › <id>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -18464,7 +18750,7 @@ paths:
       tags:
         - Discovery
       summary: "POST discovery › scan"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -18480,7 +18766,7 @@ paths:
       tags:
         - Discovery
       summary: "POST discovery › verify › <id>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -18959,7 +19245,7 @@ paths:
       tags:
         - Headroom
       summary: "POST headroom › start"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -18978,7 +19264,7 @@ paths:
       tags:
         - Headroom
       summary: "POST headroom › stop"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19040,7 +19326,7 @@ paths:
       tags:
         - Issue agent
       summary: "GET issue agent › runs"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19049,7 +19335,7 @@ paths:
       tags:
         - Issue agent
       summary: "POST issue agent › runs"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19666,7 +19952,7 @@ paths:
       tags:
         - Local
       summary: "POST local › redis › start"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19676,7 +19962,7 @@ paths:
       tags:
         - Local
       summary: "GET local › redis › status"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19686,7 +19972,7 @@ paths:
       tags:
         - Local
       summary: "POST local › redis › stop"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19955,7 +20241,7 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › audit"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19965,7 +20251,7 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › audit › stats"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19975,7 +20261,7 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › sse"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19984,7 +20270,7 @@ paths:
       tags:
         - Mcp
       summary: "POST mcp › sse"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -19994,7 +20280,7 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › status"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20004,7 +20290,7 @@ paths:
       tags:
         - Mcp
       summary: "DELETE mcp › stream"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20013,7 +20299,7 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › stream"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20022,7 +20308,7 @@ paths:
       tags:
         - Mcp
       summary: "POST mcp › stream"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20032,7 +20318,7 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › tools"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20042,7 +20328,7 @@ paths:
       tags:
         - Middleware
       summary: "GET middleware › hooks"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20051,7 +20337,7 @@ paths:
       tags:
         - Middleware
       summary: "POST middleware › hooks"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20067,7 +20353,7 @@ paths:
       tags:
         - Middleware
       summary: "DELETE middleware › hooks › <name>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20076,7 +20362,7 @@ paths:
       tags:
         - Middleware
       summary: "GET middleware › hooks › <name>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20085,7 +20371,7 @@ paths:
       tags:
         - Middleware
       summary: "PUT middleware › hooks › <name>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20795,7 +21081,7 @@ paths:
       tags:
         - Plugins
       summary: "GET plugins"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20804,7 +21090,7 @@ paths:
       tags:
         - Plugins
       summary: "POST plugins"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20820,7 +21106,7 @@ paths:
       tags:
         - Plugins
       summary: "DELETE plugins › <name>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20829,7 +21115,7 @@ paths:
       tags:
         - Plugins
       summary: "GET plugins › <name>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20845,7 +21131,7 @@ paths:
       tags:
         - Plugins
       summary: "POST plugins › <name> › activate"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20861,7 +21147,7 @@ paths:
       tags:
         - Plugins
       summary: "GET plugins › <name> › config"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20870,7 +21156,7 @@ paths:
       tags:
         - Plugins
       summary: "PUT plugins › <name> › config"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20886,7 +21172,7 @@ paths:
       tags:
         - Plugins
       summary: "POST plugins › <name> › deactivate"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20896,7 +21182,7 @@ paths:
       tags:
         - Plugins
       summary: "GET plugins › marketplace"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20906,7 +21192,7 @@ paths:
       tags:
         - Plugins
       summary: "POST plugins › marketplace › install"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -20916,7 +21202,7 @@ paths:
       tags:
         - Plugins
       summary: "POST plugins › scan"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -21156,10 +21442,42 @@ paths:
       tags:
         - Providers
       summary: "GET providers › <id> › chatgpt web codex doctor"
-      x-loopback-only: true
+      description: >-
+        Reads local ChatGPT Web Codex browser/tunnel diagnostics for this provider connection. The
+        endpoint can inspect host runtime state and is therefore LOCAL_ONLY: direct loopback and
+        trusted private-LAN peers pass the locality check, while public/unknown peers are blocked. It uses
+        `requireManagementAuth`: management bearer, dashboard session, loopback CLI token, and
+        trusted internal-service credentials are accepted; an unlocked local profile may allow
+        anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Host-local browser, storage, login, tunnel, and worker diagnostics.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChatGptWebCodexDoctorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Management authorization failed or the request did not satisfy local-only policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: ChatGPT Web Codex provider connection was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/{id}/claude-auth/apply-local:
     parameters:
       - name: id
@@ -21576,7 +21894,7 @@ paths:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - {}
-      x-loopback-only: true
+      x-local-only: true
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       requestBody:
@@ -21816,7 +22134,7 @@ paths:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - {}
-      x-loopback-only: true
+      x-local-only: true
       parameters:
         - $ref: "#/components/parameters/ResourceId"
       responses:
@@ -22013,45 +22331,212 @@ paths:
       tags:
         - Providers
       summary: "POST providers › bulk"
+      description: >-
+        Creates API-key connections independently. The HTTP 200 response reports per-entry
+        successes and failures, even when some or all entries fail. Returned connection records
+        omit API-key and OAuth credential values and sanitize provider-specific secrets. Uses
+        `requireManagementAuth`; unlocked local profiles may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Per-entry API-key connection creation results with credentials removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderBulkConnectionResponse" }
+        "410":
+          description: The requested provider has been retired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "400":
+          description: Invalid JSON, provider, or request body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: A compatible provider node was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/bulk-web-session:
     post:
       operationId: postApiProvidersBulkWebSession
       tags:
         - Providers
       summary: "POST providers › bulk web session"
+      description: >-
+        Imports web-session credentials independently for each entry. The HTTP 200 response reports
+        per-entry outcomes; returned connection records omit API-key/token values and sanitize
+        provider-specific credential fields. Uses `requireManagementAuth`; unlocked local profiles
+        may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Per-entry web-session connection import results with credentials removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderBulkConnectionResponse" }
+        "410":
+          description: The requested provider has been retired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "400":
+          description: Invalid JSON, request body, provider, or credential type.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/claude-auth/import:
     post:
       operationId: postApiProvidersClaudeAuthImport
       tags:
         - Providers
       summary: "POST providers › claude auth › import"
+      description: >-
+        Imports one Claude auth file and returns its connection metadata with API key, access,
+        refresh, and ID tokens removed and provider-specific credential fields sanitized. Uses
+        `requireManagementAuth`; unlocked local profiles may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Sanitized imported connection and whether a new connection was created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderAuthImportResponse" }
+        "400":
+          description: Invalid JSON, import payload, or Claude auth file.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ClaudeAuthFileErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "409":
+          description: A matching Claude connection already exists and overwrite was not enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ClaudeAuthFileErrorResponse" }
+        "500":
+          description: Claude auth import failed unexpectedly.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/claude-auth/import-bulk:
     post:
       operationId: postApiProvidersClaudeAuthImportBulk
       tags:
         - Providers
       summary: "POST providers › claude auth › import bulk"
+      description: >-
+        Imports Claude auth records independently. The HTTP 200 response reports per-entry results;
+        created connection records omit API-key/OAuth token values and sanitize provider-specific
+        credential fields. Uses `requireManagementAuth`; unlocked local profiles may allow anonymous
+        access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Partial-failure import counts, sanitized connections, and per-entry errors.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderBulkConnectionResponse" }
+        "400":
+          description: Invalid JSON or bulk import payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/claude-auth/zip-extract:
     post:
       operationId: postApiProvidersClaudeAuthZipExtract
       tags:
         - Providers
       summary: "POST providers › claude auth › zip extract"
+      description: >-
+        Extracts JSON files from an uploaded ZIP. The response returns each parsed JSON value intact;
+        auth files may contain access tokens, refresh tokens, API keys, or other credential material.
+        Handle this response as sensitive data. Uses `requireManagementAuth`; unlocked local profiles
+        may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Extracted JSON entries; parsed auth contents may include raw credentials.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderAuthZipExtractResponse" }
+        "400":
+          description: Invalid request body, ZIP archive, or extraction failure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderAuthZipExtractErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "413":
+          description: ZIP request exceeded the compressed size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderAuthZipExtractErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/codex-auth/import:
     post:
       operationId: postApiProvidersCodexAuthImport
@@ -22201,9 +22686,58 @@ paths:
       tags:
         - Providers
       summary: "POST providers › command code › auth › apply"
+      description: >-
+        Consumes the short-lived Command Code auth secret and creates or updates a provider
+        connection. Credentials are removed from the returned connection metadata. The response is
+        marked `Cache-Control: no-store`. Uses `requireManagementAuth`; unlocked local profiles may
+        allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Applied auth status and sanitized provider connection metadata.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommandCodeAuthApplyResponse" }
+        "400":
+          description: Invalid JSON or apply payload.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Selected API-key connection was not found.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "409":
+          description: No received API key exists for this auth state.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/command-code/auth/callback:
     post:
       operationId: postApiProvidersCommandCodeAuthCallback
@@ -22258,26 +22792,147 @@ paths:
       tags:
         - Providers
       summary: "POST providers › command code › auth › start"
+      description: >-
+        Creates a short-lived Command Code auth state and returns its browser URL and local callback
+        URL. The state is a temporary credential and the response is marked `Cache-Control:
+        no-store`. Uses `requireManagementAuth`; unlocked local profiles may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Short-lived state and URLs for completing the Command Code auth flow.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommandCodeAuthStartResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/command-code/auth/status:
     get:
       operationId: getApiProvidersCommandCodeAuthStatus
       tags:
         - Providers
       summary: "GET providers › command code › auth › status"
+      description: >-
+        Reads a Command Code auth flow using the `state` query parameter. The response is marked
+        `Cache-Control: no-store`. Uses `requireManagementAuth`; unlocked local profiles may allow
+        anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: state
+          in: query
+          required: true
+          description: Short-lived auth state returned by the start operation.
+          schema: { type: string, minLength: 32, maxLength: 512 }
       responses:
         "200":
-          description: OK
+          description: Current safe status and timestamps for the auth flow.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommandCodeAuthStatusResponse" }
+        "400":
+          description: Missing or invalid auth state.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Auth state was not found.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommandCodeAuthNotFoundResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiProvidersCommandCodeAuthStatus
       tags:
         - Providers
       summary: "POST providers › command code › auth › status"
+      description: >-
+        Reads a Command Code auth flow using the `state` JSON property (or query parameter). The
+        response is marked `Cache-Control: no-store`. Uses `requireManagementAuth`; unlocked local
+        profiles may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CommandCodeAuthStateRequest" }
+      parameters:
+        - name: state
+          in: query
+          required: false
+          description: Short-lived auth state; takes precedence over the JSON body.
+          schema: { type: string, minLength: 32, maxLength: 512 }
       responses:
         "200":
-          description: OK
+          description: Current safe status and timestamps for the auth flow.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommandCodeAuthStatusResponse" }
+        "400":
+          description: Missing or invalid auth state.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Auth state was not found.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CommandCodeAuthNotFoundResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/expiration:
     get:
       operationId: getApiProvidersExpiration
@@ -22303,17 +22958,73 @@ paths:
       tags:
         - Providers
       summary: "GET providers › free onboarding"
+      description: >-
+        Lists eligible free, no-auth providers that are not configured. Uses
+        `requireManagementAuth`; unlocked local profiles may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Eligible providers not already configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FreeProviderOnboardingListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Free-provider candidates or configured connections could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiProvidersFreeOnboarding
       tags:
         - Providers
       summary: "POST providers › free onboarding"
+      description: >-
+        Creates eligible free, no-auth provider connections and reports each requested provider as
+        created, skipped, or failed. Uses `requireManagementAuth`; unlocked local profiles may allow
+        anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Per-provider setup results.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FreeProviderOnboardingSetupResponse" }
+        "400":
+          description: Invalid request or one or more provider IDs are not eligible.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Free-provider setup failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/health-autopilot:
     get:
       operationId: getApiProvidersHealthAutopilot
@@ -22490,18 +23201,74 @@ paths:
       tags:
         - Providers
       summary: "POST providers › import"
+      description: >-
+        Imports API-key connections from a mixed-provider batch. HTTP 200 reports per-entry results;
+        created connection records omit API-key values and sanitize provider-specific credentials.
+        Uses `requireManagementAuth`; unlocked local profiles may allow anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Per-entry connection import results with credentials removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderImportBulkResponse" }
+        "410":
+          description: At least one requested provider has been retired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "400":
+          description: Invalid JSON or import request structure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/providers/openrouter-stats:
     get:
       operationId: getApiProvidersOpenrouterStats
       tags:
         - Providers
       summary: "GET providers › openrouter stats"
+      description: >-
+        Returns cached provider popularity and policy metadata collected from OpenRouter. The
+        legacy `isAuthenticated()` gate accepts a dashboard session or a manage/admin API key when
+        authentication is required; it does not accept `oma_live` access tokens or loopback CLI
+        credentials through this handler. An unlocked local profile may allow anonymous access.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: refresh
+          in: query
+          required: false
+          description: Force a refresh instead of honoring the cache TTL.
+          schema: { type: string, enum: ["true"] }
       responses:
         "200":
-          description: OK
+          description: Provider popularity, data-policy, and usage enrichment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenRouterProviderStatsResponse" }
+        "401":
+          description: Management authentication is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/providers/quota-windows:
     get:
       operationId: getApiProvidersQuotaWindows
@@ -22544,7 +23311,7 @@ paths:
       tags:
         - Providers
       summary: Start Volcengine Plan console login or bind an existing console credential
-      x-loopback-only: true
+      x-local-only: true
       description: >-
         Supplying a phone starts the headless SMS login session. Omitting the phone
         runs the legacy local browser flow and binds the plans immediately. This
@@ -22597,7 +23364,7 @@ paths:
       tags:
         - Providers
       summary: Cancel a Volcengine Plan login session
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -22640,7 +23407,7 @@ paths:
       tags:
         - Providers
       summary: Submit the SMS code for a Volcengine Plan login session
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -22695,7 +23462,7 @@ paths:
       tags:
         - Providers
       summary: Select a Volcengine Plan login identity
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -22750,7 +23517,7 @@ paths:
       tags:
         - Providers
       summary: Resend the Volcengine Plan SMS login code
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -22793,7 +23560,7 @@ paths:
       tags:
         - Providers
       summary: Poll Volcengine Plan login session status
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -23669,40 +24436,51 @@ paths:
       tags:
         - Services
       summary: "GET services › 9router › models"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Cached or refreshed embedded 9Router model list.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceModelsResponse"
   /api/services/9router/provider-expose:
     post:
       operationId: postApiServices9routerProviderExpose
       tags:
         - Services
       summary: "POST services › 9router › provider expose"
-      x-loopback-only: true
+      x-local-only: true
       responses:
-        "200":
-          description: OK
+        "204":
+          description: Provider exposure setting was updated; no response body.
   /api/services/cliproxy/accounts:
     get:
       operationId: getApiServicesCliproxyAccounts
       tags:
         - Services
       summary: "GET services › cliproxy › accounts"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Sanitized CLIProxy account health; raw auth credentials are omitted.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CliproxyAccountHealthResult"
   /api/services/cliproxy/provider-expose:
     post:
       operationId: postApiServicesCliproxyProviderExpose
       tags:
         - Services
       summary: "POST services › cliproxy › provider expose"
-      x-loopback-only: true
+      x-local-only: true
       responses:
-        "200":
-          description: OK
+        "204":
+          description: Provider exposure setting was updated; no response body.
   /api/session-pools:
     get:
       operationId: getApiSessionPools
@@ -24419,9 +25197,46 @@ paths:
       tags:
         - Settings
       summary: "GET settings › favicon"
+      description: >-
+        Serves the configured favicon bytes when the stored image is valid; otherwise redirects to
+        `/favicon.svg` with HTTP 307. This path uses the central management route policy but has no
+        route-local auth check. Protected profiles accept a management bearer identity or session,
+        plus loopback CLI/internal-service credentials. An unlocked `requireLogin=false` profile
+        may allow anonymous access; first-run bootstrap is loopback-only and locked management
+        always requires auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Configured favicon bytes.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "public, max-age=300" }
+          content:
+            image/png: { schema: { type: string, format: binary } }
+            image/x-icon: { schema: { type: string, format: binary } }
+            image/svg+xml: { schema: { type: string, format: binary } }
+            image/gif: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+        "307":
+          description: No valid custom favicon is configured; redirect to the built-in favicon.
+          headers:
+            Location:
+              required: true
+              schema: { type: string, format: uri }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/feature-flags:
     delete:
       operationId: deleteApiSettingsFeatureFlags
@@ -25039,7 +25854,7 @@ paths:
       tags:
         - Settings
       summary: Get local MITM proxy status or download its certificate
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -25082,7 +25897,7 @@ paths:
       tags:
         - Settings
       summary: Regenerate the MITM proxy certificate
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -25127,7 +25942,7 @@ paths:
       tags:
         - Settings
       summary: Update or enable the local MITM proxy
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -25326,17 +26141,100 @@ paths:
       tags:
         - Settings
       summary: "GET settings › models dev"
+      description: >-
+        Returns models.dev sync status plus counts for locally stored pricing and capabilities.
+        `action=status` is required. The legacy `isAuthenticated()` gate accepts a dashboard
+        session or manage/admin API key when authentication is required; it does not accept
+        `oma_live` Access Tokens or loopback CLI tokens in that mode. An unlocked
+        `requireLogin=false` profile may permit anonymous access, and first-run bootstrap may
+        permit loopback access. Locked management always requires authentication.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      parameters:
+        - name: action
+          in: query
+          required: true
+          schema: { type: string, const: status }
       responses:
         "200":
-          description: OK
+          description: Models.dev synchronization status and local record counts.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelsDevSyncStatusResponse" }
+        "400":
+          description: Missing or unsupported action.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Handler or central policy rejected the supplied identity.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSettingsModelsDev
       tags:
         - Settings
       summary: "POST settings › models dev"
+      description: >-
+        Starts or stops the periodic models.dev sync, or runs a one-shot sync. A failed sync is
+        represented by `success: false` in the HTTP 200 result; `data` is returned only for dry
+        runs. The legacy `isAuthenticated()` gate accepts a dashboard session or manage/admin API
+        key when authentication is required. It does not accept `oma_live` Access Tokens or loopback
+        CLI tokens in that mode; an unlocked `requireLogin=false` profile may permit anonymous
+        access, and first-run bootstrap may permit loopback access. Locked management always
+        requires authentication.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModelsDevSyncActionRequest" }
       responses:
         "200":
-          description: OK
+          description: Sync result or periodic-sync start/stop result.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ModelsDevSyncResultResponse" }
+                  - { $ref: "#/components/schemas/ModelsDevPeriodicSyncActionResponse" }
+        "400":
+          description: Malformed JSON, invalid action, or invalid sync options.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: Handler or central policy rejected the supplied identity.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/settings/notion:
     delete:
       operationId: deleteApiSettingsNotion
@@ -26774,27 +27672,165 @@ paths:
       tags:
         - Settings
       summary: "POST settings › proxy › cloudflare deploy"
+      description: >-
+        Deploys a Cloudflare Worker relay and stores its public URL in the proxy registry. The
+        Cloudflare API token is never stored or returned; the generated relay credential is stored
+        encrypted when storage encryption is configured. `requireManagementAuth()` accepts a
+        scoped management bearer identity, dashboard session, or trusted loopback CLI/internal
+        service credential. An unlocked `requireLogin=false` profile may permit anonymous access;
+        first-run bootstrap is loopback-only and locked management always requires auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CloudflareRelayDeployRequest" }
       responses:
         "200":
-          description: OK
+          description: Worker relay deployed and registered; credentials are not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyRelayDeployResponse" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        default:
+          description: Cloudflare API, deployment, or proxy-registry operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/settings/proxy/deno-deploy:
     post:
       operationId: postApiSettingsProxyDenoDeploy
       tags:
         - Settings
       summary: "POST settings › proxy › deno deploy"
+      description: >-
+        Creates and deploys a Deno Deploy relay, waits for a successful revision, and registers
+        its public URL. The Deno organization token is not stored or returned; the generated relay
+        credential is stored encrypted when storage encryption is configured. `requireManagementAuth()`
+        accepts a scoped management bearer identity, dashboard session, or trusted loopback
+        CLI/internal-service credential. An unlocked `requireLogin=false` profile may permit
+        anonymous access; first-run bootstrap is loopback-only and locked management always requires
+        auth.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DenoRelayDeployRequest" }
       responses:
         "200":
-          description: OK
+          description: Deno Deploy relay deployed and registered; credentials are not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyRelayDeployResponse" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "409":
+          description: A Deno Deploy application with this slug already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "502":
+          description: Deno Deploy rejected the app or revision deployment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "504":
+          description: Deno Deploy revision did not succeed before the polling deadline.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        default:
+          description: Deno Deploy API or proxy-registry operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/settings/proxy/vercel-deploy:
     post:
       operationId: postApiSettingsProxyVercelDeploy
       tags:
         - Settings
       summary: "POST settings › proxy › vercel deploy"
+      description: >-
+        Deploys a Vercel Edge relay, waits for READY, and registers its public URL. The Vercel
+        personal access token is not stored or returned; the generated relay credential is stored
+        encrypted when storage encryption is configured. `requireManagementAuth()` accepts a
+        scoped management bearer identity, dashboard session, or trusted loopback CLI/internal
+        service credential. An unlocked `requireLogin=false` profile may permit anonymous access;
+        first-run bootstrap is loopback-only and locked management always requires auth. The
+        optional `ssoProtectionWarning` indicates Deployment Protection could not be disabled.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VercelRelayDeployRequest" }
       responses:
         "200":
-          description: OK
+          description: Vercel relay deployed and registered; credentials are not returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProxyRelayDeployResponse" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "502":
+          description: Vercel rejected the deployment or returned no deployment URL.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
+        "504":
+          description: Vercel deployment did not reach READY before the polling deadline.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        default:
+          description: Vercel API or proxy-registry operation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/settings/purge-call-logs:
     post:
       operationId: postApiSettingsPurgeCallLogs
@@ -27386,7 +28422,7 @@ paths:
       tags:
         - Skills
       summary: "POST skills › collect › chaos"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -27396,7 +28432,7 @@ paths:
       tags:
         - Skills
       summary: "GET skills › collect › detect"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -27406,7 +28442,7 @@ paths:
       tags:
         - Skills
       summary: "POST skills › collect › install"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -27548,7 +28584,7 @@ paths:
       description: >-
         Returns the installed version, latest available version, update
         capability, channel, and active release announcement. This safe read is
-        exempt from the loopback-only guard; POST remains loopback-only.
+        exempt from the local-only locality guard; POST remains LOCAL_ONLY.
         Management authentication is required when enabled by the local auth
         configuration, and disabled-login/bootstrap configurations may allow
         anonymous access. The ETag is a SHA-256 digest of the JSON response.
@@ -27590,7 +28626,7 @@ paths:
         - System
       summary: "POST system › version"
       description: >-
-        Starts an update to the latest release. This operation is loopback-only
+        Starts an update to the latest release. This operation is LOCAL_ONLY
         and accepts no request body. Docker Compose mode returns a JSON result
         after launching the detached update. Source-checkout and npm modes
         return a `text/event-stream` whose `data:` frames contain JSON progress
@@ -27601,7 +28637,7 @@ paths:
         - BearerAuth: []
         - ManagementSessionAuth: []
         - {}
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: >-
@@ -27651,7 +28687,7 @@ paths:
       tags:
         - Tools
       summary: "GET tools › agent bridge › agents › <id>"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -27684,7 +28720,7 @@ paths:
       tags:
         - Tools
       summary: "PATCH tools › agent bridge › agents › <id>"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -27733,7 +28769,7 @@ paths:
       tags:
         - Tools
       summary: "GET tools › agent bridge › agents › <id> › detect"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -27772,7 +28808,7 @@ paths:
       tags:
         - Tools
       summary: "GET tools › agent bridge › agents › <id> › detected models"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -27806,7 +28842,7 @@ paths:
       tags:
         - Tools
       summary: "GET tools › agent bridge › cert › download"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -27844,7 +28880,7 @@ paths:
       tags:
         - Tools
       summary: "POST tools › agent bridge › cert › regenerate"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -27872,7 +28908,7 @@ paths:
       tags:
         - Tools
       summary: "GET tools › agent bridge › config"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -27899,7 +28935,7 @@ paths:
       tags:
         - Tools
       summary: "POST tools › agent bridge › config"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -27937,7 +28973,7 @@ paths:
       tags:
         - Tools
       summary: "GET tools › agent bridge › diagnose"
-      x-loopback-only: true
+      x-local-only: true
       description: >-
         Returns a capture-pipeline diagnostic report. `agentId` is optional; when omitted, the DNS
         result is aggregated across configured agents.
@@ -27973,7 +29009,7 @@ paths:
       tags:
         - Tools
       summary: "POST tools › agent bridge › repair"
-      x-loopback-only: true
+      x-local-only: true
       description: >-
         Undo orphaned DNS, root-CA, and system-proxy state. Optional `sudoPassword` is used when
         privileged system changes require elevation.
@@ -28018,7 +29054,7 @@ paths:
       tags:
         - Tools
       summary: "DELETE tools › agent bridge › tproxy"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -28045,7 +29081,7 @@ paths:
       tags:
         - Tools
       summary: "GET tools › agent bridge › tproxy"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -28067,7 +29103,7 @@ paths:
       tags:
         - Tools
       summary: "POST tools › agent bridge › tproxy"
-      x-loopback-only: true
+      x-local-only: true
       description: >-
         Starts decrypt-capable transparent capture, installing system routing rules and a capture CA.
         Optional fields override the runtime defaults; optional `sudoPassword` authorizes trust-store
@@ -28109,7 +29145,7 @@ paths:
       tags:
         - Tools
       summary: "POST tools › agent bridge › upstream ca › test"
-      x-loopback-only: true
+      x-local-only: true
       requestBody:
         required: true
         content:
@@ -28148,7 +29184,7 @@ paths:
       tags:
         - Tools
       summary: "POST tools › traffic inspector › sessions › <id> › requests"
-      x-loopback-only: true
+      x-local-only: true
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -28209,7 +29245,7 @@ paths:
       tags:
         - Tunnels
       summary: "POST tunnels › cloudflared"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -28254,7 +29290,7 @@ paths:
       tags:
         - Tunnels
       summary: "POST tunnels › tailscale › disable"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -28264,7 +29300,7 @@ paths:
       tags:
         - Tunnels
       summary: "POST tunnels › tailscale › enable"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -28274,7 +29310,7 @@ paths:
       tags:
         - Tunnels
       summary: "POST tunnels › tailscale › install"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -28284,7 +29320,7 @@ paths:
       tags:
         - Tunnels
       summary: "POST tunnels › tailscale › login"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -28294,7 +29330,7 @@ paths:
       tags:
         - Tunnels
       summary: "POST tunnels › tailscale › start daemon"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -32921,7 +33957,18 @@ paths:
       description: >-
         Lists persisted task transitions, including tasks that have expired from the in-memory
         task manager. Valid API-key callers are owner-scoped; management callers see all tasks.
-        Authentication follows the instance's REQUIRE_API_KEY and login policy.
+        A valid API key or management identity is required when REQUIRE_API_KEY is enabled;
+        otherwise authentication follows the management login policy. Anonymous access is only
+        available in the unlocked local-first profile with REQUIRE_API_KEY disabled and
+        requireLogin=false. Keyed callers are owner-scoped; management callers see all tasks.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: from
           in: query
@@ -32968,7 +34015,11 @@ paths:
                   offset: { type: integer, minimum: 0 }
         "400": { description: Invalid history query parameters }
         "401": { description: Authentication required when the instance policy requires it }
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500": { description: Task history could not be read }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/canary-drain:
     post:
@@ -33893,7 +34944,7 @@ paths:
       tags:
         - Vnc session
       summary: "GET vnc session"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -33909,7 +34960,7 @@ paths:
       tags:
         - Vnc session
       summary: "DELETE vnc session › <params>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -33918,7 +34969,7 @@ paths:
       tags:
         - Vnc session
       summary: "GET vnc session › <params>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -33927,7 +34978,7 @@ paths:
       tags:
         - Vnc session
       summary: "POST vnc session › <params>"
-      x-loopback-only: true
+      x-local-only: true
       responses:
         "200":
           description: OK
@@ -34378,6 +35429,14 @@ components:
               message: Invalid management token
               type: invalid_request
             requestId: 1b6a6ff8-d60c-4900-8d0a-25f81749f0a3
+    ManagementOrRuntimePolicyForbidden:
+      description: Invalid management credential or locked runtime policy denied the operation.
+      content:
+        application/json:
+          schema:
+            oneOf:
+              - $ref: "#/components/schemas/ApiErrorResponse"
+              - $ref: "#/components/schemas/StringErrorResponse"
     ManagementAuthUnavailable:
       description: The management-authentication service is temporarily unavailable.
       content:
@@ -41568,6 +42627,158 @@ components:
                 Whether models from this service are exposed as a routing provider.
                 9Router only.
 
+    ServiceModelsResponse:
+      type: object
+      description: Persisted embedded-service models, including soft-pruned models marked unavailable.
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ServiceModel" }
+      additionalProperties: false
+
+    ServiceModel:
+      type: object
+      description: >-
+        Embedded service model row. Upstream model properties are preserved without a fixed
+        property allowlist, so additional JSON fields may be returned.
+      required: [id]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        object: { type: string }
+        owned_by: { type: string }
+        created: { type: number }
+        available: { type: boolean }
+      additionalProperties: true
+
+    ServiceSupervisorStatus:
+      type: object
+      description: Live supervisor state returned by Bifrost start, restart, and stop operations.
+      required: [tool, state, pid, port, health, startedAt, lastError, adopted]
+      properties:
+        tool: { type: string, const: bifrost }
+        state:
+          type: string
+          enum: [not_installed, stopped, starting, running, stopping, error]
+        pid: { type: [integer, "null"] }
+        port: { type: integer }
+        health:
+          type: string
+          enum: [healthy, unhealthy, unknown]
+        startedAt: { type: [string, "null"], format: date-time }
+        lastError: { type: [string, "null"] }
+        adopted: { type: boolean }
+      additionalProperties: false
+
+    BifrostStoppedResponse:
+      type: object
+      description: Returned when the Bifrost supervisor is not registered.
+      required: [tool, state]
+      properties:
+        tool: { type: string, const: bifrost }
+        state: { type: string, const: stopped }
+      additionalProperties: false
+
+    BifrostStopResponse:
+      oneOf:
+        - $ref: "#/components/schemas/ServiceSupervisorStatus"
+        - $ref: "#/components/schemas/BifrostStoppedResponse"
+
+    BifrostStatusResponse:
+      type: object
+      description: >-
+        Bifrost runtime and installation status. Last-error text and process/version metadata are
+        operational details; no API key is returned.
+      required:
+        [tool, state, pid, port, health, startedAt, lastError, installedVersion, latestVersion, updateAvailable, autoStart, adopted, autoRestartAdopted]
+      properties:
+        tool: { type: string, const: bifrost }
+        state:
+          type: string
+          description: Supervisor state, stored service state, or `unknown` when neither exists.
+        pid: { type: [integer, "null"] }
+        port: { type: integer }
+        health:
+          type: string
+          enum: [healthy, unhealthy, unknown]
+        startedAt: { type: [string, "null"], format: date-time }
+        lastError: { type: [string, "null"] }
+        installedVersion: { type: [string, "null"] }
+        latestVersion: { type: [string, "null"] }
+        updateAvailable: { type: boolean }
+        autoStart: { type: boolean }
+        adopted: { type: boolean }
+        autoRestartAdopted: { type: boolean }
+      additionalProperties: false
+
+    BifrostUpdateResponse:
+      description: Bifrost update result; `updated` discriminates the no-op and update outcomes.
+      oneOf:
+        - type: object
+          required: [updated, installedVersion, latestVersion]
+          properties:
+            updated: { type: boolean, const: false }
+            installedVersion: { type: string }
+            latestVersion: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [updated, oldVersion, newVersion]
+          properties:
+            updated: { type: boolean, const: true }
+            oldVersion: { type: [string, "null"] }
+            newVersion: { type: string }
+          additionalProperties: false
+
+    CliproxyRecentRequest:
+      type: object
+      required: [time, success, failed]
+      properties:
+        time: { type: string }
+        success: { type: number, minimum: 0 }
+        failed: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    CliproxyAccountHealth:
+      type: object
+      description: Sanitized account status; raw auth-file credentials are not returned.
+      required:
+        [authIndex, provider, type, label, status, disabled, unavailable, createdAt, updatedAt, success, failed, recentRequests]
+      properties:
+        authIndex: { type: string }
+        provider: { type: string }
+        type: { type: string }
+        label: { type: string }
+        status: { type: string }
+        disabled: { type: boolean }
+        unavailable: { type: boolean }
+        createdAt: { type: [string, "null"] }
+        updatedAt: { type: [string, "null"] }
+        success: { type: number, minimum: 0 }
+        failed: { type: number, minimum: 0 }
+        recentRequests:
+          type: array
+          maxItems: 20
+          items: { $ref: "#/components/schemas/CliproxyRecentRequest" }
+      additionalProperties: false
+
+    CliproxyAccountHealthResult:
+      type: object
+      description: >-
+        Local CLIProxy account health snapshot. Account labels and usage counts are returned, but
+        raw auth credentials are removed by the source projection.
+      x-sensitive: true
+      required: [state, accounts, version]
+      properties:
+        state:
+          type: string
+          enum: [ready, disabled, missing_key, unreachable, unauthorized, unsupported, invalid_response]
+        accounts:
+          type: array
+          items: { $ref: "#/components/schemas/CliproxyAccountHealth" }
+        version: { type: [string, "null"] }
+      additionalProperties: false
+
     V1UnknownRouteResponse:
       type: object
       description: JSON not-found body returned by the root and versioned API catch-alls.
@@ -42128,7 +43339,7 @@ components:
           type: object
           description: >-
             Raw Volcengine console cookies. This sensitive credential material is returned only
-            after successful authentication to the loopback-only management flow.
+            after successful authentication to the LOCAL_ONLY management flow.
           x-sensitive: true
           additionalProperties: { type: string }
         binding:
@@ -43914,6 +45125,419 @@ components:
         updatedAt:
           type: string
           format: date-time
+
+    ProviderConnectionCredentialRedacted:
+      type: object
+      description: >-
+        Provider connection fields suitable for import/apply results. API keys, OAuth tokens, session
+        cookies, runtime keys, and equivalent provider-specific credential fields are omitted.
+        Additional non-secret provider metadata may be returned by the underlying connection row.
+      required: [id, provider]
+      properties:
+        id: { type: string }
+        provider: { type: string }
+        name: { type: [string, "null"] }
+        displayName: { type: [string, "null"] }
+        email: { type: [string, "null"] }
+        url: { type: [string, "null"] }
+        authType: { type: [string, "null"] }
+        isActive: { type: boolean }
+        defaultModel: { type: [string, "null"] }
+        priority: { type: integer }
+        globalPriority: { type: [integer, "null"] }
+        testStatus: { type: [string, "null"] }
+        providerSpecificData:
+          description: Sanitized provider metadata with credential fields removed.
+          oneOf:
+            - type: object
+              not:
+                anyOf:
+                  - required: [apiKey]
+                  - required: [consoleApiKey]
+                  - required: [accessToken]
+                  - required: [refreshToken]
+                  - required: [idToken]
+                  - required: [sessionToken]
+                  - required: [awsSessionToken]
+                  - required: [secretAccessKey]
+                  - required: [awsSecretAccessKey]
+                  - required: [authCookie]
+                  - required: [openCodeGoAuthCookie]
+                  - required: [opencodeGoAuthCookie]
+                  - required: [ollamaUsageCookie]
+                  - required: [ollamaCloudUsageCookie]
+                  - required: [ollamaCloudCookie]
+                  - required: [usageCookie]
+                  - required: [qwenCloudCookie]
+                  - required: [qwenCloudSecToken]
+                  - required: [alibabaConsoleCookie]
+                  - required: [alibabaConsoleSecToken]
+                  - required: [runtimeKey]
+                  - required: [validationId]
+                  - required: [volcConsoleCookie]
+                  - required: [volcCsrfToken]
+                  - required: [codexFingerprintSeed]
+                  - required: [codexClientIdentity]
+                  - required: [codexOriginalIdentityHeaders]
+                  - required: [codexTurnStateEcho]
+              additionalProperties: true
+            - type: "null"
+        rateLimitedUntil: { type: [string, "null"], format: date-time }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        createdAt: { type: [string, "null"], format: date-time }
+        updatedAt: { type: [string, "null"], format: date-time }
+      not:
+        anyOf:
+          - required: [apiKey]
+          - required: [accessToken]
+          - required: [refreshToken]
+          - required: [idToken]
+          - required: [sessionToken]
+          - required: [authCookie]
+          - required: [runtimeKey]
+      additionalProperties: true
+
+    ProviderBulkConnectionError:
+      type: object
+      required: [index, name, message]
+      properties:
+        index: { type: integer, minimum: 0 }
+        name: { type: string }
+        message: { type: string }
+        provider:
+          type: string
+          description: Included by the mixed-provider import endpoint.
+      additionalProperties: false
+
+    ProviderBulkConnectionResponse:
+      type: object
+      description: Per-entry result; some or all requested entries can fail while HTTP status stays 200.
+      required: [success, failed, total, created, errors]
+      properties:
+        success: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 1 }
+        created:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderConnectionCredentialRedacted" }
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderBulkConnectionError" }
+      additionalProperties: false
+
+    ProviderImportBulkResponse:
+      type: object
+      description: >-
+        Mixed-provider per-entry import result. Created connection records omit API keys and sanitize
+        provider-specific credentials; failed rows include their provider ID.
+      required: [success, failed, total, created, errors]
+      properties:
+        success: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        total: { type: integer, minimum: 1 }
+        created:
+          type: array
+          items: { $ref: "#/components/schemas/ProviderConnectionCredentialRedacted" }
+        errors:
+          type: array
+          items:
+            type: object
+            required: [index, name, provider, message]
+            properties:
+              index: { type: integer, minimum: 0 }
+              name: { type: string }
+              provider: { type: string }
+              message: { type: string }
+            additionalProperties: false
+      additionalProperties: false
+
+    ProviderAuthImportResponse:
+      type: object
+      description: Claude auth import result with credential values removed from the connection.
+      required: [connection, created]
+      properties:
+        connection: { $ref: "#/components/schemas/ProviderConnectionCredentialRedacted" }
+        created: { type: boolean }
+      additionalProperties: false
+
+    ProviderAuthZipExtractResponse:
+      type: object
+      description: >-
+        Sensitive ZIP extraction result. Parsed JSON is returned intact and may contain raw provider
+        credentials; clients must treat the body as secret material and avoid persistent storage.
+      x-sensitive: true
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+            required: [name, json, parseError]
+            properties:
+              name: { type: string }
+              json: { description: Parsed file JSON; may contain raw credentials. }
+              parseError:
+                type: [string, "null"]
+                enum: ["Not valid JSON", null]
+            additionalProperties: false
+      additionalProperties: false
+
+    ProviderAuthZipExtractErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code: { type: string }
+      additionalProperties: false
+
+    ChatGptWebCodexDoctorResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: object
+          required:
+            [browser, storageState, login, temporaryChats, tunnelBinary, tunnel, connector, toolRoundtrip, runtime, lease, solAvailable, proAvailable, recovery, lastError]
+          properties:
+            browser:
+              type: object
+              required: [ready, mode]
+              properties:
+                ready: { type: boolean }
+                mode: { type: string, enum: [internal-cdp, local-chromium, unavailable] }
+              additionalProperties: false
+            storageState:
+              type: object
+              required: [ready]
+              properties: { ready: { type: boolean } }
+              additionalProperties: false
+            login:
+              type: object
+              required: [ready]
+              properties: { ready: { type: boolean } }
+              additionalProperties: false
+            temporaryChats:
+              type: object
+              required: [ready]
+              properties: { ready: { type: boolean } }
+              additionalProperties: false
+            tunnelBinary:
+              type: object
+              required: [ready]
+              properties: { ready: { type: boolean } }
+              additionalProperties: false
+            tunnel:
+              type: object
+              required: [ready, processRunning, healthy, detail]
+              properties:
+                ready: { type: boolean }
+                processRunning: { type: boolean }
+                healthy: { type: boolean }
+                detail: { type: string }
+              additionalProperties: false
+            connector:
+              type: object
+              required: [ready]
+              properties: { ready: { type: boolean } }
+              additionalProperties: false
+            toolRoundtrip:
+              type: object
+              required: [ready]
+              properties: { ready: { type: boolean } }
+              additionalProperties: false
+            runtime:
+              type: object
+              required: [activeTurns, waitingTurns, browserWorkers, brokers]
+              properties:
+                activeTurns: { type: integer, minimum: 0 }
+                waitingTurns: { type: integer, minimum: 0 }
+                browserWorkers: { type: integer, minimum: 0 }
+                brokers: { type: integer, minimum: 0 }
+              additionalProperties: false
+            lease:
+              type: object
+              required: [ownedByCurrentProcess, conflict]
+              properties:
+                ownedByCurrentProcess: { type: boolean }
+                conflict: { type: boolean }
+                ownerPid: { type: integer, minimum: 1 }
+              additionalProperties: false
+            solAvailable: { type: boolean }
+            proAvailable: { type: boolean }
+            recovery:
+              type: object
+              required: [interactiveLoginRequired]
+              properties: { interactiveLoginRequired: { type: boolean } }
+              additionalProperties: false
+            lastError: { type: [string, "null"] }
+          additionalProperties: false
+      additionalProperties: false
+
+    CommandCodeAuthStateRequest:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, minLength: 32, maxLength: 512, x-sensitive: true }
+      additionalProperties: false
+
+    CommandCodeAuthApplyResponse:
+      type: object
+      required: [connection, status]
+      properties:
+        connection:
+          oneOf:
+            - $ref: "#/components/schemas/ProviderConnectionCredentialRedacted"
+            - type: "null"
+        status: { type: string, const: applied }
+      additionalProperties: false
+
+    CommandCodeAuthStartResponse:
+      type: object
+      description: No-store response containing a short-lived authentication state.
+      x-sensitive: true
+      required: [state, authUrl, callbackUrl, expiresAt, mode]
+      properties:
+        state:
+          type: string
+          minLength: 43
+          maxLength: 43
+          pattern: "^[A-Za-z0-9_-]{43}$"
+          x-sensitive: true
+        authUrl: { type: string, format: uri }
+        callbackUrl: { type: string, format: uri }
+        expiresAt: { type: string, format: date-time }
+        mode: { type: string, const: manual }
+      additionalProperties: false
+
+    CommandCodeAuthStatusResponse:
+      type: object
+      required: [status, metadata, expiresAt, receivedAt, appliedAt]
+      properties:
+        status: { type: string, enum: [pending, received, applied, expired] }
+        metadata:
+          oneOf:
+            - $ref: "#/components/schemas/CommandCodeAuthMetadata"
+            - type: "null"
+        expiresAt: { type: string, format: date-time }
+        receivedAt: { type: [string, "null"], format: date-time }
+        appliedAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+
+    CommandCodeAuthNotFoundResponse:
+      type: object
+      required: [status]
+      properties: { status: { type: string, const: not_found } }
+      additionalProperties: false
+
+    CommandCodeAuthMetadata:
+      type: object
+      properties:
+        userId: { type: string, maxLength: 256 }
+        userName: { type: string, maxLength: 256 }
+        keyName: { type: string, maxLength: 256 }
+        receivedAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    FreeProviderOnboardingProvider:
+      type: object
+      required: [id, name, website, caution]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        website: { type: string }
+        caution: { type: string }
+        defaultModel: { type: string }
+      additionalProperties: false
+
+    FreeProviderOnboardingListResponse:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/FreeProviderOnboardingProvider" }
+      additionalProperties: false
+
+    FreeProviderOnboardingSetupResult:
+      oneOf:
+        - type: object
+          required: [providerId, status, connectionId]
+          properties:
+            providerId: { type: string }
+            status: { type: string, const: created }
+            connectionId: { type: string }
+          additionalProperties: false
+        - type: object
+          required: [providerId, status, reason]
+          properties:
+            providerId: { type: string }
+            status: { type: string, const: skipped }
+            reason: { type: string, const: already-configured }
+          additionalProperties: false
+        - type: object
+          required: [providerId, status, reason]
+          properties:
+            providerId: { type: string }
+            status: { type: string, const: failed }
+            reason: { type: string, const: Failed to create provider }
+          additionalProperties: false
+
+    FreeProviderOnboardingSetupResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/FreeProviderOnboardingSetupResult" }
+      additionalProperties: false
+
+    OpenRouterProviderDataPolicy:
+      type: object
+      properties:
+        training: { type: boolean }
+        retainsPrompts: { type: boolean }
+        termsOfServiceURL: { type: string }
+        privacyPolicyURL: { type: string }
+      additionalProperties: false
+
+    OpenRouterProviderPopularityEntry:
+      type: object
+      required: [slug, displayName, modelCount, totalTokens, totalRequests, popularityRank]
+      properties:
+        slug: { type: string }
+        displayName: { type: string }
+        headquarters: { type: string }
+        statusPageUrl: { type: string }
+        byokEnabled: { type: boolean }
+        dataPolicy: { $ref: "#/components/schemas/OpenRouterProviderDataPolicy" }
+        iconUrl: { type: string }
+        modelCount: { type: integer, minimum: 0 }
+        totalTokens: { type: number, minimum: 0 }
+        totalRequests: { type: number, minimum: 0 }
+        popularityRank: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    OpenRouterProviderStatsMeta:
+      type: object
+      required: [source, count]
+      properties:
+        source: { type: string, enum: [fresh, error, stale-cache, cache] }
+        cachedAt: { type: string, format: date-time }
+        stale: { type: boolean }
+        count: { type: integer, minimum: 0 }
+        error: { type: string }
+      additionalProperties: false
+
+    OpenRouterProviderStatsResponse:
+      type: object
+      required: [object, data, meta]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/OpenRouterProviderPopularityEntry" }
+        meta: { $ref: "#/components/schemas/OpenRouterProviderStatsMeta" }
+      additionalProperties: false
 
     ProviderConnection:
       type: object
@@ -46567,6 +48191,99 @@ components:
                 custom: { type: boolean }
               additionalProperties: false
         additionalProperties: false
+
+    ModelsDevSyncActionRequest:
+      type: object
+      required: [action]
+      properties:
+        action: { type: string, enum: [sync, start, stop] }
+        dryRun: { type: boolean, default: false }
+        syncCapabilities: { type: boolean, default: true }
+    ModelsDevPricingEntry:
+      type: object
+      required: [input, output]
+      properties:
+        input: { type: number }
+        output: { type: number }
+        cached: { type: number }
+        cache_creation: { type: number }
+        reasoning: { type: number }
+      additionalProperties: false
+    ModelsDevPricingByProvider:
+      type: object
+      description: Provider ID/alias → model ID → normalized token pricing.
+      additionalProperties:
+        type: object
+        additionalProperties: { $ref: "#/components/schemas/ModelsDevPricingEntry" }
+    ModelsDevCapabilityEntry:
+      type: object
+      required:
+        [tool_call, reasoning, attachment, structured_output, temperature, modalities_input, modalities_output, knowledge_cutoff, release_date, last_updated, status, family, open_weights, limit_context, limit_input, limit_output, interleaved_field]
+      properties:
+        tool_call: { type: [boolean, "null"] }
+        reasoning: { type: [boolean, "null"] }
+        attachment: { type: [boolean, "null"] }
+        structured_output: { type: [boolean, "null"] }
+        temperature: { type: [boolean, "null"] }
+        modalities_input: { type: string, description: JSON-encoded modality array. }
+        modalities_output: { type: string, description: JSON-encoded modality array. }
+        knowledge_cutoff: { type: [string, "null"] }
+        release_date: { type: [string, "null"] }
+        last_updated: { type: [string, "null"] }
+        status: { type: [string, "null"] }
+        family: { type: [string, "null"] }
+        open_weights: { type: [boolean, "null"] }
+        limit_context: { type: [number, "null"], minimum: 0 }
+        limit_input: { type: [number, "null"], minimum: 0 }
+        limit_output: { type: [number, "null"], minimum: 0 }
+        interleaved_field: { type: [string, "null"] }
+      additionalProperties: false
+    ModelsDevCapabilitiesByProvider:
+      type: object
+      description: Provider ID/alias → model ID → normalized capability record.
+      additionalProperties:
+        type: object
+        additionalProperties: { $ref: "#/components/schemas/ModelsDevCapabilityEntry" }
+    ModelsDevSyncStatusResponse:
+      type: object
+      required: [enabled, lastSync, lastSyncModelCount, lastSyncCapabilityCount, nextSync, intervalMs, providerCount, modelCount, capabilityCount]
+      properties:
+        enabled: { type: boolean }
+        lastSync: { type: [string, "null"], format: date-time }
+        lastSyncModelCount: { type: integer, minimum: 0 }
+        lastSyncCapabilityCount: { type: integer, minimum: 0 }
+        nextSync: { type: [string, "null"], format: date-time }
+        intervalMs: { type: integer, minimum: 1 }
+        providerCount: { type: integer, minimum: 0 }
+        modelCount: { type: integer, minimum: 0 }
+        capabilityCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+    ModelsDevSyncResultResponse:
+      type: object
+      required: [success, modelCount, providerCount, capabilityCount, dryRun]
+      properties:
+        success: { type: boolean }
+        modelCount: { type: integer, minimum: 0 }
+        providerCount: { type: integer, minimum: 0 }
+        capabilityCount: { type: integer, minimum: 0 }
+        dryRun: { type: boolean }
+        data:
+          description: Present only for a successful dry run; not persisted.
+          type: object
+          required: [pricing, capabilities]
+          properties:
+            pricing: { $ref: "#/components/schemas/ModelsDevPricingByProvider" }
+            capabilities: { $ref: "#/components/schemas/ModelsDevCapabilitiesByProvider" }
+          additionalProperties: false
+        error: { type: string }
+      additionalProperties: false
+    ModelsDevPeriodicSyncActionResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, enum: [Periodic sync started, Periodic sync stopped] }
+      additionalProperties: false
 
     FreeModelCatalogResponse:
       type: object
@@ -53971,6 +55688,87 @@ components:
         source: { type: string }
         warning: { type: string }
         upstreamStatus: { type: integer, minimum: 100, maximum: 599 }
+      additionalProperties: false
+
+    CloudflareRelayDeployRequest:
+      type: object
+      required: [accountId, apiToken]
+      properties:
+        accountId:
+          type: string
+          minLength: 8
+          maxLength: 64
+          pattern: "^[a-f0-9]+$"
+        apiToken:
+          type: string
+          minLength: 20
+          maxLength: 200
+          pattern: "^[A-Za-z0-9_-]+$"
+          format: password
+          writeOnly: true
+          x-sensitive: true
+        projectName:
+          type: string
+          minLength: 3
+          maxLength: 52
+          pattern: "^[a-z0-9-]+$"
+          default: omniroute-relay
+      additionalProperties: true
+    DenoRelayDeployRequest:
+      type: object
+      required: [denoToken, orgDomain]
+      properties:
+        denoToken:
+          type: string
+          minLength: 20
+          maxLength: 200
+          pattern: "^[A-Za-z0-9_-]+$"
+          format: password
+          writeOnly: true
+          x-sensitive: true
+        orgDomain:
+          type: string
+          minLength: 3
+          maxLength: 253
+          pattern: "^[A-Za-z0-9.-]+$"
+          description: DNS-shaped Deno organization domain.
+        projectName:
+          type: string
+          minLength: 3
+          maxLength: 52
+          pattern: "^[a-z0-9-]+$"
+          default: omniroute-deno-relay
+      additionalProperties: true
+    VercelRelayDeployRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 20
+          maxLength: 200
+          pattern: "^[A-Za-z0-9_-]+$"
+          format: password
+          writeOnly: true
+          x-sensitive: true
+        projectName:
+          type: string
+          minLength: 3
+          maxLength: 52
+          pattern: "^[a-z0-9-]+$"
+          default: omniroute-relay
+      additionalProperties: true
+    ProxyRelayDeployResponse:
+      type: object
+      description: >-
+        Public relay URL and optional proxy-registry ID. Deployment API credentials and the
+        generated relay authentication secret are never returned.
+      required: [success, relayUrl]
+      properties:
+        success: { type: boolean, const: true }
+        relayUrl: { type: string, format: uri }
+        poolProxyId: { type: string }
+        ssoProtectionWarning: { type: string }
       additionalProperties: false
 
     ProxyRegistryRecord:

@@ -75,7 +75,7 @@ test("Conductor OpenAPI operations match their source routes and management auth
       `${route.method.toUpperCase()} ${route.path} must document the requireLogin=false path`
     );
     assert.notEqual(op["x-always-protected"], true);
-    assert.notEqual(op["x-loopback-only"], true);
+    assert.notEqual(op["x-local-only"], true);
     assert.match(op.description ?? "", /requireLogin=false/);
     assert.match(op.description ?? "", /locked management requires authentication/i);
     assert.equal(

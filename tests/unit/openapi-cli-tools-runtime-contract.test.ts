@@ -101,9 +101,9 @@ test("CLI tools status endpoints match their source response contracts and auth 
   assert.match(detectedTool.properties?.configContents?.description ?? "", /may contain API keys/i);
 });
 
-test("CLI runtime path is loopback-only and documents the runtime catalog id", () => {
+test("CLI runtime path is local-only and documents the runtime catalog id", () => {
   const runtime = operation("/api/cli-tools/runtime/{toolId}", "get");
-  assert.equal(runtime["x-loopback-only"], true);
+  assert.equal(runtime["x-local-only"], true);
   assert.equal(runtime.parameters?.[0]?.schema?.$ref, "#/components/schemas/CliToolId");
   assert.match(runtime.parameters?.[0]?.description ?? "", /case-normalization/i);
   assert.ok(spec.components.schemas.CliToolId.enum?.includes("amp"));

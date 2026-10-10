@@ -6,7 +6,8 @@
  * Auth: Tier 3 MANAGEMENT (requireManagementAuth) + strict local-only. The
  * `/api/discovery/` prefix is in `LOCAL_ONLY_API_PREFIXES` (routeGuard.ts), so
  * the central authz pipeline (src/proxy.ts → runAuthzPipeline → managementPolicy)
- * blocks non-loopback callers with a 403 LOCAL_ONLY before this handler runs.
+ * blocks public/unknown remote callers with a 403 LOCAL_ONLY before this handler
+ * runs; trusted private-LAN peers pass the locality tier and still face auth.
  * It is NOT in the manage-scope bypass list — strict loopback, no remote bypass.
  */
 

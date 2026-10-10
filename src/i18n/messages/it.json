@@ -4133,6 +4133,7 @@
     "tierAll": "Tutti",
     "tierAuth": "Autenticato",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Solo locale",
     "tierAlwaysProtected": "Sempre protetto",
     "tierPublic": "Pubblico",
     "hideInternal": "Nascondi interni",

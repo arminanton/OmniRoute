@@ -16,6 +16,10 @@ const MAX_FAVICON_SIZE = 50 * 1024; // 50KB
 const FETCH_TIMEOUT = 5000; // 5 seconds
 const CACHE_DURATION = 300; // 5 minutes
 
+function redirectToDefaultFavicon(request: Request): NextResponse {
+  return NextResponse.redirect(new URL("/favicon.svg", request.url));
+}
+
 function validateImageData(base64Data: string, contentType: string): boolean {
   if (!ALLOWED_IMAGE_TYPES.includes(contentType)) {
     console.error("Invalid content type:", contentType);
@@ -34,7 +38,7 @@ function validateImageData(base64Data: string, contentType: string): boolean {
   return true;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const settings = await getSettings();
 
@@ -83,12 +87,12 @@ export async function GET() {
     }
 
     if (!faviconData) {
-      return NextResponse.redirect("/favicon.svg");
+      return redirectToDefaultFavicon(request);
     }
 
     const match = faviconData.match(/^data:([^;]+);base64,(.+)$/);
     if (!match) {
-      return NextResponse.redirect("/favicon.svg");
+      return redirectToDefaultFavicon(request);
     }
 
     const contentType = match[1];
@@ -103,6 +107,6 @@ export async function GET() {
     });
   } catch (error) {
     console.error("Favicon API error:", error);
-    return NextResponse.redirect("/favicon.svg");
+    return redirectToDefaultFavicon(request);
   }
 }

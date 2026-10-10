@@ -28,14 +28,14 @@ function assertConditionalManagementAuth(op: Record<string, any>): void {
   assert.ok(op.security?.some((item: object) => Object.keys(item).length === 0));
 }
 
-test("system version documents the safe GET and loopback-only update POST separately", () => {
+test("system version documents the safe GET and local-only update POST separately", () => {
   const get = operation("/api/system/version", "get");
   const post = operation("/api/system/version", "post");
   assertConditionalManagementAuth(get);
   assertConditionalManagementAuth(post);
 
-  assert.equal(get["x-loopback-only"], undefined);
-  assert.equal(post["x-loopback-only"], true);
+  assert.equal(get["x-local-only"], undefined);
+  assert.equal(post["x-local-only"], true);
   assert.equal(routeGuard.isLocalOnlyPath("/api/system/version", "GET"), false);
   assert.equal(routeGuard.isLocalOnlyPath("/api/system/version", "POST"), true);
 

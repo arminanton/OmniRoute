@@ -20,7 +20,7 @@ exchange, and re-encrypts the request to the original destination.
 
 > **Linux-only, root-only, opt-in.** This mode requires Linux, a native addon
 > built with a C toolchain, and the **CAP_NET_ADMIN** capability (typically root). It is gated
-> behind the loopback-only AgentBridge API and disabled by default. A trusted
+> behind the LOCAL_ONLY AgentBridge API and disabled by default. Its locality gate admits loopback and trusted private-LAN peers while blocking public/unknown peers. A trusted
 > MITM CA that can sign any host is a powerful capability — see [§6 Security](#6-security).
 
 **Source:** `src/mitm/tproxy/`
@@ -248,7 +248,7 @@ forward path defends against this with a bypass socket mark (**SO_MARK**):
 
 | Control                          | Detail                                                                                                                                                                                                                                                                                                                                                             |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Loopback-only API**            | `/api/tools/agent-bridge/tproxy` is covered by the `/api/tools/agent-bridge/` prefix in `LOCAL_ONLY_API_PREFIXES` (`src/server/authz/routeGuard.ts`). Loopback enforcement runs **before** auth (Hard Rules #15 + #17) — a leaked JWT over a tunnel cannot start TPROXY capture, which applies `iptables` rules and installs a trust-store CA via child processes. |
+| **LOCAL_ONLY API**                | `/api/tools/agent-bridge/tproxy` is covered by the `/api/tools/agent-bridge/` prefix in `LOCAL_ONLY_API_PREFIXES` (`src/server/authz/routeGuard.ts`). The locality gate admits loopback and trusted private-LAN peers and blocks public/unknown peers **before** auth (Hard Rules #15 + #17), so a leaked JWT over a public tunnel cannot start TPROXY capture, which applies `iptables` rules and installs a trust-store CA via child processes. |
 | **Dedicated CA slot**            | The dynamic CA installs to `omniroute-tproxy-ca.crt`, never clobbering the static MITM cert.                                                                                                                                                                                                                                                                       |
 | **CA key never leaves the host** | `DynamicCertStore` holds the CA key in memory; it is not exported.                                                                                                                                                                                                                                                                                                 |
 | **Secret masking**               | `maskSecret()` on request/response bodies and `sanitizeHeaders()` on headers run **before** `globalTrafficBuffer.push()`.                                                                                                                                                                                                                                          |

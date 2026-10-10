@@ -45,11 +45,12 @@ test("public login/setup status matches the live handler fields", async () => {
   );
   assert.equal(typeof body.nodeCompatible, "boolean");
   assert.equal(typeof body.oidcDisablePasswordLogin, "boolean");
-  assert.equal(
+  assert.deepEqual(
     operation("get").security,
-    undefined,
-    "the login screen reads this before authentication"
+    [],
+    "login/setup status is explicitly public for the login screen"
   );
+  assert.match(operation("get").description, /Intentionally public read/i);
   assert.equal(
     operation("get").responses["200"].content["application/json"].schema.$ref,
     "#/components/schemas/RequireLoginStatusResponse"

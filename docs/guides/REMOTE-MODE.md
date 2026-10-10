@@ -95,8 +95,11 @@ The server infers the scope each route requires from the HTTP method
 (`/api/cli/tokens`, `/api/providers` mutations, `/api/oauth`, `/api/services`, …).
 A token with insufficient scope gets `403` with a clear message.
 
-> Routes that spawn processes (`/api/services/*`, `/api/mcp/*`, …) stay
-> **loopback-only** — a remote token can never reach them, regardless of scope.
+> Process-spawning routes are **LOCAL_ONLY** by default: direct loopback and trusted
+> private-LAN peers pass the locality check, while public/unknown peers are blocked
+> before auth. A narrow exception lets `/api/mcp/*` accept an explicitly permitted
+> management-scoped credential for remote access; other local-only routes do not
+> inherit that bypass.
 
 ---
 

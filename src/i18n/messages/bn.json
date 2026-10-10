@@ -4133,6 +4133,7 @@
     "tierAll": "সব",
     "tierAuth": "প্রমাণীকৃত",
     "tierLoopback": "লুপব্যাক",
+    "tierLocalOnly": "শুধুমাত্র স্থানীয়",
     "tierAlwaysProtected": "সর্বদা সুরক্ষিত",
     "tierPublic": "পাবলিক",
     "hideInternal": "অভ্যন্তরীণ লুকান",

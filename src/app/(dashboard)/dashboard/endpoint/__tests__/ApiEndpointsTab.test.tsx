@@ -13,52 +13,59 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-vi.mock("next-intl", () => ({
-  useTranslations: (namespace?: string) => {
-    const messages: Record<string, string> = {
-      "endpoint.apiEndpointsCatalogUnavailable": "API catalog unavailable",
-      "endpoint.apiEndpointsSearchPlaceholder": "Search endpoints",
-      "endpoint.badgeLoopbackTooltip": "Loopback only",
-      "endpoint.badgeAlwaysProtectedTooltip": "Always protected",
-      "endpoint.badgeInternalTooltip": "Internal endpoint",
-      "endpoint.tierAll": "All",
-      "endpoint.tierAuth": "Auth",
-      "endpoint.tierLoopback": "Loopback",
-      "endpoint.tierAlwaysProtected": "Protected",
-      "endpoint.tierPublic": "Public",
-      "endpoint.showInternal": "Show internal",
-      "endpoint.hideInternal": "Hide internal",
-      "endpoint.vscodeAliasTitle": "VS Code Token Alias",
-      "endpoint.vscodeAliasDescriptionReady":
-        "Ready-to-paste compatibility URLs using the /api/v1/vscode/{token}/... endpoint.",
-      "endpoint.vscodeAliasDescriptionError":
-        "Showing placeholder URLs because CLI keys could not be loaded in this session.",
-      "endpoint.vscodeAliasDescriptionLoading":
-        "Loading CLI keys. Placeholder URLs are shown until a key is available.",
-      "endpoint.vscodeAliasDescriptionPlaceholder":
-        "Showing placeholder URLs. Create or activate an API key in CLI Tools to replace {token}.",
-      "endpoint.vscodeAliasManage": "CLI Tools",
-      "endpoint.vscodeAliasBaseLabel": "VS Code base",
-      "endpoint.vscodeAliasModelsLabel": "VS Code models",
-      "endpoint.vscodeAliasChatLabel": "VS Code chat",
-      "endpoint.tryIt": "Try it",
-      "endpoint.parameters": "Parameters",
-      "endpoint.responses": "Responses",
-      "endpoint.requestBody": "Request body",
-      "endpoint.description": "Description",
-      "endpoint.noDescription": "No description",
-      "endpoint.security": "Security",
-      "endpoint.authRequired": "Auth required",
-      "endpoint.noAuth": "No auth",
-      "endpoint.execute": "Execute",
-      "endpoint.executing": "Executing",
-      "endpoint.close": "Close",
-      "endpoint.openJsonResponse": "Open JSON response",
-    };
+vi.mock("next-intl", () => {
+  const messages: Record<string, string> = {
+    "endpoint.apiEndpointsCatalogUnavailable": "API catalog unavailable",
+    "endpoint.apiEndpointsSearchPlaceholder": "Search endpoints",
+    "endpoint.catalogStats": "{endpoints} endpoints across {categories} categories",
+    "endpoint.tierLocalOnly": "Local-only",
+    "endpoint.badgeLoopbackTooltip": "Loopback only",
+    "endpoint.badgeAlwaysProtectedTooltip": "Always protected",
+    "endpoint.badgeInternalTooltip": "Internal endpoint",
+    "endpoint.tierAll": "All",
+    "endpoint.tierAuth": "Auth",
+    "endpoint.tierLoopback": "Loopback",
+    "endpoint.tierAlwaysProtected": "Protected",
+    "endpoint.tierPublic": "Public",
+    "endpoint.showInternal": "Show internal",
+    "endpoint.hideInternal": "Hide internal",
+    "endpoint.vscodeAliasTitle": "VS Code Token Alias",
+    "endpoint.vscodeAliasDescriptionReady":
+      "Ready-to-paste compatibility URLs using the /api/v1/vscode/{token}/... endpoint.",
+    "endpoint.vscodeAliasDescriptionError":
+      "Showing placeholder URLs because CLI keys could not be loaded in this session.",
+    "endpoint.vscodeAliasDescriptionLoading":
+      "Loading CLI keys. Placeholder URLs are shown until a key is available.",
+    "endpoint.vscodeAliasDescriptionPlaceholder":
+      "Showing placeholder URLs. Create or activate an API key in CLI Tools to replace {token}.",
+    "endpoint.vscodeAliasManage": "CLI Tools",
+    "endpoint.vscodeAliasBaseLabel": "VS Code base",
+    "endpoint.vscodeAliasModelsLabel": "VS Code models",
+    "endpoint.vscodeAliasChatLabel": "VS Code chat",
+    "endpoint.tryIt": "Try it",
+    "endpoint.parameters": "Parameters",
+    "endpoint.responses": "Responses",
+    "endpoint.requestBody": "Request body",
+    "endpoint.description": "Description",
+    "endpoint.noDescription": "No description",
+    "endpoint.security": "Security",
+    "endpoint.authRequired": "Auth required",
+    "endpoint.noAuth": "No auth",
+    "endpoint.execute": "Execute",
+    "endpoint.executing": "Executing",
+    "endpoint.close": "Close",
+    "endpoint.openJsonResponse": "Open JSON response",
+  };
 
-    return (key: string) => messages[`${namespace}.${key}`] || key;
-  },
-}));
+  const translate = (key: string, values?: Record<string, string | number>) => {
+    const message = messages[`endpoint.${key}`] || key;
+    return message.replace(/\{(\w+)\}/g, (match, name: string) =>
+      values?.[name] === undefined ? match : String(values[name])
+    );
+  };
+
+  return { useTranslations: () => translate };
+});
 
 function jsonResponse(data: unknown, status = 200) {
   return {
@@ -173,9 +180,92 @@ describe("ApiEndpointsTab", () => {
 
     await waitForText("VS Code Token Alias");
     await waitForText("OmniRoute API");
+    await waitForText("/api/v1/vscode/sk-live-123/models");
     expect(document.body.textContent).toContain("1 endpoints across 1 categories");
     expect(document.body.textContent).toContain("/api/v1/vscode/sk-live-123/models");
     expect(document.body.textContent).toContain("/api/v1/chat/completions");
+  });
+
+  it("filters local-only and strict loopback routes separately and labels both", async () => {
+    fetchMock.mockImplementation(async (input) => {
+      if (input === "/api/cli-tools/keys") return jsonResponse({ keys: [] });
+      return jsonResponse({
+        info: { title: "OmniRoute API", version: "3.8.52" },
+        servers: [],
+        tags: [{ name: "Services" }, { name: "Providers" }],
+        endpoints: [
+          {
+            method: "GET",
+            path: "/api/services/bifrost/status",
+            tags: ["Services"],
+            summary: "Bifrost status",
+            description: "Local service status",
+            security: true,
+            parameters: [],
+            requestBody: false,
+            responses: ["200"],
+            localOnly: true,
+            strictLoopbackOnly: false,
+            loopbackOnly: true,
+          },
+          {
+            method: "GET",
+            path: "/api/modality-bridge/video/runtime",
+            tags: ["Services"],
+            summary: "Video runtime",
+            description: "Strict loopback video runtime",
+            security: true,
+            parameters: [],
+            requestBody: false,
+            responses: ["200"],
+            localOnly: true,
+            strictLoopbackOnly: true,
+            loopbackOnly: true,
+          },
+          {
+            method: "GET",
+            path: "/api/providers",
+            tags: ["Providers"],
+            summary: "Provider list",
+            description: "Remote management provider list",
+            security: true,
+            parameters: [],
+            requestBody: false,
+            responses: ["200"],
+            localOnly: false,
+            strictLoopbackOnly: false,
+            loopbackOnly: false,
+          },
+        ],
+        schemas: [],
+      });
+    });
+
+    renderApiEndpointsTab();
+    await waitForText("OmniRoute API");
+
+    const filterButton = (label: string) =>
+      Array.from(document.body.querySelectorAll("button")).find(
+        (button) => button.textContent?.trim() === label
+      );
+    const localFilter = filterButton("Local-only");
+    expect(localFilter).toBeDefined();
+    await act(async () => localFilter!.click());
+
+    let rendered = document.body.textContent || "";
+    expect(rendered).toContain("/api/services/bifrost/status");
+    expect(rendered).toContain("/api/modality-bridge/video/runtime");
+    expect(rendered).not.toContain("/api/providers");
+    expect(rendered.match(/Local-only/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(rendered).toContain("Loopback");
+
+    const loopbackFilter = filterButton("Loopback");
+    expect(loopbackFilter).toBeDefined();
+    await act(async () => loopbackFilter!.click());
+    rendered = document.body.textContent || "";
+    expect(rendered).toContain("/api/modality-bridge/video/runtime");
+    expect(rendered).not.toContain("/api/services/bifrost/status");
+    expect(rendered).not.toContain("/api/providers");
   });
 
   it("renders curl example using window.location.origin when NEXT_PUBLIC_BASE_URL is unset", async () => {

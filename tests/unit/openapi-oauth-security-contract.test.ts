@@ -77,12 +77,13 @@ test("OAuth OpenAPI operations match source and declare the conditional manageme
     }
   }
 
-  assert.equal(spec.paths["/api/oauth/cursor/auto-import"]?.get?.["x-loopback-only"], true);
-  assert.equal(spec.paths["/api/oauth/kiro/auto-import"]?.get?.["x-loopback-only"], true);
+  assert.equal(spec.paths["/api/oauth/cursor/auto-import"]?.get?.["x-local-only"], true);
+  assert.equal(spec.paths["/api/oauth/kiro/auto-import"]?.get?.["x-local-only"], true);
 
   const oauthTag = spec.tags?.find((tag) => tag.name === "OAuth");
   assert.match(oauthTag?.description ?? "", /requireLogin/);
-  assert.match(oauthTag?.description ?? "", /loopback-only/);
+  assert.match(oauthTag?.description ?? "", /LOCAL_ONLY/);
+  assert.doesNotMatch(oauthTag?.description ?? "", /loopback-only/);
 });
 
 test("public Codex ticket and OIDC callback flows remain public and mirrored", () => {

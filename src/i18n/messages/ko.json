@@ -4133,6 +4133,7 @@
     "tierAll": "모두",
     "tierAuth": "인증됨",
     "tierLoopback": "루프백",
+    "tierLocalOnly": "로컬 전용",
     "tierAlwaysProtected": "항상 보호됨",
     "tierPublic": "공개",
     "hideInternal": "내부 숨기기",

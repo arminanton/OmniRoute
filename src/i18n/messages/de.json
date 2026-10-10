@@ -4133,6 +4133,7 @@
     "tierAll": "Alle",
     "tierAuth": "Authentifiziert",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Nur lokal",
     "tierAlwaysProtected": "Immer geschützt",
     "tierPublic": "Öffentlich",
     "hideInternal": "Interne ausblenden",

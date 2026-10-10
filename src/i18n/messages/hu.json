@@ -4133,6 +4133,7 @@
     "tierAll": "Összes",
     "tierAuth": "Hitelesített",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Csak helyi",
     "tierAlwaysProtected": "Mindig védett",
     "tierPublic": "Nyilvános",
     "hideInternal": "Belsők elrejtése",

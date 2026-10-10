@@ -30,7 +30,7 @@ type Operation = {
   parameters?: Array<{ $ref?: string; name?: string; in?: string; required?: boolean }>;
   requestBody?: { required?: boolean; content?: Record<string, { schema?: Schema }> };
   responses?: Record<string, Response>;
-  "x-loopback-only"?: boolean;
+  "x-local-only"?: boolean;
   "x-always-protected"?: boolean;
 };
 
@@ -52,10 +52,10 @@ function hasAnonymousAlternative(operation: Operation | undefined) {
   return operation?.security?.some((requirement) => Object.keys(requirement).length === 0) ?? false;
 }
 
-test("provider login documents the loopback gate and provider-specific request/result contract", () => {
+test("provider login documents the local-only gate and provider-specific request/result contract", () => {
   const operation = spec.paths[`${providersId}/login`]?.post;
   assert.ok(operation);
-  assert.equal(operation["x-loopback-only"], true);
+  assert.equal(operation["x-local-only"], true);
   assert.equal(
     hasAnonymousAlternative(operation),
     true,
@@ -113,7 +113,7 @@ test("provider login documents the loopback gate and provider-specific request/r
   assert.equal(
     routeGuard.split("\n").some((line) => line.startsWith("  /^") && line.includes("\\/login")),
     true,
-    "route guard has a parameter-aware loopback rule for provider login"
+    "route guard has a parameter-aware local-only rule for provider login"
   );
   assert.match(maxAiFlow, /step: z\.enum\(\["request", "verify"\]\)\.default\("request"\)/);
   assert.match(maxAiFlow, /codeSchema[\s\S]*\.length\(6\)[\s\S]*\[0-9\]/);
@@ -155,7 +155,7 @@ test("generic OAuth refresh documents rotating-token skips and handler error sta
 test("Cursor refresh documents its local-only gate, cooldown header, and result variants", () => {
   const operation = spec.paths[`${providersId}/refresh-cursor`]?.post;
   assert.ok(operation);
-  assert.equal(operation["x-loopback-only"], true);
+  assert.equal(operation["x-local-only"], true);
   assert.equal(hasAnonymousAlternative(operation), true);
   assert.equal(
     jsonSchema(operation, "200")?.$ref,
@@ -185,7 +185,7 @@ test("Cursor refresh documents its local-only gate, cooldown header, and result 
       .split("\n")
       .some((line) => line.startsWith("  /^") && line.includes("\\/refresh-cursor")),
     true,
-    "route guard has a parameter-aware loopback rule for Cursor refresh"
+    "route guard has a parameter-aware local-only rule for Cursor refresh"
   );
 });
 

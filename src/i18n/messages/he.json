@@ -4133,6 +4133,7 @@
     "tierAll": "הכל",
     "tierAuth": "מאומת",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "מקומי בלבד",
     "tierAlwaysProtected": "מוגן תמיד",
     "tierPublic": "ציבורי",
     "hideInternal": "הסתר פנימיים",

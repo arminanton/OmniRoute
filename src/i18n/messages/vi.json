@@ -4134,6 +4134,7 @@
     "tierAll": "Tất cả",
     "tierAuth": "Đã xác thực",
     "tierLoopback": "Loopback",
+    "tierLocalOnly": "Chỉ cục bộ",
     "tierAlwaysProtected": "Luôn được bảo vệ",
     "tierPublic": "Công khai",
     "hideInternal": "Ẩn nội bộ",
