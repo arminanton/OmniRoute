@@ -36419,7 +36419,21 @@ paths:
       summary: "GET tunnels › tailscale › check"
       responses:
         "200":
-          description: OK
+          description: Current Tailscale support, installation, login, daemon, Funnel, and process probe state.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TailscaleCheckStatus" }
+        "401":
+          description: Authentication required by the route-level Tailscale auth check.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Tailscale state could not be checked; host-specific error details are replaced with a coarse reason.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
   /api/tunnels/tailscale/disable:
     post:
       operationId: postApiTunnelsTailscaleDisable
@@ -36427,9 +36441,38 @@ paths:
         - Tunnels
       summary: "POST tunnels › tailscale › disable"
       x-local-only: true
+      description: >-
+        Stops the Tailscale Funnel and only the managed daemon owned by OmniRoute, then clears the
+        saved enabled state. The optional sudo password is sensitive. Successful status and
+        sanitized error metadata can disclose local install paths and tunnel details.
+      requestBody:
+        required: false
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TailscaleSudoRequest" }
       responses:
         "200":
-          description: OK
+          description: Funnel disabled and updated Tailscale status returned.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TailscaleDisableResponse" }
+        "400":
+          description: Malformed JSON or invalid optional sudo-password body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication required by the route-level Tailscale auth check.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Funnel disable failed; the response contains a public-safe reason only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
   /api/tunnels/tailscale/enable:
     post:
       operationId: postApiTunnelsTailscaleEnable
@@ -36437,9 +36480,38 @@ paths:
         - Tunnels
       summary: "POST tunnels › tailscale › enable"
       x-local-only: true
+      description: >-
+        Enables Funnel or returns a Tailscale login/Funnel-approval branch. The optional sudo
+        password and returned login or enable URLs are sensitive. Status fields may disclose local
+        installation and tunnel details.
+      requestBody:
+        required: false
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TailscaleEnableRequest" }
       responses:
         "200":
-          description: OK
+          description: Funnel enabled, login required, or Funnel approval required.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TailscaleEnableResponse" }
+        "400":
+          description: Malformed JSON or invalid optional enable body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication required by the route-level Tailscale auth check.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Funnel enable failed; the response contains a public-safe reason only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
   /api/tunnels/tailscale/install:
     post:
       operationId: postApiTunnelsTailscaleInstall
@@ -36447,9 +36519,44 @@ paths:
         - Tunnels
       summary: "POST tunnels › tailscale › install"
       x-local-only: true
+      description: >-
+        Installs Tailscale and emits progress, completion, or public-safe error frames as
+        Server-Sent Events. Invalid or unauthenticated requests are rejected as JSON before the
+        stream starts. The optional sudo password and emitted status details are sensitive.
+      requestBody:
+        required: false
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TailscaleSudoRequest" }
       responses:
         "200":
-          description: OK
+          description: >-
+            UTF-8 Server-Sent Events. `progress` data contains a progress message (which can include
+            daemon-start diagnostics); `done` data contains success and final status; `error` data
+            contains a public-safe error and reason. Failures after streaming begins are represented
+            in the stream and retain HTTP 200. Treat the full stream as sensitive.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-cache, no-transform" }
+            Connection:
+              schema: { type: string, const: keep-alive }
+          content:
+            text/event-stream:
+              schema: { type: string, x-sensitive: true }
+              x-sse-event-schema:
+                $ref: "#/components/schemas/TailscaleInstallSseEvent"
+        "400":
+          description: Malformed JSON or invalid optional sudo-password body, returned before streaming.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication required by the route-level Tailscale auth check, returned before streaming.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/tunnels/tailscale/login:
     post:
       operationId: postApiTunnelsTailscaleLogin
@@ -36457,9 +36564,37 @@ paths:
         - Tunnels
       summary: "POST tunnels › tailscale › login"
       x-local-only: true
+      description: >-
+        Starts Tailscale login and returns either an already-logged-in result or an authentication
+        URL. The optional hostname and returned authentication URL are sensitive.
+      requestBody:
+        required: false
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TailscaleLoginRequest" }
       responses:
         "200":
-          description: OK
+          description: Login is already complete or an authentication URL is available.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TailscaleLoginResponse" }
+        "400":
+          description: Malformed JSON or invalid optional login body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication required by the route-level Tailscale auth check.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Login could not be started; the response contains a public-safe reason only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
   /api/tunnels/tailscale/start-daemon:
     post:
       operationId: postApiTunnelsTailscaleStartDaemon
@@ -36467,9 +36602,37 @@ paths:
         - Tunnels
       summary: "POST tunnels › tailscale › start daemon"
       x-local-only: true
+      description: >-
+        Starts the managed Tailscale daemon if it is not already available and returns the current
+        status. The optional sudo password and returned host/process metadata are sensitive.
+      requestBody:
+        required: false
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TailscaleSudoRequest" }
       responses:
         "200":
-          description: OK
+          description: Daemon start result and current Tailscale status.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TailscaleStartDaemonResponse" }
+        "400":
+          description: Malformed JSON or invalid optional sudo-password body.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication required by the route-level Tailscale auth check.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Daemon start failed; the response contains a public-safe reason only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
   /api/upstream-proxy/{providerId}:
     parameters:
       - name: providerId
@@ -42381,14 +42544,27 @@ paths:
         - Vnc session
       summary: "GET vnc session"
       x-local-only: true
+      description: >-
+        Lists browser-login sessions and the provider login catalog. Session IDs, connection IDs,
+        provider URLs, internal ports, and session state are sensitive operational metadata; no
+        container names or browser profile paths are returned.
       responses:
         "200":
-          description: OK
+          description: Active session metadata and providers that support browser login.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VncSessionIndexResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/vnc-session/{params}:
     parameters:
       - name: params
         in: path
         required: true
+        description: Catch-all connection/session/action path segments; connection and session identifiers are sensitive.
+        x-sensitive: true
         schema:
           type: string
     delete:
@@ -42397,27 +42573,94 @@ paths:
         - Vnc session
       summary: "DELETE vnc session › <params>"
       x-local-only: true
+      description: >-
+        Stops and removes a browser-login session. The response includes sensitive connection and
+        session identifiers; stopping a missing session is idempotent.
       responses:
         "200":
-          description: OK
+          description: Session stop accepted, including when no matching active session exists.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VncSessionStopResponse" }
+        "400":
+          description: Connection or session identifier is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Session cleanup failed; sanitized error envelope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     get:
       operationId: getApiVncSessionByParams
       tags:
         - Vnc session
       summary: "GET vnc session › <params>"
       x-local-only: true
+      description: >-
+        Lists sessions for a provider connection when only its identifier is supplied, or returns
+        one session when both connection and session identifiers are supplied. Returned local viewer
+        URLs, ports, provider URLs, and identifiers are sensitive.
       responses:
         "200":
-          description: OK
+          description: Connection session list or one browser-login session.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VncSessionLookupResponse" }
+        "400":
+          description: Connection identifier is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Browser-login session was not found for the connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiVncSessionByParams
       tags:
         - Vnc session
       summary: "POST vnc session › <params>"
       x-local-only: true
+      description: >-
+        Starts a browser-login session, harvests its credentials into the provider connection, or
+        marks its local viewer active according to the catch-all action segments. Responses expose
+        sensitive session and connection metadata but never return harvested credential values.
       responses:
         "200":
-          description: OK
+          description: Session started, credentials harvested, or viewer activity recorded.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VncSessionActionResponse" }
+        "400":
+          description: Connection, session, or action segments are missing or the action is unknown.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Browser-login session was not found for the connection.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Session start or harvest failed; sanitized error envelope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/webhooks:
     get:
       operationId: getApiWebhooks
@@ -70922,4 +71165,305 @@ components:
         pid: { type: [integer, "null"], minimum: 1, x-sensitive: true }
         enabled: { type: boolean }
         phase: { type: string, enum: [unsupported, not_installed, needs_login, stopped, running, error] }
+      additionalProperties: false
+
+    TailscaleCheckStatus:
+      type: object
+      x-sensitive: true
+      required: [supported, installed, managedInstall, installSource, binaryPath, loggedIn, daemonRunning, running, tunnelUrl, apiUrl, platform, brewAvailable, lastError, pid]
+      properties:
+        supported: { type: boolean }
+        installed: { type: boolean }
+        managedInstall: { type: boolean }
+        installSource: { type: [string, "null"], enum: [managed, path, env, windows-default, null] }
+        binaryPath: { type: [string, "null"], x-sensitive: true }
+        loggedIn: { type: boolean }
+        daemonRunning: { type: boolean }
+        running: { type: boolean }
+        tunnelUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        apiUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        platform: { type: string }
+        brewAvailable: { type: boolean }
+        lastError: { type: [string, "null"], x-sensitive: true }
+        pid: { type: [integer, "null"], minimum: 1, x-sensitive: true }
+      additionalProperties: false
+
+    TailscaleSudoRequest:
+      type: object
+      properties:
+        sudoPassword: { type: string, x-sensitive: true }
+      additionalProperties: true
+
+    TailscaleEnableRequest:
+      type: object
+      x-sensitive: true
+      properties:
+        sudoPassword: { type: string, x-sensitive: true }
+        hostname: { type: string, x-sensitive: true }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+      additionalProperties: true
+
+    TailscaleLoginRequest:
+      type: object
+      x-sensitive: true
+      properties:
+        hostname: { type: string, x-sensitive: true }
+      additionalProperties: true
+
+    TailscaleDisableResponse:
+      type: object
+      x-sensitive: true
+      required: [success, status]
+      properties:
+        success: { type: boolean, const: true }
+        status: { $ref: "#/components/schemas/TailscaleTunnelStatus" }
+      additionalProperties: false
+
+    TailscaleEnableSuccessResponse:
+      type: object
+      x-sensitive: true
+      required: [success, tunnelUrl, apiUrl, status]
+      properties:
+        success: { type: boolean, const: true }
+        tunnelUrl: { type: string, format: uri, x-sensitive: true }
+        apiUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        status: { $ref: "#/components/schemas/TailscaleTunnelStatus" }
+      additionalProperties: false
+
+    TailscaleEnableNeedsLoginResponse:
+      type: object
+      x-sensitive: true
+      required: [success, needsLogin, authUrl, status]
+      properties:
+        success: { type: boolean, const: false }
+        needsLogin: { type: boolean, const: true }
+        authUrl: { type: string, format: uri, x-sensitive: true }
+        status: { $ref: "#/components/schemas/TailscaleTunnelStatus" }
+      additionalProperties: false
+
+    TailscaleEnableApprovalResponse:
+      type: object
+      x-sensitive: true
+      required: [success, funnelNotEnabled, enableUrl, status]
+      properties:
+        success: { type: boolean, const: false }
+        funnelNotEnabled: { type: boolean, const: true }
+        enableUrl: { type: [string, "null"], format: uri, x-sensitive: true }
+        status: { $ref: "#/components/schemas/TailscaleTunnelStatus" }
+      additionalProperties: false
+
+    TailscaleEnableResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/TailscaleEnableSuccessResponse" }
+        - { $ref: "#/components/schemas/TailscaleEnableNeedsLoginResponse" }
+        - { $ref: "#/components/schemas/TailscaleEnableApprovalResponse" }
+
+    TailscaleLoginResponse:
+      type: object
+      x-sensitive: true
+      oneOf:
+        - type: object
+          required: [alreadyLoggedIn]
+          properties:
+            alreadyLoggedIn: { type: boolean, const: true }
+          additionalProperties: false
+        - type: object
+          required: [authUrl]
+          properties:
+            authUrl: { type: string, format: uri, x-sensitive: true }
+          additionalProperties: false
+
+    TailscaleStartDaemonStartedResponse:
+      type: object
+      x-sensitive: true
+      required: [started]
+      properties:
+        started: { type: boolean, const: true }
+      additionalProperties: false
+
+    TailscaleStartDaemonAlreadyRunningResponse:
+      type: object
+      x-sensitive: true
+      required: [started]
+      properties:
+        started: { type: boolean, const: false }
+        systemDaemon: { type: boolean, const: true }
+      additionalProperties: false
+
+    TailscaleStartDaemonResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/TailscaleStartDaemonStartedResponse" }
+        - { $ref: "#/components/schemas/TailscaleStartDaemonAlreadyRunningResponse" }
+
+    TailscaleInstallProgressEvent:
+      type: object
+      required: [message]
+      properties:
+        message: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    TailscaleInstallDoneEvent:
+      type: object
+      x-sensitive: true
+      required: [success, status]
+      properties:
+        success: { type: boolean, const: true }
+        status: { $ref: "#/components/schemas/TailscaleTunnelStatus" }
+      additionalProperties: false
+
+    TailscaleInstallErrorEvent:
+      $ref: "#/components/schemas/PublicSafeTunnelErrorBody"
+
+    TailscaleInstallSseEvent:
+      oneOf:
+        - $ref: "#/components/schemas/TailscaleInstallProgressEvent"
+        - $ref: "#/components/schemas/TailscaleInstallDoneEvent"
+        - $ref: "#/components/schemas/TailscaleInstallErrorEvent"
+
+    VncProviderSummary:
+      type: object
+      x-sensitive: true
+      required: [id, name, url, kind]
+      properties:
+        id: { type: string, x-sensitive: true }
+        name: { type: string }
+        url: { type: string, format: uri, x-sensitive: true }
+        kind: { type: string, enum: [cookie, token] }
+      additionalProperties: false
+
+    VncSessionIndexEntry:
+      type: object
+      x-sensitive: true
+      required: [sessionId, connectionId, providerId, cdpPort, vncPort, url, status, startedAt, lastViewerAt, lastHarvestAt]
+      properties:
+        sessionId: { type: string, format: uuid, x-sensitive: true }
+        connectionId: { type: string, x-sensitive: true }
+        providerId: { type: string, x-sensitive: true }
+        cdpPort: { type: integer, minimum: 0, x-sensitive: true }
+        vncPort: { type: integer, minimum: 0, x-sensitive: true }
+        url: { type: string, format: uri, x-sensitive: true }
+        status: { type: string, enum: [starting, running, harvesting, stopping, error] }
+        startedAt: { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+        lastViewerAt: { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+        lastHarvestAt: { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+        error: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    VncPublicSession:
+      type: object
+      x-sensitive: true
+      required: [sessionId, connectionId, providerId, url, status, startedAt, lastViewerAt, lastHarvestAt, viewer]
+      properties:
+        sessionId: { type: string, format: uuid, x-sensitive: true }
+        connectionId: { type: string, x-sensitive: true }
+        providerId: { type: string, x-sensitive: true }
+        url: { type: string, format: uri, x-sensitive: true }
+        status: { type: string, enum: [starting, running, harvesting, stopping, error] }
+        startedAt: { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+        lastViewerAt: { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+        lastHarvestAt: { type: integer, minimum: 0, description: Unix timestamp in milliseconds. }
+        viewer:
+          oneOf:
+            - type: object
+              required: [localUrl, loopbackOnly]
+              properties:
+                localUrl: { type: string, format: uri, x-sensitive: true }
+                loopbackOnly: { type: boolean, const: true }
+              additionalProperties: false
+            - type: "null"
+      additionalProperties: false
+
+    VncSessionIndexResponse:
+      type: object
+      x-sensitive: true
+      required: [sessions, providers]
+      properties:
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/VncSessionIndexEntry" }
+        providers:
+          type: array
+          items: { $ref: "#/components/schemas/VncProviderSummary" }
+      additionalProperties: false
+
+    VncSessionConnectionListResponse:
+      type: object
+      x-sensitive: true
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/VncPublicSession" }
+      additionalProperties: false
+
+    VncSessionLookupResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/VncSessionConnectionListResponse" }
+        - type: object
+          required: [session]
+          properties:
+            session: { $ref: "#/components/schemas/VncPublicSession" }
+          additionalProperties: false
+
+    VncSessionStartResponse:
+      type: object
+      x-sensitive: true
+      required: [session, note]
+      properties:
+        session: { $ref: "#/components/schemas/VncPublicSession" }
+        note: { type: string }
+      additionalProperties: false
+
+    VncSessionHarvestResponse:
+      type: object
+      x-sensitive: true
+      required: [harvested, sessionId, connectionId, providerId, updatedFields, validation]
+      properties:
+        harvested: { type: boolean }
+        sessionId: { type: string, format: uuid, x-sensitive: true }
+        connectionId: { type: string, x-sensitive: true }
+        providerId: { type: string, x-sensitive: true }
+        updatedFields:
+          type: array
+          items: { type: string, x-sensitive: true }
+        validation:
+          oneOf:
+            - type: object
+              required: [valid, unsupported, error]
+              properties:
+                valid: { type: boolean }
+                unsupported: { type: boolean }
+                error: { type: [string, "null"], x-sensitive: true }
+              additionalProperties: false
+            - type: "null"
+      additionalProperties: false
+
+    VncSessionTouchResponse:
+      type: object
+      x-sensitive: true
+      required: [ok, sessionId, connectionId]
+      properties:
+        ok: { type: boolean, const: true }
+        sessionId: { type: string, format: uuid, x-sensitive: true }
+        connectionId: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    VncSessionActionResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/VncSessionStartResponse" }
+        - { $ref: "#/components/schemas/VncSessionHarvestResponse" }
+        - { $ref: "#/components/schemas/VncSessionTouchResponse" }
+
+    VncSessionStopResponse:
+      type: object
+      x-sensitive: true
+      required: [stopped, connectionId, sessionId]
+      properties:
+        stopped: { type: boolean, const: true }
+        connectionId: { type: string, x-sensitive: true }
+        sessionId: { type: string, format: uuid, x-sensitive: true }
       additionalProperties: false
