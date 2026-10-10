@@ -86,6 +86,21 @@ const operations = [
   ["post", "/api/playground/simulate-route"],
   ["get", "/api/pricing/models"],
   ["get", "/api/provider-metrics"],
+  ["get", "/api/provider-stats"],
+  ["post", "/api/providers/command-code/auth/callback"],
+  ["get", "/api/providers/expiration"],
+  ["post", "/api/proxy-fallback/test"],
+  ["get", "/api/radar/catalog"],
+  ["get", "/api/radar/intel"],
+  ["post", "/api/radar/intel/sync"],
+  ["delete", "/api/radar/local-model-state"],
+  ["get", "/api/radar/local-model-state"],
+  ["patch", "/api/radar/local-model-state"],
+  ["put", "/api/radar/local-model-state"],
+  ["get", "/api/radar/offers"],
+  ["post", "/api/radar/offers/sync"],
+  ["get", "/api/radar/referrals"],
+  ["get", "/api/radar/settings"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -100,7 +115,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 74 effective OpenAPI operations", () => {
+test("the audited batches declare all 89 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -294,6 +309,109 @@ test("routing preview/status, playground, pricing, and provider metrics mark ope
   assert.equal(operation("post", "/api/playground/simulate-route").requestBody["x-sensitive"], true);
   assert.match(operation("post", "/api/omniroute/route/preview").description, /without making an upstream model request/i);
   assert.match(operation("post", "/api/playground/simulate-route").description, /does not execute an upstream request/i);
+});
+
+test("provider stats and expiry remain conditional central-management reads", () => {
+  for (const [method, route, scope] of [
+    ["get", "/api/provider-stats", "read"],
+    ["get", "/api/providers/expiration", "read"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.match(routeOperation.description, /no handler-level auth.*central MANAGEMENT gate/s);
+    assert.match(routeOperation.description, new RegExp(`method-derived.*${scope}.*scope`, "i"));
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+});
+
+test("Command Code callback documents its management-gate ticket mismatch and admin access-token scope", () => {
+  const callback = operation("post", "/api/providers/command-code/auth/callback");
+  assert.equal(callback["x-local-only"], undefined);
+  assert.ok(callback.security.some((alternative: object) => Object.keys(alternative).length === 0));
+  assert.ok(hasScheme(callback.security, "BearerAuth"));
+  assert.match(callback.description, /centrally classified as MANAGEMENT.*not on the explicit public allowlist/s);
+  assert.match(callback.description, /state is an additional handler check, not a central-auth bypass/i);
+  assert.match(callback.description, /`oma_`.*requires `admin`.*POST under `\/api\/providers\//s);
+  assert.match(callback.description, /global CORS allowlist/i);
+  assert.match(callback.description, /Origin filter is not authentication/i);
+  assert.match(callback.description, /state is not consumed by this callback/i);
+  assert.equal(callback.requestBody["x-sensitive"], true);
+  assert.equal(callback.responses["200"]["x-sensitive"], true);
+  assert.equal(callback.responses["200"].headers["Cache-Control"].schema.const, "no-store");
+  assert.ok(callback.responses["401"]);
+  assert.ok(callback.responses["503"]);
+  assert.ok(callback.responses["403"].content["application/json"].schema.oneOf);
+});
+
+test("proxy fallback testing is conditional management access with a guarded outbound probe", () => {
+  const proxyTest = operation("post", "/api/proxy-fallback/test");
+  assert.equal(proxyTest["x-local-only"], undefined);
+  assert.ok(hasScheme(proxyTest.security, "BearerAuth"));
+  assert.ok(proxyTest.security.some((alternative: object) => Object.keys(alternative).length === 0));
+  assert.match(proxyTest.description, /`requireManagementAuth`/);
+  assert.match(proxyTest.description, /method-derived `write`/);
+  assert.match(proxyTest.description, /private.*URLs are rejected unless the operator enables/i);
+  assert.match(proxyTest.description, /outbound network probes/i);
+  assert.equal(proxyTest.requestBody["x-sensitive"], true);
+  assert.equal(proxyTest.responses["200"]["x-sensitive"], true);
+  assert.ok(proxyTest.responses["401"]);
+  assert.ok(proxyTest.responses["403"]);
+  assert.ok(proxyTest.responses["503"]);
+});
+
+test("Radar endpoints remain conditional MANAGEMENT routes with flag-order and credential notes", () => {
+  const radar = [
+    ["get", "/api/radar/catalog", "read"],
+    ["get", "/api/radar/intel", "read"],
+    ["post", "/api/radar/intel/sync", "write"],
+    ["delete", "/api/radar/local-model-state", "write"],
+    ["get", "/api/radar/local-model-state", "read"],
+    ["patch", "/api/radar/local-model-state", "write"],
+    ["put", "/api/radar/local-model-state", "write"],
+    ["get", "/api/radar/offers", "read"],
+    ["post", "/api/radar/offers/sync", "write"],
+    ["get", "/api/radar/referrals", "read"],
+    ["get", "/api/radar/settings", "read"],
+  ] as const;
+  for (const [method, route, scope] of radar) {
+    const routeOperation = operation(method, route);
+    assert.equal(routeOperation["x-local-only"], undefined, `${method.toUpperCase()} ${route}`);
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.match(routeOperation.description, /handler checks `RADAR_ENABLED` before.*central/s);
+    assert.match(routeOperation.description, /central .*first|central auth runs first/i);
+    assert.match(routeOperation.description, new RegExp(`method-derived.*${scope}.*scope`, "i"));
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["404"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+
+  for (const route of [
+    "/api/radar/catalog",
+    "/api/radar/intel",
+    "/api/radar/local-model-state",
+    "/api/radar/offers",
+    "/api/radar/referrals",
+    "/api/radar/settings",
+  ]) {
+    const get = operation("get", route);
+    assert.equal(get.responses["200"].headers["Cache-Control"].schema.const, "no-store");
+  }
+  for (const method of ["delete", "patch", "put"] as const) {
+    assert.equal(operation(method, "/api/radar/local-model-state").responses["200"].headers["Cache-Control"].schema.const, "no-store");
+  }
+  assert.match(operation("get", "/api/radar/referrals").description, /GET can trigger a server-side refresh/i);
+  assert.match(operation("get", "/api/radar/settings").description, /masked key suffix.*raw supporter key is never returned/i);
+  assert.match(operation("post", "/api/radar/intel/sync").description, /supporter key remains server-side/i);
+  assert.match(operation("post", "/api/radar/offers/sync").description, /supporter key remains server-side/i);
 });
 
 test("job history and MCP operational outputs are sensitive", () => {

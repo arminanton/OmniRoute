@@ -26756,13 +26756,29 @@ paths:
       description: >-
         Provider/model call-log aggregates with in-memory combo metrics, five-minute request
         telemetry, and per-provider tool latency. If an optional in-memory metrics helper cannot
-        load, its section is returned as an empty object.
+        load, its section is returned as an empty object. This route has no handler-level auth and
+        relies on the central MANAGEMENT gate. Scoped `oma_` access tokens use method-derived `read`
+        scope. When `requireLogin=false`, anonymous requests are admitted, including remote
+        requests; local first-run bootstrap may also admit loopback access before setup is complete.
+        The statistics and telemetry are sensitive operational data.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Provider and model statistics plus combo, telemetry, and tool-latency metrics.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProviderStatsResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/providers/{id}/cc-alias:
     parameters:
       - name: id
@@ -28152,14 +28168,35 @@ paths:
       summary: "POST providers › command code › auth › callback"
       description: >-
         Receives a Command Code API key bound to the short-lived state created by the auth-start
-        operation. The API key is never returned. A missing Origin is accepted; when Origin is
+        operation. The API key is never returned and is encrypted before it is stored. This route
+        is centrally classified as MANAGEMENT and is not on the explicit public allowlist; the
+        callback state is an additional handler check, not a central-auth bypass. When management
+        auth is locked, a dashboard session, manage/admin API key, loopback CLI token, or trusted
+        internal-service credential is accepted. A scoped `oma_` access token requires `admin` here because
+        POST under `/api/providers/` is an admin-scope
+        mutation. When `requireLogin=false`, the central gate permits anonymous requests, still
+        subject to the state check; local first-run bootstrap may also admit loopback. A missing Origin is accepted; when Origin is
         present, production allows `https://commandcode.ai` and `https://staging.commandcode.ai`,
         while non-production also allows `http://localhost:3000`. The callback request body is
-        limited to 10 KiB. The OPTIONS preflight allows POST and OPTIONS, reflects requested
-        headers, and only emits Access-Control-Allow-Origin for an allowed callback origin.
-        Responses are no-store and include CORS headers for allowed origins.
+        limited to 10 KiB. Although the route defines a callback-specific OPTIONS response, the
+        central proxy handles OPTIONS before invoking the route; effective browser preflight uses
+        the global CORS allowlist, so the callback origin must also be permitted there. The
+        callback's Origin filter is not authentication, and its route-local CORS headers do not
+        enable credentials. Responses are no-store and include callback CORS headers for allowed
+        origins. The state is not
+        consumed by this callback: a holder may update the received session again before the
+        separate apply operation consumes it.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
@@ -28167,6 +28204,7 @@ paths:
       responses:
         "200":
           description: API key accepted for the pending auth state; the raw key is not returned.
+          x-sensitive: true
           headers:
             Cache-Control:
               schema: { type: string, const: no-store }
@@ -28181,17 +28219,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/CommandCodeAuthCallbackErrorResponse"
         "403":
-          description: The supplied Origin is not allowed by the callback origin policy.
+          description: The callback origin was rejected or central management auth rejected the credential/scope.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CommandCodeAuthCallbackErrorResponse"
+                oneOf:
+                  - $ref: "#/components/schemas/CommandCodeAuthCallbackErrorResponse"
+                  - $ref: "#/components/schemas/ApiErrorResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "413":
           description: Callback request body exceeds 10 KiB.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/CommandCodeAuthCallbackErrorResponse"
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/providers/command-code/auth/start:
     post:
       operationId: postApiProvidersCommandCodeAuthStart
@@ -28345,19 +28387,37 @@ paths:
       tags:
         - Providers
       summary: List provider credential expiration status
+      description: >-
+        Lists provider credential expiry metadata and the aggregate expiration summary. This route
+        has no handler-level auth and relies on the central MANAGEMENT gate. Scoped `oma_` access
+        tokens use method-derived `read` scope. When `requireLogin=false`, anonymous requests are
+        admitted, including remote requests; local first-run bootstrap may also admit loopback.
+        Account credential lifecycle metadata is sensitive operational data.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Expiration summary and tracked provider credentials
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderExpirationResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500":
           description: Failed to fetch expiration metadata
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringErrorResponse"
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/providers/free-onboarding:
     get:
       operationId: getApiProvidersFreeOnboarding
@@ -29216,9 +29276,46 @@ paths:
       tags:
         - Proxy fallback
       summary: "POST proxy fallback › test"
+      description: >-
+        Tests caller-supplied or discovered proxy candidates against a target URL and returns
+        reachability and latency. The handler calls `requireManagementAuth`; scoped `oma_` access
+        tokens use method-derived `write` scope. Management auth is conditional on local
+        `requireLogin`; when disabled, anonymous requests are admitted, including remote requests.
+        Private, loopback, link-local, and cloud-metadata target/proxy URLs are rejected unless the
+        operator enables `OMNIROUTE_ALLOW_PRIVATE_PROVIDER_URLS`. This route performs outbound
+        network probes; target URLs, proxy endpoints, and results are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetUrl]
+              properties:
+                targetUrl: { type: string, format: uri }
+                proxyUrls:
+                  type: array
+                  items: { type: string, format: uri }
       responses:
         "200":
-          description: OK
+          description: Candidate proxy reachability, latency, and aggregate success counts.
+          x-sensitive: true
+        "400":
+          description: Invalid request or a private/local target or proxy URL was blocked.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "500":
+          description: Proxy candidates could not be tested.
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/quota/groups:
     get:
       operationId: getApiQuotaGroups
@@ -29459,96 +29556,379 @@ paths:
       tags:
         - Radar
       summary: "GET radar › catalog"
+      description: >-
+        Returns catalog entries and metadata from the local Radar cache; this route never proxies
+        the private feed service. The handler checks `RADAR_ENABLED` before its own
+        `requireManagementAuth` call, but the central MANAGEMENT gate runs first in locked profiles.
+        Management auth is conditional: scoped `oma_` access tokens use method-derived `read` scope; when
+        `requireLogin=false`, anonymous access is allowed, including remotely. This is not an
+        explicitly public or `LOCAL_ONLY` route. Successful responses are no-store; cached catalog
+        and local availability metadata are sensitive operational data.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Local cached Radar catalog entries and metadata.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Radar is disabled. Under locked management, central auth may reject before the handler reaches this feature-flag check.
+        "500":
+          description: Local Radar catalog could not be loaded.
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/intel:
     get:
       operationId: getApiRadarIntel
       tags:
         - Radar
       summary: "GET radar › intel"
+      description: >-
+        Returns the verified local Radar Intel cache; it does not proxy the private service. The
+        handler checks `RADAR_ENABLED` before its own `requireManagementAuth` call, but the central
+        MANAGEMENT gate runs first in locked profiles. Management auth is conditional: scoped `oma_`
+        access tokens use method-derived `read` scope; when `requireLogin=false`, anonymous access is allowed, including
+        remotely. This route is not explicitly public or `LOCAL_ONLY`. Successful responses are
+        no-store; Intel cache content is sensitive operational data.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Verified local Radar Intel cache.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Radar is disabled. Under locked management, central auth may reject before the handler reaches this feature-flag check.
+        "500":
+          description: Local Radar Intel could not be loaded.
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/intel/sync:
     post:
       operationId: postApiRadarIntelSync
       tags:
         - Radar
       summary: "POST radar › intel › sync"
+      description: >-
+        Triggers a server-side Radar Intel sync; the supporter key remains server-side and is never
+        returned. The
+        handler checks `RADAR_ENABLED` before its own `requireManagementAuth` call, but the central
+        MANAGEMENT gate runs first in locked profiles. Management auth is conditional: scoped `oma_`
+        access tokens use method-derived `write` scope; when `requireLogin=false`, anonymous access is
+        allowed, including remotely. This route is not explicitly public or `LOCAL_ONLY`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Radar Intel sync result; the supporter key is not returned.
+          x-sensitive: true
+        "400": { description: Sync request body was invalid. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404":
+          description: Radar is disabled. Under locked management, central auth may reject before the handler reaches this feature-flag check.
+        "413": { description: Sync request body exceeds the 1 KiB limit. }
+        "500": { description: Radar Intel sync failed. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/local-model-state:
     delete:
       operationId: deleteApiRadarLocalModelState
       tags:
         - Radar
       summary: "DELETE radar › local model state"
+      description: >-
+        Removes a local model override for the supplied provider/model identity and returns the
+        resulting override/tombstone state. “Local” describes the stored override, not a peer
+        locality restriction: this is an ordinary conditional MANAGEMENT route, not `LOCAL_ONLY`.
+        The handler checks `RADAR_ENABLED` before its own `requireManagementAuth` call, but central
+        auth runs first in locked profiles. Scoped `oma_` access tokens use method-derived `write` scope;
+        `requireLogin=false` admits anonymous access, including remotely. State responses are
+        no-store and sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          schema: { type: string }
+        - name: modelId
+          in: query
+          required: true
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Radar local model overrides and tombstones after deletion.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+        "400": { description: Provider/model identity is missing or invalid. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404": { description: Radar is disabled. }
+        "500": { description: Radar local state could not be updated. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     get:
       operationId: getApiRadarLocalModelState
       tags:
         - Radar
       summary: "GET radar › local model state"
+      description: >-
+        Lists local model overrides and tombstones. “Local” describes stored state, not a peer
+        locality restriction: this is an ordinary conditional MANAGEMENT route, not `LOCAL_ONLY`.
+        The handler checks `RADAR_ENABLED` before its own `requireManagementAuth` call, but central
+        auth runs first in locked profiles. Scoped `oma_` access tokens use method-derived `read` scope; `requireLogin=false`
+        admits anonymous access, including remotely. The state is sensitive and successful
+        responses are no-store.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Radar local model overrides and tombstones.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404": { description: Radar is disabled. }
+        "500": { description: Radar local state could not be read. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     patch:
       operationId: patchApiRadarLocalModelState
       tags:
         - Radar
       summary: "PATCH radar › local model state"
+      description: >-
+        Creates or updates a local display-name/enabled override and returns the resulting state.
+        “Local” describes stored state, not a peer locality restriction: this is an ordinary
+        conditional MANAGEMENT route, not `LOCAL_ONLY`. The handler checks `RADAR_ENABLED` before
+        its own `requireManagementAuth` call, but central auth runs first in locked profiles.
+        Scoped `oma_` access tokens use method-derived `write` scope; `requireLogin=false` admits anonymous
+        access, including remotely. State responses are no-store and sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Radar local model overrides and tombstones after update.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+        "400": { description: Invalid Radar local override. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404": { description: Radar is disabled. }
+        "413": { description: Request body exceeds the 4 KiB limit. }
+        "500": { description: Radar local state could not be updated. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     put:
       operationId: putApiRadarLocalModelState
       tags:
         - Radar
       summary: "PUT radar › local model state"
+      description: >-
+        Sets or clears a local model tombstone and returns the resulting state. “Local” describes
+        stored state, not a peer locality restriction: this is an ordinary conditional MANAGEMENT
+        route, not `LOCAL_ONLY`. The handler checks `RADAR_ENABLED` before its own
+        `requireManagementAuth` call, but central auth runs first in locked profiles. Scoped `oma_`
+        access tokens use method-derived `write` scope; `requireLogin=false` admits anonymous access,
+        including remotely. State responses are no-store and sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Radar local model overrides and tombstones after update.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+        "400": { description: Invalid Radar tombstone. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404": { description: Radar is disabled. }
+        "413": { description: Request body exceeds the 4 KiB limit. }
+        "500": { description: Radar local state could not be updated. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/offers:
     get:
       operationId: getApiRadarOffers
       tags:
         - Radar
       summary: "GET radar › offers"
+      description: >-
+        Reads the verified local Radar offers cache; it does not proxy the private service. The
+        handler checks `RADAR_ENABLED` before its own `requireManagementAuth` call, but central
+        MANAGEMENT auth runs first in locked profiles. Scoped `oma_` access tokens use method-derived `read` scope;
+        `requireLogin=false` admits anonymous access, including remotely. The supporter key is not
+        returned. Cached offers are sensitive supporter/operational data; successful responses are
+        no-store.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Verified local Radar offers cache.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404": { description: Radar is disabled. }
+        "500": { description: Local Radar offers could not be loaded. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/offers/sync:
     post:
       operationId: postApiRadarOffersSync
       tags:
         - Radar
       summary: "POST radar › offers › sync"
+      description: >-
+        Triggers a server-side sync of the signed Radar offers feed. The supporter key remains
+        server-side and is not returned. The handler checks `RADAR_ENABLED` before its own
+        `requireManagementAuth` call, but central MANAGEMENT auth runs first in locked profiles.
+        Scoped `oma_` access tokens use method-derived `write` scope; `requireLogin=false` admits anonymous
+        access, including remotely. This route is not explicitly public or `LOCAL_ONLY`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Radar offers sync result; the supporter key is not returned.
+          x-sensitive: true
+        "400": { description: Sync request body was invalid. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404": { description: Radar is disabled. }
+        "413": { description: Sync request body exceeds the 1 KiB limit. }
+        "500": { description: Radar offers sync failed. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/referrals:
     get:
       operationId: getApiRadarReferrals
       tags:
         - Radar
       summary: "GET radar › referrals"
+      description: >-
+        Returns locally cached fixed referrals, campaigns, and their feed tier. When the cache is
+        stale or missing, this GET can trigger a server-side refresh before returning; the sync
+        helper self-gates on Radar enablement/opt-in and keeps any supporter key server-side. The
+        handler checks `RADAR_ENABLED` before its own `requireManagementAuth` call, but central
+        MANAGEMENT auth runs first in locked profiles. Scoped `oma_` access tokens use method-derived `read` scope;
+        `requireLogin=false` admits anonymous access, including remotely. Results are sensitive and
+        successful responses are no-store.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Cached referral links and feed tier; the supporter key is not returned.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404": { description: Radar is disabled. }
+        "500": { description: Radar referrals could not be loaded. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/radar/settings:
     get:
       operationId: getApiRadarSettings
       tags:
         - Radar
       summary: "GET radar › settings"
+      description: >-
+        Returns Radar opt-in state, supporter-key presence, the masked key suffix, and claim/plans
+        URLs. The raw supporter key is never returned. The handler checks `RADAR_ENABLED` before its
+        own `requireManagementAuth` call, but central MANAGEMENT auth runs first in locked profiles.
+        Scoped `oma_` access tokens use method-derived `read` scope; `requireLogin=false` admits anonymous access,
+        including remotely. The presence and masked suffix of the supporter key are sensitive; the
+        successful response is no-store.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Radar opt-in/key-presence snapshot and public claim/plans links.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "404": { description: Radar is disabled. }
+        "500": { description: Radar settings could not be read. }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiRadarSettings
       tags:
