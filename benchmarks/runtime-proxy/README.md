@@ -88,11 +88,14 @@ hot path. It accepts a static table of client keys with unique non-secret IDs, i
 each key's fixed one-minute request budget and configured revocation flag, plus a global in-flight
 cap. It validates OpenAI Chat Completions JSON, holds a shared body-memory budget in 64 KiB permits,
 optionally rewrites model aliases, replaces the caller credential with a configured upstream bearer
-key, and streams the upstream response with cancellation-aware lease release. The budget reserves
-four times encoded body bytes plus 128 bytes per observed JSON structural token, up to 100,000
-tokens, before buffering/deserializing; this conservative charge accounts for the raw buffer, parsed
-JSON tree, and normalized outbound body. Client key count/ID/secret/limit size, model alias
-count/name size, request body, total body budget, and in-flight configuration all have hard limits.
+key, and streams the upstream response with cancellation-aware lease release. Body-memory permits
+cover parsing, normalization, and upstream request transmission, then release when response headers
+arrive; a separate in-flight lease remains held until the downstream stream ends or the client
+cancels. Long-lived SSE responses therefore do not retain request-body memory reservations. The
+budget reserves four times encoded body bytes plus 128 bytes per observed JSON structural token, up
+to 100,000 tokens, before buffering/deserializing; this conservative charge accounts for the raw
+buffer, parsed JSON tree, and normalized outbound body. Client key count/ID/secret/limit size, model
+alias count/name size, request body, total body budget, and in-flight configuration all have hard limits.
 It preserves tool-call/tool-result JSON but does not execute tools.
 
 Configure multiple synthetic clients with `CLIENT_KEYS_JSON`; IDs are non-secret state keys, while

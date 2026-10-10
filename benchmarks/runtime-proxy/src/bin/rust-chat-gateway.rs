@@ -588,6 +588,13 @@ async fn chat(State(state): State<AppState>, request: Request) -> Response {
             );
         }
     };
+    let request_body_bytes = body.len();
+    // The decoded/encoded request copies are all that the body-budget lease protects. Keep the
+    // lease through upstream request transmission, then release it before holding a potentially
+    // long-lived SSE response open. The independent inflight permit remains owned by the response
+    // stream until EOF or client cancellation.
+    drop(payload);
+    drop(body);
 
     let path_and_query = parts
         .uri
@@ -615,15 +622,16 @@ async fn chat(State(state): State<AppState>, request: Request) -> Response {
     state.accepted.fetch_add(1, Ordering::Relaxed);
     state
         .input_bytes
-        .fetch_add(body.len() as u64, Ordering::Relaxed);
-    let upstream = match state
+        .fetch_add(request_body_bytes as u64, Ordering::Relaxed);
+    let upstream_result = state
         .client
         .post(upstream_url)
         .headers(upstream_headers)
         .body(outbound_body)
         .send()
-        .await
-    {
+        .await;
+    drop(body_reservations);
+    let upstream = match upstream_result {
         Ok(response) => response,
         Err(_) => {
             return error_response(StatusCode::BAD_GATEWAY, "upstream connection failed", None);
@@ -654,7 +662,6 @@ async fn chat(State(state): State<AppState>, request: Request) -> Response {
     let response_stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> =
         Box::pin(async_stream::try_stream! {
             let _inflight = inflight;
-            let _body_reservations = body_reservations;
             let _active = active;
             let mut stream = upstream.bytes_stream();
             while let Some(next) = stream.next().await {
@@ -1203,7 +1210,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn client_disconnect_releases_stream_and_body_admission_leases() {
+    async fn body_admission_releases_after_upstream_send_while_stream_admission_stays_held() {
         let (upstream, upstream_task) = spawn_streaming_upstream().await;
         let state = state(upstream, 100, 1024 * 1024);
         let active = state.active.clone();
@@ -1222,7 +1229,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let _ = response.chunk().await.unwrap();
         assert_eq!(active.load(Ordering::Relaxed), 1);
-        assert!(budget.available_permits() < body_budget_permits);
+        assert_eq!(budget.available_permits(), body_budget_permits);
 
         drop(response);
         for _ in 0..50 {

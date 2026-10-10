@@ -777,9 +777,13 @@ The separate `rust-chat-gateway` benchmark binary adds one static client key, co
 comparison, a fixed per-key requests-per-minute window, and a global in-flight semaphore. It charges
 request bodies against a shared 64 KiB-unit budget at four times encoded body bytes plus 128 bytes
 per observed JSON structural token, capped at 100,000 tokens. It validates the chat shape, rewrites
-model aliases, replaces the caller credential with an upstream credential, streams responses, and
-releases leases on disconnect. Body size, aggregate body budget, in-flight concurrency, and alias
-table size have hard limits. It does not read employee keys or policy from OmniRoute storage, select
+model aliases, replaces the caller credential with an upstream credential, and streams responses.
+Body-memory permits cover buffering, parsing, normalization, and upstream request transmission, then
+release once upstream response headers arrive. A separate in-flight permit stays held until the
+downstream stream ends or the client disconnects, so long-lived streams do not retain body-memory
+reservations. A focused regression test verifies the body budget is available while an SSE response
+is still open. Body size, aggregate body budget, in-flight concurrency, and alias table size have hard
+limits. It does not read employee keys or policy from OmniRoute storage, select
 provider accounts, execute tools, apply distributed quotas, retry providers, write call logs, or
 translate provider protocols.
 
