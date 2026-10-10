@@ -23,6 +23,16 @@ type ComfyHistoryEntry = {
   outputs?: Record<string, ComfyNodeOutput>;
 };
 
+export class ComfyWorkflowSubmitError extends Error {
+  constructor(
+    message: string,
+    readonly terminal: boolean
+  ) {
+    super(message);
+    this.name = "ComfyWorkflowSubmitError";
+  }
+}
+
 function toRecord(value: unknown): JsonRecord {
   return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : {};
 }
@@ -31,22 +41,51 @@ function toRecord(value: unknown): JsonRecord {
  * Submit a workflow to ComfyUI for execution.
  * @returns The prompt_id for polling
  */
-export async function submitComfyWorkflow(baseUrl: string, workflow: object): Promise<string> {
-  const res = await fetch(`${baseUrl}/prompt`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt: workflow }),
-  });
+export async function submitComfyWorkflow(
+  baseUrl: string,
+  workflow: object,
+  signal?: AbortSignal | null
+): Promise<string> {
+  // Once a prompt POST starts, an abort cannot distinguish a rejected request
+  // from an accepted-but-unobserved job. Check before dispatch, then let the
+  // request finish and keep polling it at the caller until it reaches a terminal
+  // state so provider/account occupancy is not released early.
+  signal?.throwIfAborted();
+  let res: Response;
+  try {
+    // Do not attach the caller signal here: a ComfyUI prompt may be accepted
+    // even when the client loses the response, and then must still be tracked.
+    res = await fetch(`${baseUrl}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt: workflow }),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ComfyWorkflowSubmitError(`ComfyUI submit request failed: ${detail}`, true);
+  }
 
   if (!res.ok) {
     const errText = await res.text();
-    throw new Error(`ComfyUI submit failed (${res.status}): ${errText}`);
+    throw new ComfyWorkflowSubmitError(
+      `ComfyUI submit failed (${res.status}): ${errText}`,
+      res.status === 408 || res.status >= 500
+    );
   }
 
-  const data = toRecord(await res.json());
+  let data: JsonRecord;
+  try {
+    data = toRecord(await res.json());
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new ComfyWorkflowSubmitError(
+      `ComfyUI submit response could not be parsed: ${detail}`,
+      true
+    );
+  }
   const promptId = data.prompt_id;
   if (typeof promptId !== "string" || !promptId) {
-    throw new Error("ComfyUI submit failed: missing prompt_id");
+    throw new ComfyWorkflowSubmitError("ComfyUI submit failed: missing prompt_id", true);
   }
   return promptId;
 }
@@ -87,14 +126,15 @@ export async function fetchComfyOutput(
   baseUrl: string,
   filename: string,
   subfolder: string,
-  type: string
+  type: string,
+  signal?: AbortSignal | null
 ): Promise<ArrayBuffer> {
   const url = new URL(`${baseUrl}/view`);
   url.searchParams.set("filename", filename);
   url.searchParams.set("subfolder", subfolder);
   url.searchParams.set("type", type);
 
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), signal ? { signal } : undefined);
   if (!res.ok) {
     throw new Error(`ComfyUI fetch output failed (${res.status})`);
   }

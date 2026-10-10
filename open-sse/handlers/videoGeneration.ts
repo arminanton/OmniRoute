@@ -38,6 +38,7 @@ import {
   RUNWAYML_IMAGE_REQUIRED_MODELS,
 } from "../config/runway.ts";
 import {
+  ComfyWorkflowSubmitError,
   submitComfyWorkflow,
   pollComfyResult,
   fetchComfyOutput,
@@ -83,6 +84,11 @@ export function resolveVideoBaseUrl(
   if (normalized.endsWith("/videos/generations")) return normalized;
   const stripped = normalized.replace(/\/videos\/generations$/, "");
   return `${stripped}/videos/generations`;
+}
+
+function combineMediaSignals(...signals: Array<AbortSignal | null | undefined>) {
+  const unique = [...new Set(signals.filter((signal): signal is AbortSignal => Boolean(signal)))];
+  return unique.length > 1 ? AbortSignal.any(unique) : (unique[0] ?? null);
 }
 
 /**
@@ -235,7 +241,19 @@ export async function handleVideoGeneration({
   }
 
   if (providerConfig.format === "fal-ai-video") {
-    return handleFalVideoGeneration({ model, provider, providerConfig, body, credentials, log });
+    const result = await handleFalVideoGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      credentials,
+      log,
+      signal,
+      callerSignal,
+      admissionSignal,
+    });
+    const abortStatus = getAccountAdmissionAbortStatus(callerSignal, admissionSignal);
+    return abortStatus ? { ...result, success: false, status: abortStatus } : result;
   }
 
   if (providerConfig.format === "google-flow") {
@@ -243,7 +261,7 @@ export async function handleVideoGeneration({
   }
 
   if (providerConfig.format === "comfyui") {
-    return handleComfyUIVideoGeneration({
+    const result = await handleComfyUIVideoGeneration({
       model,
       provider,
       providerConfig: {
@@ -252,7 +270,12 @@ export async function handleVideoGeneration({
       },
       body,
       log,
+      signal: combineMediaSignals(signal, callerSignal, admissionSignal),
+      callerSignal,
+      admissionSignal,
     });
+    const abortStatus = getAccountAdmissionAbortStatus(callerSignal, admissionSignal);
+    return abortStatus ? { ...result, success: false, status: abortStatus } : result;
   }
 
   if (providerConfig.format === "sdwebui-video") {
@@ -509,10 +532,20 @@ async function handleVeoAiFreeVideoGeneration({ model, provider, body, credentia
   };
 }
 
-async function handleComfyUIVideoGeneration({ model, provider, providerConfig, body, log }) {
+async function handleComfyUIVideoGeneration({
+  model,
+  provider,
+  providerConfig,
+  body,
+  log,
+  signal,
+  callerSignal,
+  admissionSignal,
+}) {
   const startTime = Date.now();
   const [width, height] = (body.size || "512x512").split("x").map(Number);
   const frames = body.frames || 16;
+  let promptAccepted = false;
 
   // AnimateDiff workflow template
   const workflow = {
@@ -573,8 +606,19 @@ async function handleComfyUIVideoGeneration({ model, provider, providerConfig, b
   }
 
   try {
-    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow);
+    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow, signal);
+    promptAccepted = true;
     const historyEntry = await pollComfyResult(providerConfig.baseUrl, promptId, 300_000);
+    // Keep the remote prompt and its account reservation awaited until the
+    // history entry proves the job settled. Only cancel retrieval afterward.
+    if (signal?.aborted) {
+      return {
+        success: false,
+        status: getAccountAdmissionAbortStatus(callerSignal, admissionSignal) ?? 499,
+        terminal: true,
+        error: "Video generation request cancelled",
+      };
+    }
     const outputFiles = extractComfyOutputFiles(historyEntry);
 
     const videos = [];
@@ -583,7 +627,8 @@ async function handleComfyUIVideoGeneration({ model, provider, providerConfig, b
         providerConfig.baseUrl,
         file.filename,
         file.subfolder,
-        file.type
+        file.type,
+        signal
       );
       const base64 = Buffer.from(buffer).toString("base64");
       videos.push({ b64_json: base64, format: "webp" });
@@ -605,10 +650,17 @@ async function handleComfyUIVideoGeneration({ model, provider, providerConfig, b
     };
   } catch (err) {
     if (log) log.error("VIDEO", `${provider} comfyui error: ${err.message}`);
+    const abortStatus = getAccountAdmissionAbortStatus(callerSignal, admissionSignal);
+    const status = abortStatus ?? (signal?.aborted ? 499 : 502);
+    const terminal =
+      promptAccepted ||
+      (err instanceof ComfyWorkflowSubmitError && err.terminal) ||
+      status === 499 ||
+      status === 503;
     saveCallLog({
       method: "POST",
       path: "/v1/videos/generations",
-      status: 502,
+      status,
       model: `${provider}/${model}`,
       provider,
       duration: Date.now() - startTime,
@@ -616,8 +668,14 @@ async function handleComfyUIVideoGeneration({ model, provider, providerConfig, b
     }).catch(() => {});
     return {
       success: false,
-      status: 502,
-      error: sanitizeErrorMessage(err) || "Video provider error",
+      status,
+      ...(terminal ? { terminal: true } : {}),
+      error:
+        abortStatus === 503
+          ? "Provider account capacity lease lost"
+          : status === 499
+            ? "Video generation request cancelled"
+            : sanitizeErrorMessage(err) || "Video provider error",
     };
   }
 }

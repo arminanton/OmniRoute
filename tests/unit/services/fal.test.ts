@@ -357,3 +357,89 @@ test("handleFalMusicGeneration uses the provider-neutral queue contract", async 
     globalThis.fetch = originalFetch;
   }
 });
+
+test("handleFalVideoGeneration keeps polling an accepted job after caller abort", async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  const calls: Array<{ url: string; signal?: AbortSignal }> = [];
+  let releaseSubmit!: (response: Response) => void;
+  let submitStarted!: () => void;
+  const submitGate = new Promise<Response>((resolve) => (releaseSubmit = resolve));
+  const started = new Promise<void>((resolve) => (submitStarted = resolve));
+
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    calls.push({ url, signal: init?.signal as AbortSignal | undefined });
+    if (url === "https://queue.fal.run/google/gemini-omni-flash") {
+      submitStarted();
+      return submitGate;
+    }
+    if (url === "https://queue.fal.run/job-1/status") {
+      return new Response(JSON.stringify({ status: "COMPLETED" }), { status: 200 });
+    }
+    throw new Error(`Unexpected fetch while the cancelled job should be settled: ${url}`);
+  };
+
+  try {
+    const resultPromise = handleFalVideoGeneration({
+      model: "google/gemini-omni-flash",
+      provider: "fal-ai",
+      providerConfig: { baseUrl: "https://queue.fal.run" },
+      body: { prompt: "Animate a scene" },
+      credentials: { apiKey: "test-key" },
+      signal: controller.signal,
+    });
+
+    await started;
+    controller.abort();
+    releaseSubmit(
+      new Response(
+        JSON.stringify({
+          request_id: "job-1",
+          status_url: "https://queue.fal.run/job-1/status",
+          response_url: "https://queue.fal.run/job-1/result",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    const result = await resultPromise;
+    assert.equal(result.success, false);
+    assert.equal(result.status, 499);
+    assert.deepEqual(
+      calls.map(({ url }) => url),
+      ["https://queue.fal.run/google/gemini-omni-flash", "https://queue.fal.run/job-1/status"]
+    );
+    assert.notEqual(calls[0]?.signal, controller.signal);
+    assert.equal(calls[0]?.signal?.aborted, false);
+    assert.notEqual(calls[1]?.signal, controller.signal);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("handleFalVideoGeneration marks an ambiguous submit terminal without retrying", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    throw new TypeError("socket closed after submit");
+  };
+
+  try {
+    const result = await handleFalVideoGeneration({
+      model: "google/gemini-omni-flash",
+      provider: "fal-ai",
+      providerConfig: { baseUrl: "https://queue.fal.run" },
+      body: { prompt: "Animate a scene" },
+      credentials: { apiKey: "test-key" },
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 502);
+    assert.equal((result as { terminal?: boolean }).terminal, true);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

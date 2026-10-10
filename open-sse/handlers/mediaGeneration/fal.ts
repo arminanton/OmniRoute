@@ -24,6 +24,31 @@ type FalLog = {
   error?: (scope: string, message: string) => void;
 };
 
+type FalSignals = {
+  /** A combined or provider-side signal used between lifecycle stages. */
+  signal?: AbortSignal | null;
+  /** Kept separate so video callers can preserve caller-vs-account classification. */
+  callerSignal?: AbortSignal | null;
+  admissionSignal?: AbortSignal | null;
+};
+
+function falOperationSignal({ signal, callerSignal, admissionSignal }: FalSignals) {
+  const signals = [
+    ...new Set([signal, callerSignal, admissionSignal].filter(Boolean)),
+  ] as AbortSignal[];
+  if (signals.length === 0) return undefined;
+  return signals.length === 1 ? signals[0] : AbortSignal.any(signals);
+}
+
+function falCancelled(kind: MediaKind, terminal = false) {
+  return {
+    success: false as const,
+    status: 499,
+    ...(terminal ? { terminal: true } : {}),
+    error: `Fal ${kind} generation request cancelled`,
+  };
+}
+
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
@@ -232,6 +257,7 @@ async function runFalQueue({
   providerConfig,
   credentials,
   log,
+  signal,
 }: {
   model: string;
   body: FalBody;
@@ -240,6 +266,7 @@ async function runFalQueue({
   providerConfig: FalProviderConfig;
   credentials: FalCredentials | null | undefined;
   log?: FalLog | null;
+  signal?: AbortSignal;
 }) {
   const startTime = Date.now();
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
@@ -264,14 +291,22 @@ async function runFalQueue({
       ? resolvedModel
       : `fal-ai/${resolvedModel}`;
   const queueUrl = `${baseUrl}/${falModel}`;
+  let submitInFlight = false;
+  let acceptedRemoteJob = false;
 
   try {
+    // Once submit bytes are sent, Fal may accept the queued job even if the
+    // response is lost. Only honor cancellation before dispatch; do not attach
+    // the caller signal to this submit or the subsequent status polling.
+    if (signal?.aborted) return falCancelled(kind);
+    submitInFlight = true;
     const createResponse = await fetchWithTimeout(queueUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
       timeoutMs,
     });
+    submitInFlight = false;
     const createPayload = await createResponse.json().catch(() => ({}));
 
     if (!createResponse.ok) {
@@ -289,13 +324,23 @@ async function runFalQueue({
         duration: Date.now() - startTime,
         error,
       }).catch(() => {});
-      return { success: false, status: createResponse.status, error };
+      return {
+        success: false,
+        status: createResponse.status,
+        ...(createResponse.status === 408 || createResponse.status >= 500
+          ? { terminal: true }
+          : {}),
+        error,
+      };
     }
 
     const requestId = stringValue(createPayload?.request_id);
+    acceptedRemoteJob = Boolean(requestId);
     if (!requestId) {
+      // A synchronous response means provider work has settled already.
+      if (signal?.aborted) return falCancelled(kind, true);
       const normalized = normalizeFalMediaResult(createPayload, kind);
-      if (!normalized.success) return normalized;
+      if (!normalized.success) return { ...normalized, terminal: true };
       return normalized;
     }
 
@@ -314,25 +359,38 @@ async function runFalQueue({
 
       if (!statusResponse.ok) {
         const error = JSON.stringify(statusPayload).slice(0, 500);
-        return { success: false, status: statusResponse.status, error };
+        return { success: false, status: statusResponse.status, terminal: true, error };
       }
 
       const status = stringValue(statusPayload?.status);
       if (status === "COMPLETED") {
-        const resultResponse = await fetchWithTimeout(responseUrl, {
-          headers: { Authorization: `Key ${token}` },
-          timeoutMs: Math.min(getConfiguredTimeout(), Math.max(1000, deadline - Date.now())),
-        });
+        // Keep the reservation while an accepted remote job is pending. Once
+        // Fal reports completion, cancellation may stop the artifact transfer.
+        if (signal?.aborted) return falCancelled(kind, true);
+        let resultResponse: Response;
+        try {
+          resultResponse = await fetchWithTimeout(responseUrl, {
+            headers: { Authorization: `Key ${token}` },
+            timeoutMs: Math.min(getConfiguredTimeout(), Math.max(1000, deadline - Date.now())),
+            signal,
+          });
+        } catch (error) {
+          if (signal?.aborted) return falCancelled(kind, true);
+          throw error;
+        }
         const resultPayload = await resultResponse.json().catch(() => ({}));
+        if (signal?.aborted) return falCancelled(kind, true);
         if (!resultResponse.ok) {
           return {
             success: false,
             status: resultResponse.status,
+            terminal: true,
             error: JSON.stringify(resultPayload).slice(0, 500),
           };
         }
 
         const normalized = normalizeFalMediaResult(resultPayload, kind);
+        if (!normalized.success) return { ...normalized, terminal: true };
         saveCallLog({
           method: "POST",
           path: `/v1/${kind === "video" ? "videos" : "music"}/generations`,
@@ -349,6 +407,7 @@ async function runFalQueue({
         return {
           success: false,
           status: 502,
+          terminal: true,
           error: `Fal ${kind} generation ended with status ${status}`,
         };
       }
@@ -359,6 +418,7 @@ async function runFalQueue({
     return {
       success: false,
       status: 504,
+      terminal: true,
       error: `Fal ${kind} generation timed out after ${timeoutMs}ms`,
     };
   } catch (error) {
@@ -370,33 +430,44 @@ async function runFalQueue({
     return {
       success: false,
       status,
+      ...(submitInFlight || acceptedRemoteJob ? { terminal: true } : {}),
       error: `Fal ${kind} provider error: ${sanitizeErrorMessage(message)}`,
     };
   }
 }
 
-export function handleFalVideoGeneration(args: {
-  model: string;
-  provider: string;
-  providerConfig: FalProviderConfig;
-  body: FalBody;
-  credentials: FalCredentials | null | undefined;
-  log?: FalLog | null;
-}) {
+export function handleFalVideoGeneration(
+  args: {
+    model: string;
+    provider: string;
+    providerConfig: FalProviderConfig;
+    body: FalBody;
+    credentials: FalCredentials | null | undefined;
+    log?: FalLog | null;
+  } & FalSignals
+) {
   return runFalQueue({
     ...args,
     body: buildFalVideoRequestBody(args.body, args.model),
     kind: "video",
+    signal: falOperationSignal(args),
   });
 }
 
-export function handleFalMusicGeneration(args: {
-  model: string;
-  provider: string;
-  providerConfig: FalProviderConfig;
-  body: FalBody;
-  credentials: FalCredentials | null | undefined;
-  log?: FalLog | null;
-}) {
-  return runFalQueue({ ...args, body: buildFalMusicRequestBody(args.body), kind: "music" });
+export function handleFalMusicGeneration(
+  args: {
+    model: string;
+    provider: string;
+    providerConfig: FalProviderConfig;
+    body: FalBody;
+    credentials: FalCredentials | null | undefined;
+    log?: FalLog | null;
+  } & FalSignals
+) {
+  return runFalQueue({
+    ...args,
+    body: buildFalMusicRequestBody(args.body),
+    kind: "music",
+    signal: falOperationSignal(args),
+  });
 }

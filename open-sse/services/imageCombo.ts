@@ -32,8 +32,8 @@ import * as logger from "@/sse/utils/logger";
  * discriminated arms this strategy actually consumes.
  */
 type ImageGenerationResult =
-  | { success: true; data?: unknown; status?: number; error?: string }
-  | { success: false; data?: unknown; status?: number; error?: string };
+  | { success: true; data?: unknown; status?: number; error?: string; terminal?: boolean }
+  | { success: false; data?: unknown; status?: number; error?: string; terminal?: boolean };
 
 /**
  * Execute a full combo strategy for an image generation request.
@@ -155,9 +155,12 @@ export async function executeImageCombo(
       const status = result.status || 500;
       const error = typeof result.error === "string" ? result.error : "Image generation failed";
 
-      // Terminal failures (400 bad model, 403 banned, etc.) — stop iterating
+      // Terminal failures (ambiguous accepted-job submits, caller aborts,
+      // 400 bad model, 403 banned, etc.) — stop iterating
       // Non-terminal failures (429, 5xx) — try next target
       if (
+        result.terminal === true ||
+        status === 499 ||
         isRemoteMediaFailureResult(result) ||
         status === 400 ||
         status === 403 ||

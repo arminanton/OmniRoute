@@ -292,3 +292,91 @@ for (const kind of ["image", "video"] as const) {
     });
   }
 }
+
+test("ComfyUI ambiguous image submit is terminal and does not fall through to combo target", async () => {
+  const name = "comfy-ambiguous-image-submit";
+  await createCombo({
+    name,
+    strategy: "priority",
+    models: ["comfyui/flux-dev", "openai/gpt-image-2"],
+  });
+  globalThis.fetch = async () => {
+    paid += 1;
+    throw new TypeError("socket closed after submit");
+  };
+
+  const response = await executeImageCombo(
+    name,
+    { model: name, prompt: "test" },
+    { request: new Request("http://localhost/v1/images/generations"), policy: {} },
+    Date.now(),
+    logger
+  );
+
+  assert.equal(response.status, 502);
+  assert.equal(state.dispatched.length, 1);
+  assert.equal(state.selected.length, 1);
+  assert.equal((state.results[0] as { terminal?: boolean }).terminal, true);
+  assert.equal(paid, 1);
+});
+
+test("ComfyUI image caller abort waits for accepted job completion, then stops combo fallback", async () => {
+  const name = "comfy-aborted-image-submit";
+  await createCombo({
+    name,
+    strategy: "priority",
+    models: ["comfyui/flux-dev", "openai/gpt-image-2"],
+  });
+  const controller = new AbortController();
+  const calls: string[] = [];
+  let releaseSubmit!: (response: Response) => void;
+  let submitStarted!: () => void;
+  const submitGate = new Promise<Response>((resolve) => (releaseSubmit = resolve));
+  const started = new Promise<void>((resolve) => (submitStarted = resolve));
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    calls.push(url);
+    paid += 1;
+    if (url.endsWith("/prompt")) {
+      assert.equal(init?.signal, undefined);
+      submitStarted();
+      return submitGate;
+    }
+    if (url.endsWith("/history/job-accepted")) {
+      return Response.json({
+        "job-accepted": {
+          outputs: { 9: { images: [{ filename: "out.png", subfolder: "", type: "output" }] } },
+        },
+      });
+    }
+    throw new Error(`Unexpected request after caller abort: ${url}`);
+  };
+
+  const pending = executeImageCombo(
+    name,
+    { model: name, prompt: "test" },
+    {
+      request: new Request("http://localhost/v1/images/generations", {
+        signal: controller.signal,
+      }),
+      policy: {},
+    },
+    Date.now(),
+    logger
+  );
+
+  await started;
+  controller.abort();
+  releaseSubmit(Response.json({ prompt_id: "job-accepted" }));
+  const response = await pending;
+
+  assert.equal(response.status, 499);
+  assert.equal(state.dispatched.length, 1);
+  assert.equal(state.selected.length, 1);
+  assert.equal((state.results[0] as { terminal?: boolean }).terminal, true);
+  assert.deepEqual(calls, [
+    "http://localhost:8188/prompt",
+    "http://localhost:8188/history/job-accepted",
+  ]);
+  assert.equal(paid, 2, "accepted remote work is polled, but no artifact or fallback is requested");
+});

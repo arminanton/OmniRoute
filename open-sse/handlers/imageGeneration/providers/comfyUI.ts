@@ -6,15 +6,24 @@ import { randomUUID } from "crypto";
 import { saveCallLog } from "@/lib/usageDb";
 import { sanitizeErrorMessage } from "../../../utils/error.ts";
 import {
+  ComfyWorkflowSubmitError,
   submitComfyWorkflow,
   pollComfyResult,
   fetchComfyOutput,
   extractComfyOutputFiles,
 } from "../../../utils/comfyuiClient.ts";
 
-export async function handleComfyUIImageGeneration({ model, provider, providerConfig, body, log }) {
+export async function handleComfyUIImageGeneration({
+  model,
+  provider,
+  providerConfig,
+  body,
+  log,
+  signal,
+}) {
   const startTime = Date.now();
   const [width, height] = (body.size || "1024x1024").split("x").map(Number);
+  let promptAccepted = false;
 
   // Default txt2img workflow template for ComfyUI
   const workflow = {
@@ -65,8 +74,25 @@ export async function handleComfyUIImageGeneration({ model, provider, providerCo
   }
 
   try {
-    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow);
+    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow, signal);
+    promptAccepted = true;
     const historyEntry = await pollComfyResult(providerConfig.baseUrl, promptId);
+    // A ComfyUI interrupt is global rather than prompt-scoped, so keep polling
+    // an accepted job to completion. Once it settles, cancellation can safely
+    // skip the artifact download.
+    if (signal?.aborted) {
+      const error = "Image generation request cancelled";
+      saveCallLog({
+        method: "POST",
+        path: "/v1/images/generations",
+        status: 499,
+        model: `${provider}/${model}`,
+        provider,
+        duration: Date.now() - startTime,
+        error,
+      }).catch(() => {});
+      return { success: false, status: 499, terminal: true, error };
+    }
     const outputFiles = extractComfyOutputFiles(historyEntry);
 
     const images = [];
@@ -75,7 +101,8 @@ export async function handleComfyUIImageGeneration({ model, provider, providerCo
         providerConfig.baseUrl,
         file.filename,
         file.subfolder,
-        file.type
+        file.type,
+        signal
       );
       const base64 = Buffer.from(buffer).toString("base64");
       images.push({ b64_json: base64, revised_prompt: body.prompt });
@@ -97,10 +124,14 @@ export async function handleComfyUIImageGeneration({ model, provider, providerCo
     };
   } catch (err) {
     if (log) log.error("IMAGE", `${provider} comfyui error: ${err.message}`);
+    const cancelled = signal?.aborted;
+    const status = cancelled ? 499 : 502;
+    const terminal =
+      promptAccepted || (err instanceof ComfyWorkflowSubmitError && err.terminal) || cancelled;
     saveCallLog({
       method: "POST",
       path: "/v1/images/generations",
-      status: 502,
+      status,
       model: `${provider}/${model}`,
       provider,
       duration: Date.now() - startTime,
@@ -108,9 +139,11 @@ export async function handleComfyUIImageGeneration({ model, provider, providerCo
     }).catch(() => {});
     return {
       success: false,
-      status: 502,
-      error: `Image provider error: ${sanitizeErrorMessage((err as Error).message || err)}`,
+      status,
+      ...(terminal ? { terminal: true } : {}),
+      error: cancelled
+        ? "Image generation request cancelled"
+        : `Image provider error: ${sanitizeErrorMessage((err as Error).message || err)}`,
     };
   }
 }
-

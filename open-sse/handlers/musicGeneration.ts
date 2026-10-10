@@ -18,6 +18,7 @@ import { getMusicProvider, parseMusicModel } from "../config/musicRegistry.ts";
 import { kieExecutor } from "../executors/kie.ts";
 import { vertexGenerateMusic } from "../executors/vertexMedia.ts";
 import {
+  ComfyWorkflowSubmitError,
   submitComfyWorkflow,
   pollComfyResult,
   fetchComfyOutput,
@@ -147,10 +148,18 @@ export async function handleMusicGeneration({ body, credentials, log, signal, po
 
   if (providerConfig.format === "fal-ai-music") {
     // Fal queue handling is shared with the video route and currently owns its
-    // own bounded poll lifecycle. Keep this path awaited so account occupancy
-    // remains held until it settles; signal plumbing belongs with that shared
-    // helper and is intentionally left unchanged in this music-only lane.
-    return handleFalMusicGeneration({ model, provider, providerConfig, body, credentials, log });
+    // own bounded poll lifecycle. Pass the request/admission signal for the
+    // pre-dispatch and completed-artifact boundaries; the helper intentionally
+    // keeps polling without it after Fal accepts a remote job.
+    return handleFalMusicGeneration({
+      model,
+      provider,
+      providerConfig,
+      body,
+      credentials,
+      log,
+      signal,
+    });
   }
 
   if (providerConfig.format === "comfyui") {
@@ -163,6 +172,7 @@ export async function handleMusicGeneration({ body, credentials, log, signal, po
       },
       body,
       log,
+      signal,
     });
   }
 
@@ -227,9 +237,17 @@ export async function handleMusicGeneration({ body, credentials, log, signal, po
  * Handle ComfyUI music generation
  * Submits an audio generation workflow (Stable Audio / MusicGen), polls, fetches output
  */
-async function handleComfyUIMusicGeneration({ model, provider, providerConfig, body, log }) {
+async function handleComfyUIMusicGeneration({
+  model,
+  provider,
+  providerConfig,
+  body,
+  log,
+  signal,
+}) {
   const startTime = Date.now();
   const duration = body.duration || 10; // seconds
+  let promptAccepted = false;
 
   // Audio generation workflow template for ComfyUI
   const workflow = {
@@ -286,8 +304,25 @@ async function handleComfyUIMusicGeneration({ model, provider, providerConfig, b
   }
 
   try {
-    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow);
+    const promptId = await submitComfyWorkflow(providerConfig.baseUrl, workflow, signal);
+    promptAccepted = true;
     const historyEntry = await pollComfyResult(providerConfig.baseUrl, promptId, 300_000);
+    // ComfyUI has no safe per-prompt interrupt endpoint for a running job.
+    // Retain the awaited poll through completion, then skip result retrieval
+    // when the caller or account lease was cancelled.
+    if (signal?.aborted) {
+      const error = "Music generation request cancelled";
+      saveCallLog({
+        method: "POST",
+        path: "/v1/music/generations",
+        status: 499,
+        model: `${provider}/${model}`,
+        provider,
+        duration: Date.now() - startTime,
+        error,
+      }).catch(() => {});
+      return { success: false, status: 499, terminal: true, error };
+    }
     const outputFiles = extractComfyOutputFiles(historyEntry);
 
     const audioFiles = [];
@@ -296,7 +331,8 @@ async function handleComfyUIMusicGeneration({ model, provider, providerConfig, b
         providerConfig.baseUrl,
         file.filename,
         file.subfolder,
-        file.type
+        file.type,
+        signal
       );
       const base64 = Buffer.from(buffer).toString("base64");
       audioFiles.push({ b64_json: base64, format: "wav" });
@@ -318,10 +354,14 @@ async function handleComfyUIMusicGeneration({ model, provider, providerConfig, b
     };
   } catch (err) {
     if (log) log.error("MUSIC", `${provider} comfyui error: ${err.message}`);
+    const cancelled = signal?.aborted;
+    const status = cancelled ? 499 : 502;
+    const terminal =
+      promptAccepted || (err instanceof ComfyWorkflowSubmitError && err.terminal) || cancelled;
     saveCallLog({
       method: "POST",
       path: "/v1/music/generations",
-      status: 502,
+      status,
       model: `${provider}/${model}`,
       provider,
       duration: Date.now() - startTime,
@@ -329,8 +369,11 @@ async function handleComfyUIMusicGeneration({ model, provider, providerConfig, b
     }).catch(() => {});
     return {
       success: false,
-      status: 502,
-      error: sanitizeErrorMessage(err) || "Music provider error",
+      status,
+      ...(terminal ? { terminal: true } : {}),
+      error: cancelled
+        ? "Music generation request cancelled"
+        : sanitizeErrorMessage(err) || "Music provider error",
     };
   }
 }

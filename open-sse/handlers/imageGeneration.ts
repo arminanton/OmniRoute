@@ -704,6 +704,7 @@ export async function handleImageGeneration({
       },
       body,
       log,
+      signal,
     });
   }
 
