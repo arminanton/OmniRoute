@@ -17894,27 +17894,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  object:
-                    type: string
-                    enum: [routing_explain]
-                  sinks:
-                    type: array
-                    items:
-                      type: string
-                  otelEnabled:
-                    type: boolean
-                  events:
-                    type: array
-                    items:
-                      type: object
-                  quality:
-                    type: array
-                    items:
-                      type: object
-                  otel:
-                    type: object
+                $ref: "#/components/schemas/V1RoutingExplainResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "500":
@@ -54973,6 +54953,129 @@ components:
             - type: object
               additionalProperties: true
       additionalProperties: true
+
+    V1RoutingEvent:
+      type: object
+      required:
+        [
+          requestId,
+          provider,
+          model,
+          strategy,
+          latencyMs,
+          ttftMs,
+          itlMs,
+          inputTokens,
+          outputTokens,
+          cost,
+          retries,
+          fallbackUsed,
+          outcome,
+          status,
+          finishReason,
+          connectionId,
+          ts,
+        ]
+      properties:
+        requestId: { type: string }
+        provider: { type: string }
+        model: { type: string }
+        strategy: { type: string }
+        latencyMs: { type: number, minimum: 0 }
+        ttftMs: { type: [number, "null"], minimum: 0 }
+        itlMs: { type: [number, "null"], minimum: 0 }
+        inputTokens: { type: [number, "null"] }
+        outputTokens: { type: [number, "null"] }
+        cost: { type: [number, "null"] }
+        retries: { type: integer, minimum: 0 }
+        fallbackUsed: { type: boolean }
+        outcome:
+          type: string
+          enum:
+            [
+              success,
+              error,
+              malformed,
+              timeout,
+              rate_limited,
+              stream_interrupted,
+              guardrail_blocked,
+              cancelled,
+            ]
+        status: { type: [integer, "null"] }
+        finishReason: { type: [string, "null"] }
+        connectionId: { type: [string, "null"] }
+        ts: { type: number }
+      additionalProperties: false
+
+    V1RoutingQuality:
+      type: object
+      required:
+        [
+          provider,
+          model,
+          operational,
+          semantic,
+          confidence,
+          semanticConfidence,
+          samples,
+          anomalies,
+          rateLimited,
+          successEwma,
+          latencyEwmaMs,
+          ttftEwmaMs,
+          recencyMs,
+          lastTs,
+          classification,
+        ]
+      properties:
+        provider: { type: string }
+        model: { type: string }
+        operational: { type: number, minimum: 0, maximum: 1 }
+        semantic: { type: [number, "null"], minimum: 0, maximum: 1 }
+        confidence: { type: number, minimum: 0, maximum: 1 }
+        semanticConfidence: { type: [number, "null"], minimum: 0, maximum: 1 }
+        samples: { type: integer, minimum: 0 }
+        anomalies: { type: integer, minimum: 0 }
+        rateLimited: { type: integer, minimum: 0 }
+        successEwma: { type: number, minimum: 0, maximum: 1 }
+        latencyEwmaMs: { type: number, minimum: 0 }
+        ttftEwmaMs: { type: [number, "null"], minimum: 0 }
+        recencyMs: { type: [number, "null"], minimum: 0 }
+        lastTs: { type: number }
+        classification: { type: string, enum: [healthy, degraded, warming, cold] }
+      additionalProperties: false
+
+    V1RoutingOtelStats:
+      type: object
+      required: [buffered, dropped, consecutiveFailures, flushedBatches]
+      properties:
+        buffered: { type: integer, minimum: 0 }
+        dropped: { type: integer, minimum: 0 }
+        consecutiveFailures: { type: integer, minimum: 0 }
+        flushedBatches: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    V1RoutingExplainResponse:
+      type: object
+      required: [object, sinks, otelEnabled, events, quality, otel]
+      properties:
+        object: { type: string, const: routing_explain }
+        sinks:
+          type: array
+          items: { type: string }
+        otelEnabled: { type: boolean }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/V1RoutingEvent" }
+        quality:
+          type: array
+          items: { $ref: "#/components/schemas/V1RoutingQuality" }
+        otel:
+          oneOf:
+            - $ref: "#/components/schemas/V1RoutingOtelStats"
+            - type: "null"
+      additionalProperties: false
 
     SearchAnalyticsResponse:
       type: object
