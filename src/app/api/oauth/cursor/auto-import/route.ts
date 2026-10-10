@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { tryAgentAuth, tryIdeAuth } from "@/lib/cursor/tokenExtractor";
 
+const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
+
 /**
  * GET /api/oauth/cursor/auto-import
  * Auto-detect and extract Cursor tokens from:
@@ -19,23 +21,29 @@ export async function GET(request: Request) {
     // Try Cursor IDE first (has both accessToken and machineId)
     const ideResult = await tryIdeAuth();
     if (ideResult.found) {
-      return NextResponse.json({
-        found: true,
-        accessToken: ideResult.accessToken,
-        refreshToken: ideResult.refreshToken,
-        machineId: ideResult.machineId,
-        source: ideResult.source,
-      });
+      return NextResponse.json(
+        {
+          found: true,
+          accessToken: ideResult.accessToken,
+          refreshToken: ideResult.refreshToken,
+          machineId: ideResult.machineId,
+          source: ideResult.source,
+        },
+        { headers: NO_STORE_HEADERS }
+      );
     }
 
     // Fall back to cursor-agent CLI auth (accessToken only, no machineId)
     const agentResult = await tryAgentAuth();
     if (agentResult.found) {
-      return NextResponse.json({
-        found: true,
-        accessToken: agentResult.accessToken,
-        source: agentResult.source,
-      });
+      return NextResponse.json(
+        {
+          found: true,
+          accessToken: agentResult.accessToken,
+          source: agentResult.source,
+        },
+        { headers: NO_STORE_HEADERS }
+      );
     }
 
     return NextResponse.json({
