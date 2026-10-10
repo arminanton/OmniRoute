@@ -2004,6 +2004,8 @@ paths:
         API key or authenticated dashboard session is required.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       responses:
@@ -2013,6 +2015,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelListResponse"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
     post:
       operationId: postApiV1Embeddings
       tags: [Embeddings]
@@ -2025,60 +2031,13 @@ paths:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
-        - ManagementSessionAuth: []
         - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [input, model]
-              properties:
-                input:
-                  description: >-
-                    Text, token IDs, or up to 32 canonical multimodal items. Structured media
-                    input is accepted only when the resolved registry model advertises the
-                    requested modalities. URL sources must be public HTTPS and are fetched
-                    server-side into bounded inline media (redirect revalidation, timeout,
-                    size limits, public DNS checks, and connection pinning) before provider
-                    submission. Inline media is limited to 8 MiB decoded per item and 16 MiB
-                    decoded per request. Canonical items are translated to provider-native
-                    request shapes (Jina modality-keyed objects / Gemini embedContent parts)
-                    rather than forwarded unchanged.
-                  oneOf:
-                    - type: string
-                    - type: array
-                      minItems: 1
-                      items:
-                        type: string
-                    - type: array
-                      minItems: 1
-                      items:
-                        type: integer
-                        minimum: 0
-                    - type: array
-                      minItems: 1
-                      items:
-                        type: array
-                        minItems: 1
-                        items:
-                          type: integer
-                          minimum: 0
-                    - type: array
-                      minItems: 1
-                      maxItems: 32
-                      items:
-                        $ref: "#/components/schemas/EmbeddingMultimodalItem"
-                model:
-                  type: string
-                dimensions:
-                  type: integer
-                  minimum: 1
-                encoding_format:
-                  type: string
-                  enum: [float, base64]
-              additionalProperties: true
+              $ref: "#/components/schemas/EmbeddingCreateRequest"
       responses:
         "200":
           description: >-
@@ -2090,6 +2049,26 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EmbeddingResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "402":
+          description: All provider connections have exhausted their credits or subscription quota.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
 
   /api/v1/multimodal-embeddings:
     post:
@@ -2105,16 +2084,13 @@ paths:
         - BearerAuth: []
         - ClientApiKeyAuth: []
         - GoogleApiKeyAuth: []
-        - ManagementSessionAuth: []
         - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [input, model]
-              additionalProperties: true
+              $ref: "#/components/schemas/EmbeddingCreateRequest"
       responses:
         "200":
           description: Embedding vectors (same contract as POST /api/v1/embeddings).
@@ -2123,14 +2099,35 @@ paths:
               schema:
                 $ref: "#/components/schemas/EmbeddingResponse"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "402":
+          description: All provider connections have exhausted their credits or subscription quota.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
     get:
       operationId: getApiV1MultimodalEmbeddings
       tags: [Embeddings]
       summary: List embedding models (Jina multimodal-embeddings alias)
-      description: Authentication follows REQUIRE_API_KEY; anonymous requests are accepted when it is disabled.
+      description: >-
+        Same model-catalog authentication policy as GET /api/v1/embeddings. Anonymous access
+        is available only when the configured catalog policy permits it.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
         - ManagementSessionAuth: []
         - {}
       responses:
@@ -2140,6 +2137,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModelListResponse"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
 
   /api/v1/providers/{provider}/embeddings:
     post:
@@ -2147,8 +2148,10 @@ paths:
       tags: [Embeddings]
       summary: Create embeddings (provider-specific)
       description: >-
-        Creates embeddings through the named provider. Authentication is required
-        when REQUIRE_API_KEY is enabled; otherwise anonymous requests are accepted.
+        Creates embeddings through the named provider. An unqualified `model` is prefixed
+        with this provider; a qualified model must belong to the named provider.
+        Authentication is required when REQUIRE_API_KEY is enabled; otherwise anonymous
+        requests are accepted.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
@@ -2166,7 +2169,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/EmbeddingCreateRequest"
       responses:
         "200":
           description: Embedding vectors
@@ -2174,6 +2177,25 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/EmbeddingResponse"
+        "400":
+          $ref: "#/components/responses/ProviderEmbeddingError"
+        "401":
+          $ref: "#/components/responses/ProviderEmbeddingError"
+        "402":
+          description: All provider connections have exhausted their credits or subscription quota.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProviderEmbeddingErrorBody" }
+        "403":
+          $ref: "#/components/responses/ProviderEmbeddingError"
+        "429":
+          $ref: "#/components/responses/ProviderEmbeddingError"
+        "503":
+          $ref: "#/components/responses/ProviderEmbeddingError"
+        "500":
+          $ref: "#/components/responses/ProviderEmbeddingError"
+        default:
+          $ref: "#/components/responses/ProviderEmbeddingError"
 
   /api/v1/images/generations:
     get:
@@ -2459,6 +2481,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RerankResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
 
   /api/v1:
     get:
@@ -41013,6 +41049,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ImageGenerationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "402":
+          description: Provider quota or billing limit prevented image editing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "410":
+          description: The requested model or provider has been retired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the configured image-edit body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
   /api/v1/images/upscale:
     get:
       operationId: getApiV1ImagesUpscale
@@ -45584,6 +45649,12 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiErrorResponse"
+    InferenceForbidden:
+      description: Client API key is valid but model, connection, endpoint, or usage policy denies the request.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
     V1ResourceAuthenticationRequired:
       description: A valid API key or dashboard session is required for this files/batches operation, regardless of `REQUIRE_API_KEY` configuration.
       content:
@@ -45712,6 +45783,23 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ApiErrorResponse"
+    InferenceProviderError:
+      description: >-
+        Provider-specific error response. Some inference handlers pass through the upstream
+        status code and normalize the JSON error body, so the status may vary by provider.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiErrorResponse"
+    ProviderEmbeddingError:
+      description: >-
+        Provider-specific embeddings failure. Route-level validation and auth errors use the
+        standard nested error object; errors returned by the selected embedding handler use
+        `{ "error": "message" }`.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ProviderEmbeddingErrorBody"
 
   schemas:
     TranslatorTranslateFailure:
@@ -55178,6 +55266,16 @@ components:
           type: string
           format: uuid
 
+    ProviderEmbeddingErrorBody:
+      oneOf:
+        - $ref: "#/components/schemas/ApiErrorResponse"
+        - type: object
+          required: [error]
+          properties:
+            error:
+              type: string
+          additionalProperties: true
+
     RelayTokenSummary:
       type: object
       required:
@@ -56116,6 +56214,232 @@ components:
             total_tokens: { type: integer, minimum: 0 }
           additionalProperties: true
       additionalProperties: true
+
+    EmbeddingCreateRequest:
+      type: object
+      required: [input, model]
+      properties:
+        input:
+          $ref: "#/components/schemas/EmbeddingInput"
+        model:
+          type: string
+          minLength: 1
+        dimensions:
+          description: Positive integer dimensions; numeric strings are coerced to integers.
+          oneOf:
+            - type: integer
+              minimum: 1
+            - type: string
+        encoding_format:
+          type: string
+          enum: [float, base64]
+      additionalProperties: true
+
+    EmbeddingInput:
+      description: >-
+        OpenAI token/text input, OmniRoute canonical multimodal items, or supported
+        provider-native Jina/Gemini embedding input. Canonical and native batches are
+        limited to 32 items; inline media is limited to 8 MiB decoded per item and 16 MiB
+        decoded per request. URL media must be public HTTPS and is validated/fetched by
+        the server for canonical inputs. Jina-native items retain Jina's modality-keyed
+        shape; Gemini-native items retain Gemini Content/parts shape.
+      anyOf:
+        - type: string
+          minLength: 1
+        - type: array
+          minItems: 1
+          items:
+            type: string
+            minLength: 1
+        - type: array
+          minItems: 1
+          items:
+            type: integer
+            minimum: 0
+        - type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/EmbeddingTokenArray"
+        - type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            $ref: "#/components/schemas/EmbeddingMultimodalItem"
+        - type: array
+          minItems: 1
+          maxItems: 32
+          items:
+            anyOf:
+              - type: string
+                minLength: 1
+              - $ref: "#/components/schemas/EmbeddingMultimodalItem"
+              - $ref: "#/components/schemas/JinaNativeEmbeddingItem"
+              - $ref: "#/components/schemas/GeminiNativeEmbeddingItem"
+        - $ref: "#/components/schemas/JinaNativeEmbeddingItem"
+        - $ref: "#/components/schemas/GeminiNativeEmbeddingItem"
+
+    EmbeddingTokenArray:
+      type: array
+      minItems: 1
+      items:
+        type: integer
+        minimum: 0
+
+    JinaNativeEmbeddingItem:
+      description: Native Jina document or merged-content group.
+      anyOf:
+        - $ref: "#/components/schemas/JinaNativeEmbeddingDocument"
+        - $ref: "#/components/schemas/JinaNativeEmbeddingContentGroup"
+
+    JinaNativeEmbeddingDocument:
+      description: >-
+        A Jina modality-keyed document containing exactly one of text, image, audio, video,
+        or pdf. Media values retain native URL, data-URL, or base64 string form.
+      oneOf:
+        - type: object
+          required: [text]
+          properties:
+            text: { type: string, minLength: 1 }
+          additionalProperties: true
+        - type: object
+          required: [image]
+          properties:
+            image: { type: string, minLength: 1 }
+          additionalProperties: true
+        - type: object
+          required: [audio]
+          properties:
+            audio: { type: string, minLength: 1 }
+          additionalProperties: true
+        - type: object
+          required: [video]
+          properties:
+            video: { type: string, minLength: 1 }
+          additionalProperties: true
+        - type: object
+          required: [pdf]
+          properties:
+            pdf: { type: string, minLength: 1 }
+          additionalProperties: true
+
+    JinaNativeEmbeddingContentGroup:
+      description: Fused Jina content group; PDFs are not allowed inside a group.
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: array
+          minItems: 1
+          items:
+            oneOf:
+              - type: object
+                required: [text]
+                properties:
+                  text: { type: string, minLength: 1 }
+                additionalProperties: true
+              - type: object
+                required: [image]
+                properties:
+                  image: { type: string, minLength: 1 }
+                additionalProperties: true
+              - type: object
+                required: [audio]
+                properties:
+                  audio: { type: string, minLength: 1 }
+                additionalProperties: true
+              - type: object
+                required: [video]
+                properties:
+                  video: { type: string, minLength: 1 }
+                additionalProperties: true
+      additionalProperties: true
+
+    GeminiNativeEmbeddingPart:
+      description: Gemini native embedding part using text, inline data, or file data.
+      type: object
+      properties:
+        text: { type: string, minLength: 1 }
+        inline_data:
+          type: object
+          required: [data]
+          properties:
+            mime_type: { type: string, minLength: 1 }
+            mimeType: { type: string, minLength: 1 }
+            data: { type: string, format: byte }
+          anyOf:
+            - required: [mime_type]
+            - required: [mimeType]
+          additionalProperties: true
+        inlineData:
+          type: object
+          required: [data]
+          properties:
+            mime_type: { type: string, minLength: 1 }
+            mimeType: { type: string, minLength: 1 }
+            data: { type: string, format: byte }
+          anyOf:
+            - required: [mime_type]
+            - required: [mimeType]
+          additionalProperties: true
+        file_data:
+          type: object
+          anyOf:
+            - required: [file_uri]
+            - required: [fileUri]
+          properties:
+            mime_type: { type: string, minLength: 1 }
+            mimeType: { type: string, minLength: 1 }
+            file_uri: { type: string, minLength: 1 }
+            fileUri: { type: string, minLength: 1 }
+          additionalProperties: true
+        fileData:
+          type: object
+          anyOf:
+            - required: [file_uri]
+            - required: [fileUri]
+          properties:
+            mime_type: { type: string, minLength: 1 }
+            mimeType: { type: string, minLength: 1 }
+            file_uri: { type: string, minLength: 1 }
+            fileUri: { type: string, minLength: 1 }
+          additionalProperties: true
+      anyOf:
+        - required: [text]
+        - required: [inline_data]
+        - required: [inlineData]
+        - required: [file_data]
+        - required: [fileData]
+      not:
+        anyOf:
+          - required: [parts]
+          - required: [content]
+      additionalProperties: true
+
+    GeminiNativeEmbeddingItem:
+      description: Gemini native `Part`, `Content`, or `EmbedContentRequest` input shape.
+      anyOf:
+        - $ref: "#/components/schemas/GeminiNativeEmbeddingPart"
+        - type: object
+          required: [parts]
+          properties:
+            parts:
+              type: array
+              minItems: 1
+              items: { $ref: "#/components/schemas/GeminiNativeEmbeddingPart" }
+          additionalProperties: true
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: object
+              required: [parts]
+              properties:
+                parts:
+                  type: array
+                  minItems: 1
+                  items: { $ref: "#/components/schemas/GeminiNativeEmbeddingPart" }
+              additionalProperties: true
+          additionalProperties: true
 
     ImageGenerationResponse:
       type: object
