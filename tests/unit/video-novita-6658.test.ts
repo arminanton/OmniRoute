@@ -105,7 +105,13 @@ test("normalizeNovitaVideoParams tolerates missing/invalid fields", () => {
 test("buildNovitaSubmitBody omits unset optional fields", () => {
   assert.deepEqual(buildNovitaSubmitBody({ prompt: "hello" }), { prompt: "hello" });
   assert.deepEqual(
-    buildNovitaSubmitBody({ prompt: "hello", negativePrompt: "bad", duration: 5, width: 832, height: 480 }),
+    buildNovitaSubmitBody({
+      prompt: "hello",
+      negativePrompt: "bad",
+      duration: 5,
+      width: 832,
+      height: 480,
+    }),
     { prompt: "hello", negative_prompt: "bad", duration: 5, width: 832, height: 480 }
   );
 });
@@ -267,6 +273,11 @@ test("handleVideoGeneration returns 502 when the Novita task FAILED", async () =
     assert.equal(result.success, false);
     assert.equal(result.status, 502);
     assert.equal(result.error, "content policy violation");
+    assert.equal(
+      result.terminal,
+      undefined,
+      "a confirmed provider task failure may fall back in combo"
+    );
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
@@ -310,10 +321,88 @@ test("handleVideoGeneration returns 504 when the Novita task never completes", a
 
     assert.equal(result.success, false);
     assert.equal(result.status, 504);
+    assert.equal(result.terminal, true, "an accepted task timeout must stop combo fallback");
     assert.match(result.error, /timed out/);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
     Date.now = originalNow;
+  }
+});
+
+test("handleVideoGeneration makes a hung Novita submit deadline terminal", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = immediateTimeout;
+
+  let submitSignal;
+  let calls = 0;
+  globalThis.fetch = async (_url, options = {}) => {
+    calls += 1;
+    submitSignal = options.signal;
+    return new Promise(() => {});
+  };
+
+  try {
+    const result = await handleVideoGeneration({
+      body: { model: "novita/wan-t2v", prompt: "x", timeout_ms: 25 },
+      credentials: { apiKey: "novita-key" },
+      log: null,
+    });
+
+    assert.equal(calls, 1, "an ambiguous submit is never replayed");
+    assert.equal(submitSignal.aborted, true, "the server deadline aborts the submit fetch");
+    assert.equal(result.success, false);
+    assert.equal(result.status, 504);
+    assert.equal(result.terminal, true);
+    assert.match(result.error, /deadline elapsed/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+test("handleVideoGeneration makes a hung Novita poll deadline terminal", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = immediateTimeout;
+
+  let pollSignal;
+  let submitCalls = 0;
+  let pollCalls = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url) === SUBMIT_URL) {
+      submitCalls += 1;
+      return jsonResponse({ task_id: "novita-accepted" });
+    }
+    if (String(url).startsWith(POLL_URL_PREFIX)) {
+      pollCalls += 1;
+      pollSignal = options.signal;
+      return new Promise(() => {});
+    }
+    throw new Error(`Unexpected URL: ${String(url)}`);
+  };
+
+  try {
+    const result = await handleVideoGeneration({
+      body: {
+        model: "novita/wan-t2v",
+        prompt: "x",
+        timeout_ms: 25,
+        poll_interval_ms: 1,
+      },
+      credentials: { apiKey: "novita-key" },
+      log: null,
+    });
+
+    assert.equal(submitCalls, 1);
+    assert.equal(pollCalls, 1, "the stalled poll is bounded by the same absolute deadline");
+    assert.equal(pollSignal.aborted, true, "the server deadline aborts the task poll");
+    assert.equal(result.success, false);
+    assert.equal(result.status, 504);
+    assert.equal(result.terminal, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
   }
 });
