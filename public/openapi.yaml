@@ -6447,28 +6447,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  id:
-                    type: string
-                  name:
-                    type: string
-                  mode:
-                    type: string
-                    enum: [global, rule]
-                  enabled:
-                    type: boolean
-                  status:
-                    type: string
-                    enum: [ok, error, empty]
-                  error:
-                    type: [string, "null"]
-                  lastFetchedAt:
-                    type: [string, "null"]
-                    format: date-time
-                  nodes:
-                    type: array
-                    items: {}
+                $ref: "#/components/schemas/ProxySubscriptionNodesResponse"
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -57450,6 +57429,51 @@ components:
         checkedAt: { type: string, format: date-time }
       additionalProperties: false
 
+    ProxySubscriptionNodeSummary:
+      description: >-
+        Redacted parsed subscription node. Direct HTTP, HTTPS, and SOCKS5 nodes expose only whether
+        credentials exist; usernames and passwords are never included. Unsupported proxy-core
+        protocols are summarized separately for operator display.
+      oneOf:
+        - type: object
+          required: [name, type, host, port, rawProtocol, hasAuth]
+          properties:
+            name: { type: string, minLength: 1 }
+            type: { type: string, enum: [http, https, socks5] }
+            host: { type: string, minLength: 1 }
+            port: { type: [number, "null"] }
+            rawProtocol: { type: string, enum: [http, https, socks5] }
+            hasAuth: { type: boolean }
+          additionalProperties: false
+        - type: object
+          required: [name, rawProtocol, detail]
+          properties:
+            name: { type: string, minLength: 1 }
+            rawProtocol:
+              type: string
+              enum: [ss, ssr, vmess, vless, trojan, tuic, hysteria, hysteria2, wireguard, snell]
+            host: { type: string }
+            port: { type: [number, "null"] }
+            detail: { type: string }
+          additionalProperties: false
+
+    ProxySubscriptionNodesResponse:
+      type: object
+      required: [id, name, mode, enabled, status, error, lastFetchedAt, nodes]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        mode: { type: string, enum: [global, rule] }
+        enabled: { type: boolean }
+        status: { type: string, enum: [ok, error, empty] }
+        error: { type: [string, "null"] }
+        lastFetchedAt: { type: [string, "null"], format: date-time }
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProxySubscriptionNodeSummary"
+      additionalProperties: false
+
     ProxySubscription:
       type: object
       description: >-
@@ -57491,7 +57515,8 @@ components:
           type: [string, "null"]
         lastNodes:
           type: [array, "null"]
-          items: {}
+          items:
+            $ref: "#/components/schemas/ProxySubscriptionNodeSummary"
         lastErrorAt:
           type: [string, "null"]
           format: date-time
