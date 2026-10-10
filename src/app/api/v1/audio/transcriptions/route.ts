@@ -31,9 +31,12 @@ import { log } from "@omniroute/open-sse/utils/logger.ts";
 import { enforceClientApiRouteAuth } from "@/shared/utils/clientApiRouteAuth";
 import { isRuntimePolicyError } from "@/shared/runtimePolicy";
 import { runtimePolicyErrorResponse } from "@omniroute/open-sse/utils/error.ts";
+import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
 import { runMaxaiConnectionTransport } from "@omniroute/open-sse/services/maxaiTransport.ts";
 import {
-  MAX_BODY_BYTES_AUDIO, readRequestBodyWithLimit, RequestBodyTooLargeError,
+  MAX_BODY_BYTES_AUDIO,
+  readRequestBodyWithLimit,
+  RequestBodyTooLargeError,
 } from "@/shared/middleware/bodySizeGuard";
 
 /** No generic proxy wrapper and no missing-account direct path. */
@@ -124,7 +127,9 @@ async function transcribeWithModel(
     const credentialKey = providerConfig.credentialProviderId || provider;
     // NOTE: the 2nd arg of this helper is `excludeConnectionId`, not "use this
     // connection" — a combo target's connectionId must never be passed here.
-    credentials = await getProviderCredentialsWithQuotaPreflight(credentialKey);
+    credentials = await getProviderCredentialsWithQuotaPreflight(credentialKey, null, null, null, {
+      reserveAccountRequest: true,
+    });
     // Prefix match wins (`deepgram/nova-3` → native Deepgram). If that
     // provider has no credentials, retry gateways that list the same nested
     // model id (e.g. OpenRouter's `deepgram/nova-3`).
@@ -137,13 +142,21 @@ async function transcribeWithModel(
       );
       if (alternate) {
         const alternateCredentials = await getProviderCredentialsWithQuotaPreflight(
-          alternate.provider
+          alternate.provider,
+          null,
+          null,
+          null,
+          { reserveAccountRequest: true }
         );
-        if (alternateCredentials && !isAllRateLimitedCredentials(alternateCredentials)) {
-          provider = alternate.provider;
-          resolvedModel = alternate.model;
-          providerConfig = alternate.config;
-          credentials = alternateCredentials;
+        if (alternateCredentials) {
+          if (!isAllRateLimitedCredentials(alternateCredentials)) {
+            provider = alternate.provider;
+            resolvedModel = alternate.model;
+            providerConfig = alternate.config;
+            credentials = alternateCredentials;
+          } else {
+            reserveSelectedAccountRequest(alternateCredentials)();
+          }
         }
       }
     }
@@ -162,29 +175,40 @@ async function transcribeWithModel(
     }
   }
 
-  const transcribe = () => handleAudioTranscription({
-    formData,
-    credentials,
-    resolvedProvider: providerConfig,
-    resolvedModel,
-    signal: request.signal,
-  });
-  let response = provider === "maxai"
-    ? await runMaxaiTranscriptionTransport(credentials?.connectionId, transcribe, request.signal)
-    : await transcribe();
-  if (response?.ok) {
-    await clearRecoveredProviderState(credentials);
-    // No text body / playback duration available from the multipart upload, so
-    // per-second pricing cannot be applied → cost 0 (ADD-only headers, body intact).
-    response = attachOmniRouteMetaToResponse(response, {
-      provider,
-      model: resolvedModel,
-      costUsd: 0,
-      latencyMs: Date.now() - startTime,
-      requestId: generateRequestId(),
-    });
+  const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  try {
+    const transcribe = () =>
+      handleAudioTranscription({
+        formData,
+        credentials,
+        resolvedProvider: providerConfig,
+        resolvedModel,
+        signal: request.signal,
+      });
+    let response =
+      provider === "maxai"
+        ? await runMaxaiTranscriptionTransport(
+            credentials?.connectionId,
+            transcribe,
+            request.signal
+          )
+        : await transcribe();
+    if (response?.ok) {
+      await clearRecoveredProviderState(credentials);
+      // No text body / playback duration available from the multipart upload, so
+      // per-second pricing cannot be applied → cost 0 (ADD-only headers, body intact).
+      response = attachOmniRouteMetaToResponse(response, {
+        provider,
+        model: resolvedModel,
+        costUsd: 0,
+        latencyMs: Date.now() - startTime,
+        requestId: generateRequestId(),
+      });
+    }
+    return response;
+  } finally {
+    releaseAccountRequest();
   }
-  return response;
 }
 
 /**
@@ -202,7 +226,8 @@ export async function POST(request: Request) {
       headers: { "Content-Type": request.headers.get("content-type") || "" },
     }).formData();
   } catch (error) {
-    if (error instanceof RequestBodyTooLargeError) return errorResponse(413, "Audio upload exceeds the audio limit");
+    if (error instanceof RequestBodyTooLargeError)
+      return errorResponse(413, "Audio upload exceeds the audio limit");
     if (request.signal.aborted) return errorResponse(499, "Transcription request aborted");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid multipart form data");
   }
@@ -239,7 +264,12 @@ export async function POST(request: Request) {
           body: { model: modelStr } as any,
           combo: combo as any,
           handleSingleModel: async (_reqBody: any, targetModelStr: string) =>
-            transcribeWithModel(withModel(formData, targetModelStr), targetModelStr, startTime, request),
+            transcribeWithModel(
+              withModel(formData, targetModelStr),
+              targetModelStr,
+              startTime,
+              request
+            ),
           isModelAvailable: undefined,
           log,
           settings,

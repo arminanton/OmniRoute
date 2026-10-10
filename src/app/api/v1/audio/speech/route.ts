@@ -18,6 +18,10 @@ import {
 import { attachOmniRouteMetaToResponse } from "@/domain/omnirouteResponseMeta";
 import { calculateModalCost } from "@/lib/usage/costCalculator";
 import { generateRequestId } from "@/shared/utils/requestId";
+import {
+  releaseAccountRequestAfterResponseBody,
+  reserveSelectedAccountRequest,
+} from "@omniroute/open-sse/services/accountRequestLease.ts";
 
 /**
  * Handle CORS preflight
@@ -87,7 +91,9 @@ async function postHandler(request, context) {
   let credentials = null;
   if (providerConfig && providerConfig.authType !== "none") {
     const credentialKey = providerConfig.credentialProviderId || provider;
-    credentials = await getProviderCredentialsWithQuotaPreflight(credentialKey);
+    credentials = await getProviderCredentialsWithQuotaPreflight(credentialKey, null, null, null, {
+      reserveAccountRequest: true,
+    });
     if (!credentials) {
       return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
     }
@@ -96,29 +102,39 @@ async function postHandler(request, context) {
     }
   }
 
-  let response = await handleAudioSpeech({
-    body,
-    credentials,
-    resolvedProvider: providerConfig,
-    resolvedModel,
-  });
-  if (response?.ok) {
-    await clearRecoveredProviderState(credentials);
-    // TTS is billed per input character; attach cost telemetry without
-    // touching the audio Content-Type / body (ADD-only headers).
-    const characters = typeof body.input === "string" ? body.input.length : 0;
-    const costUsd = await calculateModalCost("audio", provider, resolvedModel || body.model, {
-      characters,
+  const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  let responseOwnsReservation = false;
+  try {
+    let response = await handleAudioSpeech({
+      body,
+      credentials,
+      resolvedProvider: providerConfig,
+      resolvedModel,
     });
-    response = attachOmniRouteMetaToResponse(response, {
-      provider,
-      model: resolvedModel || body.model,
-      costUsd,
-      latencyMs: Date.now() - startTime,
-      requestId: generateRequestId(),
-    });
+    if (response?.ok) {
+      await clearRecoveredProviderState(credentials);
+      // TTS is billed per input character; attach cost telemetry without
+      // touching the audio Content-Type / body (ADD-only headers).
+      const characters = typeof body.input === "string" ? body.input.length : 0;
+      const costUsd = await calculateModalCost("audio", provider, resolvedModel || body.model, {
+        characters,
+      });
+      response = attachOmniRouteMetaToResponse(response, {
+        provider,
+        model: resolvedModel || body.model,
+        costUsd,
+        latencyMs: Date.now() - startTime,
+        requestId: generateRequestId(),
+      });
+    }
+    if (response?.ok && response.body) {
+      response = releaseAccountRequestAfterResponseBody(response, releaseAccountRequest);
+      responseOwnsReservation = true;
+    }
+    return response;
+  } finally {
+    if (!responseOwnsReservation) releaseAccountRequest();
   }
-  return response;
 }
 
 export const POST = withInjectionGuard(postHandler);

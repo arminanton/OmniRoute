@@ -74,7 +74,15 @@ export function isVideoPromptOptional(parsed: { provider: string | null; model: 
  * is honored the same way regardless of which path dispatched the request.
  */
 export async function resolveLocalOverrideCredentials(provider: string) {
-  const localCredentials = await getProviderCredentialsWithQuotaPreflight(provider);
+  const localCredentials = await getProviderCredentialsWithQuotaPreflight(
+    provider,
+    null,
+    null,
+    null,
+    {
+      reserveAccountRequest: true,
+    }
+  );
   return localCredentials && !isAllRateLimitedCredentials(localCredentials)
     ? localCredentials
     : null;

@@ -19,6 +19,7 @@ import {
 } from "@/app/api/v1/_shared/rateLimit";
 import { attachOmniRouteMetaToResponse } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
+import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
 
 /**
  * Handle CORS preflight
@@ -84,7 +85,9 @@ export async function POST(request) {
   let credentials = null;
   if (providerConfig && providerConfig.authType !== "none") {
     const credentialKey = providerConfig.credentialProviderId || provider;
-    credentials = await getProviderCredentialsWithQuotaPreflight(credentialKey);
+    credentials = await getProviderCredentialsWithQuotaPreflight(credentialKey, null, null, null, {
+      reserveAccountRequest: true,
+    });
     if (!credentials) {
       return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
     }
@@ -93,23 +96,28 @@ export async function POST(request) {
     }
   }
 
-  let response = await handleAudioTranslation({
-    formData,
-    credentials,
-    resolvedProvider: providerConfig,
-    resolvedModel,
-  });
-  if (response?.ok) {
-    await clearRecoveredProviderState(credentials);
-    // No text body / playback duration available from the multipart upload, so
-    // per-second pricing cannot be applied → cost 0 (ADD-only headers, body intact).
-    response = attachOmniRouteMetaToResponse(response, {
-      provider,
-      model: resolvedModel,
-      costUsd: 0,
-      latencyMs: Date.now() - startTime,
-      requestId: generateRequestId(),
+  const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  try {
+    let response = await handleAudioTranslation({
+      formData,
+      credentials,
+      resolvedProvider: providerConfig,
+      resolvedModel,
     });
+    if (response?.ok) {
+      await clearRecoveredProviderState(credentials);
+      // No text body / playback duration available from the multipart upload, so
+      // per-second pricing cannot be applied → cost 0 (ADD-only headers, body intact).
+      response = attachOmniRouteMetaToResponse(response, {
+        provider,
+        model: resolvedModel,
+        costUsd: 0,
+        latencyMs: Date.now() - startTime,
+        requestId: generateRequestId(),
+      });
+    }
+    return response;
+  } finally {
+    releaseAccountRequest();
   }
-  return response;
 }

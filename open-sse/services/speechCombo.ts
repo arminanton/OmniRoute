@@ -27,6 +27,10 @@ import { calculateModalCost } from "@/lib/usage/costCalculator";
 import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
+import {
+  releaseAccountRequestAfterResponseBody,
+  reserveSelectedAccountRequest,
+} from "./accountRequestLease.ts";
 
 /**
  * Execute a full combo strategy for a text-to-speech request.
@@ -98,7 +102,13 @@ export async function executeSpeechCombo(
     if (providerConfig && providerConfig.authType !== "none") {
       const credentialKey = providerConfig.credentialProviderId || targetProvider;
       try {
-        credentials = await getProviderCredentialsWithQuotaPreflight(credentialKey);
+        credentials = await getProviderCredentialsWithQuotaPreflight(
+          credentialKey,
+          null,
+          null,
+          null,
+          { reserveAccountRequest: true }
+        );
       } catch {
         lastError = { status: 502, error: `Failed to resolve credentials for ${targetProvider}` };
         fallbackCount += 1;
@@ -118,50 +128,64 @@ export async function executeSpeechCombo(
       }
     }
 
-    const response = await handleAudioSpeech({
-      body: { ...body, model: target.modelStr },
-      credentials,
-      resolvedProvider: providerConfig,
-      resolvedModel,
-    });
-
-    if (response?.ok) {
-      await clearRecoveredProviderState(credentials);
-      const characters = typeof body.input === "string" ? body.input.length : 0;
-      const costUsd = await calculateModalCost(
-        "audio",
-        targetProvider,
-        resolvedModel || target.modelStr,
-        { characters }
-      );
-      return attachOmniRouteMetaToResponse(response, {
-        provider: targetProvider,
-        model: resolvedModel || target.modelStr,
-        costUsd,
-        latencyMs: Date.now() - startTime,
-        requestId: generateRequestId(),
-        strategy: "priority",
-        fallbackAttempts: fallbackCount,
-      });
-    }
-
-    const status = response?.status || 500;
-    // The body is read only on the failure path, where it is small and about to
-    // be discarded anyway; a successful audio stream is never consumed here.
-    let error = `Speech generation failed (HTTP ${status})`;
+    const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+    let responseOwnsReservation = false;
     try {
-      const text = await response?.clone().text();
-      if (text) error = text.slice(0, 300);
-    } catch {
-      // non-text or already-consumed body — keep the status-line message
-    }
+      const response = await handleAudioSpeech({
+        body: { ...body, model: target.modelStr },
+        credentials,
+        resolvedProvider: providerConfig,
+        resolvedModel,
+      });
 
-    if (status === 400 || status === 401 || status === 403) {
-      return errorResponse(status, `[${targetProvider}] ${error}`);
-    }
+      if (response?.ok) {
+        await clearRecoveredProviderState(credentials);
+        const characters = typeof body.input === "string" ? body.input.length : 0;
+        const costUsd = await calculateModalCost(
+          "audio",
+          targetProvider,
+          resolvedModel || target.modelStr,
+          { characters }
+        );
+        let successfulResponse = attachOmniRouteMetaToResponse(response, {
+          provider: targetProvider,
+          model: resolvedModel || target.modelStr,
+          costUsd,
+          latencyMs: Date.now() - startTime,
+          requestId: generateRequestId(),
+          strategy: "priority",
+          fallbackAttempts: fallbackCount,
+        });
+        if (successfulResponse.body) {
+          successfulResponse = releaseAccountRequestAfterResponseBody(
+            successfulResponse,
+            releaseAccountRequest
+          );
+          responseOwnsReservation = true;
+        }
+        return successfulResponse;
+      }
 
-    lastError = { status, error: `[${targetProvider}] ${error}` };
-    fallbackCount += 1;
+      const status = response?.status || 500;
+      // The body is read only on the failure path, where it is small and about to
+      // be discarded anyway; a successful audio stream is never consumed here.
+      let error = `Speech generation failed (HTTP ${status})`;
+      try {
+        const text = await response?.clone().text();
+        if (text) error = text.slice(0, 300);
+      } catch {
+        // non-text or already-consumed body — keep the status-line message
+      }
+
+      if (status === 400 || status === 401 || status === 403) {
+        return errorResponse(status, `[${targetProvider}] ${error}`);
+      }
+
+      lastError = { status, error: `[${targetProvider}] ${error}` };
+      fallbackCount += 1;
+    } finally {
+      if (!responseOwnsReservation) releaseAccountRequest();
+    }
   }
 
   const errorPayload = toJsonErrorPayload(

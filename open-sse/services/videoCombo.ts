@@ -42,6 +42,7 @@ import { toJsonErrorPayload } from "@/shared/utils/upstreamError";
 import { HTTP_STATUS } from "@omniroute/open-sse/config/constants.ts";
 import { errorResponse } from "@omniroute/open-sse/utils/error.ts";
 import * as logger from "@/sse/utils/logger";
+import { reserveSelectedAccountRequest } from "./accountRequestLease.ts";
 
 /**
  * Execute a full combo strategy for a video generation request.
@@ -119,7 +120,11 @@ export async function executeVideoCombo(
     if (providerConfig && providerConfig.authType !== "none") {
       try {
         credentials = await getProviderCredentialsWithQuotaPreflight(
-          resolveVideoCredentialProvider(targetProvider)
+          resolveVideoCredentialProvider(targetProvider),
+          null,
+          null,
+          targetModel,
+          { reserveAccountRequest: true }
         );
       } catch {
         lastError = { status: 502, error: `Failed to resolve credentials for ${targetProvider}` };
@@ -144,7 +149,8 @@ export async function executeVideoCombo(
           targetProvider,
           null,
           null,
-          targetModel
+          targetModel,
+          { reserveAccountRequest: true }
         );
       } catch {
         lastError = { status: 502, error: `Failed to resolve credentials for ${targetProvider}` };
@@ -170,13 +176,19 @@ export async function executeVideoCombo(
       credentials = await resolveLocalOverrideCredentials(targetProvider);
     }
 
-    const result: MediaGenerationResultLike = await handleVideoGeneration({
-      body: { ...body, model: modelStr },
-      credentials,
-      log,
-      signal: auth.request?.signal || null,
-      ...(isCustomModel && { resolvedProvider: targetProvider }),
-    });
+    const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+    let result: MediaGenerationResultLike;
+    try {
+      result = await handleVideoGeneration({
+        body: { ...body, model: modelStr },
+        credentials,
+        log,
+        signal: auth.request?.signal || null,
+        ...(isCustomModel && { resolvedProvider: targetProvider }),
+      });
+    } finally {
+      releaseAccountRequest();
+    }
 
     if (!isMediaGenerationFailure(result)) {
       await clearRecoveredProviderState(credentials);

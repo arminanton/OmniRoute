@@ -21,6 +21,7 @@ import {
   successfulMediaGenerationResponse,
 } from "@/app/api/v1/_shared/mediaGenerationRoute";
 import { getSpecialtyModelsResponse } from "@/app/api/v1/_shared/specialtyCatalog";
+import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -48,7 +49,15 @@ export async function GET(request?: Request) {
  * exists — local providers must keep working with zero configuration.
  */
 async function resolveLocalOverrideCredentials(provider) {
-  const localCredentials = await getProviderCredentialsWithQuotaPreflight(provider);
+  const localCredentials = await getProviderCredentialsWithQuotaPreflight(
+    provider,
+    null,
+    null,
+    null,
+    {
+      reserveAccountRequest: true,
+    }
+  );
   return localCredentials && !isAllRateLimitedCredentials(localCredentials)
     ? localCredentials
     : null;
@@ -87,7 +96,9 @@ async function postHandler(request, context) {
   // Get credentials — skip for local providers (authType: "none")
   let credentials = null;
   if (providerConfig && providerConfig.authType !== "none") {
-    credentials = await getProviderCredentialsWithQuotaPreflight(provider);
+    credentials = await getProviderCredentialsWithQuotaPreflight(provider, null, null, null, {
+      reserveAccountRequest: true,
+    });
     if (!credentials) {
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
@@ -101,7 +112,13 @@ async function postHandler(request, context) {
     credentials = await resolveLocalOverrideCredentials(provider);
   }
 
-  const result = await handleMusicGeneration({ body, credentials, log });
+  const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  let result;
+  try {
+    result = await handleMusicGeneration({ body, credentials, log });
+  } finally {
+    releaseAccountRequest();
+  }
 
   if (result.success) {
     await clearRecoveredProviderState(credentials);

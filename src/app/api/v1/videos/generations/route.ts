@@ -24,6 +24,7 @@ import {
 } from "@/app/api/v1/_shared/mediaGenerationRoute";
 import type { MediaGenerationResultLike } from "@/app/api/v1/_shared/mediaGenerationRoute";
 import { getSpecialtyModelsResponse } from "@/app/api/v1/_shared/specialtyCatalog";
+import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
 import {
   isVideoPromptOptional,
   resolveLocalOverrideCredentials,
@@ -105,7 +106,11 @@ async function postHandler(request, context) {
   let credentials = null;
   if (providerConfig && providerConfig.authType !== "none") {
     credentials = await getProviderCredentialsWithQuotaPreflight(
-      resolveVideoCredentialProvider(provider)
+      resolveVideoCredentialProvider(provider),
+      null,
+      null,
+      requestedModel,
+      { reserveAccountRequest: true }
     );
     if (!credentials) {
       return errorResponse(
@@ -121,7 +126,8 @@ async function postHandler(request, context) {
       provider,
       null,
       null,
-      requestedModel
+      requestedModel,
+      { reserveAccountRequest: true }
     );
     if (!credentials) {
       return errorResponse(
@@ -136,13 +142,19 @@ async function postHandler(request, context) {
     credentials = await resolveLocalOverrideCredentials(provider);
   }
 
-  const result: MediaGenerationResultLike = await handleVideoGeneration({
-    body,
-    credentials,
-    log,
-    signal: request.signal,
-    ...(isCustomModel && { resolvedProvider: provider }),
-  });
+  const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  let result: MediaGenerationResultLike;
+  try {
+    result = await handleVideoGeneration({
+      body,
+      credentials,
+      log,
+      signal: request.signal,
+      ...(isCustomModel && { resolvedProvider: provider }),
+    });
+  } finally {
+    releaseAccountRequest();
+  }
 
   if (isMediaGenerationFailure(result)) {
     return failedMediaGenerationResponse(result, "Video generation provider error");
