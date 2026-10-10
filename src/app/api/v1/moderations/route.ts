@@ -14,6 +14,7 @@ import {
   isAllRateLimitedCredentials,
   rateLimitedProviderResponse,
 } from "@/app/api/v1/_shared/rateLimit";
+import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
 
 /**
  * Handle CORS preflight
@@ -55,22 +56,43 @@ async function postHandler(request, context) {
 
   // Default to openai if no provider prefix
   const resolvedProvider = provider || "openai";
-  const credentials = await getProviderCredentialsWithQuotaPreflight(resolvedProvider);
-  if (!credentials) {
-    return errorResponse(
-      HTTP_STATUS.BAD_REQUEST,
-      `No credentials for provider: ${resolvedProvider}`
-    );
-  }
-  if (isAllRateLimitedCredentials(credentials)) {
-    return rateLimitedProviderResponse(resolvedProvider, credentials);
-  }
+  const credentials = await getProviderCredentialsWithQuotaPreflight(
+    resolvedProvider,
+    null,
+    null,
+    null,
+    { reserveAccountRequest: true }
+  );
+  const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  try {
+    if (request.signal.aborted) {
+      return errorResponse(499, "Moderation request cancelled");
+    }
+    if (!credentials) {
+      return errorResponse(
+        HTTP_STATUS.BAD_REQUEST,
+        `No credentials for provider: ${resolvedProvider}`
+      );
+    }
+    if (isAllRateLimitedCredentials(credentials)) {
+      return rateLimitedProviderResponse(resolvedProvider, credentials);
+    }
 
-  const response = await handleModeration({ body: { ...body, model }, credentials });
-  if (response?.ok) {
-    await clearRecoveredProviderState(credentials as Record<string, unknown>);
+    const response = await handleModeration({
+      body: { ...body, model },
+      credentials,
+      signal: request.signal,
+    });
+    if (request.signal.aborted) {
+      return errorResponse(499, "Moderation request cancelled");
+    }
+    if (response?.ok) {
+      await clearRecoveredProviderState(credentials as Record<string, unknown>);
+    }
+    return response;
+  } finally {
+    releaseAccountRequest();
   }
-  return response;
 }
 
 export const POST = withInjectionGuard(postHandler);

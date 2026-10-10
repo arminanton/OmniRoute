@@ -2505,6 +2505,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ModerationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "499":
+          description: >-
+            The request abort signal cancelled moderation before a result was
+            returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        default:
+          $ref: "#/components/responses/InferenceProviderError"
 
   /api/v1/rerank:
     post:

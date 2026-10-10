@@ -10,6 +10,7 @@ import { errorResponse, sanitizeErrorMessage } from "../utils/error.ts";
 import { buildSanitizedUpstreamErrorResponse } from "../utils/upstreamErrorResponse.ts";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
+import { acquireConfiguredSharedAccountAdmission } from "../services/accountRequestAdmission.ts";
 
 /**
  * Handle moderation request
@@ -17,10 +18,11 @@ import { generateRequestId } from "@/shared/utils/requestId";
  * @param {Object} options
  * @param {Object} options.body - JSON body { model, input }
  * @param {Object} options.credentials - Provider credentials { apiKey }
+ * @param {AbortSignal} [options.signal] - Caller cancellation signal
  * @returns {Response}
  */
 /** @returns {Promise<unknown>} */
-export async function handleModeration({ body, credentials }) {
+export async function handleModeration({ body, credentials, signal }) {
   const startTime = Date.now();
   if (!body.input) {
     return errorResponse(400, "input is required");
@@ -43,7 +45,26 @@ export async function handleModeration({ body, credentials }) {
     return errorResponse(401, `No credentials for moderation provider: ${providerId}`);
   }
 
+  let sharedAdmission = null;
   try {
+    try {
+      sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+        provider: providerId || "openai",
+        credentials,
+        signal,
+      });
+    } catch (error) {
+      const admissionError = error;
+      if (admissionError?.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+        return errorResponse(
+          admissionError.statusCode || 503,
+          admissionError.message || "Provider account capacity admission is unavailable"
+        );
+      }
+      throw error;
+    }
+    const requestSignal = sharedAdmission?.signal ?? signal;
+    requestSignal?.throwIfAborted();
     const res = await fetch(providerConfig.baseUrl, {
       method: "POST",
       headers: {
@@ -54,6 +75,7 @@ export async function handleModeration({ body, credentials }) {
         model: modelId,
         input: body.input,
       }),
+      signal: requestSignal,
     });
 
     if (!res.ok) {
@@ -77,10 +99,15 @@ export async function handleModeration({ body, credentials }) {
     });
     return new Response(JSON.stringify(data), { status: 200, headers });
   } catch (err) {
+    if (signal?.aborted || sharedAdmission?.signal.aborted) {
+      return errorResponse(499, "Moderation request cancelled");
+    }
     const safeDetail =
       sanitizeErrorMessage(err)
         .replace(/^[A-Za-z]*Error:\s*/, "")
         .trim() || "unknown upstream failure";
     return errorResponse(500, `Moderation request failed: ${safeDetail}`);
+  } finally {
+    sharedAdmission?.release();
   }
 }

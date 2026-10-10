@@ -219,3 +219,20 @@ test("handleModeration returns a 500 when the upstream request throws", async ()
   assert.equal(response.status, 500);
   assert.match(payload.error.message, /Moderation request failed: socket closed/);
 });
+
+test("handleModeration forwards caller cancellation and returns 499", async () => {
+  const controller = new AbortController();
+  globalThis.fetch = async (_url, options = {}) => {
+    assert.equal(options.signal, controller.signal);
+    controller.abort(new Error("synthetic client disconnect"));
+    throw new DOMException("The operation was aborted", "AbortError");
+  };
+
+  const response = await handleModeration({
+    body: { model: "openai/text-moderation-latest", input: "check this" },
+    credentials: { apiKey: "sk-test" },
+    signal: controller.signal,
+  });
+
+  assert.equal(response.status, 499);
+});
