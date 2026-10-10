@@ -1457,6 +1457,24 @@ the existing size-limit path, so this optimization can reduce detail retention u
 cardinality payloads. Private overflow captures are separate and retain exact bytes subject to their
 own limits.
 
+### Timestamp-aware stream-frame interning probe (2026-10-10)
+
+`npm run bench:call-log-stream-frame-table` compares the production artifact writer with a
+benchmark-only candidate representation. One synthetic 32,824-byte SSE frame is recorded once in
+each of the provider, OpenAI, and client tracks, with three distinct capture timestamps. The current
+writer stored 99,000 bytes; the candidate stored one frame dictionary entry plus three timestamp/
+index pairs at 33,398 bytes, a modeled 65,602-byte (66.26%) reduction under the unchanged 512 KiB
+pipeline cap. The script reads the current artifact through `readCallArtifact()` and verifies that a
+small candidate decoder reconstructs every timestamped track string in the same order. Its one-run
+write times were 6.145 ms for current then 0.947 ms for the candidate; these sequential samples are
+not a speed comparison because they include first-write and filesystem-cache effects.
+
+The timestamp/ref encoding exists only inside this measurement. Production capture still stores
+timestamp-prefixed strings, production readers do not decode the candidate format, and no production
+queue-memory, request-heap, SSE-latency, or conversation-reconstruction savings were measured. The
+next validation before any format change would be a focused production reader/writer prototype test
+that preserves byte-identical reconstructed stream strings, followed by a bounded lifecycle run.
+
 Structured `error`/`fatal` repeat suppression is a different mechanism. It scopes the 5-second
 deduplication key to severity and component, does not retain messages over 4,096 characters, expires
 stale keys on each error call, caps the key map at 500, and carries duplicate/rate-limit counts as
