@@ -1427,7 +1427,18 @@ paths:
       operationId: getApiV1Search
       tags: [Search]
       summary: List search providers
-      description: Lists configured search providers and their supported search types.
+      description: >-
+        Lists the search provider registry and each provider's supported search types; no credentials
+        are returned. Despite `/api/v1/` also appearing in the public-route table, the route classifier
+        selects CLIENT_API first, so the central `REQUIRE_API_KEY` policy applies: a valid client API
+        key or dashboard session is required when enabled, and anonymous access is allowed only when
+        that key requirement is disabled. There is no additional route-level auth check.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Search provider catalog
@@ -1460,6 +1471,12 @@ paths:
                           items:
                             type: string
                             enum: [web, news, x]
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: postApiV1Search
       tags: [Search]
@@ -2487,12 +2504,29 @@ paths:
       operationId: headApiV1Models
       tags: [Models]
       summary: Probe model catalog availability
-      description: Returns only headers; the model-list body is not generated for a HEAD probe.
+      description: >-
+        Returns only headers; the model-list body is not generated for a HEAD probe. This operation
+        passes through the central CLIENT_API policy (which takes precedence over the `/api/v1/`
+        public-route prefix): a valid client API key or dashboard session is required when
+        `REQUIRE_API_KEY` is enabled, otherwise anonymous access is allowed. The handler does not run
+        the additional GET-only `requireAuthForModels` catalog check.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Model catalog endpoint is available
           headers:
             content-type: { schema: { type: string, const: application/json } }
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     get:
       operationId: getApiV1Models
       tags: [Models]
@@ -6362,6 +6396,22 @@ paths:
       operationId: getApiUsageAnalytics
       tags: [Usage]
       summary: Get usage analytics
+      description: >-
+        Returns aggregate token, cost, model, provider, account, and API-key usage history. This is a
+        MANAGEMENT route; its central gate and `requireManagementAuth()` both honor the unlocked
+        `requireLogin=false` policy, which can admit anonymous remote requests. Otherwise accepted
+        identities include a dashboard session, `manage`/`admin` API key, method-derived `read` scope
+        for `oma_` access tokens, loopback CLI token, or trusted loopback internal-service token. The
+        `apiKeyIds` filter and returned usage/cost/account metadata are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       parameters:
         - name: range
           in: query
@@ -6381,6 +6431,7 @@ paths:
         - name: apiKeyIds
           in: query
           description: Comma-separated API key IDs or historical key names to include.
+          x-sensitive: true
           schema: { type: string }
         - name: includeFlatRateEstimates
           in: query
@@ -6393,6 +6444,7 @@ paths:
       responses:
         "200":
           description: Usage analytics data
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -6409,6 +6461,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/usage/call-logs:
     get:
@@ -6547,22 +6602,40 @@ paths:
       tags: [Usage]
       summary: Get usage for a specific connection
       description: >-
-        Returns a provider-specific live quota object. Its keys vary by provider and are not
-        normalized to one quota schema. No route-local authentication check is performed;
-        deployment-wide authorization policy may still apply.
+        Refreshes live provider quota for this connection and persists the updated Provider Limits
+        cache; rotating-refresh providers may also refresh credentials upstream. The handler has no
+        route-local authentication check and relies on the central MANAGEMENT policy, which may admit
+        anonymous requests when `requireLogin=false` (including remote requests). Scoped `oma_` tokens
+        require method-derived `read` scope. The exact sibling `/api/usage/om-usage` is a separate
+        public CLI endpoint; this parameterized operation covers connection IDs. Connection identity,
+        quota, and account usage data are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       parameters:
         - name: connectionId
           in: path
           required: true
+          x-sensitive: true
           schema:
             type: string
       responses:
         "200":
           description: Connection usage data
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderQuotaUsageRecord"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
         "default":
           description: Provider lookup or refresh error
           content:
@@ -6575,13 +6648,33 @@ paths:
       operationId: getApiUsageHistory
       tags: [Usage]
       summary: Get usage history
+      description: >-
+        Returns aggregate historical usage statistics. This is a MANAGEMENT route whose central gate
+        and `requireManagementAuth()` both honor unlocked `requireLogin=false`; anonymous access may
+        therefore be remote. Otherwise accepted identities include dashboard sessions, `manage` or
+        `admin` API keys, method-derived `read` scope for `oma_` access tokens, loopback CLI tokens,
+        and trusted
+        loopback internal-service tokens. Usage totals and account/provider activity are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Historical usage data
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/UsageStatsResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/usage/logs:
     get:
@@ -6748,15 +6841,32 @@ paths:
       operationId: getApiUsageBudget
       tags: [Usage]
       summary: Get usage budget status
-      description: Returns current budget limits and consumption.
+      description: >-
+        Returns current budget limits and consumption for one API-key ID. This is a MANAGEMENT route
+        with both the central gate and `requireManagementAuth()`; unlocked `requireLogin=false` can
+        admit anonymous remote access. Otherwise accepted identities include dashboard sessions,
+        `manage`/`admin` API keys, method-derived `read` scope for `oma_` access tokens, loopback CLI
+        tokens, or trusted
+        loopback internal-service tokens. The API-key ID and budget/cost data are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       parameters:
         - name: apiKeyId
           in: query
           required: true
+          x-sensitive: true
           schema: { type: string, minLength: 1 }
       responses:
         "200":
           description: Budget status
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -6767,13 +6877,33 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringErrorResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiUsageBudget
       tags: [Usage]
       summary: Configure usage budget
-      description: Set or update budget limits for usage tracking.
+      description: >-
+        Creates or updates usage-budget limits for an API-key ID. This is a MANAGEMENT mutation with
+        both the central gate and `requireManagementAuth()`; unlocked `requireLogin=false` can admit
+        anonymous remote access. Otherwise accepted identities include dashboard sessions,
+        `manage`/`admin` API keys, method-derived `write` scope for `oma_` access tokens, loopback CLI
+        tokens, or trusted
+        loopback internal-service tokens. Treat the API-key ID, budget settings, and result as
+        sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
@@ -6781,24 +6911,40 @@ paths:
       responses:
         "200":
           description: Updated budget configuration
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/UsageBudgetMutationResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/usage/cache-health:
     get:
       operationId: getApiUsageCacheHealth
       tags: [Usage]
       summary: Get prompt-cache health summary
-      description: |
+      description: >-
         Summarizes the `write/read` cache ratio from `call_logs` for a time window:
         distribution (p50/p90/p99/max of cache-write tokens), warm/cold/rewrite/uncached
         call counts, the "heavy write" outlier share (10x the window median, floored at
         1024 tokens — Anthropic's cache-creation minimum), and a per-model breakdown.
-        Only successful (`status = 200`) calls with a non-null cache column are counted.
+        Only successful (`status = 200`) calls with a non-null cache column are counted. The handler
+        has no route-level auth check and relies on central MANAGEMENT policy; unlocked
+        `requireLogin=false` permits anonymous remote access. Scoped `oma_` tokens require
+        method-derived `read` scope. Cache and per-model usage metrics are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       parameters:
         - name: range
           in: query
@@ -6816,6 +6962,7 @@ paths:
       responses:
         "200":
           description: Cache health summary for the requested window
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -6893,6 +7040,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringErrorResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/usage/model-latency-stats:
     get:
@@ -17700,8 +17850,19 @@ paths:
         - Providers
       summary: Provider plugin manifest
       description: >-
-        Returns the provider registry manifest augmented with enabled service-backend models.
-        The ETag is calculated from the manifest body; matching If-None-Match yields a 304.
+        Returns the provider registry manifest augmented with currently exposed service-backend model
+        IDs and capabilities; it contains no provider credentials. The ETag is calculated from this
+        live manifest body; matching If-None-Match yields a 304, and successful responses are publicly
+        cacheable for 60 seconds. The route has no handler-level auth and relies on central CLIENT_API
+        policy (which takes precedence over the `/api/v1/` public-route prefix): a valid client API key
+        or dashboard session is required when `REQUIRE_API_KEY` is enabled, otherwise anonymous access
+        is allowed.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: If-None-Match
           in: header
@@ -17721,6 +17882,12 @@ paths:
                 $ref: "#/components/schemas/ProviderPluginManifest"
         "304":
           description: Manifest has not changed; no response body.
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
         "500":
           $ref: "#/components/responses/InternalError"
   /api/keys/{id}/devices:
@@ -38130,7 +38297,20 @@ paths:
       x-local-only: true
       description: >-
         Starts Tailscale login and returns either an already-logged-in result or an authentication
-        URL. The optional hostname and returned authentication URL are sensitive.
+        URL. The optional hostname and returned authentication URL are sensitive. Central MANAGEMENT
+        policy and `requireTailscaleAuth()`'s narrower `isAuthenticated()` check both apply when auth
+        is required; the handler accepts a dashboard session or management-scoped API key, but not
+        central-only `oma_` access tokens or CLI/internal-service tokens in that mode. **LOCAL_ONLY** —
+        only loopback and trusted private-LAN peers pass the locality gate; this spawn-capable route has
+        no remote manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous
+        access. Runtime policy mode `locked` blocks the Tailscale tunnel capability.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         x-sensitive: true
@@ -38154,6 +38334,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY or management credentials were rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
         "500":
           description: Login could not be started; the response contains a public-safe reason only.
           content:
@@ -38168,7 +38354,20 @@ paths:
       x-local-only: true
       description: >-
         Starts the managed Tailscale daemon if it is not already available and returns the current
-        status. The optional sudo password and returned host/process metadata are sensitive.
+        status. The optional sudo password and returned host/process metadata are sensitive. Central
+        MANAGEMENT policy and `requireTailscaleAuth()`'s narrower `isAuthenticated()` check both apply
+        when auth is required; the handler accepts a dashboard session or management-scoped API key,
+        but not central-only `oma_` access tokens or CLI/internal-service tokens in that mode.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable route has no remote manage-scope bypass. On admitted peers, `requireLogin=false`
+        permits anonymous access. Runtime policy mode `locked` blocks the Tailscale tunnel capability.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         x-sensitive: true
@@ -38192,6 +38391,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY or management credentials were rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
         "500":
           description: Daemon start failed; the response contains a public-safe reason only.
           content:
@@ -38519,6 +38724,20 @@ paths:
       tags:
         - Usage
       summary: Get combo health metrics
+      description: >-
+        Reads historical combo health and target metrics. The handler has no route-level auth check and
+        relies on central MANAGEMENT policy; unlocked `requireLogin=false` permits anonymous remote
+        access. Scoped `oma_` tokens require method-derived `read` scope. Combo IDs, health state, and
+        historical usage signals are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       parameters:
         - name: range
           in: query
@@ -38531,12 +38750,14 @@ paths:
           in: query
           required: false
           description: Restrict the response to one combo.
+          x-sensitive: true
           schema:
             type: string
             format: uuid
       responses:
         "200":
           description: Combo health and target metrics
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -38559,6 +38780,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringErrorResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/usage/combo-health-autopilot:
     get:
       operationId: getApiUsageComboHealthAutopilot
@@ -39279,6 +39503,21 @@ paths:
       tags:
         - Usage
       summary: Get provider quota utilization over time
+      description: >-
+        Returns historical provider quota utilization, optionally aggregated by connection. The
+        handler has no route-level auth check and relies on central MANAGEMENT policy; unlocked
+        `requireLogin=false` permits anonymous remote access. Scoped `oma_` tokens require
+        method-derived `read` scope. When `aggregateBy=connection`, response metadata includes account
+        email, name, and display name; all utilization and account metadata is sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       parameters:
         - name: range
           in: query
@@ -39302,6 +39541,7 @@ paths:
       responses:
         "200":
           description: Provider utilization points and optional connection metadata
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -39318,6 +39558,9 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringErrorResponse"
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/v1/{omnirouteCatchAll}:
     parameters:
       - name: omnirouteCatchAll
@@ -41075,6 +41318,20 @@ paths:
       tags:
         - V1 Models
       summary: "GET models › <model>"
+      description: >-
+        Returns one model from the unified caller-visible catalog. The central CLIENT_API policy
+        requires a valid client API key or dashboard session when `REQUIRE_API_KEY` is enabled.
+        Additionally, the shared model-catalog handler requires a valid client API credential or
+        dashboard session when `isAuthRequired()` is true and `requireAuthForModels` is not explicitly
+        false. Anonymous access is therefore possible only when the applicable central and
+        model-catalog gates are both open. No `oma_` management-token scope is consumed by this
+        client-API route.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: OpenAI-compatible model metadata, including available context and output limits.
@@ -41088,16 +41345,38 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+        "401":
+          description: Client API key or model-catalog authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     head:
       operationId: headApiV1ModelsByModel
       tags: [V1 Models]
       summary: Probe a model endpoint
-      description: Returns only headers and does not enumerate or serialize model details.
+      description: >-
+        Returns only headers and does not enumerate or serialize model details. The central CLIENT_API
+        policy requires a valid client API key or dashboard session when `REQUIRE_API_KEY` is enabled;
+        otherwise anonymous access is allowed. This HEAD handler does not call the model-catalog GET
+        helper and therefore does not run its additional `requireAuthForModels` check.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Model endpoint is available
           headers:
             content-type: { schema: { type: string, const: application/json } }
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/v1/muse-code/models:
     get:
       operationId: getApiV1MuseCodeModels

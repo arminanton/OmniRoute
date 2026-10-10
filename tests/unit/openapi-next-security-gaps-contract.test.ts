@@ -160,6 +160,21 @@ const operations = [
   ["get", "/api/sessions"],
   ["get", "/api/storage/health"],
   ["get", "/api/synced-available-models"],
+  ["post", "/api/tunnels/tailscale/login"],
+  ["post", "/api/tunnels/tailscale/start-daemon"],
+  ["get", "/api/usage/{connectionId}"],
+  ["get", "/api/usage/analytics"],
+  ["get", "/api/usage/history"],
+  ["get", "/api/usage/budget"],
+  ["post", "/api/usage/budget"],
+  ["get", "/api/usage/cache-health"],
+  ["get", "/api/usage/combo-health"],
+  ["get", "/api/usage/utilization"],
+  ["head", "/api/v1/models"],
+  ["get", "/api/v1/models/{model}"],
+  ["head", "/api/v1/models/{model}"],
+  ["get", "/api/v1/provider-plugin-manifest"],
+  ["get", "/api/v1/search"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -174,7 +189,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 163 effective OpenAPI operations", () => {
+test("the audited batches declare all 178 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -1119,4 +1134,112 @@ test("evaluation and aggregate ranking contracts flag sensitive data and provide
   assert.equal(operation("get", "/api/free-provider-rankings").responses["200"]["x-sensitive"], true);
   assert.match(operation("post", "/api/evals").description, /provider|cost/i);
   assert.match(operation("get", "/api/free-tier/summary").description, /live.*anonymous|anonymous.*live/i);
+});
+
+test("usage endpoints retain central management auth and expose sensitive quota and cost data", () => {
+  for (const [method, route, scope] of [
+    ["get", "/api/usage/{connectionId}", "read"],
+    ["get", "/api/usage/analytics", "read"],
+    ["get", "/api/usage/history", "read"],
+    ["get", "/api/usage/budget", "read"],
+    ["post", "/api/usage/budget", "write"],
+    ["get", "/api/usage/cache-health", "read"],
+    ["get", "/api/usage/combo-health", "read"],
+    ["get", "/api/usage/utilization", "read"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.equal(routeOperation["x-local-only"], undefined);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(hasScheme(routeOperation.security, "LocalCliTokenAuth"));
+    assert.ok(hasScheme(routeOperation.security, "InternalServiceTokenAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.match(routeOperation.description, /MANAGEMENT/);
+    assert.match(routeOperation.description, new RegExp(`method-derived.*${scope}`, "i"));
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+
+  for (const route of [
+    "/api/usage/analytics",
+    "/api/usage/history",
+    "/api/usage/budget",
+  ]) {
+    const method = route === "/api/usage/budget" ? "post" : "get";
+    assert.match(operation(method, route).description, /`requireManagementAuth\(\)`/);
+  }
+
+  const live = operation("get", "/api/usage/{connectionId}");
+  assert.equal(live.parameters.find((parameter: any) => parameter.name === "connectionId")["x-sensitive"], true);
+  assert.match(live.description, /refreshes live provider quota.*persists.*cache/i);
+  assert.match(live.description, /exact sibling `\/api\/usage\/om-usage`.*separate public CLI endpoint/i);
+  const analytics = operation("get", "/api/usage/analytics");
+  assert.equal(analytics.parameters.find((parameter: any) => parameter.name === "apiKeyIds")["x-sensitive"], true);
+  const budgetGet = operation("get", "/api/usage/budget");
+  assert.equal(budgetGet.parameters.find((parameter: any) => parameter.name === "apiKeyId")["x-sensitive"], true);
+  assert.equal(operation("post", "/api/usage/budget").requestBody["x-sensitive"], true);
+  assert.match(operation("get", "/api/usage/utilization").description, /email, name, and display name/i);
+});
+
+test("Tailscale login and daemon start are local-only spawn routes with handler auth and locked-mode gates", () => {
+  for (const route of [
+    "/api/tunnels/tailscale/login",
+    "/api/tunnels/tailscale/start-daemon",
+  ]) {
+    const routeOperation = operation("post", route);
+    assert.equal(routeOperation["x-local-only"], true);
+    assert.ok(hasScheme(routeOperation.security, "ManagementApiKeyBearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementGoogleApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementAnthropicApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(!hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(!hasScheme(routeOperation.security, "LocalCliTokenAuth"));
+    assert.ok(!hasScheme(routeOperation.security, "InternalServiceTokenAuth"));
+    assert.match(routeOperation.description, /central MANAGEMENT.*`isAuthenticated\(\)`/is);
+    assert.match(routeOperation.description, /LOCAL_ONLY.*spawn-capable.*no remote manage-scope bypass/s);
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.match(routeOperation.description, /locked.*blocks.*capability/i);
+    assert.equal(routeOperation.requestBody["x-sensitive"], true);
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+  assert.match(operation("post", "/api/tunnels/tailscale/login").description, /authentication URL.*sensitive/i);
+  assert.match(operation("post", "/api/tunnels/tailscale/start-daemon").description, /sudo password.*sensitive/i);
+});
+
+test("remaining v1 catalog and search reads use conditional CLIENT_API authentication", () => {
+  for (const [method, route] of [
+    ["head", "/api/v1/models"],
+    ["get", "/api/v1/models/{model}"],
+    ["head", "/api/v1/models/{model}"],
+    ["get", "/api/v1/provider-plugin-manifest"],
+    ["get", "/api/v1/search"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ClientApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "GoogleApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(!hasScheme(routeOperation.security, "LocalCliTokenAuth"));
+    assert.ok(!hasScheme(routeOperation.security, "InternalServiceTokenAuth"));
+    assert.match(routeOperation.description, /CLIENT_API/);
+    assert.match(routeOperation.description, /REQUIRE_API_KEY/);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+  for (const route of ["/api/v1/models", "/api/v1/models/{model}"]) {
+    const head = operation("head", route);
+    assert.match(head.description, /does not run.*`requireAuthForModels`/);
+  }
+  assert.match(operation("get", "/api/v1/models/{model}").description, /`isAuthRequired\(\)`.*`requireAuthForModels`/);
+  assert.match(operation("get", "/api/v1/provider-plugin-manifest").description, /service-backend model IDs and capabilities.*no provider credentials/i);
+  assert.match(operation("get", "/api/v1/provider-plugin-manifest").description, /publicly cacheable for 60 seconds/i);
+  assert.match(operation("get", "/api/v1/search").description, /no credentials are returned/i);
 });
