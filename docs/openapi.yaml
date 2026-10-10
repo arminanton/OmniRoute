@@ -59283,10 +59283,10 @@ components:
       properties:
         id: { type: string }
         timestamp: { type: string, format: date-time }
-        method: { type: string }
-        path: { type: string }
+        method: { type: [string, "null"] }
+        path: { type: [string, "null"] }
         status: { type: integer }
-        model: { type: string }
+        model: { type: [string, "null"] }
         requestedModel: { type: [string, "null"] }
         provider: { type: [string, "null"] }
         providerDisplay: { type: [string, "null"] }
@@ -59303,7 +59303,7 @@ components:
             cacheWrite: { type: [number, "null"], minimum: 0 }
             reasoning: { type: [number, "null"], minimum: 0 }
             compressed: { type: [number, "null"], minimum: 0 }
-          additionalProperties: true
+          additionalProperties: false
         cacheSource: { type: [string, "null"] }
         requestType: { type: [string, "null"] }
         sourceFormat: { type: [string, "null"] }
@@ -59314,6 +59314,7 @@ components:
         comboStepId: { type: [string, "null"] }
         comboExecutionKey: { type: [string, "null"] }
         error:
+          type: [string, object, array, number, boolean, "null"]
           description: Error summary text or a structured sanitized provider error.
         detailState:
           type: string
@@ -59323,7 +59324,8 @@ components:
         artifactSha256: { type: [string, "null"] }
         requestSummary:
           description: Bounded request preview decoded from the stored summary.
-          nullable: true
+          type: [object, "null"]
+          additionalProperties: true
         hasRequestBody: { type: boolean }
         hasResponseBody: { type: boolean }
         hasPipelineDetails: { type: boolean }

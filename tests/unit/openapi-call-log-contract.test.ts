@@ -9,6 +9,8 @@ type OpenApiSchema = {
   $ref?: string;
   const?: string;
   enum?: unknown[];
+  type?: string | string[];
+  additionalProperties?: boolean;
   properties?: Record<string, OpenApiSchema>;
 };
 const spec = yaml.load(fs.readFileSync(specPath, "utf8")) as {
@@ -38,6 +40,22 @@ test("call-log list combo parameter is a combo-only flag", () => {
     combo.description ?? "",
     /non-empty value selects only requests assigned to a combo/i
   );
+});
+
+test("call-log summary documents nullable SQLite fields and parsed summary payloads", () => {
+  const summary = spec.components.schemas.CallLogSummary;
+  assert.ok(summary, "CallLogSummary component should exist");
+  assert.deepEqual(summary.properties?.method?.type, ["string", "null"]);
+  assert.deepEqual(summary.properties?.path?.type, ["string", "null"]);
+  assert.deepEqual(summary.properties?.model?.type, ["string", "null"]);
+  assert.deepEqual(summary.properties?.requestSummary?.type, ["object", "null"]);
+  assert.equal(summary.properties?.tokens?.additionalProperties, false);
+  for (const jsonType of ["string", "object", "array", "number", "boolean", "null"]) {
+    assert.ok(
+      (summary.properties?.error?.type as string[] | undefined)?.includes(jsonType),
+      `call-log error schema must allow ${jsonType}`
+    );
+  }
 });
 
 test("call-log detail OpenAPI exposes the persisted diagnostic and transport shape", () => {
