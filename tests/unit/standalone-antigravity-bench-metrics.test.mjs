@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  _callLogWriterHealthSummaryForTest,
   _cgroupIoCountersDeltaForTest,
+  _cgroupProcessIoCountersDeltaForTest,
+  _parseClientDiagnosticsForTest,
 } from "../../scripts/perf/bench-standalone-antigravity-tool-roundtrip.mjs";
 
 test("cgroup I/O counters report nonnegative per-device deltas", () => {
@@ -21,34 +22,28 @@ test("cgroup I/O counters report nonnegative per-device deltas", () => {
     "8:0": { rbytes: 250, wbytes: 300, rios: 4, wios: 0 },
     "8:32": { rbytes: 40 },
   });
+  assert.equal(_cgroupIoCountersDeltaForTest(null, null), null);
 });
 
-test("call-log writer health summary retains peaks and the last bounded snapshot", () => {
-  const summary = _callLogWriterHealthSummaryForTest([
-    { unavailable: true, status: 503 },
-    {
-      workerState: "running",
-      activeJobs: 2,
-      queuedArtifacts: 4,
-      reservedArtifactBytes: 1_024,
-      preparationRefusalsTotal: 1,
-    },
-    {
-      workerState: "idle",
-      activeJobs: 0,
-      queuedArtifacts: 1,
-      reservedArtifactBytes: 256,
-      preparationRefusalsTotal: 3,
-    },
-  ]);
+test("process I/O counters provide a fallback when cgroup io.stat is unavailable", () => {
+  const delta = _cgroupProcessIoCountersDeltaForTest(
+    { processCount: 2, counters: { read_bytes: 100, write_bytes: 200, syscw: 4 } },
+    { processCount: 1, counters: { read_bytes: 300, write_bytes: 800, syscw: 12 } }
+  );
 
-  assert.equal(summary.sampleCount, 2);
-  assert.equal(summary.unavailableSamples, 1);
-  assert.equal(summary.peak.activeJobs, 2);
-  assert.equal(summary.peak.queuedArtifacts, 4);
-  assert.equal(summary.peak.reservedArtifactBytes, 1_024);
-  assert.equal(summary.peak.preparationRefusalsTotal, 3);
-  assert.equal(summary.lastSnapshot.workerState, "idle");
-  assert.equal(summary.lastSnapshot.reservedArtifactBytes, 256);
-  assert.equal(Object.hasOwn(summary, "samples"), false);
+  assert.deepEqual(delta, { read_bytes: 200, write_bytes: 600, syscw: 8 });
+  assert.equal(_cgroupProcessIoCountersDeltaForTest(null, null), null);
+});
+
+test("benchmark parses the latest payload-free client timing diagnostics", () => {
+  const diagnostics = _parseClientDiagnosticsForTest(
+    [
+      "request finished",
+      'ANTIGRAVITY_CLIENT_DIAGNOSTICS {"completedRequests":10,"eventLoopDelayP95Ms":4}',
+      'ANTIGRAVITY_CLIENT_DIAGNOSTICS {"completedRequests":20,"eventLoopDelayP95Ms":8}',
+    ].join("\n")
+  );
+
+  assert.deepEqual(diagnostics, { completedRequests: 20, eventLoopDelayP95Ms: 8 });
+  assert.equal(_parseClientDiagnosticsForTest("no diagnostics"), null);
 });

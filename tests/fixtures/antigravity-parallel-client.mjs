@@ -67,10 +67,17 @@ async function turn(session, messages, stream, phaseSignal, turnNumber) {
       },
       body,
     });
+    const headersReceivedAt = performance.now();
     responseHeadersReceived++;
     stage = "response_body";
     const text = await response.text();
+    const bodyCompletedAt = performance.now();
     responseBodiesCompleted++;
+    responseTimingSamples.push({
+      headersMs: headersReceivedAt - startedAt,
+      bodyAfterHeadersMs: bodyCompletedAt - headersReceivedAt,
+      totalMs: bodyCompletedAt - startedAt,
+    });
     stage = "response_validation";
     assert.equal(response.status, 200, `unexpected gateway HTTP status ${response.status}`);
     if (!stream) return JSON.parse(text).choices[0].message;
@@ -113,7 +120,31 @@ let responseBodiesCompleted = 0;
 let requestBodyBuildMs = 0;
 let taskConstructionMs = 0;
 let maxClientRequestBytes = 0;
+const responseTimingSamples = [];
 const startedAt = performance.now();
+
+function percentile(sortedValues, fraction) {
+  if (sortedValues.length === 0) return null;
+  const index = Math.min(sortedValues.length - 1, Math.ceil(sortedValues.length * fraction) - 1);
+  return Math.round(sortedValues[index] * 100) / 100;
+}
+
+function summarizeResponseTimings(samples) {
+  const summary = {};
+  for (const field of ["headersMs", "bodyAfterHeadersMs", "totalMs"]) {
+    const values = samples
+      .map((sample) => sample[field])
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    summary[field] = {
+      count: values.length,
+      p50: percentile(values, 0.5),
+      p95: percentile(values, 0.95),
+      p99: percentile(values, 0.99),
+    };
+  }
+  return summary;
+}
 try {
   for (const count of sessionCounts) {
     const abort = new AbortController();
@@ -186,6 +217,7 @@ try {
       ...(process.env.ANTIGRAVITY_CAPTURE_MEMORY_BENCH === "1"
         ? { processMemory: snapshotProcessMemory() }
         : {}),
+      responseTimingMs: summarizeResponseTimings(responseTimingSamples),
       counts: sessionCounts,
     }) + "\n"
   );

@@ -83,6 +83,7 @@ function makeAudit() {
     tlsSocketErrors: 0,
     socketInformationalEvents: 0,
     socketErrorsByCode: {},
+    socketErrorsByMessage: {},
     socketErrorEvents: [],
     preloadLocalTlsSelfChecks: 0,
   };
@@ -101,10 +102,24 @@ function recordSocketError(transport, error) {
   else audit.tcpSocketErrors++;
   const key = `${transport}:${code}`;
   audit.socketErrorsByCode[key] = (audit.socketErrorsByCode[key] || 0) + 1;
+  const message =
+    String(error?.message || "unspecified")
+      .replace(/https?:\/\/[^\s)"']+/gi, "[url]")
+      .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "[ip]")
+      .replace(/:\d{1,5}\b/g, ":[port]")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120) || "unspecified";
+  let messageKey = `${transport}:${message}`;
+  if (!Object.hasOwn(audit.socketErrorsByMessage, messageKey)) {
+    if (Object.keys(audit.socketErrorsByMessage).length >= 16) messageKey = `${transport}:other`;
+  }
+  audit.socketErrorsByMessage[messageKey] = (audit.socketErrorsByMessage[messageKey] || 0) + 1;
   if (audit.socketErrorEvents.length < 32) {
     audit.socketErrorEvents.push({
       transport,
       code,
+      message,
       timestamp: Date.now(),
       elapsedMs: Number(process.hrtime.bigint() - auditStartedAt) / 1_000_000,
     });
