@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { parse } from "yaml";
 
 const TEST_DATA_DIR = fs.mkdtempSync(
   path.join(os.tmpdir(), "omniroute-call-log-provider-display-")
@@ -12,6 +13,17 @@ process.env.DATA_DIR = TEST_DATA_DIR;
 const core = await import("../../src/lib/db/core.ts");
 const callLogs = await import("../../src/lib/usage/callLogs.ts");
 const callLogsRoute = await import("../../src/app/api/usage/call-logs/route.ts");
+const callLogSummarySchema = (
+  parse(fs.readFileSync(path.join(process.cwd(), "docs/openapi.yaml"), "utf8")) as {
+    components: { schemas: Record<string, { properties?: Record<string, unknown> }> };
+  }
+).components.schemas.CallLogSummary.properties;
+
+function assertCallLogSummaryFieldsAreDocumented(row: object) {
+  for (const field of Object.keys(row)) {
+    assert.ok(callLogSummarySchema?.[field], `CallLogSummary schema should document ${field}`);
+  }
+}
 
 function resetTables() {
   const db = core.getDbInstance();
@@ -65,6 +77,7 @@ test("getCallLogs and getCallLogById expose providerDisplay from provider node n
 
   const rows = await callLogs.getCallLogs({ limit: 10 });
   assert.equal(rows.length, 1);
+  assertCallLogSummaryFieldsAreDocumented(rows[0]);
   assert.equal(rows[0].provider, providerId);
   assert.equal(rows[0].providerDisplay, "Bynara");
   assert.equal(rows[0].requestedModel, "bynara/gpt-4.1");
@@ -116,6 +129,8 @@ test("buildCallLogListRows adds providerDisplay to active and completed in-memor
 
   assert.ok(pending);
   assert.ok(completed);
+  assertCallLogSummaryFieldsAreDocumented(pending);
+  assertCallLogSummaryFieldsAreDocumented(completed);
   assert.equal(pending?.providerDisplay, "Bynara");
   assert.equal(completed?.providerDisplay, "Bynara");
   assert.equal(pending?.comboName, "Primary fallback");
