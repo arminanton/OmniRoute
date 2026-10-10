@@ -1023,6 +1023,7 @@ export async function getCallLogs(filter: any = {}) {
       cl.model LIKE @searchQ OR cl.path LIKE @searchQ OR cl.account LIKE @searchQ OR
       ${RESOLVED_ACCOUNT_SQL} LIKE @searchQ OR
       cl.requested_model LIKE @searchQ OR cl.provider LIKE @searchQ OR
+      pn.name LIKE @searchQ OR pn.prefix LIKE @searchQ OR
       cl.api_key_name LIKE @searchQ OR cl.api_key_id LIKE @searchQ OR
       cl.combo_name LIKE @searchQ OR CAST(cl.status AS TEXT) LIKE @searchQ
       OR cl.combo_step_id LIKE @searchQ OR cl.combo_execution_key LIKE @searchQ

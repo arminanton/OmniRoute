@@ -81,6 +81,7 @@ test("getCallLogs and getCallLogById expose providerDisplay from provider node n
   assert.equal(rows[0].provider, providerId);
   assert.equal(rows[0].providerDisplay, "Bynara");
   assert.equal(rows[0].requestedModel, "bynara/gpt-4.1");
+  assert.equal((await callLogs.getCallLogs({ search: "Bynara" })).length, 1);
 
   const detail = await callLogs.getCallLogById("log-provider-display-1");
   assert.ok(detail);

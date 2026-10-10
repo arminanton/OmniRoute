@@ -40,6 +40,10 @@ test("call-log list combo parameter is a combo-only flag", () => {
     combo.description ?? "",
     /non-empty value selects only requests assigned to a combo/i
   );
+
+  const search = parameters.find((parameter) => parameter.name === "search");
+  assert.ok(search, "search query parameter should be documented");
+  assert.match(search.description ?? "", /provider ID\/name\/prefix/i);
 });
 
 test("call-log summary documents nullable SQLite fields and parsed summary payloads", () => {

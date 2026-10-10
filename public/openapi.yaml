@@ -6512,6 +6512,10 @@ paths:
           schema: { type: string, minLength: 1 }
         - name: search
           in: query
+          description: >-
+            Substring-search persisted rows by model, path, account, provider ID/name/prefix, requested
+            model, API key, combo, status, correlation ID, combo execution identifiers, or error summary.
+            Active and recently completed in-memory rows are searched over the fields they currently expose.
           schema: { type: string }
         - name: correlationId
           in: query
