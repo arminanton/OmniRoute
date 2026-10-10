@@ -127,6 +127,105 @@ test("versioned inference request schemas preserve route validation constraints"
   ]);
 });
 
+test("OCR OpenAPI matches the transformed result, model constraints, auth, and status contract", () => {
+  const ocr = openapi.paths["/api/v1/ocr"]?.post;
+  assert.ok(ocr);
+  assert.match(ocr.description || "", /`\/v1\/ocr` is a supported alias/i);
+  const model = requestSchema("/api/v1/ocr", "post").properties?.model;
+  assert.equal(model?.minLength, 1);
+  assert.equal(model?.maxLength, 200);
+  assert.match(model?.description || "", /trimmed/i);
+
+  const response = openapi.components.schemas.OcrResponse;
+  assert.deepEqual(response.required, ["pages", "model"]);
+  assert.deepEqual(response.properties?.pages?.items?.required, ["index", "markdown"]);
+  assert.equal(response.properties?.pages?.items?.properties?.index?.minimum, 0);
+  assert.equal(response.properties?.pages?.items?.properties?.markdown?.type, "string");
+  assert.equal(response.properties?.usage_info?.type, "object");
+  assert.equal(response.properties?.text, undefined);
+  assert.equal(response.properties?.usage, undefined);
+
+  const security = ocr.security || [];
+  for (const name of [
+    "BearerAuth",
+    "ClientApiKeyAuth",
+    "GoogleApiKeyAuth",
+    "ManagementSessionAuth",
+  ]) {
+    assert.ok(
+      security.some((requirement) => name in requirement),
+      `${name} is accepted`
+    );
+  }
+  assert.ok(security.some((requirement) => Object.keys(requirement).length === 0));
+
+  const telemetryNames = [
+    "X-OmniRoute-Cache-Hit",
+    "X-OmniRoute-Decision",
+    "X-OmniRoute-Latency-Ms",
+    "X-OmniRoute-Model",
+    "X-OmniRoute-Provider",
+    "X-OmniRoute-Request-Id",
+    "X-OmniRoute-Response-Cost",
+    "X-OmniRoute-Tokens-In",
+    "X-OmniRoute-Tokens-Out",
+    "X-OmniRoute-Version",
+  ];
+  for (const name of telemetryNames) {
+    assert.ok(ocr.responses?.["200"]?.headers?.[name]?.$ref, `OCR documents ${name}`);
+  }
+
+  assert.equal(ocr.responses?.["401"]?.$ref, "#/components/responses/InferenceUnauthorized");
+  const resolveResponseSchema = (status: string) => {
+    const declared = ocr.responses?.[status];
+    assert.ok(declared, `OCR documents HTTP ${status}`);
+    const responseComponent = declared.$ref
+      ? openapi.components.responses[declared.$ref.split("/").at(-1)!]
+      : declared;
+    return responseComponent.content?.["application/json"]?.schema?.$ref;
+  };
+  for (const status of ["400", "401", "402", "403", "429", "500", "502", "503", "504", "default"]) {
+    assert.equal(
+      resolveResponseSchema(status),
+      "#/components/schemas/ApiErrorResponse",
+      `OCR HTTP ${status} has the runtime JSON error schema`
+    );
+  }
+  assert.equal(
+    ocr.responses?.["499"],
+    undefined,
+    "do not document cancellation before runtime support"
+  );
+});
+
+test("web-fetch OpenAPI documents route auth alternatives and provider URL constraints", () => {
+  const webFetch = openapi.paths["/api/v1/web/fetch"]?.post;
+  assert.ok(webFetch);
+  assert.match(webFetch.description || "", /`\/v1\/web\/fetch` is a supported alias/i);
+  assert.match(webFetch.description || "", /does not enforce an HTTP\/HTTPS scheme/i);
+  const security = webFetch.security || [];
+  for (const name of [
+    "BearerAuth",
+    "ClientApiKeyAuth",
+    "GoogleApiKeyAuth",
+    "ManagementSessionAuth",
+  ]) {
+    assert.ok(
+      security.some((requirement) => name in requirement),
+      `${name} is accepted`
+    );
+  }
+  assert.ok(security.some((requirement) => Object.keys(requirement).length === 0));
+  const url = openapi.components.schemas.WebFetchRequest.properties?.url;
+  assert.equal(url?.format, "uri");
+  assert.match(url?.description || "", /does not enforce HTTP\/HTTPS/i);
+  assert.equal(webFetch.responses?.["429"]?.$ref, "#/components/responses/RateLimited");
+  assert.equal(
+    webFetch.responses?.default?.content?.["application/json"]?.schema?.$ref,
+    "#/components/schemas/ApiErrorResponse"
+  );
+});
+
 test("analytics and Video Bridge contracts include required runtime response fields", () => {
   const analytics = openapi.components.schemas.SearchAnalyticsResponse;
   assert.deepEqual(analytics.required, [
@@ -371,11 +470,14 @@ test("embedding POST auth alternatives and provider-specific request shape match
 
 test("specialty inference operations document route and upstream error responses", () => {
   const errorRoutes = [
-    ["/api/v1/embeddings", ["400", "401", "402", "403", "429", "500", "503", "default"]],
-    ["/api/v1/multimodal-embeddings", ["400", "401", "402", "403", "429", "500", "503", "default"]],
+    ["/api/v1/embeddings", ["400", "401", "402", "403", "429", "499", "500", "503", "default"]],
+    [
+      "/api/v1/multimodal-embeddings",
+      ["400", "401", "402", "403", "429", "499", "500", "503", "default"],
+    ],
     [
       "/api/v1/providers/{provider}/embeddings",
-      ["400", "401", "402", "403", "429", "500", "503", "default"],
+      ["400", "401", "402", "403", "429", "499", "500", "503", "default"],
     ],
     ["/api/v1/rerank", ["400", "401", "403", "429", "499", "500", "503", "default"]],
     [
@@ -409,7 +511,7 @@ test("specialty inference operations document route and upstream error responses
   );
   const providerEmbeddingOperation = openapi.paths["/api/v1/providers/{provider}/embeddings"]?.post;
   assert.ok(providerEmbeddingOperation);
-  for (const status of ["400", "401", "403", "429", "500", "503", "default"]) {
+  for (const status of ["400", "401", "403", "429", "499", "500", "503", "default"]) {
     assert.equal(
       providerEmbeddingOperation.responses?.[status]?.$ref,
       "#/components/responses/ProviderEmbeddingError",
@@ -533,6 +635,7 @@ test("remaining media contracts describe inputs, auth, failures, catalog fields,
     ["/api/v1/audio/speech", "post"],
     ["/api/v1/audio/transcriptions", "post"],
     ["/api/v1/audio/translations", "post"],
+    ["/api/v1/ocr", "post"],
     ["/api/v1/music/generations", "post"],
     ["/api/v1/videos/generations", "post"],
   ] as const;

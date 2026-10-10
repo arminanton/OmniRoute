@@ -1475,13 +1475,26 @@ paths:
       tags: [Search]
       summary: Run a unified search
       description: >-
-        Searches the web, news, or X through a configured provider. Set `provider`
-        to `xquik-search` to use Xquik for X search. The aliases `xquik` and
-        `xquik_search` resolve to the same provider.
-        AnySearch (`anysearch-search`, aliases `anysearch` / `anysearch_search`)
-        provides free fallback-only web search.
+        Canonical path is `/api/v1/search`; `/v1/search` is a supported alias to
+        the same handler. Searches the web, news, or X through a configured
+        provider. Registered request aliases are `jina-ai`, `jina`, `brave`,
+        `serper`, `perplexity`, `exa`, `tavily`, `google-pse`, `linkup`,
+        `ollama`, `searchapi`, `youcom`, `searxng`, `zai`, `duckduckgo`,
+        `ctx7`, `c7`, `x_search`, `x`, `xquik`, `xquik_search`, `anysearch`,
+        and `anysearch_search`. `x-search`, `x_search`, `x`, `xquik-search`,
+        `xquik`, and `xquik_search` select X search regardless of
+        `search_type`. AnySearch aliases select free fallback-only web search.
+        The `synthesis` request field is reserved and currently ignored;
+        `answer` remains null.
+        Authentication is required when `REQUIRE_API_KEY` is enabled;
+        otherwise anonymous requests are accepted. Client API-key headers and
+        an authenticated dashboard session are also accepted.
       security:
         - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -1498,19 +1511,29 @@ paths:
                   type: string
                   minLength: 1
                   description: A search provider id or registered alias.
-                  examples: [xquik-search]
+                  examples: [brave-search, xquik-search, anysearch]
                 max_results:
-                  type: integer
-                  minimum: 1
-                  maximum: 100
+                  oneOf:
+                    - type: integer
+                      minimum: 1
+                      maximum: 100
+                    - type: string
+                      description: >-
+                        Runtime also coerces numeric strings to numbers before
+                        applying integer and range validation.
                   default: 5
                 search_type:
                   type: string
                   enum: [web, news, x]
                   default: web
                 offset:
-                  type: integer
-                  minimum: 0
+                  oneOf:
+                    - type: integer
+                      minimum: 0
+                    - type: string
+                      description: >-
+                        Runtime also coerces numeric strings to numbers before
+                        applying integer and non-negative validation.
                   default: 0
                 country:
                   type: string
@@ -1528,7 +1551,15 @@ paths:
                     snippet: { type: boolean, default: true }
                     full_page: { type: boolean, default: false }
                     format: { type: string, enum: [text, markdown], default: text }
-                    max_characters: { type: integer, minimum: 100, maximum: 100000 }
+                    max_characters:
+                      oneOf:
+                        - type: integer
+                          minimum: 100
+                          maximum: 100000
+                        - type: string
+                          description: >-
+                            Runtime also coerces numeric strings to numbers before
+                            applying integer and range validation.
                 filters:
                   type: object
                   properties:
@@ -1544,6 +1575,22 @@ paths:
                 provider_options:
                   type: object
                   additionalProperties: true
+                synthesis:
+                  type: object
+                  description: Reserved for future answer synthesis; currently accepted but ignored.
+                  properties:
+                    strategy: { type: string, enum: [none, auto, provider, internal], default: none }
+                    model: { type: string }
+                    max_tokens:
+                      oneOf:
+                        - type: integer
+                          minimum: 1
+                          maximum: 4000
+                        - type: string
+                          description: >-
+                            Runtime also coerces numeric strings to numbers before
+                            applying integer and range validation.
+                  additionalProperties: false
                 strict_filters:
                   type: boolean
                   default: false
@@ -1557,16 +1604,55 @@ paths:
                 $ref: "#/components/schemas/V1SearchResponse"
         "400":
           description: Invalid request, provider, credentials, or search type
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/InferenceUnauthorized"
         "403":
           description: Search provider blocked by API key or security policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "402":
+          description: Provider quota or billing limit rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: A search provider returned a not-found response.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "422":
+          description: A search provider rejected the request as unprocessable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "429":
-          description: Every eligible provider credential is rate limited
+          description: A request or eligible provider credential is rate limited.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "500":
           $ref: "#/components/responses/InternalError"
         "502":
           description: Search provider failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          description: Search provider request timed out.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        default:
+          description: Provider-specific status returned after search execution or failover.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/v1/chat/completions:
     post:
@@ -2028,6 +2114,11 @@ paths:
           $ref: "#/components/responses/InferenceForbidden"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "499":
+          description: The client cancelled embedding generation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
         "500":
@@ -2076,6 +2167,11 @@ paths:
           $ref: "#/components/responses/InferenceForbidden"
         "429":
           $ref: "#/components/responses/RateLimited"
+        "499":
+          description: The client cancelled embedding generation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           $ref: "#/components/responses/ServiceUnavailable"
         "500":
@@ -2154,6 +2250,8 @@ paths:
         "403":
           $ref: "#/components/responses/ProviderEmbeddingError"
         "429":
+          $ref: "#/components/responses/ProviderEmbeddingError"
+        "499":
           $ref: "#/components/responses/ProviderEmbeddingError"
         "503":
           $ref: "#/components/responses/ProviderEmbeddingError"
@@ -17612,7 +17710,8 @@ paths:
         - Images
       summary: Document OCR
       description: >-
-        Multi-provider document OCR endpoint (Mistral OCR–compatible request
+        Canonical path is `/api/v1/ocr`; `/v1/ocr` is a supported alias to the
+        same handler. Multi-provider document OCR endpoint (Mistral OCR–compatible request
         and response shape). Accepts a JSON body referencing a document/image
         and returns extracted text. `model` selects the provider via a
         `provider/model` prefix (e.g. `mistral/mistral-ocr-latest`,
@@ -17641,8 +17740,11 @@ paths:
               properties:
                 model:
                   type: string
+                  minLength: 1
+                  maxLength: 200
                   description: >-
-                    `provider/model` id or bare model id. Registered ids:
+                    Trimmed, non-empty `provider/model` id or bare model id,
+                    up to 200 characters. Registered ids:
                     `mistral/mistral-ocr-latest`,
                     `azure-document-intelligence/prebuilt-read`,
                     `vertex-deepseek-ocr/deepseek-ocr-maas`. Defaults to
@@ -17668,6 +17770,17 @@ paths:
       responses:
         "200":
           description: OCR result with extracted text.
+          headers:
+            X-OmniRoute-Cache-Hit: { $ref: "#/components/headers/OmniRouteCacheHit" }
+            X-OmniRoute-Decision: { $ref: "#/components/headers/OmniRouteDecision" }
+            X-OmniRoute-Latency-Ms: { $ref: "#/components/headers/OmniRouteLatencyMs" }
+            X-OmniRoute-Model: { $ref: "#/components/headers/OmniRouteModel" }
+            X-OmniRoute-Provider: { $ref: "#/components/headers/OmniRouteProvider" }
+            X-OmniRoute-Request-Id: { $ref: "#/components/headers/OmniRouteRequestId" }
+            X-OmniRoute-Response-Cost: { $ref: "#/components/headers/OmniRouteResponseCost" }
+            X-OmniRoute-Tokens-In: { $ref: "#/components/headers/OmniRouteTokensIn" }
+            X-OmniRoute-Tokens-Out: { $ref: "#/components/headers/OmniRouteTokensOut" }
+            X-OmniRoute-Version: { $ref: "#/components/headers/OmniRouteVersion" }
           content:
             application/json:
               schema:
@@ -17675,9 +17788,32 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          $ref: "#/components/responses/Unauthorized"
+          $ref: "#/components/responses/InferenceUnauthorized"
+        "402":
+          description: Provider quota or billing limit rejected the request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          $ref: "#/components/responses/InferenceForbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/InternalError"
+        "502":
+          $ref: "#/components/responses/InferenceProviderError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+        "504":
+          description: Asynchronous OCR operation did not complete before the polling limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        default:
+          description: OCR provider returned an HTTP status not listed above.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/v1/audio/translations:
     post:
       operationId: postApiV1AudioTranslations
@@ -44884,12 +45020,20 @@ paths:
         - V1 Web
       summary: Extract content from a URL
       description: >-
+        Canonical path is `/api/v1/web/fetch`; `/v1/web/fetch` is a supported
+        alias to the same handler.
         With no explicit provider, searches the configured provider pool and retries
         quota/rate-limit failures. Explicit-provider requests never fall back. Anonymous
-        requests are accepted when REQUIRE_API_KEY is disabled.
+        requests are accepted when REQUIRE_API_KEY is disabled. Client API-key
+        headers, Google API-key headers, and an authenticated dashboard session
+        are also accepted. The gateway validates URL syntax but does not enforce
+        an HTTP/HTTPS scheme; configured fetch providers may impose their own URL
+        restrictions.
       security:
         - BearerAuth: []
         - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
         - {}
       requestBody:
         required: true
@@ -55503,7 +55647,12 @@ components:
       type: object
       required: [url]
       properties:
-        url: { type: string, format: uri }
+        url:
+          type: string
+          format: uri
+          description: >-
+            URL syntax is validated by the gateway, but the gateway does not
+            enforce HTTP/HTTPS; supported schemes may depend on the selected provider.
         provider:
           type: string
           enum:
@@ -57363,15 +57512,23 @@ components:
 
     OcrResponse:
       type: object
-      description: Provider-normalized OCR result; page and text details vary by provider.
+      description: >-
+        OCR result with pages and model as the common shape. Azure and Vertex
+        transformations emit optional usage_info; Mistral currently passes
+        through its provider response, so additional provider fields may appear.
+      required: [pages, model]
       properties:
-        id: { type: string }
         model: { type: string }
         pages:
           type: array
-          items: { type: object, additionalProperties: true }
-        text: { type: string }
-        usage:
+          items:
+            type: object
+            required: [index, markdown]
+            properties:
+              index: { type: integer, minimum: 0 }
+              markdown: { type: string }
+            additionalProperties: true
+        usage_info:
           type: object
           additionalProperties: true
       additionalProperties: true
