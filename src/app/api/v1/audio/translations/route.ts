@@ -20,6 +20,7 @@ import {
 import { attachOmniRouteMetaToResponse } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { reserveSelectedAccountRequest } from "@omniroute/open-sse/services/accountRequestLease.ts";
+import { acquireConfiguredSharedAccountAdmission } from "@omniroute/open-sse/services/accountRequestAdmission.ts";
 
 /**
  * Handle CORS preflight
@@ -40,10 +41,17 @@ export async function OPTIONS() {
  * source audio language.
  */
 export async function POST(request) {
+  if (request.signal.aborted) {
+    return errorResponse(499, "Translation request cancelled");
+  }
+
   let formData;
   try {
     formData = await request.formData();
   } catch {
+    if (request.signal.aborted) {
+      return errorResponse(499, "Translation request cancelled");
+    }
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid multipart form data");
   }
 
@@ -91,21 +99,63 @@ export async function POST(request) {
     if (!credentials) {
       return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
     }
-    if (isAllRateLimitedCredentials(credentials)) {
-      return rateLimitedProviderResponse(provider, credentials);
-    }
   }
 
   const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
+  const releaseReservations = () => {
+    sharedAdmission?.release();
+    releaseAccountRequest();
+  };
   try {
+    if (isAllRateLimitedCredentials(credentials)) {
+      return rateLimitedProviderResponse(provider, credentials);
+    }
+    if (request.signal.aborted) {
+      return errorResponse(499, "Translation request cancelled");
+    }
+
+    const selectedProvider =
+      typeof (credentials as { provider?: unknown } | null)?.provider === "string"
+        ? (credentials as { provider: string }).provider
+        : providerConfig?.credentialProviderId || provider;
+    try {
+      sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+        provider: selectedProvider,
+        credentials,
+        signal: request.signal,
+      });
+    } catch (error) {
+      const admissionError = error as { code?: string; statusCode?: number; message?: string };
+      if (admissionError.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+        return errorResponse(
+          admissionError.statusCode || HTTP_STATUS.SERVICE_UNAVAILABLE,
+          admissionError.message || "Provider account capacity admission is unavailable"
+        );
+      }
+      throw error;
+    }
+
     let response = await handleAudioTranslation({
       formData,
       credentials,
       resolvedProvider: providerConfig,
       resolvedModel,
+      signal: sharedAdmission?.signal ?? request.signal,
     });
+    if (request.signal.aborted || sharedAdmission?.signal.aborted) {
+      try {
+        await response?.body?.cancel(request.signal.reason ?? sharedAdmission?.signal.reason);
+      } catch {
+        // A consumed/locked response body is already on its terminal path.
+      }
+      return errorResponse(499, "Translation request cancelled");
+    }
     if (response?.ok) {
       await clearRecoveredProviderState(credentials);
+      if (request.signal.aborted || sharedAdmission?.signal.aborted) {
+        return errorResponse(499, "Translation request cancelled");
+      }
       // No text body / playback duration available from the multipart upload, so
       // per-second pricing cannot be applied → cost 0 (ADD-only headers, body intact).
       response = attachOmniRouteMetaToResponse(response, {
@@ -117,7 +167,12 @@ export async function POST(request) {
       });
     }
     return response;
+  } catch (error) {
+    if (request.signal.aborted || sharedAdmission?.signal.aborted) {
+      return errorResponse(499, "Translation request cancelled");
+    }
+    throw error;
   } finally {
-    releaseAccountRequest();
+    releaseReservations();
   }
 }

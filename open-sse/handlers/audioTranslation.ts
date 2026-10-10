@@ -55,11 +55,13 @@ export async function handleAudioTranslation({
   credentials,
   resolvedProvider = null,
   resolvedModel = null,
+  signal,
 }: {
   formData: FormData;
   credentials?: TranslationCredentials | null;
   resolvedProvider?: AudioProvider | null;
   resolvedModel?: string | null;
+  signal?: AbortSignal;
 }): Promise<Response> {
   const model = formData.get("model");
   if (typeof model !== "string" || !model) {
@@ -104,16 +106,19 @@ export async function handleAudioTranslation({
     }
   }
 
+  signal?.throwIfAborted();
   const { body: multipartBody, contentType: multipartCT } = await buildMultipartBody(file, {
     model: modelId as string,
     ...extraFields,
   });
 
   try {
+    signal?.throwIfAborted();
     const res = await fetch(providerConfig.baseUrl, {
       method: "POST",
       headers: { ...buildAuthHeaders(providerConfig, token), "Content-Type": multipartCT },
       body: multipartBody,
+      signal,
     });
 
     if (!res.ok) {
@@ -129,6 +134,7 @@ export async function handleAudioTranslation({
       headers: { "Content-Type": respContentType },
     });
   } catch (err) {
+    if (signal?.aborted) return errorResponse(499, "Translation request cancelled");
     const error = err instanceof Error ? err : new Error(String(err));
     return errorResponse(500, `Translation request failed: ${error.message}`);
   }

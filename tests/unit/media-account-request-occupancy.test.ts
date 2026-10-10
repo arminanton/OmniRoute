@@ -69,6 +69,17 @@ function transcriptionRequest(model: string, signal?: AbortSignal) {
   });
 }
 
+function translationRequest(signal?: AbortSignal) {
+  const form = new FormData();
+  form.set("model", "openai/whisper-1");
+  form.set("file", new Blob([new Uint8Array([4, 5, 6])], { type: "audio/wav" }), "clip.wav");
+  return new Request("http://localhost/v1/audio/translations", {
+    method: "POST",
+    body: form,
+    ...(signal ? { signal } : {}),
+  });
+}
+
 test.before(async () => {
   audioConnectionId = await seedConnection("openai", "media-audio", {}, 1);
   asyncAudioConnectionId = await seedConnection("assemblyai", "media-audio-async", {}, 1);
@@ -211,6 +222,54 @@ test("synchronous transcription shares the configured account cap and aborts the
   });
 });
 
+test("translation shares the configured account cap and releases it on client abort", async () => {
+  await withSharedAdmission(async () => {
+    const controller = new AbortController();
+    let providerSignal: AbortSignal | undefined;
+    let startUpstream!: () => void;
+    const upstreamStarted = new Promise<void>((resolve) => (startUpstream = resolve));
+    globalThis.fetch = (async (_url: unknown, init: RequestInit = {}) => {
+      assert.equal(occupancy.getAccountRequestInFlightCount(audioConnectionId), 1);
+      providerSignal = init.signal as AbortSignal | undefined;
+      startUpstream();
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(providerSignal?.reason ?? new Error("aborted"));
+        providerSignal?.addEventListener("abort", abort, { once: true });
+        if (providerSignal?.aborted) abort();
+      });
+    }) as typeof fetch;
+
+    const responsePromise = translationsRoute.POST(translationRequest(controller.signal));
+    await upstreamStarted;
+    assert.ok(providerSignal, "selected shared lease reaches the translation fetch");
+
+    let nextAcquired = false;
+    const next = acquireConfiguredSharedAccountAdmission({
+      provider: "openai",
+      credentials: {
+        provider: "openai",
+        connectionId: audioConnectionId,
+        maxConcurrent: 1,
+        providerSpecificData: { quotaPreflightEnabled: false },
+      },
+    }).then((lease) => {
+      nextAcquired = true;
+      return lease;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(nextAcquired, false, "the shared slot stays held for translation work");
+
+    controller.abort(new Error("synthetic client disconnect"));
+    const response = await responsePromise;
+    assert.equal(response.status, 499);
+    assert.equal(providerSignal.aborted, true);
+    assert.equal(occupancy.getAccountRequestInFlightCount(audioConnectionId), 0);
+    const lease = await next;
+    assert.equal(nextAcquired, true, "cancellation releases the shared slot");
+    lease?.release();
+  });
+});
+
 test("async transcription keeps local occupancy through terminal polling after caller abort", async () => {
   await withSharedAdmission(async () => {
     const controller = new AbortController();
@@ -255,7 +314,11 @@ test("async transcription keeps local occupancy through terminal polling after c
     assert.equal(occupancy.getAccountRequestInFlightCount(asyncAudioConnectionId), 1);
     assert.equal(uploadSignal?.aborted, true, "caller cancellation is propagated to upload work");
     assert.equal(submitSignal, undefined, "job dispatch is detached after the pre-dispatch check");
-    assert.equal(pollSignal, undefined, "accepted remote work is polled without caller cancellation");
+    assert.equal(
+      pollSignal,
+      undefined,
+      "accepted remote work is polled without caller cancellation"
+    );
     finishPoll(Response.json({ status: "completed", text: "done" }));
     const response = await responsePromise;
     assert.equal(response.status, 499);
