@@ -11640,11 +11640,47 @@ paths:
       x-local-only: true
       tags: [System]
       summary: List registered background jobs
-      description: Local-only runtime administration. Returns each registered job and its latest run.
+      description: >-
+        Local-only runtime administration; returns job configuration and latest run data, which are
+        sensitive operational records. Locked local peers require management authentication; an
+        unlocked `requireLogin=false` installation permits anonymous local/LAN access. Scoped `oma_`
+        access tokens use method-derived `read` scope for GET. Remote peers are rejected by default;
+        an operator can explicitly configure a path-specific manage-scope bypass for this prefix,
+        in which case a management API key or dashboard session is required. The default bypass list
+        contains only `/api/mcp/`.
       x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security: [{ }]
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with an explicitly configured manage-scope bypass for this eligible prefix
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - ManagementSessionAuth: []
+          note: The default bypass allowlist is only `/api/mcp/`; remote access is not enabled for jobs by default.
+        - when: Remote peer without an explicitly configured manage-scope bypass
+          note: Rejected by the LOCAL_ONLY peer gate before ordinary management authentication.
       responses:
         "200":
           description: Registered jobs
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JobsListResponse" }
@@ -11653,6 +11689,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/jobs/{id}/enable:
     post:
@@ -11660,8 +11699,22 @@ paths:
       x-local-only: true
       tags: [System]
       summary: Enable a background job
-      description: Local-only runtime administration. Enables the job and restarts its timer.
+      description: >-
+        Local-only runtime administration. Enables the job and restarts its timer. Locked local
+        peers require management auth; `requireLogin=false` permits anonymous local/LAN requests.
+        Scoped `oma_` access tokens use method-derived `write` scope. Remote peers are rejected by
+        default; a path-specific manage-scope bypass can be explicitly configured, requiring a
+        management API key or dashboard session. The default bypass list is only `/api/mcp/`.
       x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -11671,6 +11724,7 @@ paths:
       responses:
         "200":
           description: Job enabled
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JobEnabledResponse" }
@@ -11684,6 +11738,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/jobs/{id}/disable:
     post:
@@ -11691,8 +11748,22 @@ paths:
       x-local-only: true
       tags: [System]
       summary: Disable a background job
-      description: Local-only runtime administration. Disables the job and stops its timer.
+      description: >-
+        Local-only runtime administration. Disables the job and stops its timer. Locked local
+        peers require management auth; `requireLogin=false` permits anonymous local/LAN requests.
+        Scoped `oma_` access tokens use method-derived `write` scope. Remote peers are rejected by
+        default; a path-specific manage-scope bypass can be explicitly configured, requiring a
+        management API key or dashboard session. The default bypass list is only `/api/mcp/`.
       x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -11702,6 +11773,7 @@ paths:
       responses:
         "200":
           description: Job disabled
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JobEnabledResponse" }
@@ -11715,6 +11787,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/jobs/{id}/run-now:
     post:
@@ -11724,8 +11799,22 @@ paths:
       summary: Trigger a background job
       description: >-
         Local-only runtime administration. Starts the job, or waits for an in-flight
-        run before queueing the next one, subject to OMNIROUTE_RUNNOW_TIMEOUT_MS.
+        run before queueing the next one, subject to OMNIROUTE_RUNNOW_TIMEOUT_MS. The timeout
+        bounds the request wait and does not cancel an already-dispatched job. Locked local peers
+        require management auth; `requireLogin=false` permits anonymous local/LAN requests. Scoped
+        `oma_` access tokens use method-derived `write` scope. Remote peers are rejected by default;
+        a path-specific manage-scope bypass can be explicitly configured, requiring a management
+        API key or dashboard session. The default bypass list is only `/api/mcp/`.
       x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -11735,6 +11824,7 @@ paths:
       responses:
         "200":
           description: Job trigger accepted
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JobTriggerResponse" }
@@ -11748,6 +11838,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/jobs/{id}/runs:
     get:
@@ -11755,8 +11848,23 @@ paths:
       x-local-only: true
       tags: [System]
       summary: Read background-job run history
-      description: Local-only runtime administration. Returns newest-first run history for one job.
+      description: >-
+        Local-only runtime administration. Returns newest-first run history for one job; run
+        records and job IDs are sensitive operational data. Locked local peers require management
+        auth; `requireLogin=false` permits anonymous local/LAN requests. Scoped `oma_` access tokens
+        use method-derived `read` scope. Remote peers are rejected by default; a path-specific
+        manage-scope bypass can be explicitly configured, requiring a management API key or
+        dashboard session. The default bypass list is only `/api/mcp/`.
       x-internal: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -11766,6 +11874,7 @@ paths:
       responses:
         "200":
           description: Job run history
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/JobRunHistoryResponse" }
@@ -11779,6 +11888,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   # ─── Log export ─────────────────────────────────────────────────
 
@@ -23677,30 +23789,102 @@ paths:
       tags:
         - Local
       summary: "POST local › redis › start"
+      description: >-
+        Starts the managed Redis container using the configured Podman/Docker runtime and port
+        binding. `/api/local/` is both `LOCAL_ONLY` and spawn-capable, so the central peer gate
+        blocks remote callers before auth and cannot be bypassed with a manage key. Locked local
+        peers require management auth; `requireLogin=false` permits anonymous local/LAN requests.
+        Scoped `oma_` access tokens use method-derived `write` scope. The route-level
+        `isLocalRequestAllowed()` helper is secondary; when its injected request headers are absent
+        in production, it also requires `OMNIROUTE_LOCAL_ENDPOINTS_ENABLED=1`.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Redis container start result, including runtime and command output.
+          x-sensitive: true
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "500":
+          description: Redis container startup failed; the response includes a sanitized runtime error.
+        "503":
+          description: No container runtime is installed or management authentication is unavailable.
   /api/local/redis/status:
     get:
       operationId: getApiLocalRedisStatus
       tags:
         - Local
       summary: "GET local › redis › status"
+      description: >-
+        Probes Redis runtime/container state and local Redis reachability. `/api/local/` is both
+        `LOCAL_ONLY` and spawn-capable, so the central peer gate blocks remote callers before auth
+        and cannot be bypassed with a manage key. Locked local peers require management auth;
+        `requireLogin=false` permits anonymous local/LAN requests. Scoped `oma_` access tokens use
+        method-derived `read` scope. The route-level `isLocalRequestAllowed()` helper is secondary;
+        when its injected request headers are absent in production, it also requires
+        `OMNIROUTE_LOCAL_ENDPOINTS_ENABLED=1`.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Redis container and endpoint status without returning the configured Redis URL.
+          x-sensitive: true
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "500":
+          description: Redis runtime status could not be read.
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/local/redis/stop:
     post:
       operationId: postApiLocalRedisStop
       tags:
         - Local
       summary: "POST local › redis › stop"
+      description: >-
+        Stops the managed Redis container. `/api/local/` is both `LOCAL_ONLY` and spawn-capable,
+        so the central peer gate blocks remote callers before auth and cannot be bypassed with a
+        manage key. Locked local peers require management auth; `requireLogin=false` permits
+        anonymous local/LAN requests. Scoped `oma_` access tokens use method-derived `write` scope.
+        The route-level `isLocalRequestAllowed()` helper is secondary; when its injected request
+        headers are absent in production, it also requires `OMNIROUTE_LOCAL_ENDPOINTS_ENABLED=1`.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Redis container stop result, including runtime and command output.
+          x-sensitive: true
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "404":
+          description: The managed Redis container is not running or was not found.
+        "500":
+          description: Redis container stop failed; the response includes a sanitized runtime error.
+        "503":
+          description: No container runtime is installed or management authentication is unavailable.
   /api/logs/{id}:
     parameters:
       - name: id
@@ -24039,19 +24223,153 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › sse"
+      description: >-
+        Opens the MCP SSE server-initiated message stream when MCP is enabled and transport is `sse`.
+        Tool/resource data and streamed frames are sensitive. The `/api/mcp/` prefix is `LOCAL_ONLY`,
+        with the default remote manage-scope bypass enabled for MCP: remote callers need an API key
+        with `mcp:connect`, `manage`, or `admin` scope, or a dashboard session. Locally admitted
+        callers may use the same credentials; `requireLogin=false` permits anonymous local/LAN
+        access. Scoped `oma_` access tokens use the `/api/mcp` admin override and require `admin`.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security: [{ }]
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with the default MCP manage-scope bypass
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+          note: >-
+            The remote locality bypass validates API keys or a dashboard session before normal
+            management auth; it does not accept scoped `oma_` access tokens.
       responses:
         "200":
-          description: OK
+          description: MCP server-initiated SSE stream.
+          x-sensitive: true
+        "400":
+          description: MCP is enabled with a transport other than `sse`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503":
+          description: MCP is disabled or management auth is unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiMcpSse
       tags:
         - Mcp
       summary: "POST mcp › sse"
+      description: >-
+        Sends a JSON-RPC message to the MCP SSE transport when MCP is enabled and transport is `sse`.
+        Request/response content can contain tool arguments, resources, prompts, and results and is
+        sensitive. The `/api/mcp/` prefix is `LOCAL_ONLY`, with the default remote manage-scope
+        bypass enabled for MCP: remote callers need an API key with `mcp:connect`, `manage`, or
+        `admin` scope, or a dashboard session. Locally admitted callers may use the same credentials;
+        `requireLogin=false` permits anonymous local/LAN access. Scoped `oma_` access tokens use the
+        `/api/mcp` admin override and require `admin`.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security: [{ }]
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with the default MCP manage-scope bypass
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+          note: >-
+            The remote locality bypass validates API keys or a dashboard session before normal
+            management auth; it does not accept scoped `oma_` access tokens.
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: JSON-RPC request to the MCP server; may contain sensitive tool arguments.
+              additionalProperties: true
       responses:
         "200":
-          description: OK
+          description: MCP SSE transport response.
+          x-sensitive: true
+        "400":
+          description: Invalid JSON-RPC request or MCP transport is not set to `sse`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503":
+          description: MCP is disabled or management auth is unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/mcp/status:
     get:
       operationId: getApiMcpStatus
@@ -24096,28 +24414,223 @@ paths:
       tags:
         - Mcp
       summary: "DELETE mcp › stream"
+      description: >-
+        Ends an MCP Streamable HTTP session. Session identifiers and stream state are sensitive.
+        The `/api/mcp/` prefix is `LOCAL_ONLY`, with the default remote manage-scope bypass enabled
+        for MCP: remote callers need an API key with `mcp:connect`, `manage`, or `admin` scope, or a
+        dashboard session. Locally admitted callers may use the same credentials; `requireLogin=false`
+        permits anonymous local/LAN access. Scoped `oma_` access tokens use the `/api/mcp` admin
+        override and require `admin`.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security: [{ }]
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with the default MCP manage-scope bypass
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+          note: >-
+            The remote locality bypass validates API keys or a dashboard session before normal
+            management auth; it does not accept scoped `oma_` access tokens.
       responses:
         "200":
-          description: OK
+          description: MCP Streamable HTTP session termination result.
+          x-sensitive: true
+        "400":
+          description: MCP is enabled with a transport other than `streamable-http`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503":
+          description: MCP is disabled or management auth is unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
     get:
       operationId: getApiMcpStream
       tags:
         - Mcp
       summary: "GET mcp › stream"
+      description: >-
+        Opens an MCP Streamable HTTP server-initiated SSE stream. Tool/resource data and streamed
+        frames are sensitive. The `/api/mcp/` prefix is `LOCAL_ONLY`, with the default remote
+        manage-scope bypass enabled for MCP: remote callers need an API key with `mcp:connect`,
+        `manage`, or `admin` scope, or a dashboard session. Locally admitted callers may use the
+        same credentials; `requireLogin=false` permits anonymous local/LAN access. Scoped `oma_`
+        access tokens use the `/api/mcp` admin override and require `admin`.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security: [{ }]
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with the default MCP manage-scope bypass
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+          note: >-
+            The remote locality bypass validates API keys or a dashboard session before normal
+            management auth; it does not accept scoped `oma_` access tokens.
       responses:
         "200":
-          description: OK
+          description: MCP server-initiated SSE stream.
+          x-sensitive: true
+        "400":
+          description: MCP is enabled with a transport other than `streamable-http`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503":
+          description: MCP is disabled or management auth is unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiMcpStream
       tags:
         - Mcp
       summary: "POST mcp › stream"
+      description: >-
+        Sends a JSON-RPC request to the MCP Streamable HTTP transport. Tool arguments, resources,
+        prompts, and results are sensitive. The `/api/mcp/` prefix is `LOCAL_ONLY`, with the default
+        remote manage-scope bypass enabled for MCP: remote callers need an API key with `mcp:connect`,
+        `manage`, or `admin` scope, or a dashboard session. Locally admitted callers may use the same
+        credentials; `requireLogin=false` permits anonymous local/LAN access. Scoped `oma_` access
+        tokens use the `/api/mcp` admin override and require `admin`.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - McpConnectApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - McpConnectGoogleApiKeyAuth: []
+        - McpConnectAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security: [{ }]
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with the default MCP manage-scope bypass
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - McpConnectApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - McpConnectGoogleApiKeyAuth: []
+            - McpConnectAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+          note: >-
+            The remote locality bypass validates API keys or a dashboard session before normal
+            management auth; it does not accept scoped `oma_` access tokens.
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: JSON-RPC request to the MCP server; may contain sensitive tool arguments.
+              additionalProperties: true
       responses:
         "200":
-          description: OK
+          description: MCP Streamable HTTP JSON-RPC response.
+          x-sensitive: true
+        "400":
+          description: Invalid JSON-RPC request or MCP transport is not set to `streamable-http`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "503":
+          description: MCP is disabled or management auth is unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/mcp/tools:
     get:
       operationId: getApiMcpTools
@@ -24277,10 +24790,59 @@ paths:
       tags:
         - Middleware
       summary: "DELETE middleware › hooks › <name>"
+      description: >-
+        Deletes a stored middleware hook and unregisters it from the live registry. Middleware code
+        is executed on the request path, so this route is `LOCAL_ONLY` by default. Locked local peers
+        require management auth; `requireLogin=false` permits anonymous local/LAN access. Scoped
+        `oma_` access tokens use method-derived `write` scope for DELETE. Remote peers are rejected
+        by default; an operator may explicitly add this eligible prefix to the live manage-scope
+        bypass settings, which then accepts a management API key or dashboard session. The default
+        bypass list is only `/api/mcp/`.
       x-local-only: true
+      security:
+        - BearerAuth: []
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-authentication-branches:
+        - when: Local peer or trusted private-LAN peer with management auth unlocked
+          security: [{ }]
+        - when: Local peer or trusted private-LAN peer with management auth locked
+          security:
+            - BearerAuth: []
+            - ManagementApiKeyBearerAuth: []
+            - ManagementGoogleApiKeyAuth: []
+            - ManagementAnthropicApiKeyAuth: []
+            - ManagementSessionAuth: []
+            - LocalCliTokenAuth: []
+            - InternalServiceTokenAuth: []
+        - when: Remote peer with an explicitly configured manage-scope bypass for this eligible prefix
+          security:
+            - ManagementApiKeyBearerAuth: []
+            - ManagementSessionAuth: []
+          note: The default bypass allowlist is only `/api/mcp/`; remote access is not enabled for middleware by default.
+        - when: Remote peer without an explicitly configured manage-scope bypass
+          note: Rejected by the LOCAL_ONLY peer gate before ordinary management authentication.
       responses:
         "200":
-          description: OK
+          description: Hook removed from persistent storage and the live middleware registry.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "404":
+          description: Middleware hook was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Hook persistence or runtime deregistration failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     get:
       operationId: getApiMiddlewareHooksByName
       tags:
@@ -39068,10 +39630,23 @@ paths:
       description: >-
         Lists curated rerank providers first, then local provider nodes that expose chat,
         Responses, or rerank APIs. Credentials are represented only by hasKey; secret values are
-        never returned. Authentication follows the instance's management-login policy.
+        never returned, but provider availability and configured-node metadata are sensitive.
+        The central route is MANAGEMENT and applies conditional management authentication; the
+        handler then separately calls `isAuthenticated()`, which accepts a dashboard session or
+        management-scoped API key but does not understand scoped `oma_` access tokens, loopback CLI
+        tokens, or internal-service tokens. Those credentials may pass the central gate and still
+        be rejected by this handler. With `requireLogin=false`, both checks permit anonymous access.
+        This route is not LOCAL_ONLY.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Provider listings for the memory rerank selector
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -39095,8 +39670,17 @@ paths:
                               id: { type: string }
                               name: { type: string }
                               dimensions: { type: [integer, "null"] }
-        "401": { description: Authentication required when the instance policy requires it }
+        "401":
+          description: Central management auth or the route-level `isAuthenticated()` check rejected the caller.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500": { description: Provider listing could not be built }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/providers/{id}/browser-login/{action}:
     parameters:
@@ -40395,6 +40979,27 @@ components:
         Bearer API key whose metadata includes `manage` or `admin` scope. Legacy database-backup
         handlers that call `isAuthenticated()` validate these API keys and dashboard sessions when
         authentication is required; they do not validate `oma_live_` access tokens in that mode.
+    McpConnectApiKeyBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: OmniRoute API key
+      description: >-
+        Bearer OmniRoute API key accepted by MCP transports when its metadata includes `mcp:connect`,
+        `manage`, or `admin`. This is an API key scope, not a scoped `oma_` access token.
+    McpConnectGoogleApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-goog-api-key
+      description: >-
+        API key in `x-goog-api-key` accepted by MCP transports with `mcp:connect`, `manage`, or
+        `admin` scope.
+    McpConnectAnthropicApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: >-
+        API key in `x-api-key` accepted by MCP transports with `mcp:connect`, `manage`, or `admin`
+        scope when the Anthropic version/User-Agent parser condition is satisfied.
     ChaosModeApiKeyBearerAuth:
       type: http
       scheme: bearer

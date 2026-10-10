@@ -34,15 +34,15 @@ the Go sidecar is exposed through the relay endpoints.
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
 contract is still stronger on route coverage than schema completeness: the deterministic inventory
 in [OPENAPI_CONTRACT_INVENTORY.md](OPENAPI_CONTRACT_INVENTORY.md) finds 981 body-bearing response
-candidates, of which 866 declare schemas on every non-`204` success response and 115 do not. The
+candidates, of which 896 declare schemas on every non-`204` success response and 85 do not. The
 remaining 48 operations are accounted for explicitly: 16 are `204`-only, 30 declare no `2xx`, and
 two are bodyless `HEAD` probes with a `200` response. The 30 without `2xx` include eight redirects,
 one WebSocket upgrade, ten catch-all not-found operations, six bodyless `HEAD` catch-alls/artifact
 probes, and five error-only operations. This differs from the earlier 600/387 counts because those
 were an outdated snapshot and counted the two `HEAD` probes in the non-`204` denominator. The
-inventory also finds 871 operations with effective operation-level security declarations (854
-nonempty, 17 explicitly public), 158 with no effective declaration, and 341 operations whose
-text signals conditional auth; all 341 now have a security declaration. The A2A persisted-history
+inventory also finds 886 operations with effective operation-level security declarations (869
+nonempty, 17 explicitly public), 143 with no effective declaration, and 356 operations whose
+text signals conditional auth; all 356 now have a security declaration. The A2A persisted-history
 route lists the accepted API-key/management alternatives and scopes its anonymous alternative to
 the unlocked local-first configuration. The login/setup status GET explicitly declares public
 access for the unauthenticated setup screen. These counts measure OpenAPI declarations, not runtime
@@ -2077,8 +2077,8 @@ image, or production deployment were involved.
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
 - Continue the source audit for response schemas and conditional auth behavior. The deterministic
-  inventory reports 866 of 981 body-bearing response candidates with declared schemas on every
-  non-`204` success (115 gaps); route coverage is 705/705. It also lists 158 operations with no
-  effective security declaration; all 341 operations whose text signals conditional auth now have
+  inventory reports 896 of 981 body-bearing response candidates with declared schemas on every
+  non-`204` success (85 gaps); route coverage is 705/705. It also lists 143 operations with no
+  effective security declaration; all 356 operations whose text signals conditional auth now have
   declarations. These are documentation review queues, not proof that handlers are insecure or
   that the declared response schemas are semantically complete.
