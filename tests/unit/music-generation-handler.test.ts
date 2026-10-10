@@ -9,7 +9,8 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "omniroute-music-"));
 const { handleMusicGeneration } = await import("../../open-sse/handlers/musicGeneration.ts");
 const { MUSIC_PROVIDERS } = await import("../../open-sse/config/musicRegistry.ts");
 
-function immediateTimeout(callback, _ms, ...args) {
+function immediateTimeout(callback, ms, ...args) {
+  if (typeof ms === "number" && ms >= 100_000) return 0;
   if (typeof callback === "function") callback(...args);
   return 0;
 }

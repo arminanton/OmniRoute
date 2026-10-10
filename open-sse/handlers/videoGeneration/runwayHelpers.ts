@@ -105,7 +105,7 @@ export function extractRunwayFailureMessage(task) {
   return null;
 }
 
-export async function normalizeRunwayVideoResult(task, body) {
+export async function normalizeRunwayVideoResult(task, body, signal?: AbortSignal) {
   const urls = extractRunwayOutputUrls(task);
   if (urls.length === 0) {
     throw new Error(
@@ -116,7 +116,7 @@ export async function normalizeRunwayVideoResult(task, body) {
 
   const videos = [];
   for (const url of urls) {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal });
     if (!response.ok) throw new Error(`Runway output fetch failed (${response.status})`);
     const arrayBuffer = await response.arrayBuffer();
     videos.push({ b64_json: Buffer.from(arrayBuffer).toString("base64"), format: "mp4" });

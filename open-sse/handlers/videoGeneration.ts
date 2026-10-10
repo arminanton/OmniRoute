@@ -976,8 +976,11 @@ async function handleRunwayVideoGeneration({
 
   const ratio = resolveRunwayRatio(body);
   const duration = resolveRunwayDuration(body);
-  const timeoutMs = resolvePositiveInteger(body.timeout_ms, 300000);
-  const pollIntervalMs = resolvePositiveInteger(body.poll_interval_ms, 5000);
+  const timeoutMs = Math.min(2_147_483_647, resolvePositiveInteger(body.timeout_ms, 300_000));
+  const pollIntervalMs = Math.min(
+    2_147_483_647,
+    resolvePositiveInteger(body.poll_interval_ms, 5_000)
+  );
   const submitUrl = buildRunwayApiUrl(
     useImageToVideo ? "/image_to_video" : "/text_to_video",
     providerConfig.baseUrl
@@ -1004,11 +1007,22 @@ async function handleRunwayVideoGeneration({
     );
   }
 
+  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineController = new AbortController();
+  const deadlineError = Object.assign(new Error("Runway task timed out"), {
+    name: "TimeoutError",
+    status: 504,
+  });
+  const deadlineTimer = setTimeout(() => deadlineController.abort(deadlineError), timeoutMs);
+  let taskId = "";
+  let taskAccepted = false;
+
   try {
     const submitResponse = await fetch(submitUrl, {
       method: "POST",
       headers,
       body: JSON.stringify(upstreamBody),
+      signal: deadlineController.signal,
     });
 
     if (!submitResponse.ok) {
@@ -1028,11 +1042,16 @@ async function handleRunwayVideoGeneration({
         duration: Date.now() - startTime,
         error: errorText.slice(0, 500),
       }).catch(() => {});
-      return { success: false, status: submitResponse.status, error: errorText };
+      return {
+        success: false,
+        status: submitResponse.status,
+        ...(submitResponse.status >= 500 ? { terminal: true } : {}),
+        error: errorText,
+      };
     }
 
     const submitData = await submitResponse.json();
-    const taskId = typeof submitData?.id === "string" ? submitData.id : "";
+    taskId = typeof submitData?.id === "string" ? submitData.id : "";
     if (!taskId) {
       const errorText = `Runway submit did not return task id: ${JSON.stringify(submitData).slice(0, 400)}`;
       saveCallLog({
@@ -1044,18 +1063,19 @@ async function handleRunwayVideoGeneration({
         duration: Date.now() - startTime,
         error: errorText,
       }).catch(() => {});
-      return { success: false, status: 502, error: errorText };
+      return { success: false, status: 502, terminal: true, error: errorText };
     }
+    taskAccepted = true;
 
-    const deadline = Date.now() + timeoutMs;
     let lastTask = null;
 
-    while (Date.now() < deadline) {
+    while (Date.now() < deadlineAt && !deadlineController.signal.aborted) {
       const taskResponse = await fetch(
         buildRunwayApiUrl(`/tasks/${encodeURIComponent(taskId)}`, providerConfig.baseUrl),
         {
           method: "GET",
           headers,
+          signal: deadlineController.signal,
         }
       );
 
@@ -1077,7 +1097,7 @@ async function handleRunwayVideoGeneration({
           error: errorText.slice(0, 500),
           responseBody: { taskId, stage: "poll" },
         }).catch(() => {});
-        return { success: false, status: taskResponse.status, error: errorText };
+        return { success: false, status: taskResponse.status, terminal: true, error: errorText };
       }
 
       const task = await taskResponse.json();
@@ -1085,7 +1105,7 @@ async function handleRunwayVideoGeneration({
       const status = String(task?.status || "").toUpperCase();
 
       if (status === "SUCCEEDED") {
-        const videos = await normalizeRunwayVideoResult(task, body);
+        const videos = await normalizeRunwayVideoResult(task, body, deadlineController.signal);
         saveCallLog({
           method: "POST",
           path: "/v1/videos/generations",
@@ -1117,7 +1137,7 @@ async function handleRunwayVideoGeneration({
         return { success: false, status: 502, error: errorText };
       }
 
-      await sleep(pollIntervalMs);
+      await sleepWithSignal(pollIntervalMs, deadlineController.signal);
     }
 
     const timeoutError = `Runway task timeout after ${timeoutMs}ms (taskId=${taskId}, status=${String(
@@ -1133,13 +1153,18 @@ async function handleRunwayVideoGeneration({
       error: timeoutError,
       responseBody: { taskId, status: lastTask?.status ?? null },
     }).catch(() => {});
-    return { success: false, status: 504, error: timeoutError };
+    return { success: false, status: 504, terminal: true, error: timeoutError };
   } catch (err) {
+    const timedOut = deadlineController.signal.aborted || Date.now() >= deadlineAt;
+    const errorStatus =
+      typeof err === "object" && err !== null && "status" in err
+        ? Number((err as { status?: unknown }).status) || 502
+        : 502;
     if (log) log.error("VIDEO", `${provider} runway error: ${err.message}`);
     saveCallLog({
       method: "POST",
       path: "/v1/videos/generations",
-      status: 502,
+      status: timedOut ? 504 : errorStatus,
       model: `${provider}/${model}`,
       provider,
       duration: Date.now() - startTime,
@@ -1147,9 +1172,12 @@ async function handleRunwayVideoGeneration({
     }).catch(() => {});
     return {
       success: false,
-      status: 502,
+      status: timedOut ? 504 : errorStatus,
+      ...(taskAccepted || timedOut ? { terminal: true } : {}),
       error: sanitizeErrorMessage(err) || "Video provider error",
     };
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 }
 
@@ -1242,6 +1270,29 @@ async function handleHaiperVideoGeneration({
     error: "Haiper video generation timed out",
   }).catch(() => {});
   return { success: false, status: 504, error: "Haiper video generation timed out" };
+}
+
+function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const abort = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) {
+      abort();
+      return;
+    }
+    timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+  });
 }
 
 function sleep(ms) {

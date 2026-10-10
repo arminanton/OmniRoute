@@ -9,7 +9,8 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "omniroute-video-"));
 const { handleVideoGeneration } = await import("../../open-sse/handlers/videoGeneration.ts");
 const { VIDEO_PROVIDERS } = await import("../../open-sse/config/videoRegistry.ts");
 
-function immediateTimeout(callback, _ms, ...args) {
+function immediateTimeout(callback, ms, ...args) {
+  if (typeof ms === "number" && ms >= 100_000) return 0;
   if (typeof callback === "function") callback(...args);
   return 0;
 }
@@ -573,6 +574,72 @@ test("handleVideoGeneration submits, polls and downloads Runway text-to-video ta
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
+  }
+});
+
+test("Runway submit hangs are bounded and terminal because acceptance is ambiguous", async () => {
+  const originalFetch = globalThis.fetch;
+  let submitSignal: AbortSignal | null = null;
+  globalThis.fetch = async (_url, init = {}) =>
+    new Promise<Response>((_resolve, reject) => {
+      submitSignal = init.signal as AbortSignal;
+      assert.ok(submitSignal, "Runway submit receives a server-owned task deadline");
+      submitSignal.addEventListener("abort", () => reject(submitSignal!.reason), { once: true });
+    });
+
+  try {
+    const result = await handleVideoGeneration({
+      body: {
+        model: "runwayml/gen4.5",
+        prompt: "cinematic sunrise",
+        timeout_ms: 20,
+      },
+      credentials: { apiKey: "runway-key" },
+      log: null,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 504);
+    assert.equal(result.terminal, true);
+    assert.equal(submitSignal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Runway poll hangs are bounded and terminal after task acceptance", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  let pollSignal: AbortSignal | null = null;
+  globalThis.fetch = async (_url, init = {}) => {
+    calls++;
+    if (calls === 1) return Response.json({ id: "accepted-runway-task" });
+
+    pollSignal = init.signal as AbortSignal;
+    return new Promise<Response>((_resolve, reject) => {
+      assert.ok(pollSignal, "Runway polling receives the same task deadline");
+      pollSignal.addEventListener("abort", () => reject(pollSignal!.reason), { once: true });
+    });
+  };
+
+  try {
+    const result = await handleVideoGeneration({
+      body: {
+        model: "runwayml/gen4.5",
+        prompt: "cinematic sunrise",
+        timeout_ms: 30,
+      },
+      credentials: { apiKey: "runway-key" },
+      log: null,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 504);
+    assert.equal(result.terminal, true);
+    assert.equal(calls, 2, "the accepted task is not recreated after a stalled poll");
+    assert.equal(pollSignal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
