@@ -960,7 +960,7 @@ export function clearModelLock(
     modelFailureState,
     getModelLockKeys(provider, connectionId, model)
   );
-  if (getCanonicalLockProvider(provider) === "antigravity") {
+  if (cleared && getCanonicalLockProvider(provider) === "antigravity") {
     const activeAdmissionKey = buildAntigravityModelCooldownKey(connectionId, model, "active");
     if (activeAdmissionKey) unblockAdmissionResource(activeAdmissionKey);
   }

@@ -16,7 +16,8 @@ const { updateProviderConnection } = await import("../../src/lib/db/providers.ts
 const { AntigravityExecutor } = await import("../../open-sse/executors/antigravity.ts");
 const { buildAntigravityModelCooldownKey } =
   await import("../../open-sse/services/coordination/antigravityModelCooldown.ts");
-const { clearAllModelLockouts } = await import("../../open-sse/services/accountFallback.ts");
+const { clearAllModelLockouts, clearModelLock } =
+  await import("../../open-sse/services/accountFallback.ts");
 const rate = await import("../../open-sse/services/rateLimitManager.ts");
 process.env.OMNI_SHARED_ADMISSION = "true";
 process.env.OMNI_COORDINATION_DB = path.join(process.env.DATA_DIR!, "coordination.sqlite");
@@ -179,6 +180,28 @@ test(
       );
       assert.equal(sibling.status, 200, await sibling.text());
       assert.equal(sends, 2);
+      assert.ok(
+        Number(
+          db
+            .prepare("SELECT until_ms FROM coordination_blocks WHERE resource=?")
+            .get(activeCooldownKey)?.until_ms
+        ) > Date.now(),
+        "success on a sibling model must not clear this model's cooldown"
+      );
+      assert.equal(clearModelLock("antigravity", connection.id, "gemini-3.8-flash-high"), true);
+      const resetStarted = Date.now();
+      let cleared = false;
+      while (Date.now() - resetStarted < 500) {
+        const row = db
+          .prepare("SELECT until_ms FROM coordination_blocks WHERE resource=?")
+          .get(activeCooldownKey);
+        if (!row) {
+          cleared = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      assert.ok(cleared, "operator/model-lock reset must clear the shared exact-model block");
     } finally {
       releaseOwner();
       const settled = await Promise.allSettled(
