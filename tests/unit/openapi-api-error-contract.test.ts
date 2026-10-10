@@ -198,3 +198,118 @@ test("OAuth import and Cursor login handlers document their error status familie
   assertResponse("/api/oauth/cursor/login/poll", "post", "5XX", "OAuthOperationErrorResponse");
   assert.equal(publicText, docsText, "public OpenAPI artifact mirrors the canonical document");
 });
+
+test("skill endpoints describe validation, auth, installation, and upstream marketplace failures", () => {
+  const skillErrors: Array<[string, string, string, string]> = [
+    ["/api/skills/{id}", "delete", "404", "StringErrorResponse"],
+    ["/api/skills/{id}", "delete", "413", "ApiErrorResponse"],
+    ["/api/skills/{id}", "delete", "500", "StringErrorResponse"],
+    ["/api/skills/{id}", "put", "400", "SkillOperationErrorResponse"],
+    ["/api/skills/{id}", "put", "413", "ApiErrorResponse"],
+    ["/api/skills/{id}", "put", "500", "StringErrorResponse"],
+    ["/api/skills/collect/chaos", "post", "400", "ApiErrorResponse"],
+    ["/api/skills/collect/chaos", "post", "401", "ApiErrorResponse"],
+    ["/api/skills/collect/chaos", "post", "403", "ApiErrorResponse"],
+    ["/api/skills/collect/chaos", "post", "413", "ApiErrorResponse"],
+    ["/api/skills/collect/chaos", "post", "500", "ApiErrorResponse"],
+    ["/api/skills/collect/detect", "get", "500", "ApiErrorResponse"],
+    ["/api/skills/collect/install", "post", "400", "ApiErrorResponse"],
+    ["/api/skills/collect/install", "post", "413", "ApiErrorResponse"],
+    ["/api/skills/collect/install", "post", "500", "ApiErrorResponse"],
+    ["/api/skills/executions", "get", "401", "StringErrorResponse"],
+    ["/api/skills/executions", "get", "500", "StringErrorResponse"],
+    ["/api/skills/executions", "post", "401", "StringErrorResponse"],
+    ["/api/skills/executions", "post", "400", "DirectValidationErrorResponse"],
+    ["/api/skills/executions", "post", "413", "ApiErrorResponse"],
+    ["/api/skills/executions", "post", "503", "StringErrorResponse"],
+    ["/api/skills/executions", "post", "500", "StringErrorResponse"],
+    ["/api/skills/install", "post", "400", "DirectValidationErrorResponse"],
+    ["/api/skills/install", "post", "413", "ApiErrorResponse"],
+    ["/api/skills/install", "post", "500", "StringErrorResponse"],
+    ["/api/skills/marketplace/install", "post", "401", "StringErrorResponse"],
+    ["/api/skills/marketplace/install", "post", "400", "DirectValidationErrorResponse"],
+    ["/api/skills/marketplace/install", "post", "409", "StringErrorResponse"],
+    ["/api/skills/marketplace/install", "post", "413", "ApiErrorResponse"],
+    ["/api/skills/marketplace/install", "post", "500", "StringErrorResponse"],
+    ["/api/skills/marketplace", "get", "401", "StringErrorResponse"],
+    ["/api/skills/marketplace", "get", "400", "StringErrorResponse"],
+    ["/api/skills/marketplace", "get", "500", "StringErrorResponse"],
+    ["/api/skills/marketplace", "get", "4XX", "StringErrorResponse"],
+    ["/api/skills/marketplace", "get", "5XX", "StringErrorResponse"],
+    ["/api/skills", "get", "500", "StringErrorResponse"],
+    ["/api/skills/skillssh/install", "post", "401", "StringErrorResponse"],
+    ["/api/skills/skillssh/install", "post", "400", "DirectValidationErrorResponse"],
+    ["/api/skills/skillssh/install", "post", "409", "StringErrorResponse"],
+    ["/api/skills/skillssh/install", "post", "413", "ApiErrorResponse"],
+    ["/api/skills/skillssh/install", "post", "500", "StringErrorResponse"],
+    ["/api/skills/skillssh", "get", "401", "StringErrorResponse"],
+    ["/api/skills/skillssh", "get", "500", "StringErrorResponse"],
+  ];
+  for (const [route, method, status, schema] of skillErrors) {
+    assertResponse(route, method, status, schema);
+  }
+
+  const managementRoutes: Array<[string, string]> = [
+    ["/api/skills/{id}", "put"],
+    ["/api/skills/{id}", "delete"],
+    ["/api/skills", "get"],
+    ["/api/skills/install", "post"],
+    ["/api/skills/collect/detect", "get"],
+    ["/api/skills/collect/install", "post"],
+  ];
+  for (const [route, method] of managementRoutes) {
+    const responses = operation(route, method).responses;
+    assert.equal(responses["401"]?.$ref, "#/components/responses/ManagementAuthenticationRequired");
+    assert.equal(responses["403"]?.$ref, "#/components/responses/ManagementInvalidToken");
+    assert.equal(responses["503"]?.$ref, "#/components/responses/ManagementAuthUnavailable");
+  }
+});
+
+test("plugin management routes document validation, not-found, body-limit, and auth failures", () => {
+  const pluginErrors: Array<[string, string, string, string]> = [
+    ["/api/plugins/{name}/activate", "post", "400", "ApiErrorResponse"],
+    ["/api/plugins/{name}/activate", "post", "413", "ApiErrorResponse"],
+    ["/api/plugins/{name}/config", "get", "404", "ApiErrorResponse"],
+    ["/api/plugins/{name}/config", "put", "400", "ApiErrorResponse"],
+    ["/api/plugins/{name}/config", "put", "404", "ApiErrorResponse"],
+    ["/api/plugins/{name}/config", "put", "413", "ApiErrorResponse"],
+    ["/api/plugins/{name}/deactivate", "post", "400", "ApiErrorResponse"],
+    ["/api/plugins/{name}/deactivate", "post", "413", "ApiErrorResponse"],
+    ["/api/plugins/{name}", "get", "404", "StringErrorResponse"],
+    ["/api/plugins/{name}", "delete", "400", "ApiErrorResponse"],
+    ["/api/plugins/{name}", "delete", "413", "ApiErrorResponse"],
+    ["/api/plugins/marketplace/install", "post", "400", "ApiErrorResponse"],
+    ["/api/plugins/marketplace/install", "post", "413", "ApiErrorResponse"],
+    ["/api/plugins/marketplace", "get", "500", "ApiErrorResponse"],
+    ["/api/plugins", "get", "400", "PluginValidationErrorResponse"],
+    ["/api/plugins", "get", "500", "ApiErrorResponse"],
+    ["/api/plugins", "post", "400", "PluginValidationErrorResponse"],
+    ["/api/plugins", "post", "413", "ApiErrorResponse"],
+    ["/api/plugins", "post", "500", "ApiErrorResponse"],
+    ["/api/plugins/scan", "post", "413", "ApiErrorResponse"],
+    ["/api/plugins/scan", "post", "500", "ApiErrorResponse"],
+  ];
+  const managementOperations: Array<[string, string]> = [
+    ["/api/plugins/{name}/activate", "post"],
+    ["/api/plugins/{name}/config", "get"],
+    ["/api/plugins/{name}/config", "put"],
+    ["/api/plugins/{name}/deactivate", "post"],
+    ["/api/plugins/{name}", "get"],
+    ["/api/plugins/{name}", "delete"],
+    ["/api/plugins/marketplace/install", "post"],
+    ["/api/plugins/marketplace", "get"],
+    ["/api/plugins", "get"],
+    ["/api/plugins", "post"],
+    ["/api/plugins/scan", "post"],
+  ];
+
+  for (const [route, method, status, schema] of pluginErrors) {
+    assertResponse(route, method, status, schema);
+  }
+  for (const [route, method] of managementOperations) {
+    const responses = operation(route, method).responses;
+    assert.equal(responses["401"]?.$ref, "#/components/responses/ManagementAuthenticationRequired");
+    assert.equal(responses["403"]?.$ref, "#/components/responses/ManagementInvalidToken");
+    assert.equal(responses["503"]?.$ref, "#/components/responses/ManagementAuthUnavailable");
+  }
+});

@@ -29659,6 +29659,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginListResponse" }
+        "400":
+          description: The plugin list filter is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginValidationErrorResponse" }
+        "500":
+          description: Listing plugins failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiPlugins
       tags:
@@ -29690,6 +29706,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginInstallResponse" }
+        "400":
+          description: Plugin installation request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PluginValidationErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Installing the plugin failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/plugins/{name}:
     parameters:
       - name: name
@@ -29722,6 +29759,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginLifecycleResponse" }
+        "400":
+          description: Plugin uninstall failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiPluginsByName
       tags:
@@ -29749,6 +29802,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginDetailsResponse" }
+        "404":
+          description: The plugin was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/plugins/{name}/activate:
     parameters:
       - name: name
@@ -29780,6 +29844,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginLifecycleResponse" }
+        "400":
+          description: Plugin activation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/plugins/{name}/config:
     parameters:
       - name: name
@@ -29814,6 +29894,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginConfigResponse" }
+        "404":
+          description: The plugin or its configuration was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiPluginsByNameConfig
       tags:
@@ -29847,6 +29938,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginConfigUpdateResponse" }
+        "400":
+          description: Plugin configuration validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: The plugin or its configuration was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/plugins/{name}/deactivate:
     parameters:
       - name: name
@@ -29878,6 +29990,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginLifecycleResponse" }
+        "400":
+          description: Plugin deactivation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/plugins/marketplace:
     get:
       operationId: getApiPluginsMarketplace
@@ -29905,6 +30033,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginMarketplaceListResponse" }
+        "500":
+          description: Searching the plugin marketplace failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/plugins/marketplace/install:
     post:
       operationId: postApiPluginsMarketplaceInstall
@@ -29936,6 +30075,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginMarketplaceInstallResponse" }
+        "400":
+          description: Plugin marketplace install request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/plugins/scan:
     post:
       operationId: postApiPluginsScan
@@ -29964,6 +30119,22 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PluginScanResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Scanning the plugin directory failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/pricing/sync:
     delete:
       operationId: deleteApiPricingSync
@@ -38324,6 +38495,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillListResponse" }
+        "500":
+          description: Listing skills failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/skills/{id}:
     parameters:
       - name: id
@@ -38354,6 +38536,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillMutationResponse" }
+        "404":
+          description: Skill id was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Deleting the skill failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiSkillsById
       tags:
@@ -38377,6 +38580,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillUpdateResponse" }
+        "400":
+          description: Malformed JSON, invalid skill fields, or an empty update payload.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SkillOperationErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Updating the skill failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/skills/collect/chaos:
     post:
       operationId: postApiSkillsCollectChaos
@@ -38396,6 +38620,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillsChaosResponse" }
+        "400":
+          description: Chaos skill-collection request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: Missing or invalid Chaos Mode API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          description: The API key is not permitted to use Chaos Mode.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Chaos skill collection failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/skills/collect/detect:
     get:
       operationId: getApiSkillsCollectDetect
@@ -38422,6 +38671,17 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillsCollectDetectResponse" }
+        "500":
+          description: Detecting installed CLI skills failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/skills/collect/install:
     post:
       operationId: postApiSkillsCollectInstall
@@ -38448,6 +38708,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillsCollectInstallResponse" }
+        "400":
+          description: Skill collection install request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Installing collected skills failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/skills/executions:
     get:
       operationId: getApiSkillsExecutions
@@ -38471,6 +38752,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillExecutionsListResponse" }
+        "401":
+          description: Authentication is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Listing skill executions failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiSkillsExecutions
       tags:
@@ -38493,6 +38784,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillExecutionCreateResponse" }
+        "400":
+          description: Skill execution request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DirectValidationErrorResponse" }
+        "401":
+          description: Authentication is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Skill execution failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          description: The skill is disabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/skills/install:
     post:
       operationId: postApiSkillsInstall
@@ -38517,6 +38833,27 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillInstallResponse" }
+        "400":
+          description: Skill install request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DirectValidationErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Installing the skill failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/skills/marketplace:
     get:
       operationId: getApiSkillsMarketplace
@@ -38543,6 +38880,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillMarketplaceSearchResponse" }
+        "400":
+          description: SkillsMP is not configured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Authentication is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Marketplace search failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "4XX":
+          description: The SkillsMP service returned a client error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "5XX":
+          description: The SkillsMP service returned a server error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/skills/marketplace/install:
     post:
       operationId: postApiSkillsMarketplaceInstall
@@ -38566,6 +38928,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillInstallResponse" }
+        "400":
+          description: Marketplace install request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DirectValidationErrorResponse" }
+        "401":
+          description: Authentication is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "409":
+          description: The configured marketplace provider is not SkillsMP.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Installing the marketplace skill failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/skills/skillssh:
     get:
       operationId: getApiSkillsSkillssh
@@ -38589,6 +38976,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillsShSearchResponse" }
+        "401":
+          description: Authentication is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Searching skills.sh failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/skills/skillssh/install:
     post:
       operationId: postApiSkillsSkillsshInstall
@@ -38612,6 +39009,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SkillInstallResponse" }
+        "400":
+          description: skills.sh install request validation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DirectValidationErrorResponse" }
+        "401":
+          description: Authentication is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "409":
+          description: The configured marketplace provider is not skills.sh.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "413":
+          description: Request body exceeds the configured API body-size limit.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Installing the skills.sh skill failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/sync/bundle:
     get:
       operationId: getApiSyncBundle
@@ -53982,9 +54404,9 @@ components:
         needsReindex:
           type: integer
           description: 1 if the vector for this memory is stale or missing
-    MemoryValidationErrorResponse:
+    DirectValidationErrorResponse:
       type: object
-      description: Validation failure returned directly by the legacy memory handlers.
+      description: Validation failure returned directly as `{message, details}` rather than nested under `error`.
       required: [message, details]
       properties:
         message: { type: string }
@@ -54006,7 +54428,23 @@ components:
       oneOf:
         - { $ref: "#/components/schemas/ApiErrorResponse" }
         - { $ref: "#/components/schemas/StringErrorResponse" }
-        - { $ref: "#/components/schemas/MemoryValidationErrorResponse" }
+        - { $ref: "#/components/schemas/DirectValidationErrorResponse" }
+    SkillOperationErrorResponse:
+      description: Skill operations return a nested message/string error or a direct validation object depending on the route.
+      oneOf:
+        - { $ref: "#/components/schemas/ApiErrorResponse" }
+        - { $ref: "#/components/schemas/StringErrorResponse" }
+        - { $ref: "#/components/schemas/DirectValidationErrorResponse" }
+    PluginValidationErrorResponse:
+      type: object
+      description: Plugin list or create validation error with field-level issue details.
+      required: [error, details]
+      properties:
+        error: { type: string }
+        details:
+          type: array
+          items: { type: object, additionalProperties: true }
+      additionalProperties: false
     MemoryHealthResponse:
       type: object
       properties:
