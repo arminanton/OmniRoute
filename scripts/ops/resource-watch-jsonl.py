@@ -420,7 +420,7 @@ def read_target_pid(pid_file: Path) -> dict[str, int] | None:
     try:
         metadata = pid_file.lstat()
         parent_metadata = pid_file.parent.lstat()
-    except FileNotFoundError:
+    except OSError:
         return None
     if (
         not stat_mode.S_ISREG(metadata.st_mode)
@@ -431,19 +431,22 @@ def read_target_pid(pid_file: Path) -> dict[str, int] | None:
         or parent_metadata.st_mode & 0o077
     ):
         return None
-    descriptor = os.open(pid_file, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     try:
-        opened = os.fstat(descriptor)
-        if (
-            not stat_mode.S_ISREG(opened.st_mode)
-            or opened.st_uid != os.getuid()
-            or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
-            or stat_mode.S_IMODE(opened.st_mode) != 0o600
-        ):
-            return None
-        value = os.read(descriptor, 128).decode("ascii", errors="ignore")
-    finally:
-        os.close(descriptor)
+        descriptor = os.open(pid_file, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat_mode.S_ISREG(opened.st_mode)
+                or opened.st_uid != os.getuid()
+                or (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino)
+                or stat_mode.S_IMODE(opened.st_mode) != 0o600
+            ):
+                return None
+            value = os.read(descriptor, 128).decode("ascii", errors="ignore")
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return None
     if not value:
         return None
     parts = value.split()
