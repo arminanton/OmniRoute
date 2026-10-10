@@ -4119,19 +4119,40 @@ paths:
       operationId: getApiKeys
       tags: [API Keys]
       summary: List API keys
+      description: >-
+        Lists API-key metadata with stored key values masked. A dashboard session or accepted management
+        bearer credential is required when management authentication is enabled. In an unlocked deployment
+        with `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: API key list
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiKeyListResponse"
+          x-sensitive: true
         "401":
-          description: Authentication required
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
     post:
       operationId: postApiKeys
       tags: [API Keys]
       summary: Create API key
+      description: >-
+        Creates an API key and returns its full value once; store the returned key securely. A dashboard
+        session or accepted management bearer credential is required when management authentication is
+        enabled. In an unlocked deployment with `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -4168,14 +4189,19 @@ paths:
                   maxItems: 100
                   items: { type: string, format: uuid }
       responses:
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "201":
           description: Created API key (includes full key value)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiKeyCreateResponse"
+          x-sensitive: true
         "401":
-          description: Authentication required
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
 
   /api/keys/{id}:
     get:
@@ -9717,7 +9743,15 @@ paths:
         Forwards to the running Dario instance's `POST /admin/login/start` using
         the stored admin token. The operator opens the returned `authorize_url`,
         approves in their own Claude account, then posts the displayed code to
-        `/admin/login-complete`. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        `/admin/login-complete`. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted;
+        public/unknown remote peers are blocked.
+        Management authentication is required when enabled; in an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted only for callers admitted by the LOCAL_ONLY peer
+        policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: false
         content:
@@ -9729,6 +9763,13 @@ paths:
                   type: string
                   description: Optional account alias; Dario assigns one if omitted.
       responses:
+        "403":
+          description: Management credentials are invalid or this request is not admitted by the LOCAL_ONLY peer policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Login challenge created
           content:
@@ -9747,7 +9788,7 @@ paths:
         "400":
           description: Invalid request body
         "401":
-          description: Missing or invalid admin auth
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "502":
           description: Dario did not respond or Dario is not running
 
@@ -9760,7 +9801,15 @@ paths:
       description: >-
         Forwards to the running Dario instance's `POST /admin/login/complete`.
         On success the account becomes routable immediately (Dario hot-reloads
-        its pool). **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        its pool). **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown
+        remote peers are blocked.
+        Management authentication is required when enabled; in an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted only for callers admitted by the LOCAL_ONLY peer
+        policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -9774,6 +9823,13 @@ paths:
                 code:
                   type: string
       responses:
+        "403":
+          description: Management credentials are invalid or this request is not admitted by the LOCAL_ONLY peer policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Account added
           content:
@@ -9790,7 +9846,7 @@ paths:
         "400":
           description: Invalid request body
         "401":
-          description: Missing or invalid admin auth
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "502":
           description: Dario did not respond or Dario is not running
 
@@ -9802,8 +9858,23 @@ paths:
       summary: List Dario account-pool accounts
       description: >-
         Forwards to the running Dario instance's `GET /admin/accounts`.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers
+        are blocked.
+        Management authentication is required when enabled; in an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted only for callers admitted by the LOCAL_ONLY peer
+        policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "403":
+          description: Management credentials are invalid or this request is not admitted by the LOCAL_ONLY peer policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Account list
           content:
@@ -9817,8 +9888,9 @@ paths:
                       type: object
                   count:
                     type: integer
+          x-sensitive: true
         "401":
-          description: Missing or invalid admin auth
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "502":
           description: Dario did not respond or Dario is not running
     delete:
@@ -9829,7 +9901,15 @@ paths:
       description: >-
         Forwards to the running Dario instance's `DELETE /admin/accounts/<alias>`.
         The alias is taken from a `?alias=` query param or a `{ alias }` JSON body.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers
+        are blocked.
+        Management authentication is required when enabled; in an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted only for callers admitted by the LOCAL_ONLY peer
+        policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: alias
           in: query
@@ -9846,6 +9926,13 @@ paths:
                 alias:
                   type: string
       responses:
+        "403":
+          description: Management credentials are invalid or this request is not admitted by the LOCAL_ONLY peer policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Account removed
           content:
@@ -9860,7 +9947,7 @@ paths:
         "400":
           description: Missing alias
         "401":
-          description: Missing or invalid admin auth
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "502":
           description: Dario did not respond or Dario is not running
 
@@ -9873,8 +9960,23 @@ paths:
       description: >-
         Returns eligible OmniRoute `claude` OAuth provider connections (metadata
         only — id/name/email/org tier, never tokens) so the UI can offer a picker
-        when more than one exists. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        when more than one exists. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted;
+        public/unknown remote peers are blocked.
+        Management authentication is required when enabled; in an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted only for callers admitted by the LOCAL_ONLY peer
+        policy.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "403":
+          description: Management credentials are invalid or this request is not admitted by the LOCAL_ONLY peer policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Eligible connections
           content:
@@ -9900,8 +10002,9 @@ paths:
                         organizationRateLimitTier:
                           type: string
                           nullable: true
+          x-sensitive: true
         "401":
-          description: Missing or invalid admin auth
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
     post:
       operationId: postApiServicesDarioAdminImportFromOmniroute
       x-local-only: true
@@ -9911,7 +10014,17 @@ paths:
         Writes the source connection's access/refresh token pair directly into
         Dario's own account-file store (`~/.dario/accounts/<alias>.json`), reusing
         the shared Claude Code OAuth client_id, then restarts the Dario supervisor
-        so it picks up the new account. **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        so it picks up the new account. **LOCAL_ONLY** — loopback and trusted private-LAN peers are
+        admitted; public/unknown remote peers are blocked.
+        Management authentication is required when enabled; in an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted only for callers admitted by the LOCAL_ONLY peer
+        policy. The operation transfers OAuth tokens into Dario account storage but does not return their
+        values.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         content:
@@ -9926,6 +10039,13 @@ paths:
                   type: string
                   description: Optional custom alias; derived from the source email if omitted.
       responses:
+        "403":
+          description: Management credentials are invalid or this request is not admitted by the LOCAL_ONLY peer policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Account imported
           content:
@@ -9942,10 +10062,11 @@ paths:
                   sourceEmail:
                     type: string
                     nullable: true
+          x-sensitive: true
         "400":
           description: Invalid request body, unsupported connection, or missing tokens
         "401":
-          description: Missing or invalid admin auth
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
         "404":
           description: Connection not found
         "500":
@@ -16267,7 +16388,21 @@ paths:
       tags:
         - Admin
       summary: "GET admin › concurrency"
+      description: >-
+        Reports current provider rate-limit and account-semaphore state. A dashboard session or accepted
+        management bearer credential is required when management authentication is enabled. In an unlocked
+        deployment with `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
     post:
@@ -16275,7 +16410,21 @@ paths:
       tags:
         - Admin
       summary: "POST admin › concurrency"
+      description: >-
+        Resets all account semaphores when `action=reset-semaphores`. A dashboard session or accepted
+        management bearer credential is required when management authentication is enabled. In an unlocked
+        deployment with `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
   /api/analytics/auto-routing:
@@ -16783,7 +16932,21 @@ paths:
       tags:
         - Chaos
       summary: "POST chaos › run"
+      description: >-
+        Runs a configured Chaos Mode execution. A dashboard session or accepted management bearer credential
+        is required when management authentication is enabled. In an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
   /api/cli-tools/all-statuses:
@@ -25075,13 +25238,30 @@ paths:
       description: >-
         Returns the effective route-tier prefixes, manage-scope bypass settings, spawn-capable
         prefixes, and CORS status for this instance.
+        When management authentication is enabled, the gateway and route handler require a dashboard session
+        or management API key; this route does not accept `oma_live_` access tokens end-to-end. In an
+        unlocked deployment with `requireLogin=false`, anonymous access is permitted. The response exposes
+        authorization and network-policy metadata.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Effective authorization and CORS configuration inventory.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthzInventoryResponse"
+          x-sensitive: true
   /api/settings/auto-disable-accounts:
     get:
       operationId: getApiSettingsAutoDisableAccounts
@@ -29315,17 +29495,53 @@ paths:
       tags:
         - System
       summary: "GET system › env › repair"
+      description: >-
+        Inspects OAuth environment defaults and reports missing variable names. When management
+        authentication is enabled, a dashboard session or management API key is required. The
+        `isAuthenticated()` handler does not accept `oma_live_` access tokens here. In an unlocked
+        deployment with `requireLogin=false`, anonymous access is permitted.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
+          x-sensitive: true
     post:
       operationId: postApiSystemEnvRepair
       tags:
         - System
       summary: "POST system › env › repair"
+      description: >-
+        Backs up `.env` and adds missing OAuth defaults. When management authentication is enabled, a
+        dashboard session or management API key is required. The `isAuthenticated()` handler does not accept
+        `oma_live_` access tokens here. In an unlocked deployment with `requireLogin=false`, anonymous
+        access is permitted.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: OK
+          x-sensitive: true
   /api/system/version:
     get:
       operationId: getApiSystemVersion
@@ -30676,13 +30892,28 @@ paths:
       tags:
         - Usage
       summary: Get cached provider quota and billing limits
+      description: >-
+        Returns cached, sanitized provider quota and billing-limit data without refreshing it. A dashboard
+        session or accepted management bearer credential is required when management authentication is
+        enabled. In an unlocked deployment with `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Cached provider limits and synchronization metadata
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderLimitsCacheResponse"
+          x-sensitive: true
         "500":
           description: Cached provider limits could not be fetched
           content:
@@ -30694,13 +30925,28 @@ paths:
       tags:
         - Usage
       summary: Refresh provider quota and billing limits
+      description: >-
+        Manually refreshes supported provider quota and billing-limit data. A dashboard session or accepted
+        management bearer credential is required when management authentication is enabled. In an unlocked
+        deployment with `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Refresh results and updated provider limits cache
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderLimitsSyncResponse"
+          x-sensitive: true
         "500":
           description: Provider limits could not be refreshed
           content:
@@ -30759,6 +31005,15 @@ paths:
       tags:
         - Usage
       summary: Get active provider connection quota status
+      description: >-
+        Returns quota, token, and rate-limit status for active provider connections; entries can include
+        account names, emails, and connection identifiers. A dashboard session or accepted management bearer
+        credential is required when management authentication is enabled. In an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: provider
           in: query
@@ -30773,12 +31028,19 @@ paths:
           schema:
             type: string
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Quota status for active provider connections
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/QuotaResponse"
+          x-sensitive: true
         "500":
           description: Quota data could not be fetched
           content:
@@ -30888,6 +31150,14 @@ paths:
       tags:
         - Usage
       summary: Delete a per-key token limit
+      description: >-
+        Deletes a per-key token limit by ID. A dashboard session or accepted management bearer credential is
+        required when management authentication is enabled. In an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: id
           in: query
@@ -30896,12 +31166,19 @@ paths:
             type: string
             minLength: 1
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Whether the token limit was deleted
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenLimitDeleteResponse"
+          x-sensitive: true
         "400":
           description: The id query parameter is required
           content:
@@ -30925,6 +31202,14 @@ paths:
       tags:
         - Usage
       summary: List per-key token limits and current usage
+      description: >-
+        Lists per-key token limits and current usage windows for the supplied `apiKeyId`. A dashboard
+        session or accepted management bearer credential is required when management authentication is
+        enabled. In an unlocked deployment with `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       parameters:
         - name: apiKeyId
           in: query
@@ -30933,12 +31218,19 @@ paths:
             type: string
             minLength: 1
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Token limits with current usage windows
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenLimitListResponse"
+          x-sensitive: true
         "400":
           description: The apiKeyId query parameter is required
           content:
@@ -30956,6 +31248,14 @@ paths:
       tags:
         - Usage
       summary: Create or update a per-key token limit
+      description: >-
+        Creates or updates a per-key token limit. A dashboard session or accepted management bearer
+        credential is required when management authentication is enabled. In an unlocked deployment with
+        `requireLogin=false`, anonymous access is permitted.
+      security:
+        - BearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       requestBody:
         required: true
         content:
@@ -30963,12 +31263,19 @@ paths:
             schema:
               $ref: "#/components/schemas/SetTokenLimitRequest"
       responses:
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: Created or updated token limit
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TokenLimitUpsertResponse"
+          x-sensitive: true
         "400":
           description: Invalid JSON or token-limit request
           content:

@@ -1,7 +1,7 @@
 ---
 title: "Runtime and Inference Data Plane Investigation"
 version: 3.8.51
-lastUpdated: 2026-10-09
+lastUpdated: 2026-10-10
 ---
 
 # Runtime and inference data-plane investigation
@@ -40,9 +40,9 @@ two are bodyless `HEAD` probes with a `200` response. The 28 without `2xx` inclu
 one WebSocket upgrade, ten catch-all not-found operations, six bodyless `HEAD` catch-alls/artifact
 probes, and three error-only operations. This differs from the earlier 600/387 counts because those
 were an outdated snapshot and counted the two `HEAD` probes in the non-`204` denominator. The
-inventory also finds 738 operations with effective operation-level security declarations (730
-nonempty, eight explicitly public), 291 with no effective declaration, and 221 operations whose
-text signals conditional auth; all 221 now have a security declaration. The A2A persisted-history
+inventory also finds 758 operations with effective operation-level security declarations (750
+nonempty, eight explicitly public), 271 with no effective declaration, and 241 operations whose
+text signals conditional auth; all 241 now have a security declaration. The A2A persisted-history
 route lists the accepted API-key/management alternatives and scopes its anonymous alternative to
 the unlocked local-first configuration. The login/setup status GET explicitly declares public
 access for the unauthenticated setup screen. These counts measure OpenAPI declarations, not runtime
@@ -2060,7 +2060,7 @@ image, or production deployment were involved.
   frontend/control plane deployed independently from the inference process.
 - Continue the source audit for response schemas and conditional auth behavior. The deterministic
   inventory reports 802 of 983 body-bearing response candidates with declared schemas on every
-  non-`204` success (181 gaps); route coverage is 705/705. It also lists 291 operations with no
-  effective security declaration; all 221 operations whose text signals conditional auth now have
+  non-`204` success (181 gaps); route coverage is 705/705. It also lists 271 operations with no
+  effective security declaration; all 241 operations whose text signals conditional auth now have
   declarations. These are documentation review queues, not proof that handlers are insecure or
   that the declared response schemas are semantically complete.
