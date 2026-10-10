@@ -63,8 +63,12 @@ function responseContentState(responseValue, components) {
 function successResponseStatuses(operation) {
   return Object.entries(operation.responses ?? {})
     .map(([status, response]) => ({ status, response }))
-    .filter(({ status }) => /^2\d\d$/.test(status))
-    .sort((left, right) => Number(left.status) - Number(right.status));
+    .filter(({ status }) => /^2\d\d$/.test(status) || status === "2XX")
+    .sort((left, right) => responseStatusOrder(left.status) - responseStatusOrder(right.status));
+}
+
+function responseStatusOrder(status) {
+  return status === "2XX" ? 200 : Number(status);
 }
 
 function operationText(pathTemplate, method, operation) {

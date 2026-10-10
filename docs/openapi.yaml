@@ -19330,25 +19330,103 @@ paths:
       tags:
         - Context
       summary: "DELETE context › combos › <id>"
+      description: >-
+        Deletes a compression combo. This MANAGEMENT route accepts an authorized management
+        credential when login is enabled; an unlocked deployment with `requireLogin=false` may
+        permit anonymous access, and first-run loopback setup behavior may also apply. The route
+        is not in the explicit public allowlist and is not LOCAL_ONLY.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Combo deleted.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Combo is missing or is the undeletable default.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiContextCombosById
       tags:
         - Context
       summary: "GET context › combos › <id>"
+      description: >-
+        Reads a compression combo and its pipeline configuration. This MANAGEMENT route accepts
+        an authorized management credential when login is enabled; an unlocked deployment with
+        `requireLogin=false` may permit anonymous access, and first-run loopback setup behavior
+        may also apply. It is not in the explicit public allowlist and is not LOCAL_ONLY.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Compression combo configuration.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Compression combo not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiContextCombosById
       tags:
         - Context
       summary: "PUT context › combos › <id>"
+      description: >-
+        Updates a compression combo, including its pipeline and optional default selection. This
+        MANAGEMENT route accepts an authorized management credential when login is enabled; an
+        unlocked deployment with `requireLogin=false` may permit anonymous access, and first-run
+        loopback setup behavior may also apply. It is not in the explicit public allowlist and is
+        not LOCAL_ONLY.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Updated compression combo configuration.
+        "400":
+          description: Invalid JSON body or combo update failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Compression combo not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/context/combos/{id}/assignments:
     parameters:
       - name: id
@@ -19361,42 +19439,160 @@ paths:
       tags:
         - Context
       summary: "GET context › combos › <id> › assignments"
+      description: >-
+        Reads routing-combo assignments for a compression combo. This MANAGEMENT route accepts
+        an authorized management credential when login is enabled; an unlocked deployment with
+        `requireLogin=false` may permit anonymous access, and first-run loopback setup behavior
+        may also apply. It is not in the explicit public allowlist and is not LOCAL_ONLY.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Routing-combo assignments for this compression combo.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Compression combo not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiContextCombosByIdAssignments
       tags:
         - Context
       summary: "PUT context › combos › <id> › assignments"
+      description: >-
+        Replaces routing-combo assignments for a compression combo. This MANAGEMENT route accepts
+        an authorized management credential when login is enabled; an unlocked deployment with
+        `requireLogin=false` may permit anonymous access, and first-run loopback setup behavior
+        may also apply. It is not in the explicit public allowlist and is not LOCAL_ONLY.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Updated routing-combo assignments.
+        "400":
+          description: Invalid JSON body or assignments failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Compression combo not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/context/combos/default:
     get:
       operationId: getApiContextCombosDefault
       tags:
         - Context
       summary: "GET context › combos › default"
+      description: >-
+        Reads the compression plan derived from current engine settings. This MANAGEMENT route
+        accepts an authorized management credential when login is enabled; an unlocked deployment
+        with `requireLogin=false` may permit anonymous access, and first-run loopback setup behavior
+        may also apply. It is not in the explicit public allowlist and is not LOCAL_ONLY.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Derived default compression mode and ordered pipeline.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiContextCombosDefault
       tags:
         - Context
       summary: "POST context › combos › default"
+      description: >-
+        Deprecated default-plan write shim. This MANAGEMENT route checks authorization before
+        returning `410 Gone`; update compression engines through `/api/settings/compression`
+        instead. An unlocked deployment with `requireLogin=false` may permit the deprecated
+        request anonymously; first-run loopback setup behavior may also apply. It is not in the
+        explicit public allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
-        "200":
-          description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "410":
+          description: Default pipeline is derived; edit compression-engine settings instead.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiContextCombosDefault
       tags:
         - Context
       summary: "PUT context › combos › default"
+      description: >-
+        Deprecated default-plan write shim. This MANAGEMENT route checks authorization before
+        returning `410 Gone`; update compression engines through `/api/settings/compression`
+        instead. An unlocked deployment with `requireLogin=false` may permit the deprecated
+        request anonymously; first-run loopback setup behavior may also apply. It is not in the
+        explicit public allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
-        "200":
-          description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "410":
+          description: Default pipeline is derived; edit compression-engine settings instead.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/context/rtk/discover:
     get:
       operationId: getApiContextRtkDiscover
@@ -19635,26 +19831,171 @@ paths:
       tags:
         - Cursor cli
       summary: "GET cursor cli › <path>"
+      description: >-
+        This path is centrally PUBLIC, but the handler authenticates forwarding requests with a
+        one-hour OmniRoute Cursor CLI session JWT minted by `POST /api/cursor-cli/auth/exchange_user_api_key`.
+        The exact GET exchange path returns 405 before session validation; other GET paths require
+        the session JWT and an active originating API key. Upstream request/response content is
+        passed through and may contain prompts or tool traffic.
+      security:
+        - CursorCliSessionBearerAuth: []
+      x-authentication-branches:
+        - method: GET
+          pathSuffix: /auth/exchange_user_api_key
+          authentication: none
+          result: 405 before session validation
+        - methods: [GET]
+          pathSuffix: all other paths
+          security:
+            - CursorCliSessionBearerAuth: []
       responses:
         "200":
-          description: OK
+          description: Cursor upstream response; response content is passed through and may be sensitive.
+          x-sensitive: true
+        "401":
+          description: Missing, expired, or revoked Cursor CLI session JWT.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "502":
+          description: Cursor upstream request failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          description: No usable Cursor API connection or Cursor credentials are available.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        default:
+          description: Other Cursor upstream status and response are forwarded.
     post:
       operationId: postApiCursorCliByPath
       tags:
         - Cursor cli
       summary: "POST cursor cli › <path>"
+      description: >-
+        This path is centrally PUBLIC but has method- and path-specific handler authentication.
+        The exact `POST /auth/exchange_user_api_key` bootstrap accepts an OmniRoute API key in
+        `Authorization: Bearer` when `REQUIRE_API_KEY` is enabled; with that setting disabled it
+        may mint a session JWT anonymously. That response returns the same sensitive session JWT
+        as both `accessToken` and `refreshToken`. Every other POST path requires a valid minted
+        Cursor CLI session JWT and forwards request content to the Cursor upstream. Do not interpret
+        the bootstrap branch's anonymous condition as applying to other paths.
+      security:
+        - CursorCliSessionBearerAuth: []
+        - CursorCliBootstrapApiKeyBearerAuth: []
+      x-authentication-branches:
+        - method: POST
+          pathSuffix: /auth/exchange_user_api_key
+          security:
+            - CursorCliBootstrapApiKeyBearerAuth: []
+            - {}
+          anonymousCondition: REQUIRE_API_KEY=false
+          result: sensitive session JWT in both accessToken and refreshToken fields
+        - methods: [POST]
+          pathSuffix: all other paths
+          security:
+            - CursorCliSessionBearerAuth: []
       responses:
         "200":
-          description: OK
+          description: >-
+            Bootstrap branch returns the one-hour session JWT in accessToken and refreshToken;
+            other branches pass through Cursor upstream content.
+          x-sensitive: true
+        "400":
+          description: Bootstrap request body is not a valid JSON object.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Bootstrap API key is invalid when required, or Cursor session JWT is missing/invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "405":
+          description: The API-key exchange path accepts POST only.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "502":
+          description: Cursor upstream request failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          description: JWT secret or usable Cursor API connection/credentials are unavailable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        default:
+          description: Other Cursor upstream status and response are forwarded.
   /api/dahl/tokens:
     post:
       operationId: postApiDahlTokens
       tags:
         - Dahl
       summary: "POST dahl › tokens"
+      description: >-
+        Proxies a fixed request to Dahl's token endpoint. This path is centrally classified as
+        MANAGEMENT (it is not in the explicit public allowlist), but has no handler-level auth:
+        management credentials are required only while login is enabled, and an unlocked
+        deployment with `requireLogin=false` or first-run loopback setup may permit anonymous
+        access. The successful upstream payload contains a bearer-like token and must be treated
+        as sensitive. This route is not LOCAL_ONLY.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
-        "200":
-          description: OK
+        "2XX":
+          description: Successful upstream token-budget response.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              description: Prevents caching the sensitive upstream token.
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [available_tokens, token]
+                properties:
+                  available_tokens: { type: number }
+                  token: { type: string, x-sensitive: true }
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          description: Management auth or safe outbound token retrieval is unavailable.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - type: object
+                    required: [error, detail]
+                    properties:
+                      error: { type: string }
+                      detail: { type: string, x-sensitive: true }
+                    additionalProperties: false
+        default:
+          description: Upstream error status or safe outbound fetch failure.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, detail]
+                properties:
+                  error: { type: string }
+                  detail: { type: string, x-sensitive: true }
+                additionalProperties: false
   /api/db-backups/export:
     get:
       operationId: getApiDbBackupsExport
@@ -19906,10 +20247,35 @@ paths:
       tags:
         - Discovery
       summary: "GET discovery › results"
+      description: >-
+        Lists persisted provider-discovery findings. Results may reveal provider endpoints, model
+        names, auth methods, rate limits, risk ratings, and operator notes; treat them as sensitive.
+        This route is LOCAL_ONLY: only loopback and trusted private-LAN peers reach management
+        authentication. Public/unknown peers are rejected before login policy, and this prefix does
+        not allow a remote manage-scope bypass. On an admitted peer, a management credential is
+        required while login is enabled; `requireLogin=false` or first-run loopback setup may permit
+        anonymous local access. This route is not in the explicit public allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Persisted provider-discovery findings.
+          x-sensitive: true
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/discovery/results/{id}:
     parameters:
       - name: id
@@ -19931,20 +20297,92 @@ paths:
       tags:
         - Discovery
       summary: "GET discovery › results › <id>"
+      description: >-
+        Reads one persisted provider-discovery finding, including endpoint and model inventory
+        metadata. This route is LOCAL_ONLY: only loopback and trusted private-LAN peers reach
+        management authentication. Public/unknown peers are rejected before login policy, and this
+        prefix does not allow a remote manage-scope bypass. On an admitted peer, `requireLogin=false`
+        or first-run loopback setup may permit anonymous local access. This route is not in the
+        explicit public allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Persisted discovery finding.
+          x-sensitive: true
+        "400":
+          description: Discovery result id is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "404":
+          description: Discovery result not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/discovery/scan:
     post:
       operationId: postApiDiscoveryScan
       tags:
         - Discovery
       summary: "POST discovery › scan"
+      description: >-
+        Runs provider-discovery probes and persists their findings. The scan makes outbound
+        provider endpoint requests, so this route is LOCAL_ONLY: only loopback and trusted
+        private-LAN peers reach management authentication. Public/unknown peers are rejected before
+        login policy, and this prefix does not allow a remote manage-scope bypass. On an admitted
+        peer, `requireLogin=false` or first-run loopback setup may permit anonymous local access.
+        This route is not in the explicit public allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [providerId]
+              properties:
+                providerId: { type: string, minLength: 1, maxLength: 200 }
       responses:
         "200":
-          description: OK
+          description: Newly scanned and persisted provider-discovery findings.
+          x-sensitive: true
+        "400":
+          description: Provider id is missing/invalid or request JSON is malformed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/discovery/verify/{id}:
     parameters:
       - name: id
@@ -19957,10 +20395,43 @@ paths:
       tags:
         - Discovery
       summary: "POST discovery › verify › <id>"
+      description: >-
+        Marks a persisted provider-discovery finding as verified. This route is LOCAL_ONLY: only
+        loopback and trusted private-LAN peers reach management authentication. Public/unknown peers
+        are rejected before login policy, and this prefix does not allow a remote manage-scope
+        bypass. On an admitted peer, `requireLogin=false` or first-run loopback setup may permit
+        anonymous local access. This route is not in the explicit public allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Updated discovery finding with verified status and timestamp.
+          x-sensitive: true
+        "400":
+          description: Discovery result id is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "404":
+          description: Discovery result not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/docs:
     get:
       operationId: getApiDocs
@@ -38254,6 +38725,22 @@ components:
       in: header
       name: x-api-key
       description: Client API key header accepted by the client API auth policy.
+    CursorCliSessionBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Cursor CLI session JWT
+      description: >-
+        One-hour JWT minted by `POST /api/cursor-cli/auth/exchange_user_api_key`. It is accepted
+        on Cursor CLI forwarding paths, is bound to the originating OmniRoute API-key identity
+        when one was supplied, and is rejected after that key is revoked or deactivated.
+    CursorCliBootstrapApiKeyBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: OmniRoute API key
+      description: >-
+        Existing OmniRoute API key supplied as `Authorization: Bearer` to the exact Cursor CLI
+        `/auth/exchange_user_api_key` bootstrap path. It is not a Cursor session JWT. If
+        `REQUIRE_API_KEY` is disabled, that bootstrap handler also accepts an anonymous request.
     GoogleApiKeyAuth:
       type: apiKey
       in: header

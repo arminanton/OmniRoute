@@ -98,22 +98,45 @@ test("OpenAPI inventory resolves response refs and classifies deliberate non-bod
   assert.equal(inventory.security.conditionalAuthWithMissingSecurity, 1);
 });
 
+test("OpenAPI inventory counts the standard 2XX response range as a success response", () => {
+  const inventory = buildOpenApiContractInventory({
+    paths: {
+      "/wildcard-success": {
+        get: {
+          responses: {
+            "2XX": {
+              description: "Any successful response",
+              content: { "application/json": { schema: { type: "object" } } },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(inventory.operationCount, 1);
+  assert.equal(inventory.responseContent.candidateOperations, 1);
+  assert.equal(inventory.responseContent.fullyTypedOperations, 1);
+  assert.equal(inventory.responseContent.untypedOperations, 0);
+  assert.equal(inventory.responseContent.no2xxOperations.length, 0);
+});
+
 test("canonical OpenAPI inventory reconciles the checked-in report counts", () => {
   const document = yaml.load(fs.readFileSync(CANONICAL_SPEC, "utf8"));
   const inventory = loadOpenApiContractInventory(CANONICAL_SPEC);
   assert.equal(inventory.pathCount, Object.keys(document.paths).length);
   assert.equal(inventory.pathCount, 705);
   assert.equal(inventory.operationCount, 1029);
-  assert.equal(inventory.responseContent.candidateOperations, 983);
-  assert.equal(inventory.responseContent.fullyTypedOperations, 849);
-  assert.equal(inventory.responseContent.untypedOperations, 134);
+  assert.equal(inventory.responseContent.candidateOperations, 981);
+  assert.equal(inventory.responseContent.fullyTypedOperations, 850);
+  assert.equal(inventory.responseContent.untypedOperations, 131);
   assert.deepEqual(inventory.responseContent.gapStateCounts, {
     "content-without-schema": 0,
-    "no-content": 134,
+    "no-content": 131,
     "unresolved-response": 0,
   });
   assert.equal(inventory.responseContent.bodyless204Operations.length, 16);
-  assert.equal(inventory.responseContent.no2xxOperations.length, 28);
+  assert.equal(inventory.responseContent.no2xxOperations.length, 30);
   assert.equal(inventory.responseContent.headOperationCount, 8);
   assert.equal(inventory.responseContent.headWithSuccessStatusCount, 2);
   assert.equal(inventory.responseContent.headWithoutSuccessStatusCount, 6);
@@ -121,20 +144,20 @@ test("canonical OpenAPI inventory reconciles the checked-in report counts", () =
     "204-only": 16,
     "catch-all-error-response": 10,
     "cors-options": 0,
-    "error-only-or-no-success-status": 3,
+    "error-only-or-no-success-status": 5,
     "head-no-success-status": 6,
     "head-success-bodyless": 2,
     "not-modified-only": 0,
     "redirect-only": 8,
     "websocket-upgrade": 1,
   });
-  assert.equal(inventory.security.operationDeclared, 812);
-  assert.equal(inventory.security.missing, 217);
+  assert.equal(inventory.security.operationDeclared, 827);
+  assert.equal(inventory.security.missing, 202);
   assert.equal(inventory.security.invalidDeclaration, 0);
   assert.equal(inventory.security.explicitPublic, 15);
-  assert.equal(inventory.security.requiresDeclaredScheme, 152);
-  assert.equal(inventory.security.includesAnonymousAlternative, 645);
-  assert.equal(inventory.security.conditionalAuthText, 285);
+  assert.equal(inventory.security.requiresDeclaredScheme, 154);
+  assert.equal(inventory.security.includesAnonymousAlternative, 658);
+  assert.equal(inventory.security.conditionalAuthText, 299);
   assert.equal(inventory.security.conditionalAuthWithMissingSecurity, 0);
   assert.equal(
     fs.readFileSync(INVENTORY_REPORT, "utf8"),
