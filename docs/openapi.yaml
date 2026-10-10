@@ -13099,12 +13099,18 @@ paths:
         "200":
           description: Suites, recent runs, scorecards, targets, and API-key display metadata.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvalDashboardResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          $ref: "#/components/responses/InternalError"
+          description: Evaluation dashboard data could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
@@ -13130,26 +13136,28 @@ paths:
         x-sensitive: true
         content:
           application/json:
-            schema:
-              type: object
+            schema: { $ref: "#/components/schemas/EvalRunSuiteRequest" }
       responses:
         "200":
           description: Evaluation results, target outputs, and scorecards.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvalRunResponse" }
         "400":
           description: Invalid JSON body or evaluation request failed validation.
           content:
             application/json:
-              schema:
-                oneOf:
-                  - { $ref: "#/components/schemas/ApiErrorResponse" }
-                  - { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          $ref: "#/components/responses/InternalError"
+          description: Evaluation run failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
 
@@ -13181,6 +13189,9 @@ paths:
         "200":
           description: Evaluation suite definition and scoring criteria.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvalSuiteByIdResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -13191,7 +13202,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "500":
-          $ref: "#/components/responses/InternalError"
+          description: Evaluation suite could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
 
@@ -21110,6 +21124,9 @@ paths:
       responses:
         "200":
           description: Discovery finding deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryResultDeleteResponse" }
         "400":
           description: Discovery result id is invalid.
           content:
@@ -21153,6 +21170,9 @@ paths:
         "200":
           description: Persisted discovery finding.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryResultResponse" }
         "400":
           description: Discovery result id is invalid.
           content:
@@ -21206,6 +21226,9 @@ paths:
         "200":
           description: Newly scanned and persisted provider-discovery findings.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryResultsResponse" }
         "400":
           description: Provider id is missing/invalid or request JSON is malformed.
           content:
@@ -21250,6 +21273,9 @@ paths:
         "200":
           description: Updated discovery finding with verified status and timestamp.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryResultResponse" }
         "400":
           description: Discovery result id is invalid.
           content:
@@ -21291,6 +21317,16 @@ paths:
       responses:
         "200":
           description: Redoc HTML shell pointing at the public OpenAPI YAML asset.
+          headers:
+            Cache-Control:
+              description: Publicly caches the static documentation shell for five minutes.
+              schema: { type: string, const: "public, max-age=300, s-maxage=300" }
+            X-Robots-Tag:
+              description: Keeps the API reference shell out of search indexing.
+              schema: { type: string, const: noindex }
+          content:
+            text/html:
+              schema: { type: string }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -21320,6 +21356,9 @@ paths:
       responses:
         "200":
           description: Guide content as a JSON string.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexCliGuideResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -21699,10 +21738,19 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      parameters:
+        - name: excludeTosAvoid
+          in: query
+          required: false
+          description: Set to `1` to exclude catalog rows whose provider terms are marked avoid.
+          schema: { type: string, enum: ["0", "1"], default: "0" }
       responses:
         "200":
           description: Free-model budgets, usage totals, provider coverage, and optional fresh feed overlay.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FreeTierSummaryResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -21732,6 +21780,9 @@ paths:
         "200":
           description: Anti-cheat anomalies.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationAnomaliesResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -21758,9 +21809,17 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      parameters:
+        - name: category
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         "200":
           description: Badge definitions; built-in rows may have been seeded idempotently.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationBadgeDefinitionsResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -21798,6 +21857,9 @@ paths:
         "200":
           description: Earned badges for one API key or the operator-wide set.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationEarnedBadgesResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -22586,16 +22648,39 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      parameters:
+        - name: minStars
+          in: query
+          required: false
+          description: Minimum stars; invalid values use 1.
+          schema: { type: string, default: "1" }
+        - name: maxResults
+          in: query
+          required: false
+          description: Maximum results, capped at 200; invalid values use 5.
+          schema: { type: string, default: "50" }
+        - name: minScore
+          in: query
+          required: false
+          description: Optional score threshold; only positive numeric values are applied.
+          schema: { type: string, default: "0" }
+        - name: query
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         "200":
           description: GitHub skill search results and any search errors.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitHubSkillsSearchResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500":
           description: GitHub skill search failed.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/GitHubSkillsSearchFailureResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiGithubSkills
@@ -22618,18 +22703,27 @@ paths:
         - LocalCliTokenAuth: []
         - InternalServiceTokenAuth: []
         - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GitHubSkillsInstallRequest" }
       responses:
         "200":
           description: Planned install destinations and per-target resolution results.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GitHubSkillsInstallPlanResponse" }
         "400":
-          description: Invalid JSON or missing repository name.
+          description: GitHub skill installation plan failed validation.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500":
-          description: Destination resolution failed.
+          description: Request parsing or destination resolution failed.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
@@ -66929,4 +67023,490 @@ components:
         results:
           type: array
           items: { $ref: "#/components/schemas/DiscoveryResult" }
+      additionalProperties: false
+
+    DiscoveryResultResponse:
+      type: object
+      x-sensitive: true
+      required: [result]
+      properties:
+        result: { $ref: "#/components/schemas/DiscoveryResult" }
+      additionalProperties: false
+
+    DiscoveryResultDeleteResponse:
+      type: object
+      required: [deleted, id]
+      properties:
+        deleted: { type: boolean, const: true }
+        id: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    CodexCliGuideResponse:
+      type: object
+      required: [content]
+      properties:
+        content: { type: string }
+      additionalProperties: false
+
+    EvalTargetDescriptor:
+      type: object
+      required: [type, id, key, label]
+      properties:
+        type: { type: string, enum: [suite-default, model, combo] }
+        id: { type: [string, "null"] }
+        key: { type: string }
+        label: { type: string }
+      additionalProperties: false
+
+    EvalRunSummary:
+      type: object
+      required: [total, passed, failed, passRate]
+      properties:
+        total: { type: integer, minimum: 0 }
+        passed: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        passRate: { type: number, minimum: 0, maximum: 100 }
+      additionalProperties: false
+
+    EvalScorecardPerSuite:
+      type: object
+      required: [id, name, passRate]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        passRate: { type: number, minimum: 0, maximum: 100 }
+      additionalProperties: false
+
+    EvalScorecard:
+      type: object
+      required: [suites, totalCases, totalPassed, overallPassRate, perSuite]
+      properties:
+        suites: { type: integer, minimum: 0 }
+        totalCases: { type: integer, minimum: 0 }
+        totalPassed: { type: integer, minimum: 0 }
+        overallPassRate: { type: number, minimum: 0, maximum: 100 }
+        perSuite:
+          type: array
+          items: { $ref: "#/components/schemas/EvalScorecardPerSuite" }
+      additionalProperties: false
+
+    EvalTargetOption:
+      type: object
+      required: [key, type, id, label, description]
+      properties:
+        key: { type: string }
+        type: { type: string, enum: [suite-default, model, combo] }
+        id: { type: [string, "null"] }
+        label: { type: string }
+        description: { type: string }
+      additionalProperties: false
+
+    EvalApiKeyDisplay:
+      type: object
+      x-sensitive: true
+      required: [id, name, isActive]
+      properties:
+        id: { type: string, x-sensitive: true }
+        name: { type: string }
+        isActive: { type: boolean }
+      additionalProperties: false
+
+    EvalSuiteListCase:
+      type: object
+      x-sensitive: true
+      required: [id, name, input, expected, tags]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        model: { type: string }
+        input: { $ref: "#/components/schemas/EvalCaseInputRecord" }
+        expected: { $ref: "#/components/schemas/EvalCaseExpectedRecord" }
+        tags:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    EvalSuiteListBuiltin:
+      type: object
+      x-sensitive: true
+      required: [id, name, description, source, caseCount, cases]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        source: { type: string, const: built-in }
+        caseCount: { type: integer, minimum: 0 }
+        cases:
+          type: array
+          items: { $ref: "#/components/schemas/EvalSuiteListCase" }
+      additionalProperties: false
+
+    EvalSuiteListCustom:
+      type: object
+      x-sensitive: true
+      required: [id, name, description, source, caseCount, cases, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        source: { type: string, const: custom }
+        caseCount: { type: integer, minimum: 0 }
+        cases:
+          type: array
+          items: { $ref: "#/components/schemas/EvalSuiteListCase" }
+        updatedAt: { type: string }
+      additionalProperties: false
+
+    EvalSuiteListEntry:
+      oneOf:
+        - { $ref: "#/components/schemas/EvalSuiteListBuiltin" }
+        - { $ref: "#/components/schemas/EvalSuiteListCustom" }
+
+    EvalPersistedRun:
+      type: object
+      x-sensitive: true
+      required: [id, runGroupId, suiteId, suiteName, target, apiKeyId, avgLatencyMs, summary, results, outputs, createdAt]
+      properties:
+        id: { type: string }
+        runGroupId: { type: [string, "null"] }
+        suiteId: { type: string }
+        suiteName: { type: string }
+        target: { $ref: "#/components/schemas/EvalTargetDescriptor" }
+        apiKeyId: { type: [string, "null"], x-sensitive: true }
+        avgLatencyMs: { type: number, minimum: 0 }
+        summary: { $ref: "#/components/schemas/EvalRunSummary" }
+        results:
+          type: array
+          x-sensitive: true
+          items: { type: object, additionalProperties: true }
+        outputs:
+          type: object
+          x-sensitive: true
+          additionalProperties: { type: string, x-sensitive: true }
+        createdAt: { type: string, format: date-time }
+      additionalProperties: false
+
+    EvalDashboardResponse:
+      type: object
+      x-sensitive: true
+      required: [suites, recentRuns, scorecard, targets, apiKeys]
+      properties:
+        suites:
+          type: array
+          items: { $ref: "#/components/schemas/EvalSuiteListEntry" }
+        recentRuns:
+          type: array
+          items: { $ref: "#/components/schemas/EvalPersistedRun" }
+        scorecard:
+          oneOf:
+            - { $ref: "#/components/schemas/EvalScorecard" }
+            - { type: "null" }
+        targets:
+          type: array
+          items: { $ref: "#/components/schemas/EvalTargetOption" }
+        apiKeys:
+          type: array
+          items: { $ref: "#/components/schemas/EvalApiKeyDisplay" }
+      additionalProperties: false
+
+    EvalTargetInput:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [suite-default, model, combo] }
+        id: { type: [string, "null"], minLength: 1 }
+      additionalProperties: true
+
+    EvalRunSuiteRequest:
+      type: object
+      x-sensitive: true
+      required: [suiteId]
+      properties:
+        suiteId: { type: string, minLength: 1 }
+        outputs:
+          type: object
+          x-sensitive: true
+          additionalProperties: { type: string, x-sensitive: true }
+        target: { $ref: "#/components/schemas/EvalTargetInput" }
+        compareTarget: { $ref: "#/components/schemas/EvalTargetInput" }
+        apiKeyId: { type: string, minLength: 1, x-sensitive: true }
+      additionalProperties: true
+
+    EvalRunResult:
+      type: object
+      x-sensitive: true
+      required: [caseId, caseName, passed, durationMs]
+      properties:
+        caseId: { type: string }
+        caseName: { type: string }
+        passed: { type: boolean }
+        durationMs: { type: number, minimum: 0 }
+        error: { type: string, x-sensitive: true }
+        details:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+      additionalProperties: false
+
+    EvalManualOutputsResponse:
+      type: object
+      x-sensitive: true
+      required: [suiteId, suiteName, results, summary]
+      properties:
+        suiteId: { type: string }
+        suiteName: { type: string }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/EvalRunResult" }
+        summary: { $ref: "#/components/schemas/EvalRunSummary" }
+      additionalProperties: false
+
+    EvalTargetRunsResponse:
+      type: object
+      x-sensitive: true
+      required: [suiteId, runGroupId, runs, scorecard, recentRuns, historyScorecard]
+      properties:
+        suiteId: { type: string }
+        runGroupId: { type: [string, "null"] }
+        runs:
+          type: array
+          items: { $ref: "#/components/schemas/EvalPersistedRun" }
+        scorecard:
+          oneOf:
+            - { $ref: "#/components/schemas/EvalScorecard" }
+            - { type: "null" }
+        recentRuns:
+          type: array
+          items: { $ref: "#/components/schemas/EvalPersistedRun" }
+        historyScorecard:
+          oneOf:
+            - { $ref: "#/components/schemas/EvalScorecard" }
+            - { type: "null" }
+      additionalProperties: false
+
+    EvalRunResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/EvalManualOutputsResponse" }
+        - { $ref: "#/components/schemas/EvalTargetRunsResponse" }
+
+    EvalBuiltinSuiteByIdResponse:
+      type: object
+      x-sensitive: true
+      required: [id, name, cases]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        cases:
+          type: array
+          items: { $ref: "#/components/schemas/EvalSuiteListCase" }
+      additionalProperties: true
+
+    EvalSuiteByIdResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/EvalBuiltinSuiteByIdResponse" }
+        - { $ref: "#/components/schemas/EvalSuiteRecord" }
+
+    FreeTierModelBudget:
+      type: object
+      required: [provider, modelId, displayName, monthlyTokens, creditTokens, freeType, poolKey, tos]
+      properties:
+        provider: { type: string }
+        modelId: { type: string }
+        displayName: { type: string }
+        monthlyTokens: { type: number, minimum: 0 }
+        creditTokens: { type: number, minimum: 0 }
+        freeType:
+          type: string
+          enum: [recurring-daily, recurring-monthly, recurring-credit, recurring-uncapped, one-time-initial, keyless, discontinued]
+        poolKey: { type: [string, "null"] }
+        tos: { type: string, enum: [ok, caution, ambiguous, avoid, unknown] }
+        trainsOnPrompts: { type: boolean }
+        hardStopGuaranteed: { type: boolean }
+        eligibilityGate: { type: string, enum: [regional-identity] }
+        enabled: { type: boolean }
+      additionalProperties: false
+
+    FreeTierSummaryResponse:
+      type: object
+      x-sensitive: true
+      required: [steadyRecurringTokens, steadyWithRecurringCreditsTokens, firstMonthRealisticTokens, boostMonthlyTokens, uncappedProviders, gatedRecurringTokens, gatedProviders, modelCount, poolCount, perModel, headline, usedThisMonth, remaining, catalogUpdatedAt, catalogSource, noCredentialProviders]
+      properties:
+        steadyRecurringTokens: { type: number, minimum: 0 }
+        steadyWithRecurringCreditsTokens: { type: number, minimum: 0 }
+        firstMonthRealisticTokens: { type: number, minimum: 0 }
+        boostMonthlyTokens: { type: number, minimum: 0 }
+        uncappedProviders:
+          type: array
+          items: { type: string }
+        gatedRecurringTokens: { type: number, minimum: 0 }
+        gatedProviders:
+          type: array
+          items: { type: string }
+        modelCount: { type: integer, minimum: 0 }
+        poolCount: { type: integer, minimum: 0 }
+        perModel:
+          type: array
+          items: { $ref: "#/components/schemas/FreeTierModelBudget" }
+        headline: { type: string }
+        usedThisMonth: { type: number, minimum: 0 }
+        remaining: { type: number, minimum: 0 }
+        catalogUpdatedAt: { type: string }
+        catalogSource: { type: string, enum: [baseline, radar-overlay] }
+        noCredentialProviders:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    GamificationAnomaly:
+      type: object
+      x-sensitive: true
+      required: [apiKeyId, xpLastHour, zScore]
+      properties:
+        apiKeyId: { type: string, x-sensitive: true }
+        xpLastHour: { type: number }
+        zScore: { type: number }
+      additionalProperties: false
+
+    GamificationAnomaliesResponse:
+      type: object
+      x-sensitive: true
+      required: [anomalies]
+      properties:
+        anomalies:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationAnomaly" }
+      additionalProperties: false
+
+    GamificationBadgeDefinition:
+      type: object
+      required: [id, name, description, icon, category, rarity, criteria, hidden, createdAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        icon: { type: [string, "null"] }
+        category: { type: [string, "null"] }
+        rarity: { type: string }
+        criteria: { type: [string, "null"] }
+        hidden: { type: integer }
+        createdAt: { type: string }
+      additionalProperties: false
+
+    GamificationBadgeDefinitionsResponse:
+      type: object
+      required: [badges]
+      properties:
+        badges:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationBadgeDefinition" }
+      additionalProperties: false
+
+    GamificationEarnedBadge:
+      type: object
+      x-sensitive: true
+      required: [apiKeyId, badgeId, unlockedAt]
+      properties:
+        apiKeyId: { type: string, x-sensitive: true }
+        badgeId: { type: string }
+        unlockedAt: { type: string }
+        badgeName: { type: string }
+        badgeDescription: { type: [string, "null"] }
+        badgeIcon: { type: [string, "null"] }
+        badgeCategory: { type: [string, "null"] }
+        badgeRarity: { type: string }
+      additionalProperties: false
+
+    GamificationEarnedBadgesResponse:
+      type: object
+      x-sensitive: true
+      required: [badges]
+      properties:
+        badges:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationEarnedBadge" }
+      additionalProperties: false
+
+    GitHubSkillsSearchItem:
+      type: object
+      required: [fullName, stars, score, description, hasSkillFile, license]
+      properties:
+        fullName: { type: string }
+        stars: { type: integer, minimum: 0 }
+        score: { type: number }
+        description: { type: string, maxLength: 300 }
+        hasSkillFile: { type: boolean }
+        license: { type: [string, "null"] }
+      additionalProperties: false
+
+    GitHubSkillsSearchResponse:
+      type: object
+      required: [skills, total]
+      properties:
+        skills:
+          type: array
+          items: { $ref: "#/components/schemas/GitHubSkillsSearchItem" }
+        total: { type: integer, minimum: 0 }
+        errors:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    GitHubSkillsSearchFailureResponse:
+      type: object
+      required: [error, skills, total]
+      properties:
+        error: { type: string }
+        skills: { type: array, maxItems: 0 }
+        total: { type: integer, const: 0 }
+      additionalProperties: false
+
+    GitHubSkillsInstallRequest:
+      type: object
+      required: [repoName]
+      properties:
+        repoName: { type: string, minLength: 1 }
+        targets:
+          type: array
+          items: { type: string, minLength: 1 }
+          default: [hermes]
+        description: { type: string, default: "" }
+      additionalProperties: true
+
+    GitHubSkillPlanTargetSuccess:
+      type: object
+      required: [target, ok, action, destDir]
+      properties:
+        target: { type: string }
+        ok: { type: boolean, const: true }
+        action: { type: string, const: planned }
+        destDir: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    GitHubSkillPlanTargetFailure:
+      type: object
+      required: [target, ok, action, error]
+      properties:
+        target: { type: string }
+        ok: { type: boolean, const: false }
+        action: { type: string, const: error }
+        error: { type: string }
+      additionalProperties: false
+
+    GitHubSkillPlanTargetResult:
+      oneOf:
+        - { $ref: "#/components/schemas/GitHubSkillPlanTargetSuccess" }
+        - { $ref: "#/components/schemas/GitHubSkillPlanTargetFailure" }
+
+    GitHubSkillsInstallPlanResponse:
+      type: object
+      x-sensitive: true
+      required: [repoName, skillName, results, allOk]
+      properties:
+        repoName: { type: string }
+        skillName: { type: string }
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/GitHubSkillPlanTargetResult" }
+        allOk: { type: boolean }
       additionalProperties: false
