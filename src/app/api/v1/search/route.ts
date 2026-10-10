@@ -233,8 +233,7 @@ async function postHandler(request: Request, context: unknown) {
   );
 
   let credentials: Record<string, any> | null = null;
-  let alternateProviderId: string | undefined;
-  let alternateCredentials: Record<string, any> | null = null;
+  let alternateProviderIds: string[] = [];
   let releaseSelection: (() => void) | undefined;
 
   try {
@@ -243,8 +242,7 @@ async function postHandler(request: Request, context: unknown) {
       async () => {
         let selectedProviderConfig = initialProviderConfig;
         let selectedCredentials: Record<string, any> | null = null;
-        let selectedAlternateProviderId: string | undefined;
-        let selectedAlternateCredentials: Record<string, any> | null = null;
+        let selectedAlternateProviderIds: string[] = [];
         let firstRateLimitedCredentials: {
           providerId: string;
           credentials: RateLimitedCredentials;
@@ -359,56 +357,39 @@ async function postHandler(request: Request, context: unknown) {
               return { kind: "response" as const, response };
             }
 
-            // Resolve an alternate for provider failover. It intentionally does
-            // not reserve capacity until handleSearch actually attempts it.
+            // Keep only the provider order in the plan. Resolve and reserve its
+            // account only after the primary fails, so unused backups do not
+            // consume account capacity and concurrent fallback requests see
+            // each other's reservations.
             const otherIds = Object.values(SEARCH_PROVIDERS)
               .filter(
                 (provider) =>
-                  !provider.fallbackOnly && supportsSearchType(provider, body.search_type)
+                  !provider.fallbackOnly &&
+                  supportsSearchType(provider, body.search_type) &&
+                  !isProviderBlockedByIdOrAlias(provider.id, blockedProviders)
               )
               .sort((a, b) => a.costPerQuery - b.costPerQuery)
               .map((provider) => provider.id)
               .filter((providerId) => providerId !== selectedProviderConfig.id);
-
-            for (const providerId of otherIds) {
-              const alternateConfig = getSearchProvider(providerId);
-              const alternate = alternateConfig
-                ? await resolveSearchExecutionCredentials(alternateConfig)
-                : null;
-              if (isAllRateLimitedCredentials(alternate)) continue;
-              if (alternate) {
-                selectedAlternateProviderId = providerId;
-                selectedAlternateCredentials = alternate;
-                break;
-              }
-            }
-
-            if (!selectedAlternateProviderId) {
-              for (const fallbackProvider of Object.values(SEARCH_PROVIDERS)) {
-                if (
-                  !fallbackProvider.fallbackOnly ||
-                  fallbackProvider.id === selectedProviderConfig.id
-                ) {
-                  continue;
-                }
-                if (isUnconfiguredLoopbackSearchProvider(fallbackProvider)) continue;
-                if (!supportsSearchType(fallbackProvider, body.search_type)) continue;
-                const fallback = await resolveSearchExecutionCredentials(fallbackProvider);
-                if (fallback && !isAllRateLimitedCredentials(fallback)) {
-                  selectedAlternateProviderId = fallbackProvider.id;
-                  selectedAlternateCredentials = fallback;
-                  break;
-                }
-              }
-            }
+            const fallbackOnlyIds = Object.values(SEARCH_PROVIDERS)
+              .filter(
+                (provider) =>
+                  provider.fallbackOnly &&
+                  provider.id !== selectedProviderConfig.id &&
+                  supportsSearchType(provider, body.search_type) &&
+                  !isProviderBlockedByIdOrAlias(provider.id, blockedProviders) &&
+                  !isUnconfiguredLoopbackSearchProvider(provider)
+              )
+              .sort((a, b) => a.costPerQuery - b.costPerQuery)
+              .map((provider) => provider.id);
+            selectedAlternateProviderIds = [...otherIds, ...fallbackOnlyIds];
           }
 
           return {
             kind: "execution" as const,
             providerConfig: selectedProviderConfig,
             credentials: selectedCredentials!,
-            alternateProviderId: selectedAlternateProviderId,
-            alternateCredentials: selectedAlternateCredentials,
+            alternateProviderIds: selectedAlternateProviderIds,
           };
         } catch (error) {
           selectedCredentials?.releaseAccountRequest?.();
@@ -426,72 +407,154 @@ async function postHandler(request: Request, context: unknown) {
 
     providerConfig = selection.value.providerConfig;
     credentials = selection.value.credentials;
-    alternateProviderId = selection.value.alternateProviderId;
-    alternateCredentials = selection.value.alternateCredentials;
+    alternateProviderIds = selection.value.alternateProviderIds;
 
-    // Clamp max_results to provider limit.
-    const clampedMaxResults = Math.min(body.max_results, providerConfig.maxMaxResults);
-
-    // Cache key — includes all fields that affect results
-    const cacheKey = computeCacheKey(
-      body.query,
-      providerConfig.id,
-      body.search_type,
-      clampedMaxResults,
-      body.country,
-      body.language,
-      {
-        filters: body.filters,
-        offset: body.offset,
-        time_range: body.time_range,
-        content: body.content,
-        provider_options: body.provider_options,
-        strict_filters: body.strict_filters,
-      },
-      {
-        apiKeyId: policy.apiKeyInfo?.id ?? null,
-        connectionId: credentials?.connectionId ?? null,
-        alternateProvider: alternateProviderId ?? null,
-        alternateConnectionId: alternateCredentials?.connectionId ?? null,
-      }
-    );
-
-    const ttl = providerConfig.cacheTTLMs ?? SEARCH_CACHE_DEFAULT_TTL_MS;
-
-    const { data: searchResult, cached } = await getOrCoalesce(
-      cacheKey,
-      ttl,
-      async (producerSignal) => {
-        const result = await handleSearch({
-          query: body.query,
-          provider: providerConfig.id,
-          maxResults: clampedMaxResults,
-          searchType: body.search_type,
-          country: body.country,
-          language: body.language,
-          timeRange: body.time_range,
+    const runCachedProvider = async (
+      stageConfig: SearchProviderConfig,
+      stageCredentials: Record<string, any>
+    ) => {
+      const clampedMaxResults = Math.min(body.max_results, stageConfig.maxMaxResults);
+      const cacheKey = computeCacheKey(
+        body.query,
+        stageConfig.id,
+        body.search_type,
+        clampedMaxResults,
+        body.country,
+        body.language,
+        {
+          filters: body.filters,
           offset: body.offset,
-          domainFilter: buildDomainFilter(body.filters),
-          contentOptions: body.content,
-          strictFilters: body.strict_filters,
-          providerOptions: body.provider_options,
-          credentials,
-          alternateProvider: alternateProviderId,
-          alternateCredentials,
-          log,
-          connectionId: credentials?.connectionId || undefined,
-          apiKeyId: policy.apiKeyInfo?.id || undefined,
-          signal: producerSignal,
-        });
-
-        if (!result.success) {
-          throw new SearchError(result.error || "Search failed", result.status || 502);
+          time_range: body.time_range,
+          content: body.content,
+          provider_options: body.provider_options,
+          strict_filters: body.strict_filters,
+        },
+        {
+          apiKeyId: policy.apiKeyInfo?.id ?? null,
+          connectionId: stageCredentials.connectionId ?? null,
         }
+      );
+      const stageStartedAt = Date.now();
+      return getOrCoalesce(
+        cacheKey,
+        stageConfig.cacheTTLMs ?? SEARCH_CACHE_DEFAULT_TTL_MS,
+        async (producerSignal) => {
+          const result = await handleSearch({
+            query: body.query,
+            provider: stageConfig.id,
+            maxResults: clampedMaxResults,
+            searchType: body.search_type,
+            country: body.country,
+            language: body.language,
+            timeRange: body.time_range,
+            offset: body.offset,
+            domainFilter: buildDomainFilter(body.filters),
+            contentOptions: body.content,
+            strictFilters: body.strict_filters,
+            providerOptions: body.provider_options,
+            credentials: stageCredentials,
+            log,
+            connectionId: stageCredentials.connectionId || undefined,
+            apiKeyId: policy.apiKeyInfo?.id || undefined,
+            signal: producerSignal,
+          });
 
-        return result.data!;
-      },
-      { signal: request.signal }
-    );
+          if (!result.success) {
+            const statusCode = result.status || 502;
+            const fallbackEligible =
+              !result.terminal &&
+              ![400, 401, 403, 404].includes(statusCode) &&
+              Date.now() - stageStartedAt < 15_000;
+            throw new SearchError(
+              result.error || "Search failed",
+              statusCode,
+              result.terminal === true,
+              fallbackEligible
+            );
+          }
+
+          return result.data!;
+        },
+        { signal: request.signal }
+      );
+    };
+
+    let stage: Awaited<ReturnType<typeof runCachedProvider>>;
+    try {
+      stage = await runCachedProvider(providerConfig, credentials);
+    } catch (primaryError) {
+      if (
+        body.provider ||
+        alternateProviderIds.length === 0 ||
+        !(primaryError instanceof SearchError) ||
+        !primaryError.fallbackEligible
+      ) {
+        throw primaryError;
+      }
+
+      // A primary failure is only converted into SearchError inside the cache
+      // producer; successful primary results remain cached solely against the
+      // selected primary connection.
+      log.warn(
+        "SEARCH",
+        `${providerConfig.id} failed (${primaryError.statusCode}), resolving fallback account after primary failure`
+      );
+
+      let fallbackStage: Awaited<ReturnType<typeof runCachedProvider>> | undefined;
+      let fallbackFailure: SearchError | undefined;
+
+      for (const fallbackProviderId of alternateProviderIds) {
+        const fallbackConfig = getSearchProvider(fallbackProviderId);
+        if (!fallbackConfig) continue;
+
+        const fallbackSelection = await acquireSearchCredentialSelection(
+          `${selectionKey}:fallback:${fallbackProviderId}`,
+          async () => {
+            const selected = await resolveSearchExecutionCredentials(fallbackConfig, true);
+            if (!selected) return { kind: "missing" as const };
+            if (isAllRateLimitedCredentials(selected)) {
+              return { kind: "rate-limited" as const };
+            }
+            return { kind: "credentials" as const, credentials: selected };
+          },
+          (selected) => {
+            if (selected.kind === "credentials") {
+              releaseUnclaimedSearchCredentialReservation(selected.credentials);
+            }
+          }
+        );
+
+        try {
+          if (fallbackSelection.value.kind !== "credentials") continue;
+          try {
+            fallbackStage = await runCachedProvider(
+              fallbackConfig,
+              fallbackSelection.value.credentials
+            );
+          } catch (error) {
+            if (request.signal.aborted) throw error;
+            if (error instanceof SearchError && error.terminal) {
+              fallbackFailure = error;
+            } else {
+              // Match the existing fallback contract: a non-terminal
+              // fallback error leaves the primary error visible to callers.
+              fallbackFailure = primaryError;
+            }
+          }
+          break;
+        } finally {
+          fallbackSelection.release();
+        }
+      }
+
+      if (fallbackStage) {
+        stage = fallbackStage;
+      } else {
+        throw fallbackFailure || primaryError;
+      }
+    }
+
+    const { data: searchResult, cached } = stage;
 
     // Record cost for budget tracking (skip cache hits — no provider cost)
     if (!cached && policy.apiKeyInfo?.id && searchResult.usage?.search_cost_usd > 0) {
@@ -541,9 +604,13 @@ async function postHandler(request: Request, context: unknown) {
 
 class SearchError extends Error {
   statusCode: number;
-  constructor(message: string, statusCode: number) {
+  terminal: boolean;
+  fallbackEligible: boolean;
+  constructor(message: string, statusCode: number, terminal = false, fallbackEligible = false) {
     super(message);
     this.statusCode = statusCode;
+    this.terminal = terminal;
+    this.fallbackEligible = fallbackEligible;
   }
 }
 

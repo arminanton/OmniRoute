@@ -11,8 +11,9 @@ const core = await import("../../src/lib/db/core.ts");
 const providersDb = await import("../../src/lib/db/providers.ts");
 const searchRoute = await import("../../src/app/api/v1/search/route.ts");
 const { getCacheStats } = await import("../../open-sse/services/searchCache.ts");
-const { getAccountRequestInFlightCount } =
+const { getAccountRequestInFlightCount, _clearAccountRequestOccupancyForTest } =
   await import("../../open-sse/services/accountRequestOccupancy.ts");
+const settingsDb = await import("../../src/lib/db/settings.ts");
 const { waitForCallLogSaves } = await import("../../src/lib/usage/callLogs.ts");
 const { flushProxyLogsSync } = await import("../../src/lib/proxyLogger.ts");
 
@@ -604,6 +605,291 @@ test("v1 search reserves distinct selected accounts before concurrent provider a
     await Promise.allSettled(responses);
     globalThis.fetch = originalFetch;
   }
+});
+
+test("auto-search selects and reserves fallback accounts only after primary failure", async () => {
+  const { SEARCH_PROVIDERS, selectProvider } =
+    await import("../../open-sse/config/searchRegistry.ts");
+  const primaryConfig = selectProvider(undefined, "web");
+  assert.ok(primaryConfig);
+  const fallbackConfig = SEARCH_PROVIDERS["serper-search"];
+  const primaryAccount = await seedConnection(primaryConfig.id, {
+    apiKey: "primary-search-key",
+    maxConcurrent: 8,
+  });
+  const lowCapacityFallback = await seedConnection(fallbackConfig.id, {
+    apiKey: "fallback-low-capacity-key",
+    maxConcurrent: 1,
+  });
+  const highCapacityFallback = await seedConnection(fallbackConfig.id, {
+    apiKey: "fallback-high-capacity-key",
+    maxConcurrent: 10,
+  });
+  await settingsDb.updateSettings({ fallbackStrategy: "available-capacity" });
+  _clearAccountRequestOccupancyForTest();
+
+  const originalFetch = globalThis.fetch;
+  const primaryResponses: Array<(response: Response) => void> = [];
+  const fallbackResponses: Array<(response: Response) => void> = [];
+  const fallbackAccounts: string[] = [];
+  const primaryStarted = deferred<void>();
+  const fallbackStarted = deferred<void>();
+  let primaryFetches = 0;
+
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target.includes(primaryConfig.baseUrl)) {
+      primaryFetches++;
+      if (primaryFetches === 4) primaryStarted.resolve();
+      return new Promise<Response>((resolve) => primaryResponses.push(resolve));
+    }
+
+    if (target.includes(fallbackConfig.baseUrl)) {
+      const apiKey = new Headers(init.headers).get("x-api-key");
+      if (apiKey === "fallback-low-capacity-key") fallbackAccounts.push("low");
+      else if (apiKey === "fallback-high-capacity-key") fallbackAccounts.push("high");
+      else assert.fail(`unexpected fallback credential: ${apiKey}`);
+      assert.equal(
+        getAccountRequestInFlightCount(String(primaryAccount.id)),
+        0,
+        "the failed primary releases its reservation before alternate admission"
+      );
+      if (fallbackAccounts.length === 4) fallbackStarted.resolve();
+      return new Promise<Response>((resolve) => fallbackResponses.push(resolve));
+    }
+
+    assert.fail(`unexpected search provider URL: ${target}`);
+  };
+
+  const post = (query: string) =>
+    searchRoute.POST(
+      new Request("http://localhost/api/v1/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, max_results: 1, search_type: "web" }),
+      })
+    );
+  const requests = [0, 1, 2, 3].map((index) =>
+    post(`fallback capacity query ${Date.now()} ${index}`)
+  );
+  const waitForWithTimeout = async (promise: Promise<void>, label: string) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(label)), 3_000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+
+  try {
+    await waitForWithTimeout(primaryStarted.promise, "four primary attempts did not start");
+    assert.equal(
+      fallbackAccounts.length,
+      0,
+      "fallback accounts stay unreserved during primary work"
+    );
+    for (const resolve of primaryResponses) resolve(new Response("rate limited", { status: 429 }));
+
+    await waitForWithTimeout(fallbackStarted.promise, "four fallback attempts did not start");
+
+    assert.equal(
+      fallbackAccounts.filter((account) => account === "low").length,
+      1,
+      "available-capacity selection should spend the single low-capacity slot once"
+    );
+    assert.equal(
+      fallbackAccounts.filter((account) => account === "high").length,
+      3,
+      "later concurrent fallbacks should see and account for already reserved capacity"
+    );
+    assert.equal(getAccountRequestInFlightCount(String(lowCapacityFallback.id)), 1);
+    assert.equal(getAccountRequestInFlightCount(String(highCapacityFallback.id)), 3);
+
+    for (const resolve of fallbackResponses) {
+      resolve(
+        Response.json({
+          organic: [{ title: "Fallback", link: "https://example.com/fallback", snippet: "ok" }],
+        })
+      );
+    }
+    const results = await Promise.all(requests);
+    assert.deepEqual(
+      results.map((response) => response.status),
+      [200, 200, 200, 200]
+    );
+    const bodies = await Promise.all(results.map((response) => response.json() as Promise<any>));
+    assert.ok(bodies.every((body) => body.provider === fallbackConfig.id));
+    assert.equal(getAccountRequestInFlightCount(String(lowCapacityFallback.id)), 0);
+    assert.equal(getAccountRequestInFlightCount(String(highCapacityFallback.id)), 0);
+  } finally {
+    for (const resolve of primaryResponses) resolve(new Response("rate limited", { status: 429 }));
+    for (const resolve of fallbackResponses) {
+      resolve(Response.json({ organic: [] }));
+    }
+    await Promise.allSettled(requests);
+    globalThis.fetch = originalFetch;
+    _clearAccountRequestOccupancyForTest();
+  }
+});
+
+test("identical auto-search fallbacks coalesce on the actual account and release cache-hit reservations", async () => {
+  const { SEARCH_PROVIDERS, selectProvider } =
+    await import("../../open-sse/config/searchRegistry.ts");
+  const primaryConfig = selectProvider(undefined, "web");
+  assert.ok(primaryConfig);
+  const blockedFallbackConfig = SEARCH_PROVIDERS["zai-search"];
+  const fallbackConfig = SEARCH_PROVIDERS["serper-search"];
+  assert.ok(blockedFallbackConfig.costPerQuery < fallbackConfig.costPerQuery);
+
+  await seedConnection(primaryConfig.id, { apiKey: "primary-search-key-a", maxConcurrent: 8 });
+  await seedConnection(primaryConfig.id, { apiKey: "primary-search-key-b", maxConcurrent: 8 });
+  const blockedFallbackAccount = await seedConnection(blockedFallbackConfig.id, {
+    apiKey: "blocked-zai-search-key",
+  });
+  const fallbackAccount = await seedConnection(fallbackConfig.id, {
+    apiKey: "serper-fallback-key",
+    maxConcurrent: 1,
+  });
+  await settingsDb.updateSettings({
+    fallbackStrategy: "available-capacity",
+    blockedProviders: [blockedFallbackConfig.id],
+  });
+  _clearAccountRequestOccupancyForTest();
+
+  const originalFetch = globalThis.fetch;
+  const primaryStarted = deferred<void>();
+  const primaryResponse = deferred<Response>();
+  const fallbackStarted = deferred<void>();
+  const fallbackResponse = deferred<Response>();
+  let primaryCalls = 0;
+  let fallbackCalls = 0;
+  let blockedFallbackCalls = 0;
+
+  globalThis.fetch = async (url, init = {}) => {
+    const target = String(url);
+    if (target.includes(primaryConfig.baseUrl)) {
+      primaryCalls++;
+      primaryStarted.resolve();
+      return primaryCalls === 1
+        ? primaryResponse.promise
+        : new Response("rate limited", { status: 429 });
+    }
+
+    if (target.includes(blockedFallbackConfig.baseUrl)) {
+      blockedFallbackCalls++;
+      assert.fail("a blocked search provider must not be attempted as fallback");
+    }
+
+    if (target.includes(fallbackConfig.baseUrl)) {
+      fallbackCalls++;
+      assert.equal(new Headers(init.headers).get("x-api-key"), "serper-fallback-key");
+      assert.equal(
+        getAccountRequestInFlightCount(String(fallbackAccount.id)),
+        1,
+        "one selected fallback account reservation owns the shared attempt"
+      );
+      fallbackStarted.resolve();
+      return fallbackResponse.promise;
+    }
+
+    assert.fail(`unexpected search provider URL: ${target}`);
+  };
+
+  const query = `identical fallback coalescing ${Date.now()}`;
+  const post = () =>
+    searchRoute.POST(
+      new Request("http://localhost/api/v1/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, max_results: 1, search_type: "web" }),
+      })
+    );
+  const waitFor = async (condition: () => boolean, message: string) => {
+    const deadline = Date.now() + 3_000;
+    while (!condition() && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.ok(condition(), message);
+  };
+  const waitForHits = async (minimum: number) => {
+    await waitFor(
+      () => getCacheStats().hits >= minimum,
+      "expected search request to join cache work"
+    );
+  };
+  const waitForPromise = async <T>(promise: Promise<T>, message: string) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(message)), 3_000);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  const first = post();
+  let second: Promise<Response> | undefined;
+
+  try {
+    await waitForPromise(primaryStarted.promise, "primary search attempt did not start");
+    const cacheHitsBeforeSecond = getCacheStats().hits;
+    second = post();
+    await waitForHits(cacheHitsBeforeSecond + 1);
+    assert.equal(primaryCalls, 1, "identical searches share the primary upstream attempt");
+
+    const cacheHitsAfterPrimaryJoin = getCacheStats().hits;
+    primaryResponse.resolve(new Response("rate limited", { status: 429 }));
+    await waitForPromise(fallbackStarted.promise, "fallback search attempt did not start");
+    await waitForHits(cacheHitsAfterPrimaryJoin + 1);
+    assert.equal(fallbackCalls, 1, "identical failures share one fallback upstream attempt");
+    assert.equal(blockedFallbackCalls, 0, "blocked fallback providers are skipped");
+
+    fallbackResponse.resolve(
+      Response.json({
+        organic: [{ title: "Shared fallback", link: "https://example.com/shared-fallback" }],
+      })
+    );
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+    const [firstBody, secondBody] = await Promise.all([
+      firstResponse.json() as Promise<any>,
+      secondResponse.json() as Promise<any>,
+    ]);
+    assert.equal(firstResponse.status, 200);
+    assert.equal(secondResponse.status, 200);
+    assert.equal(firstBody.provider, fallbackConfig.id);
+    assert.equal(secondBody.provider, fallbackConfig.id);
+    assert.equal(getAccountRequestInFlightCount(String(fallbackAccount.id)), 0);
+
+    const cachedFallback = await post();
+    const cachedFallbackBody = (await cachedFallback.json()) as any;
+    assert.equal(cachedFallback.status, 200);
+    assert.equal(
+      cachedFallbackBody.cached,
+      true,
+      "the fallback cache is keyed by the selected account"
+    );
+    assert.equal(primaryCalls, 2, "a primary error is not cached as a success");
+    assert.equal(fallbackCalls, 1, "the actual fallback account's cached result is reused");
+    assert.equal(
+      getAccountRequestInFlightCount(String(fallbackAccount.id)),
+      0,
+      "a cache hit releases the newly selected but unclaimed fallback reservation"
+    );
+  } finally {
+    primaryResponse.resolve(new Response("rate limited", { status: 429 }));
+    fallbackResponse.resolve(Response.json({ organic: [] }));
+    await Promise.allSettled(second ? [first, second] : [first]);
+    globalThis.fetch = originalFetch;
+    _clearAccountRequestOccupancyForTest();
+  }
+  assert.equal(getAccountRequestInFlightCount(String(blockedFallbackAccount.id)), 0);
 });
 
 test("v1 search POST detaches one cancelled cache waiter without aborting shared upstream work", async () => {
