@@ -12931,22 +12931,84 @@ paths:
       operationId: getApiPolicies
       tags: [System]
       summary: List routing policies
+      description: >-
+        Returns the currently locked identifiers used by the abuse/lockout guard. This route uses
+        the central MANAGEMENT policy; a dashboard session or supported management credential is
+        required when management login is enabled, while an unlocked `requireLogin=false` install may
+        permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Policy list
+          description: Current in-memory and persisted lockout identifiers.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PolicyListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Lockout policy state could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiPolicies
       tags: [System]
-      summary: Create routing policy
+      summary: Force-unlock a lockout policy identifier
+      description: >-
+        Removes an identifier from the lockout cache and persisted lockout state. This route uses
+        the central MANAGEMENT policy; a dashboard session or supported management credential is
+        required when management login is enabled, while an unlocked `requireLogin=false` install may
+        permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/PolicyUnlockRequest"
       responses:
-        "201":
-          description: Created policy
+        "200":
+          description: Lockout identifier removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PolicyUnlockResponse" }
+        "400":
+          description: Invalid JSON, unlock request, or unsupported action.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Lockout policy state could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/compliance/audit-log:
     get:
       operationId: getApiComplianceAuditLog
@@ -12955,9 +13017,17 @@ paths:
       description: >
         Returns paginated audit log entries. Use `level=high` to filter to
         high-level actions only (powers the Activity feed). Use `level=all`
-        (default) for full compliance table.
+        (default) for full compliance table. The entries may contain IP addresses, actors, targets,
+        and audit details; treat this response as sensitive. Management auth may be bypassed on an
+        unlocked install with `requireLogin=false`.
       security:
         - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: level
           in: query
@@ -12989,11 +13059,32 @@ paths:
             default: 0
       responses:
         "200":
-          description: Audit log entries
+          description: Paginated normalized audit-log entries. Pagination totals are returned in headers.
+          x-sensitive: true
+          headers:
+            x-total-count:
+              description: Total records matching the filters before pagination.
+              schema: { type: string }
+            x-page-limit:
+              description: Applied page size after clamping.
+              schema: { type: string }
+            x-page-offset:
+              description: Applied zero-based row offset after clamping.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ComplianceAuditLogResponse" }
         "401":
-          description: Unauthorized
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
-          description: Internal server error
+          description: Audit log query failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   # ─── Quota Sharing (Group B, plan 22) ────────────────────────────
 
@@ -20081,9 +20172,36 @@ paths:
       tags:
         - Files
       summary: "GET files"
+      description: >-
+        Lists stored file metadata across API keys. This management endpoint may return file names,
+        MIME types, and the internal API-key ID associated with each upload; it does not include
+        content bytes. Unlocked `requireLogin=false` installs may permit anonymous management access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Stored file metadata; content bytes are omitted.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementFileListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: File metadata could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/files/{id}/content:
     parameters:
       - name: id
@@ -20096,9 +20214,40 @@ paths:
       tags:
         - Files
       summary: "GET files › <id> › content"
+      description: >-
+        Downloads stored file bytes. The response MIME type is the stored file MIME type or
+        `application/octet-stream`; content may contain uploaded prompts or other user data.
+        Unlocked `requireLogin=false` installs may permit anonymous management access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Raw file content. Content-Disposition names the downloaded file.
+          x-sensitive: true
+          headers:
+            Content-Disposition:
+              description: Attachment disposition with the stored filename or file ID.
+              schema: { type: string }
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: File metadata or file content was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/free-models:
     get:
       operationId: getApiFreeModels
@@ -21786,19 +21935,111 @@ paths:
       tags:
         - Middleware
       summary: "GET middleware › hooks"
+      description: >-
+        Lists executable middleware hooks, or returns one named hook with optional execution logs
+        when `name` is supplied. Hook code and execution errors are sensitive. This route requires
+        management authentication and the LOCAL_ONLY peer boundary; it is not remotely reachable
+        through the manage-scope local-only bypass.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: name
+          in: query
+          required: false
+          description: Return a single hook, optionally with execution logs.
+          schema: { type: string }
+        - name: logs
+          in: query
+          required: false
+          description: Include recent logs only when the exact value `true` is supplied with `name`.
+          schema: { type: string, enum: ["true"] }
+        - name: logLimit
+          in: query
+          required: false
+          description: Requested log limit when `logs=true`; defaults to 10.
+          schema: { type: integer, default: 10 }
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Single hook detail (optionally with logs), or hook list and registry counts.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MiddlewareHooksGetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "404":
+          description: The requested named hook does not exist.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Middleware hook state or logs could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiMiddlewareHooks
       tags:
         - Middleware
       summary: "POST middleware › hooks"
+      description: >-
+        Registers and immediately loads a user-supplied JavaScript hook that runs in the request
+        middleware pipeline. The code, source errors, and resulting hook configuration are
+        sensitive. This route requires management authentication and the LOCAL_ONLY peer boundary;
+        it is not remotely reachable through the manage-scope local-only bypass.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MiddlewareHookCreateRequest" }
       x-local-only: true
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Hook was saved and registered in the runtime hook registry.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MiddlewareHookCreateResponse" }
+        "400":
+          description: Hook body failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "409":
+          description: A middleware hook with this name already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Hook persistence or registration failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/middleware/hooks/{name}:
     parameters:
       - name: name
@@ -22169,9 +22410,28 @@ paths:
       tags:
         - Models
       summary: "GET models › openrouter catalog"
+      description: >-
+        Returns the cached OpenRouter model catalog, refreshing it when stale. An explicit refresh
+        returns a source `error` in the `200` body rather than an HTTP error when OpenRouter is
+        unavailable. The handler uses the legacy `isAuthenticated()` check: dashboard session or
+        Bearer management API key when authentication is required; an unlocked
+        `requireLogin=false` installation may permit anonymous access.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: OpenRouter model list with cache/freshness metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenRouterCatalogResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/models/test:
     post:
       operationId: postApiModelsTest
@@ -26157,9 +26417,41 @@ paths:
       tags:
         - Routing
       summary: "GET routing › decisions › <requestId>"
+      description: >-
+        Explains a persisted routing decision and related target/resilience evidence. The response
+        may disclose model, provider, account, API-key name, and request metadata. Requires
+        management authentication when enabled; unlocked installs may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Route decision explanation, replay comparison, and resilience evidence.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RouteExplainabilityResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: No persisted call log matches this request ID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: The routing decision could not be explained.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/search/providers:
     get:
       operationId: getApiSearchProviders
@@ -31542,25 +31834,112 @@ paths:
       tags:
         - Upstream proxy
       summary: "DELETE upstream proxy › <providerId>"
+      description: >-
+        Removes the provider's upstream-proxy configuration and reports whether a row was deleted.
+        This route relies on the central MANAGEMENT policy rather than a handler-level auth helper;
+        an unlocked `requireLogin=false` install may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Whether an upstream-proxy row was deleted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpstreamProxyDeleteResponse" }
+        "400":
+          description: Provider ID is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiUpstreamProxyByProviderId
       tags:
         - Upstream proxy
       summary: "GET upstream proxy › <providerId>"
+      description: >-
+        Returns the stored provider proxy config, or a minimal disabled/native default when no row
+        exists. This route relies on the central MANAGEMENT policy rather than a handler-level auth
+        helper; an unlocked `requireLogin=false` install may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Stored proxy configuration or the route's minimal native/disabled default.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpstreamProxyGetResponse" }
+        "400":
+          description: Provider ID is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     put:
       operationId: putApiUpstreamProxyByProviderId
       tags:
         - Upstream proxy
       summary: "PUT upstream proxy › <providerId>"
+      description: >-
+        Upserts proxy mode and routing priorities. Enabling a non-native mode is rejected by runtime
+        capability policy when embedded-service forwarding is locked. This route relies on the
+        central MANAGEMENT policy rather than a handler-level auth helper; an unlocked
+        `requireLogin=false` install may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpstreamProxyUpdateRequest" }
       responses:
         "200":
-          description: OK
+          description: The resulting stored proxy configuration.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UpstreamProxyConfig" }
+        "400":
+          description: Provider ID, request body, proxy mode, or provider/mode combination is invalid.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/DirectValidationErrorPayload" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/usage/budget/bulk:
     get:
       operationId: getApiUsageBudgetBulk
@@ -37375,17 +37754,96 @@ paths:
       tags:
         - Webhooks
       summary: "GET webhooks"
+      description: >-
+        Lists webhook endpoints with secrets masked to the first ten characters plus an ellipsis.
+        URLs, metadata, and even masked secret prefixes are sensitive. Requires management auth
+        when enabled; an unlocked `requireLogin=false` install may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Optional maximum returned rows; when omitted, the route does not add a limit.
+          schema: { type: integer }
+        - name: offset
+          in: query
+          required: false
+          description: Row offset when `limit` is supplied; defaults to zero.
+          schema: { type: integer, default: 0 }
       responses:
         "200":
-          description: OK
+          description: Webhook records with masked secrets and total record count.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Webhook records could not be listed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiWebhooks
       tags:
         - Webhooks
       summary: "POST webhooks"
+      description: >-
+        Creates a webhook and returns the stored record, including its plaintext secret. If `secret`
+        is omitted, a new secret is generated and returned only in this response; treat the response
+        as sensitive. Requires management auth when enabled; an unlocked `requireLogin=false` install
+        may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookCreateRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Webhook created; plaintext signing secret is returned in the stored record.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookUpdatedResponse" }
+        "400":
+          description: Invalid webhook fields or Telegram encryption is not configured.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Webhook creation failed; this also covers malformed JSON caught by the route.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/webhooks/{id}:
     parameters:
       - name: id
@@ -37644,9 +38102,44 @@ paths:
       tags:
         - Webhooks
       summary: "POST webhooks › validate url"
+      description: >-
+        Applies the outbound URL/SSRF policy without contacting the destination. Unsafe/private and
+        malformed URLs are reported as `200` invalid results; request JSON/schema errors use `400`.
+        Requires management auth when enabled; an unlocked `requireLogin=false` install may permit
+        anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookUrlValidationRequest" }
       responses:
         "200":
-          description: OK
+          description: URL validation result; private/blocked and malformed URLs are represented as valid=false.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookUrlValidationResponse" }
+        "400":
+          description: Invalid JSON or URL field failed validation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
 components:
   securitySchemes:
@@ -62194,4 +62687,392 @@ components:
       properties:
         message: { type: string, const: Sync token revoked successfully }
         syncToken: { $ref: "#/components/schemas/SyncTokenSummary" }
+      additionalProperties: false
+
+    PolicyLockedIdentifier:
+      type: object
+      required: [identifier, lockedUntil, remainingMs]
+      properties:
+        identifier: { type: string, x-sensitive: true }
+        lockedUntil: { type: number, minimum: 0, description: Unix epoch milliseconds. }
+        remainingMs: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    PolicyListResponse:
+      type: object
+      required: [lockedIdentifiers]
+      properties:
+        lockedIdentifiers:
+          type: array
+          items: { $ref: "#/components/schemas/PolicyLockedIdentifier" }
+      additionalProperties: false
+
+    PolicyUnlockRequest:
+      type: object
+      required: [action, identifier]
+      properties:
+        action: { type: string, const: unlock }
+        identifier: { type: string, minLength: 1 }
+      additionalProperties: true
+
+    PolicyUnlockResponse:
+      type: object
+      required: [success, action, identifier]
+      properties:
+        success: { type: boolean, const: true }
+        action: { type: string, const: unlocked }
+        identifier: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    ComplianceAuditLogEntry:
+      type: object
+      x-sensitive: true
+      description: >-
+        Normalized compliance audit row. Known fields are declared here; additional database columns
+        are preserved by the source mapper. `details` and `metadata` are parsed JSON values.
+      required:
+        [status, timestamp, createdAt, details, metadata, ip_address, ip, resource_type, resourceType, request_id, requestId]
+      properties:
+        id: { type: [integer, "null"] }
+        action: { type: [string, "null"] }
+        actor: { type: [string, "null"] }
+        target: { type: [string, "null"], x-sensitive: true }
+        status: { type: [string, "null"] }
+        timestamp: { type: string }
+        createdAt: { type: string }
+        details: { x-sensitive: true }
+        metadata: { x-sensitive: true }
+        ip_address: { type: [string, "null"], x-sensitive: true }
+        ip: { type: [string, "null"], x-sensitive: true }
+        resource_type: { type: [string, "null"] }
+        resourceType: { type: [string, "null"] }
+        request_id: { type: [string, "null"] }
+        requestId: { type: [string, "null"] }
+      additionalProperties: true
+
+    ComplianceAuditLogResponse:
+      type: array
+      x-sensitive: true
+      items: { $ref: "#/components/schemas/ComplianceAuditLogEntry" }
+
+    DirectValidationErrorPayload:
+      type: object
+      required: [message, details]
+      properties:
+        message: { type: string }
+        details:
+          type: array
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field: { type: string }
+              message: { type: string }
+              keys:
+                type: array
+                items: { type: string }
+            additionalProperties: true
+      additionalProperties: true
+
+    UpstreamProxyConfig:
+      type: object
+      required:
+        [id, providerId, mode, cliproxyapiModelMapping, nativePriority, cliproxyapiPriority, enabled, family, fallbackBackend, createdAt, updatedAt]
+      properties:
+        id: { type: integer }
+        providerId: { type: string }
+        mode:
+          type: string
+          description: Stored mode; supported write-time values are native, cliproxyapi, dario, and fallback.
+        cliproxyapiModelMapping:
+          type: [object, "null"]
+          additionalProperties: true
+        nativePriority: { type: number }
+        cliproxyapiPriority: { type: number }
+        enabled: { type: boolean }
+        family: { type: string }
+        fallbackBackend: { type: string, enum: [cliproxyapi, dario] }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      additionalProperties: false
+
+    UpstreamProxyDisabledDefaultResponse:
+      type: object
+      required: [enabled, mode, fallbackBackend]
+      properties:
+        enabled: { type: boolean, const: false }
+        mode: { type: string, const: native }
+        fallbackBackend: { type: string, const: cliproxyapi }
+      additionalProperties: false
+
+    UpstreamProxyGetResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/UpstreamProxyConfig" }
+        - { $ref: "#/components/schemas/UpstreamProxyDisabledDefaultResponse" }
+
+    UpstreamProxyUpdateRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [native, cliproxyapi, dario, fallback]
+          default: native
+        enabled: { type: boolean, default: true }
+        fallbackBackend: { type: string, enum: [cliproxyapi, dario] }
+      additionalProperties: true
+
+    UpstreamProxyDeleteResponse:
+      type: object
+      required: [deleted]
+      properties:
+        deleted: { type: boolean }
+      additionalProperties: false
+
+    WebhookCreateRequest:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, minLength: 1, maxLength: 2000, x-sensitive: true }
+        events:
+          type: array
+          description: Event names accepted by the webhook dispatcher; defaults to wildcard `*`.
+          items: { type: string }
+        secret: { type: string, maxLength: 500, x-sensitive: true }
+        description: { type: string, maxLength: 1000 }
+        kind: { type: string, enum: [slack, telegram, discord, custom], default: custom }
+        metadata:
+          type: object
+          x-sensitive: true
+          additionalProperties: { type: string }
+      additionalProperties: true
+
+    WebhookListResponse:
+      type: object
+      x-sensitive: true
+      required: [webhooks, total]
+      properties:
+        webhooks:
+          type: array
+          items: { $ref: "#/components/schemas/WebhookMaskedRecord" }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    WebhookUrlValidationRequest:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, minLength: 1, maxLength: 2000, x-sensitive: true }
+      additionalProperties: true
+
+    WebhookUrlValidResponse:
+      type: object
+      required: [valid]
+      properties:
+        valid: { type: boolean, const: true }
+      additionalProperties: false
+
+    WebhookUrlInvalidResponse:
+      type: object
+      required: [valid, reason]
+      properties:
+        valid: { type: boolean, const: false }
+        reason: { type: string, enum: [blocked_private, invalid_url] }
+      additionalProperties: false
+
+    WebhookUrlValidationResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/WebhookUrlValidResponse" }
+        - { $ref: "#/components/schemas/WebhookUrlInvalidResponse" }
+
+    ManagementFileRecord:
+      type: object
+      x-sensitive: true
+      required: [id, bytes, createdAt, filename, purpose, mimeType, apiKeyId, expiresAt, deletedAt]
+      properties:
+        id: { type: string, pattern: "^file-[0-9a-f]{24}$" }
+        bytes: { type: integer, minimum: 0 }
+        createdAt: { type: integer, minimum: 0, description: Unix epoch seconds. }
+        filename: { type: string, x-sensitive: true }
+        purpose: { type: string }
+        mimeType: { type: [string, "null"] }
+        apiKeyId: { type: [string, "null"], x-sensitive: true }
+        expiresAt: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+        deletedAt: { type: [integer, "null"], minimum: 0, description: Unix epoch seconds. }
+      additionalProperties: false
+
+    ManagementFileListResponse:
+      type: object
+      x-sensitive: true
+      required: [files]
+      properties:
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/ManagementFileRecord" }
+      additionalProperties: false
+
+    MiddlewareHookScope:
+      oneOf:
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, const: global }
+          additionalProperties: false
+        - type: object
+          required: [type, comboId]
+          properties:
+            type: { type: string, const: combo }
+            comboId: { type: string, minLength: 1 }
+          additionalProperties: false
+
+    MiddlewareHookConfig:
+      type: object
+      x-sensitive: true
+      required: [name, description, priority, scope, enabled, code, createdAt, updatedAt, runCount]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        priority: { type: integer }
+        scope: { $ref: "#/components/schemas/MiddlewareHookScope" }
+        enabled: { type: boolean }
+        code: { type: string, x-sensitive: true, description: Executable JavaScript source. }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+        runCount: { type: integer, minimum: 0 }
+        lastError: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    MiddlewareHookLogEntry:
+      type: object
+      x-sensitive: true
+      required: [id, hookName, requestId, durationMs, mutated, skipped, error, timestamp]
+      properties:
+        id: { type: integer }
+        hookName: { type: string }
+        requestId: { type: [string, "null"] }
+        durationMs: { type: number, minimum: 0 }
+        mutated: { type: boolean }
+        skipped: { type: boolean }
+        error: { type: [string, "null"], x-sensitive: true }
+        timestamp: { type: string }
+      additionalProperties: false
+
+    MiddlewareHookDetailResponse:
+      type: object
+      x-sensitive: true
+      required: [hook]
+      properties:
+        hook: { $ref: "#/components/schemas/MiddlewareHookConfig" }
+        logs:
+          type: array
+          items: { $ref: "#/components/schemas/MiddlewareHookLogEntry" }
+      additionalProperties: false
+
+    MiddlewareHookRegistryStats:
+      type: object
+      required: [dbCount, registryCount]
+      properties:
+        dbCount: { type: integer, minimum: 0 }
+        registryCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    MiddlewareHookListResponse:
+      type: object
+      x-sensitive: true
+      required: [hooks, registryStats]
+      properties:
+        hooks:
+          type: array
+          items: { $ref: "#/components/schemas/MiddlewareHookConfig" }
+        registryStats: { $ref: "#/components/schemas/MiddlewareHookRegistryStats" }
+      additionalProperties: false
+
+    MiddlewareHooksGetResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/MiddlewareHookDetailResponse" }
+        - { $ref: "#/components/schemas/MiddlewareHookListResponse" }
+
+    MiddlewareHookCreateRequest:
+      type: object
+      required: [name, code]
+      properties:
+        name: { type: string, minLength: 1, pattern: "^[a-zA-Z0-9_-]+$" }
+        description: { type: string, default: "" }
+        priority: { type: integer, default: 200 }
+        scope:
+          allOf:
+            - { $ref: "#/components/schemas/MiddlewareHookScope" }
+          default: { type: global }
+        code: { type: string, minLength: 1, x-sensitive: true }
+      additionalProperties: true
+
+    MiddlewareHookCreateResponse:
+      type: object
+      x-sensitive: true
+      required: [hook]
+      properties:
+        hook: { $ref: "#/components/schemas/MiddlewareHookConfig" }
+      additionalProperties: false
+
+    OpenRouterCatalogEntry:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        context_length: { type: integer, minimum: 0 }
+        pricing:
+          type: object
+          properties:
+            prompt: { type: string }
+            completion: { type: string }
+            image: { type: string }
+            request: { type: string }
+          additionalProperties: true
+        top_provider:
+          type: object
+          properties:
+            max_completion_tokens: { type: integer, minimum: 0 }
+            is_moderated: { type: boolean }
+          additionalProperties: true
+        architecture:
+          type: object
+          properties:
+            modality: { type: string }
+            input_modalities:
+              type: array
+              items: { type: string }
+            output_modalities:
+              type: array
+              items: { type: string }
+            tokenizer: { type: string }
+            instruct_type: { type: string }
+          additionalProperties: true
+        supported_parameters:
+          type: array
+          items: { type: string }
+        created: { type: integer, minimum: 0 }
+      additionalProperties: true
+
+    OpenRouterCatalogMeta:
+      type: object
+      required: [source, count]
+      properties:
+        source: { type: string, enum: [fresh, cache, stale-cache, error] }
+        count: { type: integer, minimum: 0 }
+        stale: { type: boolean }
+        cachedAt: { type: string, format: date-time }
+        error: { type: string }
+      additionalProperties: false
+
+    OpenRouterCatalogResponse:
+      type: object
+      required: [object, data, meta]
+      properties:
+        object: { type: string, const: list }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/OpenRouterCatalogEntry" }
+        meta: { $ref: "#/components/schemas/OpenRouterCatalogMeta" }
       additionalProperties: false
