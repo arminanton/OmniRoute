@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   captureCurrentProviderBody,
   createPreparedRequestLogger,
+  isPreparedProviderRequest,
   runWithCapture,
   type Capture,
   type ProviderRequestPrepared,
@@ -215,6 +216,122 @@ test("runWithCapture does not duplicate an already prepared identical fetch", as
 
     assert.equal(prepared.length, 1);
   } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("prepared-request finalization skips only the same URL, body identity, and header values", () => {
+  const url = "https://provider.example/v1/responses";
+  const body = { model: "gpt-6.1-sol", input: [{ role: "user", content: "prepared" }] };
+  const capture: Capture = {
+    capture() {},
+    body(fallback) {
+      return fallback;
+    },
+    latest() {
+      return {
+        url,
+        headers: { Authorization: "Bearer synthetic", "Content-Type": "application/json" },
+        body,
+        bodyString: JSON.stringify(body),
+      };
+    },
+  };
+
+  assert.equal(
+    isPreparedProviderRequest(
+      capture,
+      url,
+      new Headers({ authorization: "Bearer synthetic", "content-type": "application/json" }),
+      body
+    ),
+    true
+  );
+  assert.equal(isPreparedProviderRequest(capture, `${url}?retry=1`, {}, body), false);
+  assert.equal(
+    isPreparedProviderRequest(capture, url, { Authorization: "Bearer changed" }, body),
+    false
+  );
+  assert.equal(
+    isPreparedProviderRequest(
+      capture,
+      url,
+      { Authorization: "Bearer synthetic", "Content-Type": "application/json" },
+      { ...body }
+    ),
+    false
+  );
+});
+
+test("prepared-request header snapshot prevents a mutated retry from being deduplicated", async () => {
+  const url = "https://provider.example/v1/responses";
+  const body = { model: "gpt-6.1-sol", input: [{ role: "user", content: "prepared" }] };
+  const request = {
+    url,
+    headers: { Authorization: "Bearer first", "Content-Type": "application/json" },
+    body,
+    bodyString: JSON.stringify(body),
+  };
+  const capture = createPreparedRequestLogger(
+    { logTargetRequest() {} },
+    { id: null, model: body.model, provider: "codex", connectionId: null }
+  );
+  await capture.capture(request);
+
+  request.headers.Authorization = "Bearer retry";
+
+  assert.equal(capture.latest?.()?.headers.Authorization, "Bearer first");
+  assert.equal(isPreparedProviderRequest(capture, url, request.headers, body), false);
+});
+
+test("captureCurrentProviderBody skips JSON.parse for an already prepared bodyString", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalParse = JSON.parse;
+  const url = "https://provider.example/v1/responses";
+  const preparedBody = { model: "gpt-6.1-sol", input: [{ role: "user", content: "prepared" }] };
+  const preparedBodyString = JSON.stringify(preparedBody);
+  const nextBodyString = JSON.stringify({ ...preparedBody, service_tier: "priority" });
+  let latest: ProviderRequestPrepared | null = {
+    url,
+    headers: {},
+    body: preparedBody,
+    bodyString: preparedBodyString,
+  };
+  const captured: ProviderRequestPrepared[] = [];
+  let parseCalls = 0;
+  const capture: Capture = {
+    capture(request) {
+      latest = request;
+      captured.push(request);
+    },
+    body(fallback) {
+      return latest?.body ?? fallback;
+    },
+    latest() {
+      return latest;
+    },
+  };
+  JSON.parse = ((
+    text: string,
+    reviver?: (this: unknown, key: string, value: unknown) => unknown
+  ) => {
+    if (text === preparedBodyString || text === nextBodyString) parseCalls++;
+    return originalParse(text, reviver);
+  }) as typeof JSON.parse;
+
+  try {
+    await runWithCapture(capture, async () => {
+      await captureCurrentProviderBody(url, {}, preparedBodyString);
+      assert.equal(parseCalls, 0);
+      assert.equal(captured.length, 0);
+
+      await captureCurrentProviderBody(url, {}, nextBodyString);
+      assert.equal(parseCalls, 1);
+      assert.equal(captured.length, 1);
+      assert.deepEqual(captured[0].body, originalParse(nextBodyString));
+    });
+  } finally {
+    JSON.parse = originalParse;
     globalThis.fetch = originalFetch;
   }
 });

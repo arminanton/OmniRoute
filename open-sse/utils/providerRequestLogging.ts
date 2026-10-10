@@ -6,6 +6,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 
 import { updatePendingScope, type PendingRequestScope } from "@/lib/usage/pendingRequestScope";
+import { normalizeHeaders } from "./headers.ts";
 
 export type ProviderRequestPrepared = {
   url: string;
@@ -30,6 +31,27 @@ export type Capture = {
   /** Drop any retained prepared request after its terminal log has been written. */
   release?: () => void;
 };
+
+/**
+ * Whether the request logger already captured this exact prepared request.
+ * ChatCore calls logTargetRequest again after executor return; when the
+ * executor's captured body and headers are unchanged, that second call only
+ * cloned and re-compared a large body that is already in the pipeline snapshot.
+ */
+export function isPreparedProviderRequest(
+  capture: Pick<Capture, "latest">,
+  url: string,
+  headers: unknown,
+  body: unknown
+): boolean {
+  const latest = capture.latest?.();
+  if (!latest || latest.url !== url || latest.body !== body) return false;
+  const capturedHeaders = normalizeHeaders(latest.headers);
+  const currentHeaders = normalizeHeaders(headers);
+  const capturedKeys = Object.keys(capturedHeaders);
+  if (capturedKeys.length !== Object.keys(currentHeaders).length) return false;
+  return capturedKeys.every((key) => capturedHeaders[key] === currentHeaders[key]);
+}
 
 type RequestLoggerLike = {
   getDiagnosticOverflowTrace?: () => DiagnosticOverflowTrace | null;
@@ -159,6 +181,11 @@ export function captureCurrentProviderBody(
   log?: WarnLog | null
 ) {
   const requestCapture = captureState.context.getStore();
+  // Most Codex transports prepare the request before fetch and then pass the
+  // same serialized bytes through this hook. Check the cheap identity tuple
+  // before JSON.parse: parsing here would allocate another full request object
+  // only for capturePreparedRequest to discard it as an exact duplicate.
+  if (!requestCapture || requestCapture.enabled === false) return;
   if (requestCapture?.diagnosticOverflowOnly) {
     return capturePreparedRequest(
       requestCapture,
@@ -170,6 +197,8 @@ export function captureCurrentProviderBody(
       fingerprintProviderBody(bodyString)
     );
   }
+  const latest = requestCapture.latest?.();
+  if (latest?.url === url && latest.bodyString === bodyString) return;
   return captureCurrentProviderRequest(url, headers, parseBody(bodyString), bodyString, log);
 }
 
@@ -442,7 +471,10 @@ export function createPreparedRequestLogger(
           stage: "sending_to_provider",
         });
       } else {
-        latest = request;
+        // Header objects are sometimes reused and mutated for a retry. Keep
+        // the exact captured header values so finalizer dedup never mistakes a
+        // changed-header attempt for the already-logged request.
+        latest = { ...request, headers: { ...request.headers } };
         reqLogger.logTargetRequest(request.url, request.headers, request.body);
         updatePendingScope(scope, {
           providerRequest: request.body,

@@ -214,7 +214,11 @@ import {
 } from "../services/tokenRefresh.ts";
 import { createRequestLogger } from "../utils/requestLogger.ts";
 import { releaseClientRawRequestBodyForPrivateCapture } from "@/sse/handlers/chat/clientRawRequest.ts";
-import { createPreparedRequestLogger, runWithCapture } from "../utils/providerRequestLogging.ts";
+import {
+  createPreparedRequestLogger,
+  isPreparedProviderRequest,
+  runWithCapture,
+} from "../utils/providerRequestLogging.ts";
 import { summarizeToolSources } from "../utils/toolSources.ts";
 import { applyResponsesPreviousResponseIdPolicy } from "../utils/responsesStatePolicy.ts";
 import { applyClaudeEffortVariant } from "./chatCore/claudeEffortVariant.ts";
@@ -1370,6 +1374,14 @@ async function handleChatCoreOwned({
     enabled: detailedLoggingEnabled,
     provider,
   });
+  const logTargetRequestIfNotAlreadyCaptured = (
+    url: string,
+    headers: Record<string, string>,
+    requestBody: unknown
+  ) => {
+    if (isPreparedProviderRequest(providerRequestCapture, url, headers, requestBody)) return;
+    reqLogger.logTargetRequest(url, headers, requestBody);
+  };
   // 0. Log client raw request; redact video cues on the producer-bounded snapshot.
   // See videoBridgeSnapshotRedaction.ts; reuse its already-isolated body.
   logClientRawRequestRedacted(reqLogger, clientRawRequest, videoBridgeObserved, true);
@@ -4617,7 +4629,7 @@ async function handleChatCoreOwned({
       );
 
       // Log target request (final request to provider)
-      reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
+      logTargetRequestIfNotAlreadyCaptured(providerUrl, providerHeaders, finalBody);
       updatePendingScope(pendingScope, {
         providerRequest: finalBody,
         providerUrl,
@@ -4983,7 +4995,7 @@ async function handleChatCoreOwned({
             providerUrl = retryResult.url;
             providerHeaders = new Headers(retryResult.headers || {});
             finalBody = providerRequestCapture.body(retryResult.transformedBody);
-            reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
+            logTargetRequestIfNotAlreadyCaptured(providerUrl, providerHeaders, finalBody);
             updatePendingScope(pendingScope, {
               providerRequest: finalBody,
               providerUrl,
@@ -5147,7 +5159,7 @@ async function handleChatCoreOwned({
           providerUrl = signatureRecovery.execution.url;
           providerHeaders = signatureRecovery.execution.headers;
           finalBody = providerRequestCapture.body(signatureRecovery.execution.transformedBody);
-          reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
+          logTargetRequestIfNotAlreadyCaptured(providerUrl, providerHeaders, finalBody);
           updatePendingScope(pendingScope, {
             providerRequest: finalBody,
             providerUrl,
@@ -5263,7 +5275,7 @@ async function handleChatCoreOwned({
               providerUrl = fallbackResult.url;
               providerHeaders = fallbackResult.headers;
               finalBody = providerRequestCapture.body(fallbackResult.transformedBody);
-              reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
+              logTargetRequestIfNotAlreadyCaptured(providerUrl, providerHeaders, finalBody);
               updatePendingScope(pendingScope, {
                 providerRequest: finalBody,
                 providerUrl,
@@ -5364,7 +5376,7 @@ async function handleChatCoreOwned({
               providerUrl = fallbackResult.url;
               providerHeaders = fallbackResult.headers;
               finalBody = providerRequestCapture.body(fallbackResult.transformedBody);
-              reqLogger.logTargetRequest(providerUrl, providerHeaders, finalBody);
+              logTargetRequestIfNotAlreadyCaptured(providerUrl, providerHeaders, finalBody);
               updatePendingScope(pendingScope, {
                 providerRequest: finalBody,
                 providerUrl,
@@ -5651,7 +5663,7 @@ async function handleChatCoreOwned({
         const captured = providerRequestCapture.latest?.() ?? null;
         finalBody = captured?.body ?? finalBody ?? translatedBody;
         if (captured) {
-          reqLogger.logTargetRequest(captured.url, captured.headers, captured.body);
+          logTargetRequestIfNotAlreadyCaptured(captured.url, captured.headers, captured.body);
         }
         reqLogger.logError(new Error(err.error || "Provider request failed"), finalBody);
         const isNetworkThrow = Boolean(err.originalError);
@@ -5895,7 +5907,7 @@ async function handleChatCoreOwned({
         clientRawRequest?.headers
       );
       const capturedOk = providerRequestCapture.latest?.();
-      reqLogger.logTargetRequest(
+      logTargetRequestIfNotAlreadyCaptured(
         okLeg.requestUrl || capturedOk?.url || "",
         okLeg.requestHeaders || capturedOk?.headers || {},
         capturedOk?.body ?? finalBody
