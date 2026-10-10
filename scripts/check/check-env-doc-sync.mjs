@@ -235,6 +235,8 @@ const IGNORE_FROM_CODE = new Set([
   "OMNI_AG_BODY_BENCH_BYTES",
   "OMNI_AG_BODY_BENCH_MODE",
   "OMNI_AG_BODY_BENCH_SESSIONS",
+  // Test-only call-log benchmark fixture toggle; never server configuration.
+  "BENCH_INCLUDE_PIPELINE_STREAM_CHUNKS",
   // Standalone E2E harness selection and failure-scratch retention controls.
   "OMNIROUTE_KEEP_STANDALONE_E2E_FAILURES",
   "OMNIROUTE_STANDALONE_CAPTURE",
