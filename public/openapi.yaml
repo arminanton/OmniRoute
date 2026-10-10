@@ -43202,7 +43202,17 @@ paths:
       tags:
         - V1 Vscode
       summary: Reject an unsupported POST to the combo base path
-      description: The compatibility route accepts POST only at the `/api/show` suffix.
+      description: >-
+        This base-path POST always returns 404; the compatibility route accepts POST only at the
+        `/api/show` suffix. The handler does not independently authenticate the token, but central
+        CLIENT_API policy validates the path token when `REQUIRE_API_KEY` is enabled. When that policy
+        is disabled, the fallback 404 can be anonymous. The path token is sensitive.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "404":
           description: The combo base path does not support POST
@@ -43210,14 +43220,23 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StringErrorResponse"
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/v1/vscode/combos/{token}/{slug}:
     parameters:
       - name: token
         in: path
         required: true
+        x-sensitive: true
         schema:
           type: string
-        description: VS Code client API token carried in the path; treat this value as a credential.
+        description: >-
+          VS Code client API token carried in the path. It is also used by the shared catalog handler
+          when that branch runs; treat this URL value as secret material.
       - name: slug
         in: path
         required: true
@@ -43232,10 +43251,32 @@ paths:
       tags:
         - V1 Vscode
       summary: Read an Ollama-compatible combo endpoint
-      description: Returns version, tags, or combo catalog data depending on the path suffix.
+      description: >-
+        Returns static Ollama version metadata for `api/version`, or combo data for `api/tags` and the
+        default catalog branch. Central CLIENT_API policy validates client credentials when
+        `REQUIRE_API_KEY` is enabled; the version branch performs no handler auth. Catalog branches
+        additionally call the shared model-catalog auth check when `isAuthRequired()` is true and
+        `requireAuthForModels` is not explicitly false, using the path token as a credential fallback.
+        Anonymous access is possible only when all applicable gates are open. The path token and
+        combo catalog output are sensitive; no `oma_` management-token scope is used.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
+      x-authentication-branches:
+        - suffix: api/version
+          authentication: central CLIENT_API policy only
+          anonymousCondition: REQUIRE_API_KEY=false
+        - suffix: api/tags or omitted
+          authentication: central CLIENT_API plus conditional model-catalog handler gate
+          anonymousCondition: REQUIRE_API_KEY=false and model-catalog handler gate open
       responses:
         "200":
           description: Ollama version, tags, or combo catalog response
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -43246,14 +43287,35 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          description: Client API key or model-catalog authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
     post:
       operationId: postApiV1VscodeCombosByTokenBySlug
       tags:
         - V1 Vscode
       summary: Return Ollama-compatible details for a combo
-      description: The `api/show` suffix accepts either `name` or `model` in the request body.
+      description: >-
+        The `api/show` suffix accepts either `name` or `model` in the request body; unsupported suffixes
+        return 404 before model lookup. Central CLIENT_API policy validates client credentials when
+        `REQUIRE_API_KEY` is enabled. For `api/show`, the handler forwards the path token as an API-key
+        fallback into the shared model-catalog auth gate when `isAuthRequired()` is true and
+        `requireAuthForModels` is not explicitly false. Anonymous access requires all applicable gates
+        to be open. Path tokens, the model selector, and returned catalog metadata are sensitive; this
+        client-API route does not consume `oma_` management-token scopes.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
+        x-sensitive: true
         content:
           application/json:
             schema:
@@ -43261,6 +43323,7 @@ paths:
       responses:
         "200":
           description: Combo model details
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -43283,6 +43346,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProviderConnectionErrorResponse"
+        "401":
+          description: Client API key or model-catalog authentication is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/v1/vscode/raw/{token}:
     parameters:
       - name: token
@@ -43465,14 +43534,27 @@ paths:
       - name: token
         in: path
         required: true
+        x-sensitive: true
         schema:
           type: string
-        description: Path segment required by the route; this static version handler does not read it or authenticate it.
+        description: >-
+          VS Code path-scoped API key carried in the URL. The handler does not read it, but central
+          CLIENT_API policy extracts and validates it when `REQUIRE_API_KEY` is enabled; treat the
+          path value as a credential.
     get:
       operationId: getApiV1VscodeRawByTokenApiVersion
       tags: [V1 Vscode]
       summary: Return the Ollama compatibility version
-      description: Returns the static Ollama-compatible version and does not use the path token for authentication.
+      description: >-
+        Returns the static Ollama-compatible version. The handler performs no auth check, but central
+        CLIENT_API policy uses the path token as a client API key when `REQUIRE_API_KEY` is enabled;
+        when disabled, anonymous access is permitted and the token is ignored by the handler.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Ollama compatibility version.
@@ -43480,6 +43562,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VscodeOllamaVersionResponse"
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/v1/vscode/raw/{token}/chat/completions:
     parameters:
       - name: token
@@ -43552,19 +43640,32 @@ paths:
       - name: token
         in: path
         required: true
+        x-sensitive: true
         schema:
           type: string
-        description: Path segment required by the route; this combo-list handler does not use it for authentication.
+        description: >-
+          VS Code path-scoped API key carried in the URL. The combo-list handler does not read it, but
+          central CLIENT_API policy extracts and validates it when `REQUIRE_API_KEY` is enabled; treat
+          the path value as a credential.
     get:
       operationId: getApiV1VscodeRawByTokenCombos
       tags: [V1 Vscode]
       summary: List combos for raw VS Code import
       description: >-
-        Returns projected combo metadata in both `data` and `combos`. The route reads
-        the combo store directly and does not use the path token.
+        Returns projected combo metadata in both `data` and `combos`. The route reads the combo store
+        directly and does not independently authenticate the path token; central CLIENT_API policy
+        validates it when `REQUIRE_API_KEY` is enabled and allows anonymous access when that policy is
+        disabled. The projection omits internal account IDs, weights, and routing labels.
+      security:
+        - BearerAuth: []
+        - ClientApiKeyAuth: []
+        - GoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Combo list with resolved public capabilities.
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -43574,6 +43675,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Client API key is required but missing or invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
   /api/v1/vscode/raw/{token}/models:
     parameters:
       - name: token
@@ -44730,7 +44837,21 @@ paths:
       description: >-
         Lists browser-login sessions and the provider login catalog. Session IDs, connection IDs,
         provider URLs, internal ports, and session state are sensitive operational metadata; no
-        container names or browser profile paths are returned.
+        container names or browser profile paths are returned. The handler calls
+        `requireManagementAuth()` after the central MANAGEMENT gate; on an admitted loopback/private-LAN
+        peer, unlocked `requireLogin=false` permits anonymous access, otherwise a dashboard session,
+        manage/admin API key, method-scoped `oma_` read token, or trusted loopback CLI/internal token is
+        required. **LOCAL_ONLY** applies before ordinary auth: remote peers are rejected even with a
+        valid management credential because this spawn-capable prefix has no remote bypass.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Active session metadata and providers that support browser login.
@@ -44742,6 +44863,29 @@ paths:
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/vnc-session/{params}:
+    description: >-
+      Connection-scoped browser-session controls. All methods are LOCAL_ONLY and spawn-capable: the
+      central peer-locality gate admits loopback and trusted private-LAN peers only; no remote
+      manage-scope bypass applies. After locality passes, the central MANAGEMENT policy and each
+      handler's `requireManagementAuth()` check apply. Unlocked `requireLogin=false` permits anonymous
+      requests from admitted peers; otherwise accepted identities include dashboard sessions,
+      manage/admin API keys, method-scoped `oma_` tokens (read for GET; write for POST/DELETE), and
+      trusted loopback CLI/internal-service tokens. POST start/harvest also fail in locked runtime
+      policy; DELETE remains available for session cleanup.
+    x-authentication-branches:
+      - when: Request comes from loopback or a trusted private-LAN peer and management auth is unlocked
+        security: [{}]
+      - when: Request comes from loopback or a trusted private-LAN peer and management auth is required
+        security:
+          - BearerAuth: []
+          - ManagementGoogleApiKeyAuth: []
+          - ManagementAnthropicApiKeyAuth: []
+          - ManagementSessionAuth: []
+          - LocalCliTokenAuth: []
+          - InternalServiceTokenAuth: []
+        note: Scoped `oma_` tokens require the operation's method-derived read/write scope.
+      - when: Request comes from a remote peer
+        result: Rejected by LOCAL_ONLY before the handler auth helper; there is no remote bypass.
     parameters:
       - name: params
         in: path
@@ -44758,7 +44902,18 @@ paths:
       x-local-only: true
       description: >-
         Stops and removes a browser-login session. The response includes sensitive connection and
-        session identifiers; stopping a missing session is idempotent.
+        session identifiers; stopping a missing session is idempotent. Central management plus
+        `requireManagementAuth()` requires method-derived `write` scope for `oma_` tokens when auth is enabled.
+        **LOCAL_ONLY** admits loopback/trusted private-LAN peers; the spawn-capable route has no remote
+        manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Session stop accepted, including when no matching active session exists.
@@ -44788,7 +44943,18 @@ paths:
       description: >-
         Lists sessions for a provider connection when only its identifier is supplied, or returns
         one session when both connection and session identifiers are supplied. Returned local viewer
-        URLs, ports, provider URLs, and identifiers are sensitive.
+        URLs, ports, provider URLs, and identifiers are sensitive. Central management plus
+        `requireManagementAuth()` requires method-derived `read` scope for `oma_` tokens when auth is enabled.
+        **LOCAL_ONLY** admits loopback/trusted private-LAN peers; the spawn-capable route has no remote
+        manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Connection session list or one browser-login session.
@@ -44818,7 +44984,20 @@ paths:
       description: >-
         Starts a browser-login session, harvests its credentials into the provider connection, or
         marks its local viewer active according to the catch-all action segments. Responses expose
-        sensitive session and connection metadata but never return harvested credential values.
+        sensitive session and connection metadata but never return harvested credential values. Central
+        management plus `requireManagementAuth()` requires method-derived `write` scope for `oma_`
+        tokens when auth is enabled. **LOCAL_ONLY** admits loopback/trusted private-LAN peers; this spawn-capable route has
+        no remote manage-scope bypass. On admitted peers, `requireLogin=false` permits anonymous access.
+        Starting or harvesting is also blocked by the locked-runtime `vnc-session` capability; touch
+        remains an in-memory session activity update.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Session started, credentials harvested, or viewer activity recorded.

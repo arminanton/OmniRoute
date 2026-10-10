@@ -191,6 +191,15 @@ const operations = [
   ["get", "/api/v1/vscode/{token}/combos"],
   ["get", "/api/v1/vscode/combos/{token}"],
   ["get", "/api/v1/models"],
+  ["post", "/api/v1/vscode/combos/{token}"],
+  ["get", "/api/v1/vscode/combos/{token}/{slug}"],
+  ["post", "/api/v1/vscode/combos/{token}/{slug}"],
+  ["get", "/api/v1/vscode/raw/{token}/api/version"],
+  ["get", "/api/v1/vscode/raw/{token}/combos"],
+  ["get", "/api/vnc-session"],
+  ["delete", "/api/vnc-session/{params}"],
+  ["get", "/api/vnc-session/{params}"],
+  ["post", "/api/vnc-session/{params}"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -205,7 +214,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 194 effective OpenAPI operations", () => {
+test("the audited batches declare all 203 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -1340,4 +1349,80 @@ test("VS Code tokenized endpoints distinguish central token validation from hand
   const tokenizedCatalog = operation("get", "/api/v1/vscode/combos/{token}");
   assert.match(tokenizedCatalog.description, /model-catalog gate.*path token is copied to an API-key header/i);
   assert.equal(tokenizedCatalog.responses["200"]["x-sensitive"], true);
+});
+
+test("remaining VS Code combo and raw routes document URL-token auth and catalog branch differences", () => {
+  const routes = [
+    ["post", "/api/v1/vscode/combos/{token}"],
+    ["get", "/api/v1/vscode/combos/{token}/{slug}"],
+    ["post", "/api/v1/vscode/combos/{token}/{slug}"],
+    ["get", "/api/v1/vscode/raw/{token}/api/version"],
+    ["get", "/api/v1/vscode/raw/{token}/combos"],
+  ] as const;
+  for (const [method, route] of routes) {
+    const routeOperation = operation(method, route);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ClientApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "GoogleApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.match(routeOperation.description, /CLIENT_API/);
+    assert.match(routeOperation.description, /REQUIRE_API_KEY/);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+  for (const route of [
+    "/api/v1/vscode/combos/{token}",
+    "/api/v1/vscode/combos/{token}/{slug}",
+    "/api/v1/vscode/raw/{token}/api/version",
+    "/api/v1/vscode/raw/{token}/combos",
+  ]) {
+    assert.equal(spec.paths[route].parameters.find((parameter: any) => parameter.name === "token")["x-sensitive"], true);
+  }
+  assert.match(operation("post", "/api/v1/vscode/combos/{token}").description, /always returns 404.*does not independently authenticate/i);
+  const comboRead = operation("get", "/api/v1/vscode/combos/{token}/{slug}");
+  assert.match(comboRead.description, /version branch performs no handler auth.*catalog branches.*model-catalog auth check/i);
+  assert.equal(comboRead.responses["200"]["x-sensitive"], true);
+  const comboShow = operation("post", "/api/v1/vscode/combos/{token}/{slug}");
+  assert.match(comboShow.description, /`api\/show`.*model-catalog auth gate/i);
+  assert.equal(comboShow.requestBody["x-sensitive"], true);
+  assert.equal(comboShow.responses["200"]["x-sensitive"], true);
+  assert.match(operation("get", "/api/v1/vscode/raw/{token}/api/version").description, /handler performs no auth.*central CLIENT_API.*uses the path token/i);
+  assert.match(operation("get", "/api/v1/vscode/raw/{token}/combos").description, /does not independently authenticate.*central CLIENT_API/i);
+});
+
+test("VNC session operations are local-only spawn routes with sensitive session metadata", () => {
+  for (const [method, route, scope] of [
+    ["get", "/api/vnc-session", "read"],
+    ["delete", "/api/vnc-session/{params}", "write"],
+    ["get", "/api/vnc-session/{params}", "read"],
+    ["post", "/api/vnc-session/{params}", "write"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.equal(routeOperation["x-local-only"], true);
+    assert.equal(routeOperation["x-loopback-only"], undefined);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementGoogleApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementAnthropicApiKeyAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(hasScheme(routeOperation.security, "LocalCliTokenAuth"));
+    assert.ok(hasScheme(routeOperation.security, "InternalServiceTokenAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(!hasScheme(routeOperation.security, "McpConnectApiKeyBearerAuth"));
+    assert.match(routeOperation.description, /LOCAL_ONLY/);
+    assert.match(routeOperation.description, /loopback.*private-LAN/s);
+    assert.match(routeOperation.description, /no remote.*bypass/i);
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.match(routeOperation.description, new RegExp(`method-scoped.*${scope}|method-derived.*${scope}`, "i"));
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+  assert.match(operation("get", "/api/vnc-session").description, /container names or browser profile paths are returned|no container names or browser profile paths are returned/i);
+  const params = spec.paths["/api/vnc-session/{params}"].parameters[0];
+  assert.equal(params["x-sensitive"], true);
+  assert.match(operation("post", "/api/vnc-session/{params}").description, /harvests its credentials.*never return harvested credential values/i);
+  assert.match(spec.paths["/api/vnc-session/{params}"].description, /POST start\/harvest.*locked runtime.*DELETE remains available/i);
+  assert.match(operation("delete", "/api/vnc-session/{params}").description, /stopping a missing session is idempotent|missing session is idempotent/i);
 });
