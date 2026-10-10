@@ -12664,11 +12664,20 @@ paths:
         "200":
           description: Circuit breakers reset
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MonitoringHealthResetResponse" }
         "401":
           description: Authentication required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500":
           description: Circuit breaker reset failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/monitoring/compression:
@@ -12878,6 +12887,13 @@ paths:
       responses:
         "200":
           description: Per-modality bridge stats (vision, audio, video)
+          headers:
+            Cache-Control:
+              description: Live counters are not cached.
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModalityBridgeStatsResponse" }
         "401":
           description: Unauthorized
 
@@ -12894,6 +12910,13 @@ paths:
       responses:
         "200":
           description: Video Bridge runtime availability
+          headers:
+            Cache-Control:
+              description: Runtime probe response is not cached.
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VideoRuntimeStatus" }
         "401":
           description: Unauthorized
         "403":
@@ -12910,8 +12933,18 @@ paths:
       security: []
       parameters:
         - in: query
+          name: mode
+          required: false
+          description: "`audio` selects audio extraction; `frames` or omission selects frame extraction."
+          schema: { type: string, enum: [audio, frames], default: frames }
+        - in: query
+          name: subtitles
+          required: false
+          description: "Set to `1` to run the embedded-subtitle probe instead of frame/audio extraction."
+          schema: { type: string, enum: ["1"] }
+        - in: query
           name: frames
-          required: true
+          required: false
           schema:
             type: integer
             minimum: 1
@@ -12940,6 +12973,7 @@ paths:
             minimum: 0
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/octet-stream:
             schema:
@@ -12948,27 +12982,56 @@ paths:
               maxLength: 52428800
       responses:
         "200":
-          description: Sanitized duration and bounded JPEG data-URI frames
+          description: >-
+            One of the bounded frame, audio, or subtitle-probe payloads selected by query mode.
+            Every success response is sent with Cache-Control no-store.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              description: Extracted media payloads are not cached.
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VideoExtractionResponse" }
         "400":
           description: Invalid fixed broker contract
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "403":
           description: Authenticated trusted-loopback broker identity required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "413":
           description: Input exceeds the 50 MiB byte limit
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "422":
           description: Media rejected or extraction failed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "499":
           description: Client request aborted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "503":
           description: Queue capacity is exhausted, or FFmpeg/ffprobe is unavailable on PATH
           headers:
             Retry-After:
               description: Present with value 1 when queue capacity is exhausted
-              schema:
-                type: integer
-                minimum: 1
+              schema: { type: string, const: "1" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "504":
           description: Fixed 120-second broker extraction deadline exceeded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/modality-bridge/video/drilldown:
     get:
@@ -13012,9 +13075,30 @@ paths:
           required: false
           schema: { type: integer, minimum: 1, maximum: 16 }
       responses:
-        "200": { description: Bounded cached frame slice with derivation audit metadata }
-        "403": { description: Trusted loopback/token identity and principal required }
-        "404": { description: Drill-down session or media key was not found }
+        "200":
+          description: Bounded cached frame slice with derivation audit metadata; not cached by HTTP clients.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VideoDrilldownResult" }
+        "400":
+          description: Drill-down query is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          description: Trusted loopback/token identity and principal required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Invalid internal path or drill-down session/media key was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     post:
       operationId: postApiModalityBridgeVideoDrilldown
       x-local-only: true
@@ -13035,6 +13119,7 @@ paths:
             pattern: "^[!-~]{1,256}$"
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
@@ -13083,10 +13168,45 @@ paths:
                         maxLength: 5592431
                         description: Canonical Base64 data URI whose decoded bytes pass a warning-sensitive bounded full JPEG decode/re-encode; trailing bytes are discarded and width and height are derived server-side
       responses:
-        "201": { description: Drill-down result stored }
-        "403": { description: Trusted loopback/token identity and principal required }
-        "413": { description: Payload exceeds the bounded session budget }
-        "499": { description: Caller cancelled before the derivation was committed }
+        "201":
+          description: Drill-down result stored; not cached by HTTP clients.
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VideoDrilldownStoredResponse" }
+        "400":
+          description: Invalid content type, malformed/invalid body, or failed media validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          description: Trusted loopback/token identity and principal required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Internal drill-down path did not match the configured base path.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "413":
+          description: Payload exceeds the bounded session budget
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "499":
+          description: Caller cancelled before the derivation was committed
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Unexpected cache storage failure.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
     delete:
       operationId: deleteApiModalityBridgeVideoDrilldown
       x-local-only: true
@@ -13110,8 +13230,26 @@ paths:
           description: Canonical opaque ID without surrounding whitespace
           schema: { type: string, minLength: 1, maxLength: 128 }
       responses:
-        "200": { description: Session entries removed }
-        "403": { description: Trusted loopback/token identity and principal required }
+        "200":
+          description: Session entries removed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VideoDrilldownDeleteResponse" }
+        "400":
+          description: A canonical sessionId query value is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          description: Trusted loopback/token identity and principal required
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "404":
+          description: Internal drill-down path did not match the configured base path.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
 
   /api/cache/stats:
     get:
@@ -24820,16 +24958,39 @@ paths:
             The remote locality bypass validates API keys or a dashboard session before normal
             management auth; it does not accept scoped `oma_` access tokens.
       responses:
-        "200":
-          description: MCP Streamable HTTP session termination result.
+        "2XX":
+          description: >-
+            MCP SDK pass-through success for session termination. The SDK may return a JSON body
+            or no body; this contract intentionally does not pin an SDK-specific success status.
           x-sensitive: true
+          headers:
+            Mcp-Session-Id:
+              required: true
+              description: Session identifier added by the HTTP wrapper when the SDK did not provide one.
+              schema: { type: string, x-sensitive: true }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpStreamSdkResponse" }
         "400":
-          description: MCP is enabled with a transport other than `streamable-http`.
+          description: Wrong configured transport or JSON-RPC request without a session ID.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/McpStreamJsonRpcErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "404":
+          description: MCP session ID is unknown or expired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpStreamJsonRpcErrorResponse" }
+        "500":
+          description: MCP transport threw while handling the session termination.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
-        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
-        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
         "503":
           description: MCP is disabled or management auth is unavailable.
           content:
@@ -24891,16 +25052,41 @@ paths:
             The remote locality bypass validates API keys or a dashboard session before normal
             management auth; it does not accept scoped `oma_` access tokens.
       responses:
-        "200":
-          description: MCP server-initiated SSE stream.
+        "2XX":
+          description: >-
+            MCP SDK pass-through success; the exact 2xx status is SDK-controlled. The response
+            body and media type are passed through without normalizing the protocol stream.
           x-sensitive: true
+          headers:
+            Mcp-Session-Id:
+              required: true
+              description: Session identifier added by the HTTP wrapper when the SDK did not provide one.
+              schema: { type: string, x-sensitive: true }
+          content:
+            text/event-stream:
+              schema: { type: string, x-sensitive: true }
+            application/json:
+              schema: { $ref: "#/components/schemas/McpStreamSdkResponse" }
         "400":
-          description: MCP is enabled with a transport other than `streamable-http`.
+          description: Wrong configured transport or JSON-RPC request without a session ID.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/McpStreamJsonRpcErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "404":
+          description: MCP session ID is unknown or expired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpStreamJsonRpcErrorResponse" }
+        "500":
+          description: MCP transport threw while opening the session stream.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
-        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
-        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
         "503":
           description: MCP is disabled or management auth is unavailable.
           content:
@@ -24971,16 +25157,45 @@ paths:
               description: JSON-RPC request to the MCP server; may contain sensitive tool arguments.
               additionalProperties: true
       responses:
-        "200":
-          description: MCP Streamable HTTP JSON-RPC response.
+        "2XX":
+          description: >-
+            MCP SDK pass-through success; the exact 2xx status and JSON/SSE body variant are
+            SDK-controlled. The response is intentionally documented generically rather than
+            assigning fixed statuses to particular JSON-RPC message types.
           x-sensitive: true
+          headers:
+            Mcp-Session-Id:
+              required: true
+              description: Session identifier added by the HTTP wrapper when the SDK did not provide one.
+              schema: { type: string, x-sensitive: true }
+            Cache-Control:
+              description: On POST event-stream responses the wrapper appends `no-transform`, preserving existing directives.
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpStreamSdkResponse" }
+            text/event-stream:
+              schema: { type: string, x-sensitive: true }
         "400":
-          description: Invalid JSON-RPC request or MCP transport is not set to `streamable-http`.
+          description: Wrong configured transport or JSON-RPC request without a session ID.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/McpStreamJsonRpcErrorResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
+        "404":
+          description: MCP session ID is unknown or expired.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpStreamJsonRpcErrorResponse" }
+        "500":
+          description: MCP transport threw while handling the JSON-RPC request.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
-        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
-        "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
         "503":
           description: MCP is disabled or management auth is unavailable.
           content:
@@ -25188,6 +25403,9 @@ paths:
       responses:
         "200":
           description: Hook removed from persistent storage and the live middleware registry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MiddlewareHookDeleteResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
         "404":
@@ -25244,10 +25462,24 @@ paths:
           note: The default bypass allowlist is only `/api/mcp/`; remote access is not enabled for middleware by default.
         - when: Remote peer without an explicitly configured manage-scope bypass
           note: Rejected by the LOCAL_ONLY peer gate before ordinary management authentication.
+      parameters:
+        - name: logs
+          in: query
+          required: false
+          description: Set exactly to `true` to include recent hook execution logs.
+          schema: { type: string, enum: ["true"] }
+        - name: logLimit
+          in: query
+          required: false
+          description: Maximum log rows requested; defaults to 20 and is passed to the database as parsed.
+          schema: { type: string, default: "20" }
       responses:
         "200":
           description: Hook configuration and optional execution logs.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MiddlewareHookDetailResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
         "404":
@@ -25336,11 +25568,14 @@ paths:
         "200":
           description: Updated hook; code changes are immediately re-registered.
           x-sensitive: true
-        "400":
-          description: No valid hook update fields were supplied.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+              schema: { $ref: "#/components/schemas/MiddlewareHookResponse" }
+        "400":
+          description: Update body failed validation; malformed JSON is returned as a 500 error.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden" }
         "404":
@@ -26154,8 +26389,14 @@ paths:
         "200":
           description: Ranked candidate preview; no live request was executed.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OmniRouteCandidatePreviewResponse" }
         "400":
           description: Candidate payload failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
@@ -26255,10 +26496,29 @@ paths:
         "200":
           description: Simulated target order and estimated outcome; no upstream model request was executed.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PlaygroundRouteSimulationResponse" }
         "400":
           description: Request must contain exactly one of `comboId` or `combo`, with a valid configuration.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "404":
+          description: Saved combo was not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
         "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "500":
+          description: Simulation failed; the handler includes the error message.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/plugins:
     get:
@@ -66913,9 +67173,9 @@ components:
       x-sensitive: true
       required: [id, hookName, requestId, durationMs, mutated, skipped, error, timestamp]
       properties:
-        id: { type: integer }
+        id: { type: string }
         hookName: { type: string }
-        requestId: { type: [string, "null"] }
+        requestId: { type: string, x-sensitive: true }
         durationMs: { type: number, minimum: 0 }
         mutated: { type: boolean }
         skipped: { type: boolean }
@@ -68768,3 +69028,308 @@ components:
             data: { x-sensitive: true }
           additionalProperties: true
       additionalProperties: true
+
+    McpStreamSdkResponse:
+      x-sensitive: true
+      description: Arbitrary JSON response body passed through from the MCP SDK; it may be absent for bodyless successes.
+
+    McpStreamJsonRpcErrorResponse:
+      type: object
+      x-sensitive: true
+      required: [jsonrpc, error, id]
+      properties:
+        jsonrpc: { type: string, const: "2.0" }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: integer, const: -32000 }
+            message: { type: string }
+          additionalProperties: false
+        id: { type: "null" }
+      additionalProperties: false
+
+    MiddlewareHookResponse:
+      type: object
+      x-sensitive: true
+      required: [hook]
+      properties:
+        hook: { $ref: "#/components/schemas/MiddlewareHookConfig" }
+      additionalProperties: false
+
+    MiddlewareHookDeleteResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+      additionalProperties: false
+
+    BridgeModalityStats:
+      type: object
+      required: [attempts, averageLatencyMs, bridged, cacheHits, resultCacheBytes, resultCacheHits, resultCacheLatencyMs, resultSingleflightCoalesced, failures, fusionRuns, fusionPartials, lastUsedAt, latencySamples, successes, totalLatencyMs]
+      properties:
+        attempts: { type: integer, minimum: 0 }
+        averageLatencyMs: { type: number, minimum: 0 }
+        bridged: { type: integer, minimum: 0 }
+        cacheHits: { type: integer, minimum: 0 }
+        resultCacheBytes: { type: integer, minimum: 0 }
+        resultCacheHits: { type: integer, minimum: 0 }
+        resultCacheLatencyMs: { type: number, minimum: 0 }
+        resultSingleflightCoalesced: { type: integer, minimum: 0 }
+        failures: { type: integer, minimum: 0 }
+        fusionRuns: { type: integer, minimum: 0 }
+        fusionPartials: { type: integer, minimum: 0 }
+        lastUsedAt: { type: [string, "null"], format: date-time }
+        latencySamples: { type: integer, minimum: 0 }
+        successes: { type: integer, minimum: 0 }
+        totalLatencyMs: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    ModalityBridgeStatsResponse:
+      type: object
+      required: [vision, audio, video]
+      properties:
+        vision: { $ref: "#/components/schemas/BridgeModalityStats" }
+        audio: { $ref: "#/components/schemas/BridgeModalityStats" }
+        video: { $ref: "#/components/schemas/BridgeModalityStats" }
+      additionalProperties: false
+
+    VideoDrilldownDerivationMetadata:
+      type: object
+      x-sensitive: true
+      required: [contentHash, createdAt, format, parent, policy, resolution, version]
+      properties:
+        contentHash: { type: string, pattern: "^sha256:[a-f0-9]{64}$", x-sensitive: true }
+        createdAt: { type: integer, minimum: 0 }
+        format: { type: string, const: image/jpeg }
+        parent:
+          type: object
+          required: [contentHash, referenceHash]
+          properties:
+            contentHash: { type: string, pattern: "^sha256:[a-f0-9]{64}$", x-sensitive: true }
+            referenceHash: { type: string, pattern: "^sha256:[a-f0-9]{64}$", x-sensitive: true }
+          additionalProperties: false
+        policy: { type: string }
+        resolution:
+          type: object
+          required: [height, width]
+          properties:
+            height: { type: integer, minimum: 1 }
+            width: { type: integer, minimum: 1 }
+          additionalProperties: false
+        version: { type: string }
+      additionalProperties: false
+
+    VideoDrilldownFrame:
+      type: object
+      x-sensitive: true
+      required: [dataUri, timestampSeconds, height, width]
+      properties:
+        dataUri: { type: string, x-sensitive: true }
+        timestampSeconds: { type: number, minimum: 0 }
+        height: { type: integer, minimum: 1 }
+        width: { type: integer, minimum: 1 }
+      additionalProperties: false
+
+    VideoDrilldownResult:
+      type: object
+      x-sensitive: true
+      required: [derivation, durationSeconds, frames]
+      properties:
+        derivation: { $ref: "#/components/schemas/VideoDrilldownDerivationMetadata" }
+        durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 600 }
+        focusWindow:
+          type: object
+          required: [startSeconds, endSeconds]
+          properties:
+            startSeconds: { type: number, minimum: 0 }
+            endSeconds: { type: number, minimum: 0 }
+          additionalProperties: false
+        frames:
+          type: array
+          items: { $ref: "#/components/schemas/VideoDrilldownFrame" }
+      additionalProperties: false
+
+    VideoDrilldownDeleteResponse:
+      type: object
+      required: [removed]
+      properties:
+        removed: { type: boolean }
+      additionalProperties: false
+
+    VideoDrilldownStoredResponse:
+      type: object
+      required: [stored]
+      properties:
+        stored: { type: boolean, const: true }
+      additionalProperties: false
+
+    VideoRuntimeStatus:
+      type: object
+      required: [available, ffmpegVersion, ffprobeVersion]
+      properties:
+        available: { type: boolean }
+        ffmpegVersion: { type: [string, "null"] }
+        ffprobeVersion: { type: [string, "null"] }
+        reason: { type: string }
+      additionalProperties: false
+
+    VideoFrameResponse:
+      type: object
+      x-sensitive: true
+      required: [durationSeconds, frames, sampling]
+      properties:
+        durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 600 }
+        frames:
+          type: array
+          items:
+            type: object
+            x-sensitive: true
+            required: [dataUri, timestampSeconds]
+            properties:
+              dataUri: { type: string, x-sensitive: true }
+              timestampSeconds: { type: number, minimum: 0 }
+            additionalProperties: false
+        sampling:
+          type: object
+          required: [candidateCount, policyEffective, policyRequested]
+          properties:
+            candidateCount: { type: integer, minimum: 0 }
+            focusWindow:
+              type: object
+              required: [startSeconds, endSeconds]
+              properties:
+                startSeconds: { type: number, minimum: 0 }
+                endSeconds: { type: number, minimum: 0 }
+              additionalProperties: false
+            policyEffective: { type: string, enum: [uniform, scene_aware, segment_aware] }
+            policyRequested: { type: string, enum: [uniform, scene_aware, segment_aware] }
+          additionalProperties: false
+      additionalProperties: false
+
+    VideoAudioResponse:
+      type: object
+      x-sensitive: true
+      required: [audio, durationSeconds]
+      properties:
+        audio:
+          type: object
+          x-sensitive: true
+          required: [channels, dataUri, sampleRateHz]
+          properties:
+            channels: { type: integer, minimum: 1 }
+            dataUri: { type: string, x-sensitive: true }
+            sampleRateHz: { type: integer, minimum: 1 }
+          additionalProperties: false
+        durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 600 }
+      additionalProperties: false
+
+    VideoSubtitleResponse:
+      type: object
+      x-sensitive: true
+      required: [durationSeconds, formatName, streams, fingerprint]
+      properties:
+        durationSeconds: { type: number, exclusiveMinimum: 0, maximum: 600 }
+        formatName: { type: string }
+        streams:
+          type: array
+          items:
+            type: object
+            x-sensitive: true
+            required: [codecName, streamIndex, webvtt]
+            properties:
+              codecName: { type: string, enum: [mov_text, subrip, webvtt] }
+              streamIndex: { type: integer, minimum: 0 }
+              webvtt: { type: string, x-sensitive: true }
+            additionalProperties: false
+        fingerprint: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    VideoExtractionResponse:
+      oneOf:
+        - { $ref: "#/components/schemas/VideoFrameResponse" }
+        - { $ref: "#/components/schemas/VideoAudioResponse" }
+        - { $ref: "#/components/schemas/VideoSubtitleResponse" }
+
+    MonitoringHealthResetResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, resetCount]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        resetCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    OmniRouteCandidateExplanation:
+      type: object
+      x-sensitive: true
+      required: [providerId, modelId, score, eligible, reasons, factors]
+      properties:
+        providerId: { type: string }
+        modelId: { type: string }
+        score: { type: number, minimum: 0, maximum: 1 }
+        eligible: { type: boolean }
+        reasons:
+          type: array
+          items: { type: string }
+        factors:
+          type: object
+          additionalProperties: { type: [number, string] }
+      additionalProperties: false
+
+    OmniRouteCandidatePreviewResponse:
+      type: object
+      x-sensitive: true
+      required: [request, selected, candidates, liveRequestExecuted]
+      properties:
+        request:
+          type: object
+          required: [candidateCount]
+          properties:
+            candidateCount: { type: integer, minimum: 1, maximum: 100 }
+          additionalProperties: false
+        selected: { type: [string, "null"] }
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/OmniRouteCandidateExplanation" }
+        liveRequestExecuted: { type: boolean, const: false }
+      additionalProperties: false
+
+    PlaygroundTargetSimulation:
+      type: object
+      x-sensitive: true
+      required: [provider, model, strategy, rank, estimatedCost, estimatedLatencyMs, status]
+      properties:
+        provider: { type: string }
+        model: { type: string }
+        strategy: { type: string }
+        rank: { type: integer, minimum: 1 }
+        estimatedCost: { type: number, minimum: 0 }
+        estimatedLatencyMs: { type: number, minimum: 0 }
+        status: { type: string, enum: [available, no_quota, degraded, error, unknown] }
+        maxTokens: { type: integer, minimum: 0 }
+        contextWindow: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    PlaygroundRouteSimulationResponse:
+      type: object
+      x-sensitive: true
+      required: [comboName, strategy, targets, totalEstimatedCost, totalEstimatedLatencyMs, warnings, errors]
+      properties:
+        comboId: { type: string }
+        comboName: { type: string }
+        strategy: { type: string }
+        targets:
+          type: array
+          items: { $ref: "#/components/schemas/PlaygroundTargetSimulation" }
+        totalEstimatedCost: { type: number, minimum: 0 }
+        totalEstimatedLatencyMs: { type: number, minimum: 0 }
+        warnings:
+          type: array
+          items: { type: string }
+        errors:
+          type: array
+          items: { type: string }
+      additionalProperties: false

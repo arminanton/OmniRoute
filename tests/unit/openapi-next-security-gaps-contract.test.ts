@@ -184,7 +184,8 @@ test("MCP security contracts distinguish local auth, remote mcp:connect bypass, 
     assert.match(routeOperation.description, /default remote manage-scope bypass/i);
     assert.match(routeOperation.description, /mcp:connect.*manage.*admin/i);
     assert.match(routeOperation.description, /`oma_`.*admin/i);
-    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    const successStatus = route === "/api/mcp/stream" ? "2XX" : "200";
+    assert.equal(routeOperation.responses[successStatus]["x-sensitive"], true);
     assert.deepEqual(routeOperation["x-authentication-branches"].map((branch: any) => branch.when), [
       "Local peer or trusted private-LAN peer with management auth unlocked",
       "Local peer or trusted private-LAN peer with management auth locked",
