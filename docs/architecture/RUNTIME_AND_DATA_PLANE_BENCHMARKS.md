@@ -1543,7 +1543,9 @@ Reproduce with
 `bun scripts/perf/bench-call-log-artifact-capacity.mjs 100 262144`; replace `262144` with `1311987`
 for the larger-request case. Each configuration ran three times. Values below are medians; RSS is
 sampled every 10 ms during the concurrent save phase. The benchmark reports temporary-database and
-module setup separately as `setupMs`; process high-water RSS is also included in each JSON result.
+module setup separately as `setupMs`. It also reports Linux `VmHWM` peak RSS, process
+`/proc/self/io` byte deltas, and artifact-writer queue/reservation high-water counters. The I/O
+interval is after DB setup through artifact readback, so it includes SQLite and artifact-file work.
 
 | Runtime      | Target request bytes | Detailed artifacts ready | Summary rows retained | Median save time | Median load peak RSS | Artifact bytes written |
 | ------------ | -------------------: | -----------------------: | --------------------: | ---------------: | -------------------: | ---------------------: |
@@ -1560,6 +1562,33 @@ uses `better-sqlite3`; Bun uses `bun:sqlite`, so the writer timings compare both
 driver. This excludes Next routes, authentication, account routing, provider execution, and tool
 cycles. The Bun result is not evidence that the full Next app is ready to run on Bun; the production
 image runs Node 26.10.0 and this harness uses Node 24.21.0.
+
+#### Current-source stream-chunk inclusion A/B (single Node pair, 2026-10-10)
+
+The writer harness now accepts `BENCH_INCLUDE_PIPELINE_STREAM_CHUNKS=false`, reports writer
+high-water counters and `/proc/self/io`, and uses Linux `VmHWM` for kernel peak RSS. A single
+current-source pair used 100 synthetic `saveCallLog()` calls with 262,144-byte requests and 100
+small chunks in each of three tracks; all data was written under a fresh `/tmp/DATA_DIR` and
+removed at exit:
+
+| Pipeline stream chunks | Details ready | Details omitted | Reservation high-water | Artifact bytes | Process write bytes | Sampled RSS / kernel `VmHWM` |
+| ---------------------- | ------------: | --------------: | ---------------------: | -------------: | ------------------: | ---------------------------: |
+| included               |        23/100 |              77 |          132,576,000 B |    6,521,942 B |        16,965,632 B |            245.7 / 254.4 MiB |
+| excluded               |        25/100 |              75 |          132,331,600 B |    6,539,770 B |        16,924,672 B |            245.6 / 265.1 MiB |
+
+This is one measurement per mode, not a repeated timing/RSS comparison. It shows that this small
+synthetic stream-chunk payload changes the number of admitted details by only two; both modes
+approach the 128 MiB preparation-reservation limit and omit most detailed rows. This fixture does
+not support the hypothesis that small pipeline stream excerpts are the main reason for those
+omissions. It does **not** measure request-logger capture, private diagnostic overflow, real
+high-context tool loops, provider traffic, or the full app/container, and it cannot attribute the
+historical host I/O graph.
+
+The first run exposed a bad benchmark field: `process.resourceUsage().maxRSS` returned `3,679,476`
+on this ARM64 host, while a 100 MiB allocation control reported `process.memoryUsage().rss` near
+148 MB and `/proc/self/status` `VmHWM` near 144,220 kB. The value did not match the Linux kernel
+peak, so the harness now reports `/proc` `VmHWM` rather than converting that raw value into a
+misleading multi-GiB RSS estimate.
 
 ## Request-logger lifecycle stress
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Exercise the production call-log save/worker path without a provider or Next build.
+ * Exercise the production call-log save/worker path with synthetic payloads. This measures
+ * artifact preparation/persistence only; it does not simulate upstream request capture.
  * All artifacts are written under a fresh temporary DATA_DIR and removed on exit.
  * Run with: node --import tsx/esm scripts/perf/bench-call-log-artifact-capacity.mjs
  */
@@ -12,6 +13,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const clients = parsePositiveInt(process.argv[2], 100);
 const requestBytes = parsePositiveInt(process.argv[3], 262_144);
+const includePipelineStreamChunks = process.env.BENCH_INCLUDE_PIPELINE_STREAM_CHUNKS !== "false";
 if (clients > 1_000 || requestBytes > 4 * 1024 * 1024) {
   throw new RangeError("benchmark limits are 1,000 clients and 4 MiB per request");
 }
@@ -21,7 +23,9 @@ process.env.DATA_DIR = dataDir;
 process.env.OMNIROUTE_MIGRATIONS_DIR = path.join(root, "src/lib/db/migrations");
 process.env.DISABLE_SQLITE_AUTO_BACKUP = "true";
 process.env.CALL_LOG_PIPELINE_MAX_SIZE_KB = "10240";
-process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS = "true";
+process.env.CALL_LOG_PIPELINE_CAPTURE_STREAM_CHUNKS = includePipelineStreamChunks
+  ? "true"
+  : "false";
 process.env.CALL_LOG_PIPELINE_STREAM_CHUNK_MAX_SIZE_KB = "256";
 process.env.NODE_ENV = "test";
 
@@ -35,6 +39,36 @@ let callLogArtifactWriter;
 let loadSampler;
 let peakLoadRssBytes = process.memoryUsage().rss;
 const ids = [];
+
+function readProcessIoBytes() {
+  try {
+    const values = new Map(
+      fs
+        .readFileSync("/proc/self/io", "utf8")
+        .split("\n")
+        .map((line) => line.trim().split(/\s+/, 2))
+        .filter(([key, value]) => key && value && /^\d+$/.test(value))
+        .map(([key, value]) => [key.replace(/:$/, ""), Number(value)])
+    );
+    return {
+      readBytes: values.get("read_bytes") ?? 0,
+      writeBytes: values.get("write_bytes") ?? 0,
+      cancelledWriteBytes: values.get("cancelled_write_bytes") ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function readLinuxPeakRssMiB() {
+  try {
+    const status = fs.readFileSync("/proc/self/status", "utf8");
+    const match = /^VmHWM:\s+(\d+)\s+kB$/m.exec(status);
+    return match ? Math.round((Number(match[1]) / 1024) * 10) / 10 : null;
+  } catch {
+    return null;
+  }
+}
 
 try {
   const setupStartedAt = performance.now();
@@ -52,6 +86,7 @@ try {
 
   await ensureDbInitialized();
   const setupMs = Math.round(performance.now() - setupStartedAt);
+  const processIoBefore = readProcessIoBytes();
 
   const textBytes = Math.max(0, requestBytes - 2_048);
   const sharedHistory = "agent context with prior tool calls and results "
@@ -127,11 +162,15 @@ try {
             timestamp: new Date().toISOString(),
             body: pipelineResponseSnapshot,
           },
-          streamChunks: {
-            provider: streamChunks,
-            openai: streamChunks.slice(),
-            client: streamChunks.slice(),
-          },
+          ...(includePipelineStreamChunks
+            ? {
+                streamChunks: {
+                  provider: streamChunks,
+                  openai: streamChunks.slice(),
+                  client: streamChunks.slice(),
+                },
+              }
+            : {}),
         },
       });
     })
@@ -151,6 +190,8 @@ try {
       artifactBytes += fs.statSync(path.join(callLogsDir, detail.artifactRelPath)).size;
     }
   }
+  const processIoAfter = readProcessIoBytes();
+  const writerSnapshot = callLogArtifactWriter.getCallLogArtifactWriterSnapshot();
 
   console.log(
     JSON.stringify({
@@ -158,13 +199,37 @@ try {
       clients,
       targetRequestBytes: requestBytes,
       streamChunkCount: streamChunks.length,
+      includePipelineStreamChunks,
+      payloadSource: "synthetic saveCallLog pipeline payloads; no request logger or provider",
       completedSaves: ids.length,
       states,
       artifactBytes,
       setupMs,
       elapsedMs: Math.round(elapsedMs),
       peakLoadRssMiB: Math.round((peakLoadRssBytes / (1024 * 1024)) * 10) / 10,
-      processHighWaterRssMiB: Math.round((process.resourceUsage().maxRSS / 1024) * 10) / 10,
+      kernelPeakRssMiB: readLinuxPeakRssMiB(),
+      processIoBytes:
+        processIoBefore && processIoAfter
+          ? {
+              readBytes: Math.max(0, processIoAfter.readBytes - processIoBefore.readBytes),
+              writeBytes: Math.max(0, processIoAfter.writeBytes - processIoBefore.writeBytes),
+              cancelledWriteBytes: Math.max(
+                0,
+                processIoAfter.cancelledWriteBytes - processIoBefore.cancelledWriteBytes
+              ),
+            }
+          : null,
+      processIoScope:
+        "from post-DB setup through artifact readback; includes SQLite and artifact I/O",
+      artifactWriter: {
+        activeJobsHighWater: writerSnapshot.activeJobsHighWater,
+        queuedArtifactsHighWater: writerSnapshot.queuedArtifactsHighWater,
+        queuedDiagnosticStubsHighWater: writerSnapshot.queuedDiagnosticStubsHighWater,
+        reservedArtifactBytesHighWater: writerSnapshot.reservedArtifactBytesHighWater,
+        reservedDiagnosticStubBytesHighWater: writerSnapshot.reservedDiagnosticStubBytesHighWater,
+        detailOmissionsTotal: writerSnapshot.detailOmissionsTotal,
+        workerFailuresTotal: writerSnapshot.workerFailuresTotal,
+      },
       dataDirBytes: directoryBytes(dataDir),
       workerFileAvailable: callLogArtifactWriter.isCallLogArtifactWorkerAvailable(),
     })
