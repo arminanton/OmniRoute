@@ -168,19 +168,57 @@ export function buildAntigravity429ErrorMessage(errorJson: unknown): string {
   return errorMessage;
 }
 
-function getChunkedOrFixedBody(bodyStr: string, stream: boolean): BodyInit {
-  if (stream) {
-    return new ReadableStream(
-      {
-        async start(controller) {
-          controller.enqueue(new TextEncoder().encode(bodyStr));
+const ANTIGRAVITY_REQUEST_BODY_CHUNK_BYTES = 64 * 1024;
+// TextEncoder emits at most three UTF-8 bytes for each UTF-16 code unit (a
+// surrogate pair emits four bytes for two code units). Stay below 64 KiB even
+// for all three-byte input, with a little room for a boundary adjustment.
+const ANTIGRAVITY_REQUEST_BODY_CHUNK_CODE_UNITS = Math.floor(
+  ANTIGRAVITY_REQUEST_BODY_CHUNK_BYTES / 3
+);
+
+/** Keep non-stream requests as strings; stream UTF-8 only as the fetch body is read. */
+export function createAntigravityRequestBody(bodyStr: string, stream: boolean): BodyInit {
+  if (!stream) return bodyStr;
+
+  const encoder = new TextEncoder();
+  let source: string | undefined = bodyStr;
+  let offset = 0;
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        const body = source;
+        if (body === undefined || offset >= body.length) {
+          source = undefined;
           controller.close();
-        },
+          return;
+        }
+
+        let end = Math.min(body.length, offset + ANTIGRAVITY_REQUEST_BODY_CHUNK_CODE_UNITS);
+        // TextEncoder replaces lone surrogates. Keep a valid pair together so
+        // split chunks encode to the same bytes as encoding the complete string.
+        if (
+          end < body.length &&
+          body.charCodeAt(end - 1) >= 0xd800 &&
+          body.charCodeAt(end - 1) <= 0xdbff &&
+          body.charCodeAt(end) >= 0xdc00 &&
+          body.charCodeAt(end) <= 0xdfff
+        ) {
+          end--;
+        }
+
+        const chunk = encoder.encode(body.slice(offset, end));
+        offset = end;
+        controller.enqueue(chunk);
       },
-      { highWaterMark: 16384 }
-    );
-  }
-  return bodyStr;
+      cancel() {
+        // Drop this stream's reference promptly if the caller aborts mid-send.
+        source = undefined;
+      },
+    },
+    // Do not pre-encode or queue ahead of fetch's demand. Each pull produces
+    // only one bounded byte chunk.
+    { highWaterMark: 0 }
+  );
 }
 
 function cloneAntigravityRequestBody(body: unknown): unknown {
@@ -350,7 +388,7 @@ export async function sendAntigravityRequest(
     {
       method: "POST",
       headers: finalHeaders,
-      body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
+      body: createAntigravityRequestBody(serializedRequest.bodyString, stream),
       ...(stream ? { duplex: "half" } : {}),
       signal,
     },
@@ -382,7 +420,7 @@ export async function sendAntigravityRequest(
       {
         method: "POST",
         headers: retryHeaders,
-        body: getChunkedOrFixedBody(serializedRequest.bodyString, stream),
+        body: createAntigravityRequestBody(serializedRequest.bodyString, stream),
         ...(stream ? { duplex: "half" } : {}),
         signal,
       },
@@ -452,7 +490,7 @@ export async function tryCreditsRetry(
       {
         method: "POST",
         headers: finalCreditsHeaders,
-        body: getChunkedOrFixedBody(serializedCreditsRequest.bodyString, stream),
+        body: createAntigravityRequestBody(serializedCreditsRequest.bodyString, stream),
         ...(stream ? { duplex: "half" } : {}),
         signal,
       },

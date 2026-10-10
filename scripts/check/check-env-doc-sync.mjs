@@ -230,6 +230,10 @@ const IGNORE_FROM_CODE = new Set([
   "ANTIGRAVITY_CAPTURE_REQUEST_TIMEOUT_MS",
   "ANTIGRAVITY_CAPTURE_SESSION_COUNTS",
   "ANTIGRAVITY_UPSTREAM_DELAY_MS",
+  // Isolated request-body encoder microbenchmark controls in scripts/perf; never server config.
+  "OMNI_AG_BODY_BENCH_BYTES",
+  "OMNI_AG_BODY_BENCH_MODE",
+  "OMNI_AG_BODY_BENCH_SESSIONS",
   // Standalone E2E harness selection and failure-scratch retention controls.
   "OMNIROUTE_KEEP_STANDALONE_E2E_FAILURES",
   "OMNIROUTE_STANDALONE_CAPTURE",
