@@ -26,6 +26,8 @@ type KiePollInput = {
   signal?: AbortSignal;
 };
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 export type KieTaskRecord = {
   data: JsonObject;
   state: KieTaskState;
@@ -103,37 +105,53 @@ export class KieExecutor extends BaseExecutor {
     pollIntervalMs,
     signal,
   }: KiePollInput): Promise<KieTaskRecord> {
-    const deadline = Date.now() + timeoutMs;
+    const boundedTimeoutMs = Number.isFinite(timeoutMs)
+      ? Math.min(MAX_TIMER_DELAY_MS, Math.max(0, timeoutMs))
+      : 0;
+    const deadline = Date.now() + boundedTimeoutMs;
+    const timeoutError = Object.assign(new Error("Kie task timed out"), { status: 504 });
+    const requestController = new AbortController();
+    const abortFromCaller = () =>
+      requestController.abort(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    if (signal?.aborted) abortFromCaller();
+    else signal?.addEventListener("abort", abortFromCaller, { once: true });
+    const deadlineTimer = setTimeout(() => requestController.abort(timeoutError), boundedTimeoutMs);
 
-    while (Date.now() < deadline) {
-      signal?.throwIfAborted();
-      const pollUrl = new URL(statusUrl);
-      pollUrl.searchParams.set("taskId", String(taskId));
+    try {
+      while (Date.now() < deadline) {
+        if (signal?.aborted) signal.throwIfAborted();
+        if (requestController.signal.aborted) throw requestController.signal.reason ?? timeoutError;
+        const pollUrl = new URL(statusUrl);
+        pollUrl.searchParams.set("taskId", String(taskId));
 
-      const res = await fetch(pollUrl.toString(), {
-        method: "GET",
-        headers: { Authorization: `Bearer ${token}` },
-        signal,
-      });
-
-      if (!res.ok) {
-        const error = await res.text();
-        throw Object.assign(new Error(error || `Kie poll failed with status ${res.status}`), {
-          status: res.status,
+        const res = await fetch(pollUrl.toString(), {
+          method: "GET",
+          headers: { Authorization: `Bearer ${token}` },
+          signal: requestController.signal,
         });
+
+        if (!res.ok) {
+          const error = await res.text();
+          throw Object.assign(new Error(error || `Kie poll failed with status ${res.status}`), {
+            status: res.status,
+          });
+        }
+
+        const data = (await res.json()) as unknown;
+        const recordData = isJsonObject(data) ? data : {};
+        const state = normalizeKieTaskState(recordData);
+        if (state !== "pending") {
+          return { data: recordData, state };
+        }
+
+        await sleepWithSignal(pollIntervalMs, requestController.signal);
       }
 
-      const data = (await res.json()) as unknown;
-      const recordData = isJsonObject(data) ? data : {};
-      const state = normalizeKieTaskState(recordData);
-      if (state !== "pending") {
-        return { data: recordData, state };
-      }
-
-      await sleepWithSignal(pollIntervalMs, signal);
+      throw timeoutError;
+    } finally {
+      clearTimeout(deadlineTimer);
+      signal?.removeEventListener("abort", abortFromCaller);
     }
-
-    throw Object.assign(new Error("Kie task timed out"), { status: 504 });
   }
 }
 
