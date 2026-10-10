@@ -1622,7 +1622,7 @@ were omitted.
 
 #### Bun 1.4.2 source-level runtime comparison
 
-The same harness was run once per cell against the same blue source tree under Node 24.21.0 and
+The same harness was run twice per cell against the same blue source tree under Node 24.21.0 and
 Bun 1.4.2, using the official [Linux aarch64 release archive](https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-aarch64.zip)
 with SHA-256 `54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7`. Each run used a
 2 GiB `MemoryMax`, one CPU, 70 concurrent 1 MiB requests, 9,610 response bytes per client, a local
@@ -1630,22 +1630,21 @@ fake upstream, and the 128 MiB aggregate artifact reservation cap. The checkout 
 `17cbbf15ab`; the call-log implementation under test was unchanged from `cc6c04289c`. Only the
 benchmark's runtime-label expression was an uncommitted edit during these measurements.
 
-| Runtime | Stream chunks | Details ready | Elapsed | Sampled RSS / heap | Kernel `VmHWM` | Process write bytes | SQLite driver |
-| ------- | ------------: | ------------: | ------: | -----------------: | -------------: | ------------------: | ------------- |
-| Node 24.21.0 | off | 6/70 | 1,063 ms | 423.8 / 251.1 MiB | 435.4 MiB | 13,742,080 | better-sqlite3 |
-| Bun 1.4.2 | off | 6/70 | 600 ms | 393.5 / 190.1 MiB | 393.5 MiB | 13,742,080 | bun:sqlite |
-| Node 24.21.0 | on | 6/70 | 1,119 ms | 460.3 / 290.2 MiB | 461.3 MiB | 13,799,424 | better-sqlite3 |
-| Bun 1.4.2 | on | 6/70 | 672 ms | 344.7 / 222.8 MiB | 374.3 MiB | 13,795,328 | bun:sqlite |
+| Runtime      | Stream chunks | Details ready | Elapsed (run 1 / 2) | Sampled RSS / heap (run 1 / 2)                | Kernel `VmHWM` (run 1 / 2) | Process writes (run 1 / 2)   | SQLite driver  |
+| ------------ | ------------: | ------------: | -----------------: | ---------------------------------------------: | ------------------------: | ---------------------------: | -------------- |
+| Node 24.21.0 |           off |          6/70 |    1,063 / 1,074 ms |    423.8 / 251.1, 425.4 / 255.1 MiB           |      435.4 / 439.0 MiB    | 13,742,080 / 13,742,080 B   | better-sqlite3 |
+| Bun 1.4.2    |           off |          6/70 |      600 / 621 ms   |    393.5 / 190.1, 328.0 / 220.8 MiB           |      393.5 / 365.6 MiB    | 13,742,080 / 13,742,080 B   | bun:sqlite     |
+| Node 24.21.0 |            on |          6/70 |    1,119 / 1,121 ms |    460.3 / 290.2, 424.3 / 258.3 MiB           |      461.3 / 435.5 MiB    | 13,799,424 / 13,795,328 B   | better-sqlite3 |
+| Bun 1.4.2    |            on |          6/70 |      672 / 660 ms   |    344.7 / 222.8, 338.1 / 222.7 MiB           |      374.3 / 378.7 MiB    | 13,795,328 / 13,791,232 B   | bun:sqlite     |
 
-In these single trials Bun finished the logger workload sooner and had a lower process high-water
-mark. The comparison is confounded by Bun selecting its built-in `bun:sqlite` driver while Node
-uses `better-sqlite3`, and one run per cell does not characterize variance. All four cells admitted
-70 fake upstream calls and skipped all 70 duplicate finalizer logs, but the shared 128 MiB
-reservation limit retained only six details per run. This exercises the production request-logger,
-fetch-capture, stream-tap, `saveCallLog`, SQLite, and artifact-worker source path; it does not start
-Next.js, compare Turbopack packaging, model the full application, or establish a provider or
-70–100-agent capacity result. The Bun process can execute this path, but the result is not evidence
-that Bun reduces full-app memory.
+Both runs per cell admitted 70 fake upstream calls and skipped all 70 duplicate finalizer logs, but
+the shared 128 MiB reservation limit retained only six details in each run. Bun was faster and had a
+lower process high-water in all four paired runs; two samples per cell are still too few to estimate
+variance. The comparison is confounded by Bun selecting its built-in `bun:sqlite` driver while Node
+uses `better-sqlite3`. This exercises the production request-logger, fetch-capture, stream-tap,
+`saveCallLog`, SQLite, and artifact-worker source path; it does not start Next.js, compare
+Turbopack packaging, model the full application, or establish provider or 70–100-agent capacity.
+The result is not evidence that Bun reduces full-app memory.
 
 An isolated capacity experiment temporarily raised the in-memory reservation constant to 2 GiB
 and ran the same 70 × 1 MiB request workload under `node --max-old-space-size=2048`; the source
