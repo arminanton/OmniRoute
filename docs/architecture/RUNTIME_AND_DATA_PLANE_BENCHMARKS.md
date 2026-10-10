@@ -11,7 +11,7 @@ results, not production capacity claims. No deployment is part of this work.
 
 ## OpenAPI surface and plane boundary
 
-The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 1,338
+The canonical `docs/openapi.yaml` currently contains 705 route templates, 1,029 operations, and 1,427
 component schemas. The API route inventory checker verifies that source files and the spec agree on
 every path, exported method, and path parameter; it reports 705/705 routes and the documented public
 copy at `public/openapi.yaml` is byte-identical to the canonical spec.
@@ -34,14 +34,14 @@ the Go sidecar is exposed through the relay endpoints.
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
 contract is still stronger on route coverage than schema completeness: the deterministic inventory
 in [OPENAPI_CONTRACT_INVENTORY.md](OPENAPI_CONTRACT_INVENTORY.md) finds 983 body-bearing response
-candidates, of which 818 declare schemas on every non-`204` success response and 165 do not. The
+candidates, of which 833 declare schemas on every non-`204` success response and 150 do not. The
 remaining 46 operations are accounted for explicitly: 16 are `204`-only, 28 declare no `2xx`, and
 two are bodyless `HEAD` probes with a `200` response. The 28 without `2xx` include eight redirects,
 one WebSocket upgrade, ten catch-all not-found operations, six bodyless `HEAD` catch-alls/artifact
 probes, and three error-only operations. This differs from the earlier 600/387 counts because those
 were an outdated snapshot and counted the two `HEAD` probes in the non-`204` denominator. The
-inventory also finds 771 operations with effective operation-level security declarations (762
-nonempty, nine explicitly public), 258 with no effective declaration, and 253 operations whose
+inventory also finds 783 operations with effective operation-level security declarations (774
+nonempty, nine explicitly public), 246 with no effective declaration, and 263 operations whose
 text signals conditional auth; all 253 now have a security declaration. The A2A persisted-history
 route lists the accepted API-key/management alternatives and scopes its anonymous alternative to
 the unlocked local-first configuration. The login/setup status GET explicitly declares public
@@ -2059,8 +2059,8 @@ image, or production deployment were involved.
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
 - Continue the source audit for response schemas and conditional auth behavior. The deterministic
-  inventory reports 818 of 983 body-bearing response candidates with declared schemas on every
-  non-`204` success (165 gaps); route coverage is 705/705. It also lists 258 operations with no
-  effective security declaration; all 253 operations whose text signals conditional auth now have
+  inventory reports 833 of 983 body-bearing response candidates with declared schemas on every
+  non-`204` success (150 gaps); route coverage is 705/705. It also lists 246 operations with no
+  effective security declaration; all 263 operations whose text signals conditional auth now have
   declarations. These are documentation review queues, not proof that handlers are insecure or
   that the declared response schemas are semantically complete.

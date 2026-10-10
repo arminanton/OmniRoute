@@ -16253,13 +16253,21 @@ paths:
         - {}
       responses:
         "200":
-          description: A2A status and task counts
+          description: A2A enablement state, in-memory task counts, and reduced public agent-card summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/A2AStatusResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: A2A status could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/a2a/tasks:
     get:
       operationId: getApiA2aTasks
@@ -16571,7 +16579,10 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Current active provider rate-limit queues and account-semaphore gates.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminConcurrencyResponse" }
     post:
       operationId: postApiAdminConcurrency
       tags:
@@ -16593,7 +16604,15 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: All account semaphores were reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AdminConcurrencyResetResponse" }
+        "400":
+          description: The requested action is not supported.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/analytics/auto-routing:
     get:
       operationId: getApiAnalyticsAutoRouting
@@ -16783,9 +16802,36 @@ paths:
       tags:
         - Batches
       summary: "GET batches"
+      description: >-
+        Lists recent internal batch records. The management-auth helper accepts a dashboard session,
+        management-scoped credentials, and trusted local service credentials when management auth
+        is enabled; an unlocked install with `requireLogin=false` may permit anonymous access.
+        Records include internal API-key IDs and worker-supplied metadata/error/usage objects.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Recent internal batch records, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementBatchListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Batch records could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/batches/{id}:
     parameters:
       - name: id
@@ -16798,9 +16844,41 @@ paths:
       tags:
         - Batches
       summary: "GET batches › <id>"
+      description: >-
+        Returns one internal batch record. The management-auth helper accepts a dashboard session,
+        management-scoped credentials, and trusted local service credentials when management auth
+        is enabled; an unlocked install with `requireLogin=false` may permit anonymous access.
+        Records may include internal API-key IDs and worker-supplied metadata/error/usage objects.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: The requested internal batch record.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ManagementBatchResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: No batch exists with this ID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: The batch record could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cache/entries:
     delete:
       operationId: deleteApiCacheEntries
@@ -18998,10 +19076,43 @@ paths:
       tags:
         - Copilot
       summary: "POST copilot › chat"
+      description: >-
+        Requires `requireManagementAuth()` and the route's local-only tier. Protected profiles accept
+        management credentials, a dashboard session, or trusted local service credentials; an
+        unlocked install may permit anonymous access. Tool output can include a newly created
+        plaintext API key, so callers must treat the full response as sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Copilot message and optional tool-call results; results may include a one-time API key.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CopilotChatResponse" }
+        "400":
+          description: The message list or message content failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Copilot processing failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cursor-cli/{path}:
     parameters:
       - name: path
@@ -20087,9 +20198,60 @@ paths:
       tags:
         - Internal
       summary: "POST internal › codex responses ws"
+      description: >-
+        Internal WebSocket bridge. Requires the shared secret in
+        `x-omniroute-ws-bridge-secret`; this operation is not management-authenticated. The request
+        and `prepare` response may contain prompts, API credentials, upstream authorization headers,
+        and proxy credentials and must be treated as sensitive.
+      security:
+        - CodexResponsesWsBridgeSecretAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CodexResponsesWsBridgeRequest" }
       responses:
         "200":
-          description: OK
+          description: Action-discriminated result for `authenticate`, `prepare`, or `log`.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CodexResponsesWsBridgeResponse" }
+        "400":
+          description: Invalid bridge JSON/action, or unsupported reasoning routing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          description: No WebSocket credential was supplied or the Codex OAuth token is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          description: The bridge secret or supplied WebSocket credential is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: A managed-lease key cannot use the WebSocket bridge transport.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "426":
+          description: The selected combo requires the HTTP Responses transport.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Bridge call-history persistence failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          description: The Codex WebSocket transport is disabled or no eligible connection is available.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/issue-agent/runs:
     get:
       operationId: getApiIssueAgentRuns
@@ -21011,20 +21173,73 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › audit"
+      description: >-
+        Lists recent MCP tool audit entries. Input is represented by a hash, while each entry may
+        include a truncated output summary and an API-key ID. Requires management authentication;
+        unlocked installs may permit anonymous access. This route is local-only.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Paginated MCP audit entries and result count.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpAuditEntriesResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: MCP audit entries could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/mcp/audit/stats:
     get:
       operationId: getApiMcpAuditStats
       tags:
         - Mcp
       summary: "GET mcp › audit › stats"
+      description: >-
+        Returns 24-hour MCP audit aggregates. Database failures handled by the stats helper return
+        zeroed aggregates; unexpected route failures return an error. Requires management
+        authentication; unlocked installs may permit anonymous access. This route is local-only.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: MCP tool-call count, success rate, average duration, and top tools.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpAuditStatsResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: MCP audit statistics could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/mcp/sse:
     get:
       operationId: getApiMcpSse
@@ -21050,10 +21265,38 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › status"
+      description: >-
+        Reports MCP runtime, heartbeat, transport, and recent activity. The response includes a
+        host-local heartbeat path, PID, allowed scopes, and process timing. Requires management
+        authentication or an accepted `mcp:connect` credential; unlocked installs may permit
+        anonymous access. This route is local-only.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: MCP enabled/online state, heartbeat, transport, and last-day activity summary.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpStatusResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: MCP status could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/mcp/stream:
     delete:
       operationId: deleteApiMcpStream
@@ -21088,10 +21331,36 @@ paths:
       tags:
         - Mcp
       summary: "GET mcp › tools"
+      description: >-
+        Lists the MCP tool catalog and source endpoint metadata. Requires management authentication
+        or an accepted `mcp:connect` credential; unlocked installs may permit anonymous access. This
+        route is local-only.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: MCP tool count and catalog entries.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/McpToolsResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: MCP tools could not be loaded.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/middleware/hooks:
     get:
       operationId: getApiMiddlewareHooks
@@ -29840,26 +30109,141 @@ paths:
       tags:
         - Sync
       summary: "GET sync › bundle"
+      description: >-
+        Exports the configuration associated with a valid sync-token capability supplied in
+        `x-sync-token` or as a Bearer token. The bundle contains plaintext API keys and provider
+        credentials. Responses use private, no-store caching; `If-None-Match` may produce a bodyless
+        `304` response.
+      security:
+        - SyncTokenHeaderAuth: []
+        - SyncTokenBearerAuth: []
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: Quoted config version or SHA-256 version to request a bodyless `304` response.
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Credential-bearing configuration snapshot.
+          headers:
+            ETag:
+              description: Quoted SHA-256 configuration version.
+              schema: { type: string }
+            x-config-version:
+              description: Unquoted SHA-256 configuration version.
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string, const: "private, no-store" }
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ConfigSyncBundleResponse" }
+        "304":
+          description: The configuration version matches `If-None-Match`; no response body is sent.
+          headers:
+            ETag:
+              schema: { type: string }
+            x-config-version:
+              schema: { type: string }
+            Cache-Control:
+              schema: { type: string, const: "private, no-store" }
+        "401":
+          description: The sync token is missing, invalid, or revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: The configuration bundle could not be built.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/sync/tokens:
     get:
       operationId: getApiSyncTokens
       tags:
         - Sync
       summary: "GET sync › tokens"
+      description: >-
+        Lists sync-token metadata without returning token hashes or plaintext token values. Requires
+        management authentication; unlocked installs with `requireLogin=false` may permit anonymous
+        access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Sync-token summaries and total count.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncTokenListResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Sync-token metadata could not be listed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiSyncTokens
       tags:
         - Sync
       summary: "POST sync › tokens"
+      description: >-
+        Creates a sync token and returns its plaintext value once. Requires management
+        authentication; unlocked installs with `requireLogin=false` may permit anonymous access.
+        The response is sensitive and includes `Cache-Control: no-store`.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SyncTokenCreateRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Sync token created; the plaintext token is returned only in this response.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncTokenCreateResponse" }
+        "400":
+          description: Invalid JSON or token name failed validation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          description: Sync token creation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/sync/tokens/{id}:
     parameters:
       - name: id
@@ -29872,9 +30256,40 @@ paths:
       tags:
         - Sync
       summary: "DELETE sync › tokens › <id>"
+      description: >-
+        Revokes a sync token by ID and returns its metadata without its token hash or plaintext
+        value. Requires management authentication; unlocked installs with `requireLogin=false` may
+        permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Sync token revoked.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncTokenRevokeResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: No sync token exists with this ID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Sync token revocation failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/synced-available-models:
     get:
       operationId: getApiSyncedAvailableModels
@@ -36866,6 +37281,23 @@ components:
       description: >-
         Process-local shared token used only by the AgentBridge server to post sanitized captured
         entries to `/api/tools/traffic-inspector/internal/ingest`. This is not an OmniRoute API key.
+    CodexResponsesWsBridgeSecretAuth:
+      type: apiKey
+      in: header
+      name: x-omniroute-ws-bridge-secret
+      description: >-
+        Shared internal credential for the Codex Responses WebSocket bridge. This is not an
+        OmniRoute management or inference API key. Never expose or log its value.
+    SyncTokenHeaderAuth:
+      type: apiKey
+      in: header
+      name: x-sync-token
+      description: Opaque capability token used to read a configuration sync bundle.
+    SyncTokenBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: sync token
+      description: Opaque `osync_` capability token used to read a configuration sync bundle.
     InternalServiceTokenAuth:
       type: apiKey
       in: header
@@ -60805,4 +61237,541 @@ components:
             source: { type: string, const: internal governance limits }
             upstreamQuotaClaims: { type: boolean, const: false }
           additionalProperties: false
+      additionalProperties: false
+
+    A2AStatusTaskCounts:
+      type: object
+      required: [submitted, working, completed, failed, cancelled]
+      properties:
+        submitted: { type: integer, minimum: 0 }
+        working: { type: integer, minimum: 0 }
+        completed: { type: integer, minimum: 0 }
+        failed: { type: integer, minimum: 0 }
+        cancelled: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    A2AStatusTaskStats:
+      type: object
+      required: [counts, total, activeStreams, lastTaskAt]
+      properties:
+        counts: { $ref: "#/components/schemas/A2AStatusTaskCounts" }
+        total: { type: integer, minimum: 0 }
+        activeStreams: { type: integer, minimum: 0 }
+        lastTaskAt: { type: [string, "null"] }
+      additionalProperties: false
+
+    A2AStatusAgentSummary:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        version: { type: string }
+        url: { type: string }
+      additionalProperties: true
+
+    A2AStatusResponse:
+      type: object
+      required: [status, online, enabled, tasks, agent, capabilities, skills]
+      properties:
+        status: { type: string, enum: [ok, disabled] }
+        online: { type: boolean }
+        enabled: { type: boolean }
+        tasks: { $ref: "#/components/schemas/A2AStatusTaskStats" }
+        agent:
+          oneOf:
+            - { $ref: "#/components/schemas/A2AStatusAgentSummary" }
+            - { type: "null" }
+        capabilities:
+          description: Agent-card capabilities, or null when A2A is disabled or card loading fails.
+          oneOf:
+            - { type: object, additionalProperties: true }
+            - { type: "null" }
+        skills:
+          type: array
+          items: { type: object, additionalProperties: true }
+      additionalProperties: false
+
+    AdminRateLimitStatusEntry:
+      type: object
+      required: [queued, running, executing]
+      properties:
+        queued: { type: integer, minimum: 0 }
+        running: { type: integer, minimum: 0 }
+        executing: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    AdminAccountSemaphoreStatus:
+      type: object
+      required: [running, queued, maxConcurrency, blockedUntil]
+      properties:
+        running: { type: integer, minimum: 0 }
+        queued: { type: integer, minimum: 0 }
+        maxConcurrency: { type: integer, minimum: 0 }
+        blockedUntil: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+
+    AdminConcurrencyResponse:
+      type: object
+      required: [timestamp, rateLimits, semaphores]
+      properties:
+        timestamp: { type: string, format: date-time }
+        rateLimits:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/AdminRateLimitStatusEntry" }
+        semaphores:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/AdminAccountSemaphoreStatus" }
+      additionalProperties: false
+
+    AdminConcurrencyResetResponse:
+      type: object
+      required: [ok, action]
+      properties:
+        ok: { type: boolean, const: true }
+        action: { type: string, const: reset-semaphores }
+      additionalProperties: false
+
+    ManagementBatchRecord:
+      type: object
+      description: >-
+        Internal camelCase database record used by `/api/batches`; it is not the OpenAI-compatible
+        snake_case `V1BatchObject` returned by `/api/v1/batches`.
+      x-sensitive: true
+      required:
+        [id, endpoint, completionWindow, status, inputFileId, createdAt, requestCountsTotal, requestCountsCompleted, requestCountsFailed]
+      properties:
+        id: { type: string }
+        endpoint: { type: string }
+        completionWindow: { type: string }
+        status:
+          type: string
+          enum: [validating, failed, in_progress, finalizing, completed, expired, cancelling, cancelled]
+        inputFileId: { type: string }
+        outputFileId: { type: [string, "null"] }
+        errorFileId: { type: [string, "null"] }
+        createdAt: { type: integer, minimum: 0 }
+        inProgressAt: { type: [integer, "null"], minimum: 0 }
+        expiresAt: { type: [integer, "null"], minimum: 0 }
+        finalizingAt: { type: [integer, "null"], minimum: 0 }
+        completedAt: { type: [integer, "null"], minimum: 0 }
+        failedAt: { type: [integer, "null"], minimum: 0 }
+        expiredAt: { type: [integer, "null"], minimum: 0 }
+        cancellingAt: { type: [integer, "null"], minimum: 0 }
+        cancelledAt: { type: [integer, "null"], minimum: 0 }
+        requestCountsTotal: { type: integer, minimum: 0 }
+        requestCountsCompleted: { type: integer, minimum: 0 }
+        requestCountsFailed: { type: integer, minimum: 0 }
+        metadata:
+          type: [object, "null"]
+          x-sensitive: true
+          additionalProperties: true
+        apiKeyId:
+          type: [string, "null"]
+          x-sensitive: true
+        errors:
+          x-sensitive: true
+          description: Nullable worker-supplied batch error payload; shape is provider-specific.
+        model: { type: [string, "null"] }
+        usage:
+          description: Nullable worker-supplied usage value; the source type does not constrain its fields.
+        outputExpiresAfterSeconds: { type: [integer, "null"], minimum: 0 }
+        outputExpiresAfterAnchor: { type: [string, "null"] }
+      additionalProperties: false
+
+    ManagementBatchListResponse:
+      type: object
+      x-sensitive: true
+      required: [batches]
+      properties:
+        batches:
+          type: array
+          items: { $ref: "#/components/schemas/ManagementBatchRecord" }
+      additionalProperties: false
+
+    ManagementBatchResponse:
+      type: object
+      x-sensitive: true
+      required: [batch]
+      properties:
+        batch: { $ref: "#/components/schemas/ManagementBatchRecord" }
+      additionalProperties: false
+
+    CopilotToolCall:
+      type: object
+      x-sensitive: true
+      required: [name, args, result]
+      properties:
+        name: { type: string }
+        args:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+        result:
+          type: string
+          x-sensitive: true
+          description: May contain a newly created plaintext API key or other tool output.
+      additionalProperties: false
+
+    CopilotChatResponse:
+      type: object
+      x-sensitive: true
+      required: [message]
+      properties:
+        message:
+          type: string
+          x-sensitive: true
+          description: May contain a newly created plaintext API key.
+        toolCalls:
+          type: array
+          items: { $ref: "#/components/schemas/CopilotToolCall" }
+      additionalProperties: false
+
+    CodexResponsesWsBridgeRequest:
+      type: object
+      x-sensitive: true
+      required: [action]
+      properties:
+        action: { type: string, enum: [authenticate, prepare, log] }
+        requestUrl: { type: string, x-sensitive: true }
+        headers:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+        response:
+          type: object
+          x-sensitive: true
+          additionalProperties: true
+      description: >-
+        Bridge fields vary by action. `authenticate` consumes requestUrl/headers, `prepare` also
+        consumes the Responses request in response, and `log` consumes call-history fields. Unknown
+        fields are accepted by the route.
+      additionalProperties: true
+
+    CodexResponsesWsBridgeAuthenticateResponse:
+      type: object
+      required: [ok, authenticated, authType, wsAuth]
+      properties:
+        ok: { type: boolean, const: true }
+        authenticated: { type: boolean }
+        authType: { type: string, enum: [none, api_key, session] }
+        wsAuth: { type: boolean }
+      additionalProperties: false
+
+    CodexResponsesWsBridgePrepareResponse:
+      type: object
+      x-sensitive: true
+      required: [ok, upstreamUrl, browser, os, connectionId, provider, account, model, headers, reasoningRouting, response]
+      properties:
+        ok: { type: boolean, const: true }
+        upstreamUrl: { type: string, format: uri }
+        browser: { type: string, const: chrome_142 }
+        os: { type: string, const: windows }
+        connectionId: { type: string, x-sensitive: true }
+        provider: { type: string }
+        account: { type: [string, "null"], format: email, x-sensitive: true }
+        model: { type: string }
+        headers:
+          type: object
+          x-sensitive: true
+          description: Upstream request headers may include bearer credentials.
+          additionalProperties: { type: string, x-sensitive: true }
+        proxy:
+          type: string
+          x-sensitive: true
+          description: May contain proxy authentication credentials; omitted when no proxy is configured.
+        reasoningRouting:
+          type: [object, "null"]
+          x-sensitive: true
+          additionalProperties: true
+        response:
+          type: object
+          x-sensitive: true
+          description: Transformed Codex Responses request, including client prompt content.
+          additionalProperties: true
+      additionalProperties: false
+
+    CodexResponsesWsBridgeLogResponse:
+      type: object
+      required: [ok, logged]
+      properties:
+        ok: { type: boolean, const: true }
+        logged: { type: boolean, const: true }
+      additionalProperties: false
+
+    CodexResponsesWsBridgeResponse:
+      description: >-
+        Successful response selected by the bridge action. `prepare` contains credential-bearing
+        upstream headers and transformed request data.
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/CodexResponsesWsBridgeAuthenticateResponse" }
+        - { $ref: "#/components/schemas/CodexResponsesWsBridgePrepareResponse" }
+        - { $ref: "#/components/schemas/CodexResponsesWsBridgeLogResponse" }
+
+    McpAuditEntry:
+      type: object
+      x-sensitive: true
+      required: [id, toolName, inputHash, outputSummary, durationMs, apiKeyId, success, errorCode, createdAt]
+      properties:
+        id: { type: integer, minimum: 0 }
+        toolName: { type: string }
+        inputHash: { type: string }
+        outputSummary:
+          type: string
+          x-sensitive: true
+          description: Truncated output summary; it may still contain sensitive application data.
+        durationMs: { type: number, minimum: 0 }
+        apiKeyId: { type: [string, "null"], x-sensitive: true }
+        success: { type: boolean }
+        errorCode: { type: [string, "null"] }
+        createdAt: { type: string }
+      additionalProperties: false
+
+    McpAuditEntriesResponse:
+      type: object
+      x-sensitive: true
+      required: [entries, total, limit, offset]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/McpAuditEntry" }
+        total: { type: integer, minimum: 0 }
+        limit: { type: integer, minimum: 1, maximum: 500 }
+        offset: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    McpAuditTopTool:
+      type: object
+      required: [tool, count]
+      properties:
+        tool: { type: string }
+        count: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    McpAuditStatsResponse:
+      type: object
+      required: [totalCalls, successRate, avgDurationMs, topTools]
+      properties:
+        totalCalls: { type: integer, minimum: 0 }
+        successRate: { type: number, minimum: 0, maximum: 1 }
+        avgDurationMs: { type: number, minimum: 0 }
+        topTools:
+          type: array
+          items: { $ref: "#/components/schemas/McpAuditTopTool" }
+      additionalProperties: false
+
+    McpStatusHeartbeat:
+      type: object
+      required: [pid, startedAt, lastHeartbeatAt, version, transport, scopesEnforced, allowedScopes, toolCount, pidAlive, heartbeatAgeMs, uptimeMs]
+      properties:
+        pid: { type: integer, minimum: 1, x-sensitive: true }
+        startedAt: { type: string, x-sensitive: true }
+        lastHeartbeatAt: { type: string, x-sensitive: true }
+        version: { type: string }
+        transport: { type: string, const: stdio }
+        scopesEnforced: { type: boolean }
+        allowedScopes:
+          type: array
+          items: { type: string }
+        toolCount: { type: integer, minimum: 0 }
+        pidAlive: { type: boolean }
+        heartbeatAgeMs: { type: [number, "null"], minimum: 0 }
+        uptimeMs: { type: [number, "null"], minimum: 0 }
+      additionalProperties: false
+
+    McpStatusHttpTransport:
+      type: object
+      required: [online, transport, startedAt, uptime]
+      properties:
+        online: { type: boolean }
+        transport: { type: [string, "null"] }
+        startedAt: { type: [integer, "null"], minimum: 0 }
+        uptime: { type: [string, "null"] }
+      additionalProperties: false
+
+    McpStatusActivity:
+      type: object
+      required: [totalCalls24h, successRate, avgDurationMs, topTools, lastCallAt, lastCallTool]
+      properties:
+        totalCalls24h: { type: integer, minimum: 0 }
+        successRate: { type: number, minimum: 0, maximum: 1 }
+        avgDurationMs: { type: number, minimum: 0 }
+        topTools:
+          type: array
+          items: { $ref: "#/components/schemas/McpAuditTopTool" }
+        lastCallAt: { type: [string, "null"] }
+        lastCallTool: { type: [string, "null"] }
+      additionalProperties: false
+
+    McpStatusResponse:
+      type: object
+      x-sensitive: true
+      required: [status, online, enabled, transport, scopesEnforced, heartbeatPath, heartbeat, httpTransport, activity]
+      properties:
+        status: { type: string, enum: [online, offline] }
+        online: { type: boolean }
+        enabled: { type: boolean }
+        transport: { type: string }
+        scopesEnforced: { type: boolean }
+        heartbeatPath: { type: string, x-sensitive: true }
+        heartbeat:
+          oneOf:
+            - { $ref: "#/components/schemas/McpStatusHeartbeat" }
+            - { type: "null" }
+        httpTransport: { $ref: "#/components/schemas/McpStatusHttpTransport" }
+        activity: { $ref: "#/components/schemas/McpStatusActivity" }
+      additionalProperties: false
+
+    McpToolCatalogEntry:
+      type: object
+      required: [name, description, scopes, phase, auditLevel, sourceEndpoints]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        scopes:
+          type: array
+          items: { type: string }
+        phase: { type: integer, enum: [1, 2] }
+        auditLevel: { type: string, enum: [basic, full, none] }
+        sourceEndpoints:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    McpToolsResponse:
+      type: object
+      required: [total, mappedTotal, tools]
+      properties:
+        total: { type: integer, minimum: 0 }
+        mappedTotal: { type: integer, minimum: 0 }
+        tools:
+          type: array
+          items: { $ref: "#/components/schemas/McpToolCatalogEntry" }
+      additionalProperties: false
+
+    ConfigSyncProviderConnection:
+      type: object
+      x-sensitive: true
+      description: >-
+        Sanitized provider connection export. It may include accessToken, refreshToken, apiKey, or
+        credential-bearing providerSpecificData; local-only Nous OAuth connections are excluded.
+      additionalProperties: true
+
+    ConfigSyncApiKey:
+      type: object
+      x-sensitive: true
+      description: >-
+        Sanitized API-key export that includes the plaintext `key` field so the destination can
+        restore the credential.
+      properties:
+        id: { type: string }
+        name: { type: string }
+        key: { type: string, x-sensitive: true }
+        machineId: { type: [string, "null"] }
+        modelAccessMode: { type: string }
+        allowedModels:
+          type: array
+          items: { type: string }
+        allowedCombos:
+          type: array
+          items: { type: string }
+        allowedConnections:
+          type: array
+          items: { type: string }
+        noLog: { type: boolean }
+        autoResolve: { type: boolean }
+        isActive: { type: boolean }
+        accessSchedule: { type: [object, "null"], additionalProperties: true }
+        maxRequestsPerDay: { type: [integer, "null"], minimum: 0 }
+        maxRequestsPerMinute: { type: [integer, "null"], minimum: 0 }
+        throttleDelayMs: { type: [integer, "null"], minimum: 0 }
+        maxSessions: { type: [integer, "null"], minimum: 0 }
+      additionalProperties: true
+
+    ConfigSyncBundle:
+      type: object
+      x-sensitive: true
+      required: [settings, providerConnections, providerNodes, modelAliases, combos, apiKeys, reasoningRoutingRules]
+      properties:
+        settings:
+          type: object
+          description: Settings export excludes password, requireLogin, and cloudEnabled.
+          additionalProperties: true
+        providerConnections:
+          type: array
+          items: { $ref: "#/components/schemas/ConfigSyncProviderConnection" }
+        providerNodes:
+          type: array
+          items: { type: object, additionalProperties: true }
+        modelAliases:
+          type: object
+          additionalProperties: true
+        combos:
+          type: array
+          items: { type: object, additionalProperties: true }
+        apiKeys:
+          type: array
+          items: { $ref: "#/components/schemas/ConfigSyncApiKey" }
+        reasoningRoutingRules:
+          type: array
+          items: { type: object, additionalProperties: true }
+      additionalProperties: false
+
+    ConfigSyncBundleResponse:
+      type: object
+      x-sensitive: true
+      required: [version, bundle]
+      properties:
+        version: { type: string, pattern: "^[0-9a-f]{64}$" }
+        bundle: { $ref: "#/components/schemas/ConfigSyncBundle" }
+      additionalProperties: false
+
+    SyncTokenCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+      additionalProperties: true
+
+    SyncTokenSummary:
+      type: object
+      required: [id, name, syncApiKeyId, revokedAt, lastUsedAt, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        syncApiKeyId: { type: [string, "null"], x-sensitive: true }
+        revokedAt: { type: [string, "null"] }
+        lastUsedAt: { type: [string, "null"] }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      additionalProperties: false
+
+    SyncTokenListResponse:
+      type: object
+      required: [tokens, total]
+      properties:
+        tokens:
+          type: array
+          items: { $ref: "#/components/schemas/SyncTokenSummary" }
+        total: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    SyncTokenCreateResponse:
+      type: object
+      x-sensitive: true
+      required: [token, syncToken]
+      properties:
+        token:
+          type: string
+          x-sensitive: true
+          description: One-time plaintext sync token; the database stores only its SHA-256 hash.
+        syncToken: { $ref: "#/components/schemas/SyncTokenSummary" }
+      additionalProperties: false
+
+    SyncTokenRevokeResponse:
+      type: object
+      required: [message, syncToken]
+      properties:
+        message: { type: string, const: Sync token revoked successfully }
+        syncToken: { $ref: "#/components/schemas/SyncTokenSummary" }
       additionalProperties: false

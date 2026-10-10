@@ -105,11 +105,11 @@ test("canonical OpenAPI inventory reconciles the checked-in report counts", () =
   assert.equal(inventory.pathCount, 705);
   assert.equal(inventory.operationCount, 1029);
   assert.equal(inventory.responseContent.candidateOperations, 983);
-  assert.equal(inventory.responseContent.fullyTypedOperations, 818);
-  assert.equal(inventory.responseContent.untypedOperations, 165);
+  assert.equal(inventory.responseContent.fullyTypedOperations, 833);
+  assert.equal(inventory.responseContent.untypedOperations, 150);
   assert.deepEqual(inventory.responseContent.gapStateCounts, {
     "content-without-schema": 0,
-    "no-content": 165,
+    "no-content": 150,
     "unresolved-response": 0,
   });
   assert.equal(inventory.responseContent.bodyless204Operations.length, 16);
@@ -128,13 +128,13 @@ test("canonical OpenAPI inventory reconciles the checked-in report counts", () =
     "redirect-only": 8,
     "websocket-upgrade": 1,
   });
-  assert.equal(inventory.security.operationDeclared, 771);
-  assert.equal(inventory.security.missing, 258);
+  assert.equal(inventory.security.operationDeclared, 783);
+  assert.equal(inventory.security.missing, 246);
   assert.equal(inventory.security.invalidDeclaration, 0);
   assert.equal(inventory.security.explicitPublic, 9);
-  assert.equal(inventory.security.requiresDeclaredScheme, 151);
-  assert.equal(inventory.security.includesAnonymousAlternative, 611);
-  assert.equal(inventory.security.conditionalAuthText, 253);
+  assert.equal(inventory.security.requiresDeclaredScheme, 153);
+  assert.equal(inventory.security.includesAnonymousAlternative, 621);
+  assert.equal(inventory.security.conditionalAuthText, 263);
   assert.equal(inventory.security.conditionalAuthWithMissingSecurity, 0);
   assert.equal(
     fs.readFileSync(INVENTORY_REPORT, "utf8"),
