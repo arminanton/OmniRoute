@@ -141,29 +141,125 @@ mod tests {
 
         let row = db
             .query_row(
-                "SELECT is_active, is_banned, revoked_at FROM api_keys
+                "SELECT is_active, is_banned, revoked_at, expires_at FROM api_keys
                  WHERE key = ?1 OR key_hash = ?2",
                 params![presented_key, opaque_key_hash],
                 |row| {
                     Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
                         row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 },
             )
             .optional()?;
 
-        let valid = row.is_some_and(|(is_active, is_banned, revoked_at)| {
-            is_active != 0
-                && is_banned == 0
+        let valid = row.is_some_and(|(is_active, is_banned, revoked_at, expires_at)| {
+            let expired = expires_at
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .and_then(parse_canonical_utc_timestamp_ms)
+                .is_some_and(|expires_at_ms| expires_at_ms <= now_ms);
+
+            // Match rowParsers.ts: inactive only when exactly 0; banned only when exactly 1.
+            is_active != Some(0)
+                && is_banned != Some(1)
                 && !revoked_at.is_some_and(|value| !value.trim().is_empty())
+                && !expired
         });
         cache.cache_validation_result(opaque_key_hash, valid, now_ms);
         Ok(valid)
     }
 
+    /// Parse the canonical UTC timestamp shape used by the shared test vectors. JavaScript's
+    /// Date.parse accepts a broader grammar; unsupported/malformed values intentionally return
+    /// None because validateApiKey() ignores expiry strings for which Date.parse is non-finite.
+    fn parse_canonical_utc_timestamp_ms(value: &str) -> Option<i64> {
+        let bytes = value.as_bytes();
+        if bytes.len() < 20
+            || bytes[4] != b'-'
+            || bytes[7] != b'-'
+            || bytes[10] != b'T'
+            || bytes[13] != b':'
+            || bytes[16] != b':'
+        {
+            return None;
+        }
+
+        let number = |start: usize, end: usize| -> Option<i64> {
+            let slice = bytes.get(start..end)?;
+            if !slice.iter().all(u8::is_ascii_digit) {
+                return None;
+            }
+            std::str::from_utf8(slice).ok()?.parse().ok()
+        };
+
+        let year = number(0, 4)?;
+        let month = number(5, 7)?;
+        let day = number(8, 10)?;
+        let hour = number(11, 13)?;
+        let minute = number(14, 16)?;
+        let second = number(17, 19)?;
+        if !(1..=9999).contains(&year)
+            || !(1..=12).contains(&month)
+            || !(0..=23).contains(&hour)
+            || !(0..=59).contains(&minute)
+            || !(0..=59).contains(&second)
+        {
+            return None;
+        }
+        let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let days_in_month = match month {
+            2 if leap_year => 29,
+            2 => 28,
+            4 | 6 | 9 | 11 => 30,
+            _ => 31,
+        };
+        if !(1..=days_in_month).contains(&day) {
+            return None;
+        }
+
+        let fraction_ms = match bytes.get(19..) {
+            Some([b'Z']) => 0,
+            Some([b'.', fraction @ .., b'Z']) if !fraction.is_empty() => {
+                if !fraction.iter().all(u8::is_ascii_digit) {
+                    return None;
+                }
+                let millis_digits = &fraction[..fraction.len().min(3)];
+                let parsed: i64 = std::str::from_utf8(millis_digits).ok()?.parse().ok()?;
+                parsed * 10_i64.pow((3 - millis_digits.len()) as u32)
+            }
+            _ => return None,
+        };
+
+        let adjusted_year = year - i64::from(month <= 2);
+        let era = adjusted_year.div_euclid(400);
+        let year_of_era = adjusted_year - era * 400;
+        let adjusted_month = month + if month > 2 { -3 } else { 9 };
+        let day_of_year = (153 * adjusted_month + 2) / 5 + day - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        let days_since_epoch = era * 146_097 + day_of_era - 719_468;
+        Some(
+            days_since_epoch * 86_400_000
+                + hour * 3_600_000
+                + minute * 60_000
+                + second * 1_000
+                + fraction_ms,
+        )
+    }
+
     fn sqlite_api_key_authority() -> Connection {
+        let db = empty_sqlite_api_key_authority();
+        db.execute_batch(
+            "INSERT INTO api_keys (id, key, key_hash, is_active, is_banned)
+             VALUES ('fixture-id', 'fixture-presented-key', 'opaque-hash-1', 1, 0);",
+        )
+        .expect("create source-shaped API-key row");
+        db
+    }
+
+    fn empty_sqlite_api_key_authority() -> Connection {
         let db = Connection::open_in_memory().expect("open in-memory API-key database");
         db.execute_batch(
             "CREATE TABLE api_keys (
@@ -174,11 +270,9 @@ mod tests {
                 is_banned INTEGER NOT NULL DEFAULT 0,
                 revoked_at TEXT,
                 expires_at TEXT
-             );
-             INSERT INTO api_keys (id, key, key_hash, is_active, is_banned)
-             VALUES ('fixture-id', 'fixture-presented-key', 'opaque-hash-1', 1, 0);",
+             );",
         )
-        .expect("create source-shaped API-key row");
+        .expect("create source-shaped API-key table");
         db
     }
 
@@ -346,6 +440,55 @@ mod tests {
             .expect("other worker reloads revoked SQLite row at TTL boundary")
         );
         assert_eq!(other_worker_cache.cached_validation(key_hash, 61_001), None);
+    }
+
+    #[test]
+    fn sqlite_lifecycle_gates_match_shared_typescript_vectors() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../fixtures/api-key-validation-cache-v1.json"))
+                .expect("shared API-key cache fixture must be valid JSON");
+
+        for case in fixture["lifecycleCases"]
+            .as_array()
+            .expect("lifecycle cases array")
+        {
+            let name = case["name"].as_str().expect("case name");
+            let key = case["key"].as_str().expect("fixture key");
+            let key_hash = format!("hash-{key}");
+            let db = empty_sqlite_api_key_authority();
+            db.execute(
+                "INSERT INTO api_keys (id, key, key_hash, is_active, is_banned, revoked_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    format!("fixture-{name}"),
+                    key,
+                    key_hash,
+                    case["isActive"].as_i64().expect("isActive"),
+                    case["isBanned"].as_i64().expect("isBanned"),
+                    case["revokedAt"].as_str(),
+                    case["expiresAt"].as_str(),
+                ],
+            )
+            .expect("insert lifecycle fixture row");
+
+            let mut cache = ApiKeyValidationCache::default();
+            for check in case["checks"].as_array().expect("lifecycle checks") {
+                let actual = validate_from_sqlite(
+                    &mut cache,
+                    &db,
+                    &key_hash,
+                    key,
+                    check["nowMs"].as_i64().expect("check nowMs"),
+                )
+                .expect("validate lifecycle fixture row");
+                assert_eq!(
+                    actual,
+                    check["expected"].as_bool().expect("check expected"),
+                    "{name} at {}ms",
+                    check["nowMs"],
+                );
+            }
+        }
     }
 
     #[test]

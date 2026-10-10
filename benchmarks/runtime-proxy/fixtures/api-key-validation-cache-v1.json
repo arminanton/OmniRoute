@@ -83,5 +83,74 @@
         { "op": "validate", "key": "evict-1001", "atMs": 30009, "expected": true }
       ]
     }
+  ],
+  "lifecycleCases": [
+    {
+      "name": "inactive-key-is-denied",
+      "key": "lifecycle-inactive",
+      "isActive": 0,
+      "isBanned": 0,
+      "revokedAt": null,
+      "expiresAt": null,
+      "checks": [{ "nowMs": 10000, "expected": false }]
+    },
+    {
+      "name": "banned-key-is-denied",
+      "key": "lifecycle-banned",
+      "isActive": 1,
+      "isBanned": 1,
+      "revokedAt": null,
+      "expiresAt": null,
+      "checks": [{ "nowMs": 10000, "expected": false }]
+    },
+    {
+      "name": "revoked-key-is-denied",
+      "key": "lifecycle-revoked",
+      "isActive": 1,
+      "isBanned": 0,
+      "revokedAt": "2026-10-10T00:00:00.000Z",
+      "expiresAt": null,
+      "checks": [{ "nowMs": 10000, "expected": false }]
+    },
+    {
+      "name": "blank-revocation-timestamp-is-not-revoked",
+      "key": "lifecycle-blank-revocation",
+      "isActive": 1,
+      "isBanned": 0,
+      "revokedAt": "  ",
+      "expiresAt": null,
+      "checks": [{ "nowMs": 10000, "expected": true }]
+    },
+    {
+      "name": "expiry-at-current-time-is-denied",
+      "key": "lifecycle-expiry-boundary",
+      "isActive": 1,
+      "isBanned": 0,
+      "revokedAt": null,
+      "expiresAt": "1970-01-01T00:00:10.000Z",
+      "checks": [{ "nowMs": 10000, "expected": false }]
+    },
+    {
+      "name": "expiry-one-millisecond-in-future-is-allowed",
+      "key": "lifecycle-future-expiry",
+      "isActive": 1,
+      "isBanned": 0,
+      "revokedAt": null,
+      "expiresAt": "1970-01-01T00:00:10.001Z",
+      "checks": [
+        { "nowMs": 10000, "expected": true },
+        { "nowMs": 10001, "expected": true },
+        { "nowMs": 70000, "expected": false }
+      ]
+    },
+    {
+      "name": "invalid-expiry-is-ignored-by-date-parse-gate",
+      "key": "lifecycle-invalid-expiry",
+      "isActive": 1,
+      "isBanned": 0,
+      "revokedAt": null,
+      "expiresAt": "not-a-date",
+      "checks": [{ "nowMs": 10000, "expected": true }]
+    }
   ]
 }

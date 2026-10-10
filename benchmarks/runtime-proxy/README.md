@@ -351,6 +351,13 @@ TTL expires and it rereads the revoked row. This is a deterministic storage-back
 not execution of the TypeScript validator and not proof of cross-process invalidation or Redis
 behavior. The real TypeScript validator is exercised separately by
 `tests/unit/api-key-validation-cache-vectors.test.ts`, which consumes the same shared cache vectors.
+That shared fixture also has `lifecycleCases` executed against the real TypeScript validator and
+the Rust SQLite probe. They cover inactive and banned rows, non-empty versus whitespace-only
+`revoked_at`, expiry exactly at `now`, expiry one millisecond ahead, and a positive cache entry
+that stays usable after its key expires until the cache's 60-second boundary. The Rust expiry parser
+supports only the canonical UTC timestamp forms used by these vectors; it does not reproduce the
+full JavaScript `Date.parse()` grammar. A malformed timestamp is treated as unparsed in the Rust
+probe, matching the TypeScript gate's behavior for `Date.parse()` returning a non-finite value.
 
 The TypeScript validator checks banned/active/revoked/expiry state; a revoke writes
 `revoked_at` and `is_active = 0` before clearing local caches, then attempts to delete the optional

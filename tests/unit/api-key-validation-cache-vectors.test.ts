@@ -34,6 +34,15 @@ type CacheVectorFixture = {
   schemaVersion: number;
   policy: { ttlMs: number; maxEntries: number; evictEntries: number };
   vectors: Array<{ name: string; actions: VectorAction[] }>;
+  lifecycleCases: Array<{
+    name: string;
+    key: string;
+    isActive: number;
+    isBanned: number;
+    revokedAt: string | null;
+    expiresAt: string | null;
+    checks: Array<{ nowMs: number; expected: boolean }>;
+  }>;
 };
 
 const fixturePath = fileURLToPath(
@@ -180,6 +189,33 @@ test("TypeScript local API-key cache follows the shared deterministic action vec
       for (const action of vector.actions) await runAction(action, ids, vector.name);
     } catch (error) {
       assert.fail(`${vector.name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  apiKeys.resetApiKeyState();
+  core.resetDbInstance();
+  fs.rmSync(testDataDir, { recursive: true, force: true });
+  fs.mkdirSync(testDataDir, { recursive: true });
+  core.getDbInstance();
+  await apiKeys.getApiKeys(); // Ensure lifecycle fallback columns exist before fixture SQL updates.
+
+  const ids = new Map<string, string>();
+  for (const lifecycleCase of fixture.lifecycleCases) {
+    insertFixtureKey(lifecycleCase.key, true, ids);
+    const result = dataDb()
+      .prepare(
+        "UPDATE api_keys SET is_active = ?, is_banned = ?, revoked_at = ?, expires_at = ? WHERE key = ?"
+      )
+      .run(
+        lifecycleCase.isActive,
+        lifecycleCase.isBanned,
+        lifecycleCase.revokedAt,
+        lifecycleCase.expiresAt,
+        lifecycleCase.key
+      );
+    assert.equal(result.changes, 1, `${lifecycleCase.name}: lifecycle row should be updated`);
+    for (const check of lifecycleCase.checks) {
+      await validateAt(lifecycleCase.key, check.nowMs, check.expected, lifecycleCase.name);
     }
   }
 });
