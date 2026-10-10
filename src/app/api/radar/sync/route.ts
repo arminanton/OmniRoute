@@ -12,7 +12,7 @@
 import { NextResponse } from "next/server";
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
-import { isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { syncRadar } from "@/lib/radar/sync";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 import { radarSyncBodyError, validateRadarSyncBody } from "../syncRequest";
@@ -33,12 +33,8 @@ export async function POST(request: Request) {
     });
   }
 
-  if (!(await isAuthenticated(request))) {
-    return NextResponse.json(buildErrorBody(401, "Unauthorized"), {
-      status: 401,
-      headers: CORS_HEADERS,
-    });
-  }
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
 
   const bodyError = radarSyncBodyError(await validateRadarSyncBody(request));
   if (bodyError) {

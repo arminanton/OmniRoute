@@ -12,7 +12,10 @@ process.env.JWT_SECRET = "test-jwt-secret-for-radar-local-state";
 process.env.INITIAL_PASSWORD = "test-bootstrap-password-for-radar-local-state";
 
 const core = await import("../../src/lib/db/core.ts");
+const accessTokens = await import("../../src/lib/db/accessTokens.ts");
+const settingsDb = await import("../../src/lib/db/settings.ts");
 const route = await import("../../src/app/api/radar/local-model-state/route.ts");
+const authzHeaders = await import("../../src/server/authz/headers.ts");
 
 async function authHeaders(): Promise<Record<string, string>> {
   const secret = new TextEncoder().encode(process.env.JWT_SECRET);
@@ -177,4 +180,63 @@ test("GET returns no-store local state for restore controls", async () => {
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.deepEqual(await response.json(), { states: [] });
+});
+
+test("Radar routes accept scoped management tokens and trusted local CLI identity", async () => {
+  process.env.RADAR_ENABLED = "true";
+
+  const read = accessTokens.createAccessToken({ name: "radar-read", scope: "read" });
+  const write = accessTokens.createAccessToken({ name: "radar-write", scope: "write" });
+  const admin = accessTokens.createAccessToken({ name: "radar-admin", scope: "admin" });
+
+  for (const token of [read, admin]) {
+    const response = await route.GET(
+      request("GET", undefined, { Authorization: `Bearer ${token.secret}` })
+    );
+    assert.equal(response.status, 200, `${token.record.scope} token should read Radar state`);
+  }
+
+  const patch = await route.PATCH(
+    request(
+      "PATCH",
+      { provider: "groq", modelId: "llama-3.3-70b-versatile", enabled: false },
+      { Authorization: `Bearer ${write.secret}` }
+    )
+  );
+  assert.equal(patch.status, 200, "write token should mutate Radar state");
+
+  const insufficient = await route.PATCH(
+    request(
+      "PATCH",
+      { provider: "groq", modelId: "another-model", enabled: false },
+      { Authorization: `Bearer ${read.secret}` }
+    )
+  );
+  assert.equal(insufficient.status, 403, "read token must not mutate Radar state");
+
+  const localCli = await route.GET(
+    request("GET", undefined, {
+      [authzHeaders.AUTHZ_HEADER_AUTH_KIND]: "management_key",
+      [authzHeaders.AUTHZ_HEADER_AUTH_LABEL]: "local-cli-token",
+    })
+  );
+  assert.equal(
+    localCli.status,
+    200,
+    "the trusted central local-CLI decision must survive the route check"
+  );
+});
+
+test("requireLogin=false continues to allow anonymous Radar requests", async () => {
+  process.env.RADAR_ENABLED = "true";
+  const initialPassword = process.env.INITIAL_PASSWORD;
+  delete process.env.INITIAL_PASSWORD;
+  try {
+    await settingsDb.updateSettings({ requireLogin: false });
+    const response = await route.GET(request("GET"));
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { states: [] });
+  } finally {
+    if (initialPassword !== undefined) process.env.INITIAL_PASSWORD = initialPassword;
+  }
 });

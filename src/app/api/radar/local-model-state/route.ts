@@ -7,13 +7,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { buildErrorBody, sanitizeErrorMessage } from "@omniroute/open-sse/utils/error";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import {
   clearRadarLocalModelOverride,
   listRadarLocalModelState,
   setRadarLocalModelOverride,
   setRadarModelTombstone,
 } from "@/lib/db/radar";
-import { isAuthenticated } from "@/shared/utils/apiAuth";
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import {
@@ -70,10 +70,9 @@ function error(status: number, message: string): NextResponse {
   return json(buildErrorBody(status, message), status);
 }
 
-async function authorize(request: Request): Promise<NextResponse | null> {
+async function authorize(request: Request): Promise<Response | null> {
   if (!isFeatureFlagEnabled("RADAR_ENABLED")) return error(404, "Not found");
-  if (!(await isAuthenticated(request))) return error(401, "Unauthorized");
-  return null;
+  return requireManagementAuth(request);
 }
 
 const RADAR_LOCAL_STATE_BODY_LIMIT_BYTES = 4 * 1024;

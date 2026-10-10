@@ -8,7 +8,7 @@ import { syncRadarIntel } from "@/lib/radar/intelSync";
 import { syncRadarOffers } from "@/lib/radar/offersSync";
 import { syncRadarReferrals } from "@/lib/radar/referralsSync";
 import { syncRadar } from "@/lib/radar/sync";
-import { isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { radarSyncBodyError, validateRadarSyncBody } from "../syncRequest";
@@ -27,12 +27,8 @@ export async function POST(request: Request) {
       headers: CORS_HEADERS,
     });
   }
-  if (!(await isAuthenticated(request))) {
-    return NextResponse.json(buildErrorBody(401, "Unauthorized"), {
-      status: 401,
-      headers: CORS_HEADERS,
-    });
-  }
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
   const bodyError = radarSyncBodyError(await validateRadarSyncBody(request));
   if (bodyError) {
     return NextResponse.json(buildErrorBody(bodyError.status, bodyError.message), {

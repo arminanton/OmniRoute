@@ -13,7 +13,7 @@
 import { NextResponse } from "next/server";
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
-import { isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getRadarCatalog } from "@/lib/radar";
 import { buildErrorBody } from "@omniroute/open-sse/utils/error";
 
@@ -33,12 +33,8 @@ export async function GET(request: Request) {
     });
   }
 
-  if (!(await isAuthenticated(request))) {
-    return NextResponse.json(buildErrorBody(401, "Unauthorized"), {
-      status: 401,
-      headers: CORS_HEADERS,
-    });
-  }
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
 
   try {
     const result = getRadarCatalog();

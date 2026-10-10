@@ -27,7 +27,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
-import { isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { setRadarOptIn, setRadarKey, getRadarSettings } from "@/lib/db/radar";
 import { getContributorClaimUrl, getSupporterPlansUrl } from "@/lib/radar/links";
 import { SUPPORTER_KEY_REGEX } from "@/lib/radar/supporterKey";
@@ -68,12 +68,8 @@ export async function GET(request: Request) {
     });
   }
 
-  if (!(await isAuthenticated(request))) {
-    return NextResponse.json(buildErrorBody(401, "Unauthorized"), {
-      status: 401,
-      headers: CORS_HEADERS,
-    });
-  }
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
 
   try {
     const settings = getRadarSettings();
@@ -105,12 +101,8 @@ export async function POST(request: Request) {
     });
   }
 
-  if (!(await isAuthenticated(request))) {
-    return NextResponse.json(buildErrorBody(401, "Unauthorized"), {
-      status: 401,
-      headers: CORS_HEADERS,
-    });
-  }
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
 
   let body: unknown;
   try {

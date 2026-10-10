@@ -30,7 +30,7 @@
 import { NextResponse } from "next/server";
 import { CORS_HEADERS, handleCorsOptions } from "@/shared/utils/cors";
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
-import { isAuthenticated } from "@/shared/utils/apiAuth";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 import { getRadarReferrals } from "@/lib/radar";
 import { getRadarReferralsCache } from "@/lib/db/radar";
 import { syncRadarReferrals, shouldSyncReferralsOnRead } from "@/lib/radar/referralsSync";
@@ -46,18 +46,14 @@ export async function OPTIONS() {
 export async function GET(request: Request) {
   // Flag gate — surface doesn't exist when disabled. MUST run before auth.
   if (!isFeatureFlagEnabled("RADAR_ENABLED")) {
-    return NextResponse.json(
-      buildErrorBody(404, "Not found"),
-      { status: 404, headers: CORS_HEADERS },
-    );
+    return NextResponse.json(buildErrorBody(404, "Not found"), {
+      status: 404,
+      headers: CORS_HEADERS,
+    });
   }
 
-  if (!(await isAuthenticated(request))) {
-    return NextResponse.json(
-      buildErrorBody(401, "Unauthorized"),
-      { status: 401, headers: CORS_HEADERS },
-    );
-  }
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
 
   try {
     // Sync-on-read: refresh the cache inline when it is stale or missing.
@@ -74,13 +70,13 @@ export async function GET(request: Request) {
     const cache = getRadarReferralsCache();
     return NextResponse.json(
       { fixed, campaigns, tier: cache?.tier ?? null },
-      { headers: { ...CORS_HEADERS, "Cache-Control": "no-store" } },
+      { headers: { ...CORS_HEADERS, "Cache-Control": "no-store" } }
     );
   } catch (err: unknown) {
     const { sanitizeErrorMessage } = await import("@omniroute/open-sse/utils/error");
     return NextResponse.json(
       buildErrorBody(500, sanitizeErrorMessage(err) || "Failed to load Radar referrals"),
-      { status: 500, headers: CORS_HEADERS },
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 }
