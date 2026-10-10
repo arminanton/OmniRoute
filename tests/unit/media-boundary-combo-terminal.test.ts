@@ -215,7 +215,7 @@ test("local result provenance survives duplicate module detection, not JSON or p
   );
 });
 
-test("direct video route propagates caller abort to Adobe before upload or generation", async (t) => {
+test("direct video route rejects a pre-aborted caller before provider dispatch", async (t) => {
   const wire = installPinnedTransport(t.mock);
   t.after(wire.restore);
   const controller = new AbortController();
@@ -232,8 +232,11 @@ test("direct video route propagates caller abort to Adobe before upload or gener
   });
   const response = await videoRoute.POST(request);
   assert.equal(response.status, 499);
-  assert.equal(state.dispatched.length, 1);
-  assert.equal(state.dispatched[0].signal, request.signal);
+  assert.equal(
+    state.dispatched.length,
+    0,
+    "a pre-aborted request must not reach the provider handler"
+  );
   assert.equal(paid, 0);
   assert.equal(wire.dials.length, 0);
 });
@@ -379,4 +382,33 @@ test("ComfyUI image caller abort waits for accepted job completion, then stops c
     "http://localhost:8188/history/job-accepted",
   ]);
   assert.equal(paid, 2, "accepted remote work is polled, but no artifact or fallback is requested");
+});
+
+test("accepted video task failures marked terminal do not dispatch the next combo model", async () => {
+  const name = "accepted-video-task-terminal";
+  await createCombo({
+    name,
+    strategy: "priority",
+    models: ["xai/grok-imagine-video", "comfyui/animatediff"],
+  });
+  state.override = {
+    success: false,
+    status: 504,
+    terminal: true,
+    error: "accepted video task poll timed out",
+  };
+
+  const response = await executeVideoCombo(
+    name,
+    { model: name, prompt: "test" },
+    { request: new Request("http://localhost/v1/videos/generations"), policy: {} },
+    Date.now(),
+    logger
+  );
+
+  assert.equal(response.status, 504);
+  assert.equal(state.dispatched.length, 1, "must not create a second paid video task");
+  assert.equal(state.selected.length, 1, "must not select another provider account");
+  assert.equal((state.results[0] as { terminal?: boolean }).terminal, true);
+  assert.equal(paid, 0);
 });
