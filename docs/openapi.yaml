@@ -7190,24 +7190,36 @@ paths:
       tags: [CLI Remote Mode]
       summary: Exchange the management password for a scoped CLI access token
       description: >
-        Remote-mode bootstrap. Public (password-gated) route: verifies the
-        management password with brute-force lockout, then mints an `oma_`
-        access token. The plaintext token is returned once.
+        Remote-mode bootstrap. This is an explicitly public route with its own
+        password-body authentication: it verifies the management password with
+        brute-force lockout, then mints an `oma_live_` access token. The
+        plaintext token is returned once. The successful response is marked
+        no-store to prevent caching the credential.
+      security: []
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
               type: object
               required: [password]
               properties:
-                password: { type: string }
-                name: { type: string }
-                scope: { type: string, enum: [read, write, admin] }
+                password: { type: string, minLength: 1, x-sensitive: true }
+                name: { type: string, maxLength: 100 }
+                scope: { type: string, enum: [read, write, admin], default: admin }
                 expiresInDays: { type: integer, minimum: 1, maximum: 3650 }
       responses:
         "200":
           description: Token minted (token returned once)
+          x-sensitive: true
+          headers:
+            Cache-Control:
+              description: Prevents caching the one-time plaintext access token.
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliRemoteConnectResponse" }
         "401":
           description: Invalid password
         "429":
@@ -7218,11 +7230,29 @@ paths:
       operationId: getApiCliWhoami
       tags: [CLI Remote Mode]
       summary: Report the current credential (scope, name, expiry)
+      description: >-
+        Requires a management credential while authentication is enabled or locked. The route
+        accepts scoped Access Tokens, management-scoped API keys, dashboard sessions, and trusted
+        loopback CLI/internal-service credentials. An unlocked deployment with `requireLogin=false`
+        may permit anonymous access; first-run loopback setup behavior may also apply. This route
+        is not in the explicit public allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Authenticated; access-token details when applicable
         "401":
-          description: Authentication required
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/cli/tokens:
     get:
@@ -15144,7 +15174,18 @@ paths:
         Returns the full 42-entry Agent Skills catalog with optional filtering.
         Skills describe how to use OmniRoute's REST API and CLI — they are structured
         SKILL.md documentation files discoverable by external agents, MCP clients, and
-        A2A orchestrators. No authentication required.
+        A2A orchestrators. This route is centrally classified as MANAGEMENT and is not in the
+        explicit public API allowlist: a management credential is required when login is enabled.
+        An unlocked installation with `requireLogin=false` may permit anonymous access; first-run
+        loopback setup behavior may also apply.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: category
           in: query
@@ -15178,8 +15219,14 @@ paths:
                     $ref: "#/components/schemas/SkillCoverage"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
           $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/agent-skills/{id}:
     get:
@@ -15188,7 +15235,18 @@ paths:
       summary: Get a single agent skill
       description: |
         Returns metadata for a single agent skill by its canonical ID
-        (e.g. `omni-providers`, `cli-serve`). No authentication required.
+        (e.g. `omni-providers`, `cli-serve`). This route is centrally classified as MANAGEMENT
+        and is not in the explicit public API allowlist: a management credential is required when
+        login is enabled. An unlocked installation with `requireLogin=false` may permit anonymous
+        access; first-run loopback setup behavior may also apply.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -15211,6 +15269,12 @@ paths:
           $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/agent-skills/{id}/raw:
     get:
@@ -15220,7 +15284,18 @@ paths:
       description: |
         Returns the SKILL.md content for a skill as `text/markdown`.
         Resolution order: local filesystem `skills/{id}/SKILL.md` → GitHub raw URL (1-hour cache).
-        No authentication required.
+        This route is centrally classified as MANAGEMENT and is not in the explicit public API
+        allowlist: a management credential is required when login is enabled. An unlocked
+        installation with `requireLogin=false` may permit anonymous access; first-run loopback
+        setup behavior may also apply.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: id
           in: path
@@ -15264,6 +15339,12 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
         "500":
           $ref: "#/components/responses/InternalError"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/agent-skills/coverage:
     get:
@@ -15272,7 +15353,18 @@ paths:
       summary: Get SKILL.md coverage stats
       description: |
         Returns how many of the 22 API skills and 20 CLI skills have SKILL.md
-        files on the local filesystem vs the catalog totals. No authentication required.
+        files on the local filesystem vs the catalog totals. This route is centrally classified
+        as MANAGEMENT and is not in the explicit public API allowlist: a management credential is
+        required when login is enabled. An unlocked installation with `requireLogin=false` may
+        permit anonymous access; first-run loopback setup behavior may also apply.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Coverage stats
@@ -15282,6 +15374,12 @@ paths:
                 $ref: "#/components/schemas/SkillCoverage"
         "500":
           $ref: "#/components/responses/InternalError"
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/agent-skills/generate:
     post:
@@ -16139,9 +16237,29 @@ paths:
       tags:
         - A2a
       summary: "GET a2a › status"
+      description: >-
+        Returns the A2A enablement state, in-memory task counts, and the public agent-card summary
+        when A2A is enabled. The route is centrally classified as MANAGEMENT, not explicitly
+        public: a management credential is required when login is enabled. An unlocked
+        installation with `requireLogin=false` may permit anonymous access; first-run loopback
+        setup behavior may also apply.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: A2A status and task counts
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/a2a/tasks:
     get:
       operationId: getApiA2aTasks
@@ -16363,28 +16481,74 @@ paths:
       tags:
         - Acp
       summary: "DELETE acp › agents"
+      description: >-
+        Removes a configured custom agent by its `id` query parameter. When authentication is
+        required, this legacy handler accepts a dashboard session or a management API key with
+        `manage` or `admin` scope; it does not accept `oma_live_` Access Tokens. An unlocked
+        installation with `requireLogin=false` may permit anonymous access. Independently, this
+        route is `LOCAL_ONLY`: it is reachable only from loopback or a trusted private-LAN peer;
+        management credentials do not bypass that peer boundary.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Custom agent removed and detected-agent list returned.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
     get:
       operationId: getApiAcpAgents
       tags:
         - Acp
       summary: "GET acp › agents"
+      description: >-
+        Detects installed ACP agents and returns their availability. When authentication is
+        required, this legacy handler accepts a dashboard session or a management API key with
+        `manage` or `admin` scope; it does not accept `oma_live_` Access Tokens. An unlocked
+        installation with `requireLogin=false` may permit anonymous access. Independently, this
+        route is `LOCAL_ONLY`: it is reachable only from loopback or a trusted private-LAN peer;
+        management credentials do not bypass that peer boundary.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Installed agents and availability summary.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
     post:
       operationId: postApiAcpAgents
       tags:
         - Acp
       summary: "POST acp › agents"
+      description: >-
+        Refreshes the local agent registry or adds a custom agent definition. When authentication
+        is required, this legacy handler accepts a dashboard session or a management API key with
+        `manage` or `admin` scope; it does not accept `oma_live_` Access Tokens. An unlocked
+        installation with `requireLogin=false` may permit anonymous access. Independently, this
+        route is `LOCAL_ONLY`: it is reachable only from loopback or a trusted private-LAN peer;
+        management credentials do not bypass that peer boundary. Adding or refreshing agents can
+        probe locally installed binaries.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementSessionAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Refreshed registry or newly added custom agent and detected-agent list.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/LocalOnlyAccessDenied"
   /api/admin/concurrency:
     get:
       operationId: getApiAdminConcurrency
@@ -16477,34 +16641,93 @@ paths:
       tags:
         - Analytics
       summary: "GET analytics › diversity"
+      description: >-
+        Returns an in-memory provider-diversity summary. This route is centrally classified as
+        MANAGEMENT, not explicitly public: a management credential is required when login is
+        enabled. An unlocked installation with `requireLogin=false` may permit anonymous access;
+        first-run loopback setup behavior may also apply.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: In-memory provider-diversity summary.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProviderDiversityReportResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
         "500":
           description: Diversity report could not be read; the serialized error property may be omitted when no message is available.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProviderDiversityErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/assess:
     get:
       operationId: getApiAssess
       tags:
         - Assess
       summary: "GET assess"
+      description: >-
+        Returns assessment results, combo-health placeholder state, or currently working models.
+        This route is centrally classified as MANAGEMENT, not explicitly public: a management
+        credential is required when login is enabled. An unlocked installation with
+        `requireLogin=false` may permit anonymous access; first-run loopback setup behavior may
+        also apply.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiAssess
       tags:
         - Assess
       summary: "POST assess"
+      description: >-
+        Runs model assessments for the requested scope and returns the run summary. This route is
+        centrally classified as MANAGEMENT, not explicitly public: a management credential is
+        required when login is enabled. An unlocked installation with `requireLogin=false` may
+        permit anonymous access; first-run loopback setup behavior may also apply. Assessment
+        execution can make outbound requests to configured model providers.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: OK
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/auth/csrf:
     get:
       operationId: getApiAuthCsrf
@@ -40176,6 +40399,21 @@ components:
         scope: { type: string, enum: [read, write, admin] }
         tokenPrefix: { type: string, description: Non-secret display prefix. }
         createdAt: { type: string, format: date-time }
+        expiresAt: { type: [string, "null"], format: date-time }
+      additionalProperties: false
+    CliRemoteConnectResponse:
+      type: object
+      x-sensitive: true
+      required: [success, token, id, name, scope, expiresAt]
+      properties:
+        success: { type: boolean, const: true }
+        token:
+          type: string
+          x-sensitive: true
+          description: Plaintext oma_live_ credential returned only by this successful connect response.
+        id: { type: string }
+        name: { type: string }
+        scope: { type: string, enum: [read, write, admin] }
         expiresAt: { type: [string, "null"], format: date-time }
       additionalProperties: false
     CliAccessTokenRevokedResponse:
