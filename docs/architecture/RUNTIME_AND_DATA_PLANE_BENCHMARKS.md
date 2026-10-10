@@ -40,9 +40,9 @@ two are bodyless `HEAD` probes with a `200` response. The 30 without `2xx` inclu
 one WebSocket upgrade, ten catch-all not-found operations, six bodyless `HEAD` catch-alls/artifact
 probes, and five error-only operations. This differs from the earlier 600/387 counts because those
 were an outdated snapshot and counted the two `HEAD` probes in the non-`204` denominator. The
-inventory also finds 827 operations with effective operation-level security declarations (812
-nonempty, 15 explicitly public), 202 with no effective declaration, and 299 operations whose
-text signals conditional auth; all 299 now have a security declaration. The A2A persisted-history
+inventory also finds 842 operations with effective operation-level security declarations (827
+nonempty, 15 explicitly public), 187 with no effective declaration, and 314 operations whose
+text signals conditional auth; all 314 now have a security declaration. The A2A persisted-history
 route lists the accepted API-key/management alternatives and scopes its anonymous alternative to
 the unlocked local-first configuration. The login/setup status GET explicitly declares public
 access for the unauthenticated setup screen. These counts measure OpenAPI declarations, not runtime

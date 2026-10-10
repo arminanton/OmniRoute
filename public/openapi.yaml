@@ -12894,28 +12894,96 @@ paths:
       operationId: getApiEvals
       tags: [System]
       summary: List eval suites
+      description: >-
+        Returns evaluation suites, recent runs, scorecards, target options, and API-key IDs/names
+        (never raw API-key values). This route uses `requireManagementAuth()` and is centrally
+        classified as MANAGEMENT. A management credential is required when login is enabled; an
+        unlocked `requireLogin=false` installation or first-run loopback setup may permit anonymous
+        access. Treat the result as sensitive operational data.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: Eval suite list
+          description: Suites, recent runs, scorecards, targets, and API-key display metadata.
+          x-sensitive: true
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiEvals
       tags: [System]
       summary: Run evaluation
+      description: >-
+        Runs a stored evaluation suite against supplied outputs or one or more configured targets.
+        Target runs may call external model providers and incur their normal usage costs. This route
+        uses `requireManagementAuth()` and is centrally classified as MANAGEMENT. A management
+        credential is required when login is enabled; an unlocked `requireLogin=false` installation
+        or first-run loopback setup may permit anonymous evaluation runs.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema:
               type: object
       responses:
         "200":
-          description: Eval results
+          description: Evaluation results, target outputs, and scorecards.
+          x-sensitive: true
+        "400":
+          description: Invalid JSON body or evaluation request failed validation.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/evals/{suiteId}:
     get:
       operationId: getApiEvalsBySuiteId
       tags: [System]
       summary: Get eval suite details
+      description: >-
+        Returns the selected evaluation suite, including its configured prompts and scoring
+        criteria. This route uses `requireManagementAuth()` and is centrally classified as
+        MANAGEMENT. A management credential is required when login is enabled; an unlocked
+        `requireLogin=false` installation or first-run loopback setup may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: suiteId
           in: path
@@ -12924,7 +12992,21 @@ paths:
             type: string
       responses:
         "200":
-          description: Eval suite details
+          description: Evaluation suite definition and scoring criteria.
+          x-sensitive: true
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Evaluation suite not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
 
   /api/policies:
     get:
@@ -19201,9 +19283,35 @@ paths:
       tags:
         - Context
       summary: "GET context › analytics › engine"
+      description: >-
+        Returns per-engine compression analytics. This route uses `requireManagementAuth()` and is
+        centrally classified as MANAGEMENT, not explicitly public. A management credential is
+        required when login is enabled; an unlocked `requireLogin=false` installation or first-run
+        loopback setup may permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Per-engine compression analytics for the requested time range.
+        "400":
+          description: The required engineId query parameter is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/context/caveman/config:
     get:
       operationId: getApiContextCavemanConfig
@@ -20288,10 +20396,42 @@ paths:
       tags:
         - Discovery
       summary: "DELETE discovery › results › <id>"
+      description: >-
+        Deletes one persisted provider-discovery finding. This route is LOCAL_ONLY: only loopback
+        and trusted private-LAN peers reach management authentication. Public/unknown peers are
+        rejected before login policy, and this prefix does not allow a remote manage-scope bypass.
+        On an admitted peer, `requireLogin=false` or first-run loopback setup may permit anonymous
+        local access. It is not in the explicit public allowlist.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Discovery finding deleted.
+        "400":
+          description: Discovery result id is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementOrRuntimePolicyForbidden"
+        "404":
+          description: Discovery result not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiDiscoveryResultsById
       tags:
@@ -20438,18 +20578,63 @@ paths:
       tags:
         - Docs
       summary: "GET docs"
+      description: >-
+        Serves the Redoc API-reference shell. Although the route source labels this surface PUBLIC,
+        `/api/docs` is not in the explicit public API allowlist and the central classifier assigns
+        it to MANAGEMENT. A management credential is required when login is enabled; an unlocked
+        `requireLogin=false` installation or first-run loopback setup may permit anonymous access.
+        The handler's public cache header applies to this static documentation content.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Redoc HTML shell pointing at the public OpenAPI YAML asset.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/docs/codex-cli:
     get:
       operationId: getApiDocsCodexCli
       tags:
         - Docs
       summary: "GET docs › codex cli"
+      description: >-
+        Returns the Codex CLI configuration guide from the repository docs. The handler has no
+        route-local auth, but this path is not in the explicit public allowlist and the central
+        classifier assigns it to MANAGEMENT. A management credential is required when login is
+        enabled; an unlocked `requireLogin=false` installation or first-run loopback setup may
+        permit anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Guide content as a JSON string.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "404":
+          description: Codex CLI guide file not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/evals/suites:
     post:
       operationId: postApiEvalsSuites
@@ -20725,6 +20910,19 @@ paths:
       tags:
         - Free models
       summary: "GET free models"
+      description: >-
+        Lists the curated free-model quota catalog for plugin enrichment. The handler uses
+        `requireManagementAuth()`; this path is centrally classified as MANAGEMENT, not explicitly
+        public. An unlocked `requireLogin=false` installation or first-run loopback setup may permit
+        anonymous access.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Curated free-model quota catalog
@@ -20740,15 +20938,32 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/free-provider-rankings:
     get:
       operationId: getApiFreeProviderRankings
       tags:
         - Free provider rankings
       summary: "GET free provider rankings"
+      description: >-
+        Returns provider rankings and optional configured/available or usage annotations. The
+        handler has no route-local auth, but this path is centrally classified as MANAGEMENT and
+        is not in the explicit public allowlist. A management credential is required when login
+        is enabled; an unlocked `requireLogin=false` installation or first-run loopback setup may
+        permit anonymous access. `withUsage=true` includes aggregate usage data.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Free-provider rankings, optionally filtered and annotated with connection or usage data.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/FreeProviderRankingsResponse" }
@@ -20757,42 +20972,142 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/FreeProviderRankingsQueryErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/free-tier/summary:
     get:
       operationId: getApiFreeTierSummary
       tags:
         - Free tier
       summary: "GET free tier › summary"
+      description: >-
+        Returns the curated free-model budget summary, current-month usage, and no-credential
+        provider list. Despite its public-feed comment and permissive CORS header, this path is not
+        in the explicit public allowlist and the central classifier assigns it to MANAGEMENT. A
+        management credential is required when login is enabled; an unlocked `requireLogin=false`
+        installation or first-run loopback setup may permit anonymous access. The handler also calls
+        `isAuthenticated()` before serving a fresh `live` Radar overlay; because that helper returns
+        true when auth is disabled, the paid overlay may be returned anonymously in that mode.
+        Treat the full response as sensitive until that policy mismatch is resolved.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Free-model budgets, usage totals, provider coverage, and optional fresh feed overlay.
+          x-sensitive: true
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/gamification/anomalies:
     get:
       operationId: getApiGamificationAnomalies
       tags:
         - Gamification
       summary: "GET gamification › anomalies"
+      description: >-
+        Lists anti-cheat anomalies for management review. This route uses
+        `requireManagementAuth()` and is centrally classified as MANAGEMENT; an unlocked
+        `requireLogin=false` installation or first-run loopback setup may permit anonymous access.
+        Anomaly and abuse-detection details are sensitive operational data.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Anti-cheat anomalies.
+          x-sensitive: true
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/gamification/badges:
     get:
       operationId: getApiGamificationBadges
       tags:
         - Gamification
       summary: "GET gamification › badges"
+      description: >-
+        Returns the built-in badge definitions and seeds missing built-ins idempotently. This
+        route uses `requireManagementAuth()` and is centrally classified as MANAGEMENT; an unlocked
+        `requireLogin=false` installation or first-run loopback setup may permit anonymous access.
+        The handler comment calls this LOCAL_ONLY, but no gamification LOCAL_ONLY path is present in
+        the central route guard; this operation is not currently restricted by peer locality.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
-          description: OK
+          description: Badge definitions; built-in rows may have been seeded idempotently.
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/gamification/badges/earned:
     get:
       operationId: getApiGamificationBadgesEarned
       tags:
         - Gamification
       summary: "GET gamification › badges › earned"
+      description: >-
+        Returns earned badges for `apiKeyId`, or the operator-wide set across all API keys when
+        the parameter is omitted. This route uses `requireManagementAuth()` and is centrally
+        classified as MANAGEMENT; an unlocked `requireLogin=false` installation or first-run
+        loopback setup may permit anonymous access. Operator-wide per-key activity is sensitive.
+        The handler's LOCAL_ONLY comment is not enforced by a gamification routeGuard entry.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      parameters:
+        - name: apiKeyId
+          in: query
+          required: false
+          description: API key identifier; treat as sensitive account metadata.
+          x-sensitive: true
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Earned badges for one API key or the operator-wide set.
+          x-sensitive: true
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          $ref: "#/components/responses/ManagementInvalidToken"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/gamification/federation/leaderboard:
     get:
       operationId: getApiGamificationFederationLeaderboard
@@ -20802,7 +21117,47 @@ paths:
       description: >-
         Returns federation-safe leaderboard rows containing only API key IDs and scores; display
         names and key material are not included. `scope` defaults to `global` and `limit` defaults
-        to 100, with the handler accepting limits from 1 through 200.
+        to 100, with the handler accepting limits from 1 through 200. The handler requires a
+        connected-federation Bearer token. Central classification is also MANAGEMENT: when
+        `requireLogin=false` is unlocked, that federation token alone reaches the handler; when
+        management auth is enabled, central auth additionally requires a dashboard session or
+        management key in a separate cookie/API-key header, or a loopback-only CLI/internal-service
+        token. A management Bearer token cannot share `Authorization` with the federation token, so
+        it cannot satisfy both layers by itself.
+        This route is not LOCAL_ONLY.
+      security:
+        - GamificationFederationBearerAuth: []
+        - GamificationFederationBearerAuth: []
+          ManagementSessionAuth: []
+        - GamificationFederationBearerAuth: []
+          ManagementGoogleApiKeyAuth: []
+        - GamificationFederationBearerAuth: []
+          ManagementAnthropicApiKeyAuth: []
+        - GamificationFederationBearerAuth: []
+          LocalCliTokenAuth: []
+        - GamificationFederationBearerAuth: []
+          InternalServiceTokenAuth: []
+      x-authentication-branches:
+        - when: Management authentication is disabled or unlocked
+          security:
+            - GamificationFederationBearerAuth: []
+        - when: Management authentication is required
+          security:
+            - GamificationFederationBearerAuth: []
+              ManagementSessionAuth: []
+            - GamificationFederationBearerAuth: []
+              ManagementGoogleApiKeyAuth: []
+            - GamificationFederationBearerAuth: []
+              ManagementAnthropicApiKeyAuth: []
+            - GamificationFederationBearerAuth: []
+              LocalCliTokenAuth: []
+            - GamificationFederationBearerAuth: []
+              InternalServiceTokenAuth: []
+          note: >-
+            The federation token occupies Authorization: Bearer; a management Bearer token cannot
+            also be supplied there. Locked remote callers need the dashboard cookie or a separate
+            management API-key header. Trusted loopback callers may instead use the CLI or internal
+            service token, subject to those credentials' locality checks.
       parameters:
         - name: scope
           in: query
@@ -20816,9 +21171,33 @@ paths:
       responses:
         "200":
           description: Federation leaderboard rows without display names.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/GamificationFederationLeaderboardResponse" }
+        "400":
+          description: The limit must be an integer from 1 through 200.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Federation or central management authentication is missing.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          description: Federation token or central management credential is invalid.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/gamification/federation/score:
     post:
       operationId: postApiGamificationFederationScore
@@ -20827,18 +21206,84 @@ paths:
       summary: "POST gamification › federation › score"
       description: >-
         Accepts a score update authenticated by a connected federation server's Bearer token.
-        The request scope defaults to `global`.
+        The request scope defaults to `global`. Central classification is also MANAGEMENT: when
+        `requireLogin=false` is unlocked, the federation token alone reaches the handler; when
+        management auth is enabled, central auth additionally requires a dashboard session or
+        management key in a separate cookie/API-key header, or a loopback-only CLI/internal-service
+        token. A management Bearer token cannot share `Authorization` with the federation token, so
+        it cannot satisfy both layers by itself.
+        This route is not LOCAL_ONLY.
+      security:
+        - GamificationFederationBearerAuth: []
+        - GamificationFederationBearerAuth: []
+          ManagementSessionAuth: []
+        - GamificationFederationBearerAuth: []
+          ManagementGoogleApiKeyAuth: []
+        - GamificationFederationBearerAuth: []
+          ManagementAnthropicApiKeyAuth: []
+        - GamificationFederationBearerAuth: []
+          LocalCliTokenAuth: []
+        - GamificationFederationBearerAuth: []
+          InternalServiceTokenAuth: []
+      x-authentication-branches:
+        - when: Management authentication is disabled or unlocked
+          security:
+            - GamificationFederationBearerAuth: []
+        - when: Management authentication is required
+          security:
+            - GamificationFederationBearerAuth: []
+              ManagementSessionAuth: []
+            - GamificationFederationBearerAuth: []
+              ManagementGoogleApiKeyAuth: []
+            - GamificationFederationBearerAuth: []
+              ManagementAnthropicApiKeyAuth: []
+            - GamificationFederationBearerAuth: []
+              LocalCliTokenAuth: []
+            - GamificationFederationBearerAuth: []
+              InternalServiceTokenAuth: []
+          note: >-
+            The federation token occupies Authorization: Bearer; a management Bearer token cannot
+            also be supplied there. Locked remote callers need the dashboard cookie or a separate
+            management API-key header. Trusted loopback callers may instead use the CLI or internal
+            service token, subject to those credentials' locality checks.
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/GamificationFederationScoreRequest" }
       responses:
         "200":
           description: Score update accepted.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SuccessResponse" }
+        "400":
+          description: Invalid JSON body or score update request.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "401":
+          description: Federation or central management authentication is missing.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403":
+          description: Federation token or central management credential is invalid.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/gamification/invite:
     delete:
       operationId: deleteApiGamificationInvite
@@ -38614,6 +39059,15 @@ paths:
 
 components:
   securitySchemes:
+    GamificationFederationBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: connected federation token
+      description: >-
+        Opaque credential issued to a connected federation server and validated against the
+        stored token hash by the federation leaderboard/score handlers. This is distinct from
+        OmniRoute management or inference API keys and does not satisfy the central management
+        gate when that gate is enabled.
     BearerAuth:
       type: http
       scheme: bearer
@@ -61428,7 +61882,10 @@ components:
       description: Federation projection intentionally omits display names and API key credential material.
       required: [apiKeyId, score]
       properties:
-        apiKeyId: { type: string }
+        apiKeyId:
+          type: string
+          x-sensitive: true
+          description: API key identifier; treat as sensitive account metadata.
         score: { type: number }
       additionalProperties: false
 
@@ -61444,8 +61901,15 @@ components:
     GamificationFederationScoreRequest:
       type: object
       required: [apiKeyId, score]
+      x-sensitive: true
+      description: >-
+        Federation score update containing an API key identifier; treat the request as sensitive
+        account metadata.
       properties:
-        apiKeyId: { type: string }
+        apiKeyId:
+          type: string
+          x-sensitive: true
+          description: API key identifier; treat as sensitive account metadata.
         score: { type: number }
         scope: { type: string, enum: [global, weekly, monthly], default: global }
       additionalProperties: true
