@@ -120,7 +120,7 @@ test("primary inference operations describe their JSON and streaming wire format
   );
   assert.equal(
     successContent(operation("/api/v1/images/upscale", "get"), "application/json").schema.$ref,
-    "#/components/schemas/ModelListResponse"
+    "#/components/schemas/ImageUpscaleModelListResponse"
   );
   assert.equal(
     successContent(operation("/api/v1/classify", "post"), "application/json").schema.$ref,
@@ -148,6 +148,17 @@ test("primary inference operations describe their JSON and streaming wire format
     successContent(operation("/api/v1/ws", "get"), "application/json").schema.$ref,
     "#/components/schemas/WebSocketHandshakeResponse"
   );
+});
+
+test("Jina classify and audio translation document caller-cancellation responses", () => {
+  for (const route of ["/api/v1/classify", "/api/v1/audio/translations"]) {
+    const cancelled = operation(route, "post").responses?.["499"];
+    assert.ok(cancelled, `${route} must document its source-level abort response`);
+    assert.equal(
+      cancelled.content?.["application/json"]?.schema?.$ref,
+      "#/components/schemas/ApiErrorResponse"
+    );
+  }
 });
 
 test("Gemini-compatible model discovery and generation describe the native wire shape", () => {
@@ -189,7 +200,6 @@ test("client inference auth reflects key, session, and configured anonymous acce
     ["/api/v1/providers/{provider}/chat/completions", "post"],
     ["/api/v1/messages", "post"],
     ["/api/v1/responses", "post"],
-    ["/api/v1/embeddings", "post"],
     ["/api/v1/images/generations", "post"],
     ["/api/v1/audio/speech", "post"],
     ["/api/v1/audio/transcriptions", "post"],
@@ -218,6 +228,20 @@ test("client inference auth reflects key, session, and configured anonymous acce
       );
     }
   }
+
+  const embeddingSecurity = operation("/api/v1/embeddings", "post").security ?? [];
+  for (const scheme of ["BearerAuth", "ClientApiKeyAuth", "GoogleApiKeyAuth"]) {
+    assert.ok(
+      embeddingSecurity.some((requirement) => scheme in requirement),
+      `embedding inference: ${scheme}`
+    );
+  }
+  assert.ok(embeddingSecurity.some((requirement) => Object.keys(requirement).length === 0));
+  assert.equal(
+    embeddingSecurity.some((requirement) => "ManagementSessionAuth" in requirement),
+    false,
+    "embedding inference uses client keys and does not accept a dashboard session"
+  );
 });
 
 test("chat routes document local pressure errors, retry timing, and correlation", () => {
