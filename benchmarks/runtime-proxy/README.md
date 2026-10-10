@@ -321,6 +321,16 @@ cargo test --offline --manifest-path benchmarks/runtime-proxy/Cargo.toml --lib p
 `src/api_key_validation_cache.rs` models only the process-local positive validation cache from
 `src/lib/db/apiKeys.ts`: successful validations are reused for a strict 60-second window, denied
 keys are not cached, and a successful key mutation clears the local validation/metadata caches.
+Both the Rust model test and the TypeScript test of the real validator consume the same deterministic
+action vectors in `fixtures/api-key-validation-cache-v1.json`. The vectors cover a denied result
+followed by an allowed result, the exact 60-second expiry boundary, invalidation after a local key
+write and revoke, and insertion-order eviction after the cache exceeds 1,000 entries. Test-only
+direct SQLite state changes intentionally bypass cache invalidation so positive hits, negative
+non-insertion, and eviction order are externally observable without exposing production cache
+internals. The eviction vector touches the oldest key before the trigger insert, then changes
+authoritative state for the first 201 keys: the first 200 must be revalidated, while key 200 must
+still hit its cached positive. This confirms that a read hit does not refresh insertion order.
+
 The TypeScript validator checks banned/active/revoked/expiry state; a revoke writes
 `revoked_at` and `is_active = 0` before clearing local caches, then attempts to delete the optional
 Redis auth entry. Redis stores auth snapshots for up to one hour, and Redis read/write/delete
@@ -352,9 +362,17 @@ Focused tests reuse the cached build tree:
 
 ```bash
 . "$HOME/.cargo/env"
-CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target cargo test --offline \
-  --manifest-path benchmarks/runtime-proxy/Cargo.toml --lib api_key_validation_cache::tests
+systemd-run --user --scope --property=CPUQuota=100% --property=MemoryMax=2G \
+  env CARGO_BUILD_JOBS=1 CARGO_TARGET_DIR=/tmp/omni-runtime-proxy-target cargo test --offline \
+    --manifest-path benchmarks/runtime-proxy/Cargo.toml --lib api_key_validation_cache::tests
+systemd-run --user --scope --property=CPUQuota=100% --property=MemoryMax=2G \
+  env DISABLE_SQLITE_AUTO_BACKUP=true node --import tsx/esm \
+    --import ./tests/_setup/isolateDataDir.ts --test \
+    tests/unit/api-key-validation-cache-vectors.test.ts
 ```
+
+These are deterministic tests of the process-local cache only. The fixture does not test Redis
+availability/deletion, multiple OmniRoute processes, or cross-process revocation freshness.
 
 ### Synthetic multi-level admission contention
 

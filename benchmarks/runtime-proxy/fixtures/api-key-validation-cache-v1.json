@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "policy": {
+    "ttlMs": 60000,
+    "maxEntries": 1000,
+    "evictEntries": 200
+  },
+  "vectors": [
+    {
+      "name": "positive-only-and-strict-ttl",
+      "actions": [
+        { "op": "seed-key", "key": "negative-then-positive", "valid": false },
+        {
+          "op": "validate",
+          "key": "negative-then-positive",
+          "atMs": 1000,
+          "expected": false
+        },
+        {
+          "op": "set-authoritative-validity",
+          "key": "negative-then-positive",
+          "valid": true
+        },
+        {
+          "op": "validate",
+          "key": "negative-then-positive",
+          "atMs": 1001,
+          "expected": true
+        },
+        { "op": "seed-key", "key": "ttl-boundary", "valid": true },
+        { "op": "validate", "key": "ttl-boundary", "atMs": 5000, "expected": true },
+        {
+          "op": "set-authoritative-validity",
+          "key": "ttl-boundary",
+          "valid": false
+        },
+        { "op": "validate", "key": "ttl-boundary", "atMs": 64999, "expected": true },
+        { "op": "validate", "key": "ttl-boundary", "atMs": 65000, "expected": false }
+      ]
+    },
+    {
+      "name": "local-write-and-revoke-invalidation",
+      "actions": [
+        { "op": "seed-key", "key": "write-invalidates", "valid": true },
+        { "op": "validate", "key": "write-invalidates", "atMs": 10000, "expected": true },
+        { "op": "write-invalidate", "key": "write-invalidates", "valid": false },
+        { "op": "validate", "key": "write-invalidates", "atMs": 10001, "expected": false },
+        { "op": "seed-key", "key": "revoke-invalidates", "valid": true },
+        { "op": "validate", "key": "revoke-invalidates", "atMs": 20000, "expected": true },
+        { "op": "revoke", "key": "revoke-invalidates" },
+        { "op": "validate", "key": "revoke-invalidates", "atMs": 20001, "expected": false }
+      ]
+    },
+    {
+      "name": "insertion-order-eviction-does-not-refresh-on-hit",
+      "actions": [
+        {
+          "op": "seed-valid-range",
+          "prefix": "evict-",
+          "start": 0,
+          "endInclusive": 999
+        },
+        { "op": "seed-key", "key": "evict-1000", "valid": true },
+        { "op": "seed-key", "key": "evict-1001", "valid": true },
+        {
+          "op": "validate-range",
+          "prefix": "evict-",
+          "start": 0,
+          "endInclusive": 999,
+          "atMs": 30000
+        },
+        { "op": "validate", "key": "evict-0", "atMs": 30001, "expected": true },
+        { "op": "set-authoritative-validity", "key": "evict-0", "valid": false },
+        { "op": "set-authoritative-validity", "key": "evict-199", "valid": false },
+        { "op": "set-authoritative-validity", "key": "evict-200", "valid": false },
+        { "op": "validate", "key": "evict-1000", "atMs": 30002, "expected": true },
+        { "op": "validate", "key": "evict-1001", "atMs": 30003, "expected": true },
+        { "op": "validate", "key": "evict-0", "atMs": 30004, "expected": false },
+        { "op": "validate", "key": "evict-199", "atMs": 30005, "expected": false },
+        { "op": "validate", "key": "evict-200", "atMs": 30006, "expected": true },
+        { "op": "validate", "key": "evict-999", "atMs": 30007, "expected": true },
+        { "op": "validate", "key": "evict-1000", "atMs": 30008, "expected": true },
+        { "op": "validate", "key": "evict-1001", "atMs": 30009, "expected": true }
+      ]
+    }
+  ]
+}

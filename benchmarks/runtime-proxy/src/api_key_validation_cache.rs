@@ -81,58 +81,127 @@ impl ApiKeyValidationCache {
     pub fn generation(&self) -> u64 {
         self.generation
     }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.entries.len()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
-    fn caches_only_positive_validation_and_expires_at_the_strict_ttl_boundary() {
-        let mut cache = ApiKeyValidationCache::default();
-        cache.cache_validation_result("hash-valid", true, 1_000);
-        cache.cache_validation_result("hash-denied", false, 1_000);
+    fn shared_typescript_action_vectors_define_local_cache_parity() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../fixtures/api-key-validation-cache-v1.json"))
+                .expect("shared API-key cache fixture must be valid JSON");
+        assert_eq!(fixture["schemaVersion"].as_u64(), Some(1));
+        assert_eq!(
+            fixture["policy"]["ttlMs"].as_i64(),
+            Some(API_KEY_VALIDATION_TTL_MS)
+        );
+        assert_eq!(
+            fixture["policy"]["maxEntries"].as_u64(),
+            Some(MAX_CACHE_SIZE as u64)
+        );
+        assert_eq!(
+            fixture["policy"]["evictEntries"].as_u64(),
+            Some(EVICT_COUNT as u64)
+        );
 
-        assert_eq!(cache.cached_validation("hash-valid", 60_999), Some(true));
-        assert_eq!(cache.cached_validation("hash-valid", 61_000), None);
-        assert_eq!(cache.cached_validation("hash-denied", 1_001), None);
-        assert_eq!(cache.len(), 1);
-    }
+        for vector in fixture["vectors"].as_array().expect("vectors array") {
+            let vector_name = vector["name"].as_str().expect("vector name");
+            let mut cache = ApiKeyValidationCache::default();
+            let mut authoritative_validity = HashMap::<String, bool>::new();
 
-    #[test]
-    fn successful_key_mutation_advances_generation_and_invalidates_cached_authorization() {
-        let mut cache = ApiKeyValidationCache::default();
-        cache.cache_validation_result("hash-key", true, 5_000);
-        let prior_generation = cache.generation();
-        assert_eq!(cache.cached_validation("hash-key", 5_001), Some(true));
+            for (action_index, action) in vector["actions"]
+                .as_array()
+                .expect("vector actions")
+                .iter()
+                .enumerate()
+            {
+                let op = action["op"].as_str().expect("action op");
+                let key = action["key"].as_str();
+                let at_ms = action["atMs"].as_i64().unwrap_or_default();
+                let context = format!("{vector_name} action {action_index} ({op})");
 
-        cache.invalidate_after_key_write();
-
-        assert_eq!(cache.generation(), prior_generation + 1);
-        assert_eq!(cache.cached_validation("hash-key", 5_002), None);
-        assert_eq!(cache.len(), 0);
-    }
-
-    #[test]
-    fn bounded_eviction_preserves_map_insertion_order_not_hit_recency() {
-        let mut cache = ApiKeyValidationCache::default();
-        for index in 0..=MAX_CACHE_SIZE {
-            cache.cache_validation_result(&format!("hash-{index}"), true, 10);
+                match op {
+                    "seed-key" => {
+                        authoritative_validity.insert(
+                            key.expect("seed key").to_owned(),
+                            action["valid"].as_bool().expect("seed validity"),
+                        );
+                    }
+                    "seed-valid-range" => {
+                        let prefix = action["prefix"].as_str().expect("range prefix");
+                        let start = action["start"].as_u64().expect("range start");
+                        let end = action["endInclusive"].as_u64().expect("range end");
+                        for index in start..=end {
+                            authoritative_validity.insert(format!("{prefix}{index}"), true);
+                        }
+                    }
+                    "set-authoritative-validity" => {
+                        authoritative_validity.insert(
+                            key.expect("state key").to_owned(),
+                            action["valid"].as_bool().expect("state validity"),
+                        );
+                    }
+                    "validate" => {
+                        apply_validation_action(
+                            &mut cache,
+                            &authoritative_validity,
+                            key.expect("validation key"),
+                            at_ms,
+                            action["expected"].as_bool().expect("expected result"),
+                            &context,
+                        );
+                    }
+                    "validate-range" => {
+                        let prefix = action["prefix"].as_str().expect("range prefix");
+                        let start = action["start"].as_u64().expect("range start");
+                        let end = action["endInclusive"].as_u64().expect("range end");
+                        for index in start..=end {
+                            let range_key = format!("{prefix}{index}");
+                            apply_validation_action(
+                                &mut cache,
+                                &authoritative_validity,
+                                &range_key,
+                                at_ms,
+                                true,
+                                &format!("{context} key {range_key}"),
+                            );
+                        }
+                    }
+                    "write-invalidate" => {
+                        authoritative_validity.insert(
+                            key.expect("write key").to_owned(),
+                            action["valid"].as_bool().expect("write validity"),
+                        );
+                        cache.invalidate_after_key_write();
+                    }
+                    "revoke" => {
+                        authoritative_validity.insert(key.expect("revoke key").to_owned(), false);
+                        cache.invalidate_after_key_write();
+                    }
+                    other => panic!("{context}: unsupported fixture operation {other}"),
+                }
+            }
         }
-        // Reads do not change insertion order in the TypeScript Map.
-        assert_eq!(cache.cached_validation("hash-0", 11), Some(true));
-        // Size is already > 1,000, so the next insertion evicts the first 200 keys.
-        cache.cache_validation_result("hash-new", true, 12);
+    }
 
-        assert_eq!(cache.len(), 802);
-        assert_eq!(cache.cached_validation("hash-0", 13), None);
-        assert_eq!(cache.cached_validation("hash-199", 13), None);
-        assert_eq!(cache.cached_validation("hash-200", 13), Some(true));
-        assert_eq!(cache.cached_validation("hash-new", 13), Some(true));
+    fn apply_validation_action(
+        cache: &mut ApiKeyValidationCache,
+        authoritative_validity: &HashMap<String, bool>,
+        key: &str,
+        now_ms: i64,
+        expected: bool,
+        context: &str,
+    ) {
+        let actual = cache.cached_validation(key, now_ms).unwrap_or_else(|| {
+            let valid = *authoritative_validity
+                .get(key)
+                .unwrap_or_else(|| panic!("{context}: missing authoritative key state"));
+            cache.cache_validation_result(key, valid, now_ms);
+            valid
+        });
+        assert_eq!(actual, expected, "{context}: key {key} at {now_ms}ms");
     }
 }
