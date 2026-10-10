@@ -365,10 +365,12 @@ export async function main() {
         );
       }
 
-      // Best-effort: build the TPROXY native addon (Linux-only, opt-in) BEFORE
-      // assembling, so its transparent.node is present for assembleStandalone's
-      // NATIVE_ASSET_ENTRIES copy. Non-Linux / no-toolchain is non-fatal — the
-      // capture mode degrades gracefully when the addon is absent.
+      // Best-effort on Linux: compile the TPROXY addon before standalone
+      // assembly. The feature is opt-in at runtime, but this build path attempts
+      // to package it whenever the host has matching Node headers/toolchain.
+      // Docker sets OMNIROUTE_DOCKER_NATIVE_BUILD=1, so its build is strict and
+      // the following native-deps verifier requires the packaged addon. A
+      // regular non-Linux or toolchain-missing host build remains non-fatal.
       try {
         const { buildTproxyNative } = await import("./build-tproxy-native.mjs");
         const res = buildTproxyNative(projectRoot);

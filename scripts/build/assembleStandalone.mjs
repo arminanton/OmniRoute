@@ -103,9 +103,10 @@ export const NATIVE_ASSET_ENTRIES = [
   },
   {
     // TPROXY IP_TRANSPARENT addon (Fase 3 / Epic A). Built by build-tproxy-native
-    // before assembly; Linux-only + opt-in, so the source is absent on non-Linux
-    // builds → syncNativeAssetsToDir skips it gracefully. The runtime loader
-    // (transparentSocket.ts) resolves it cwd-relative to this same dest.
+    // before assembly on Linux; the feature is opt-in only at runtime. If a
+    // non-Linux or best-effort host build did not produce the binary,
+    // syncNativeAssetsToDir skips the missing artifact. The runtime loader
+    // (transparentSocket.ts) resolves it cwd-relative to this same destination.
     label: "TPROXY transparent-socket addon (Linux-only, opt-in)",
     src: ["src", "mitm", "tproxy", "native", "build", "Release", "transparent.node"],
     dest: ["src", "mitm", "tproxy", "native", "build", "Release", "transparent.node"],
