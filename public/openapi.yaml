@@ -7614,13 +7614,39 @@ paths:
                 - required: [models]
       responses:
         "200":
-          description: Tool configuration saved
+          description: Guide-based CLI configuration was written to the selected local config file.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GuideSettingsSavedResponse" }
         "400":
           description: Invalid settings or unsupported configuration target
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          description: Invalid management credential or local CLI config write policy denied the write.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/CliConfigWriteRefusalResponse" }
+        "422":
+          description: The target file is ephemeral inside the container and cannot be persisted to the host.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliConfigWriteRefusalResponse" }
+        "500":
+          description: Local CLI configuration file could not be written.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
 
@@ -8726,11 +8752,25 @@ paths:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
-          $ref: "#/components/responses/ManagementInvalidToken"
+          description: Management credential rejected or CLI config writes are disabled by policy.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OpenClaw CLI settings reset
+          description: OpenClaw settings reset; response message distinguishes absent file from removal.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenClawSettingsDeleteResponse" }
+        "500":
+          description: OpenClaw settings could not be reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
 
   # ─── Embedded Services ─────────────────────────────────────────
   # LOCAL_ONLY admits loopback and trusted private-LAN peers; public/unknown peers are blocked.
@@ -16711,10 +16751,29 @@ paths:
       responses:
         "200":
           description: Custom agent removed and detected-agent list returned.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcpAgentRegistryDeleteResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "400":
+          description: The agent ID query parameter is missing.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "404":
+          description: The ID is not present in the custom-agent registry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Custom agent removal or local detection failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     get:
       operationId: getApiAcpAgents
       tags:
@@ -16735,10 +16794,19 @@ paths:
       responses:
         "200":
           description: Installed agents and availability summary.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcpAgentRegistryGetResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "500":
+          description: Local agent detection failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
     post:
       operationId: postApiAcpAgents
       tags:
@@ -16760,10 +16828,32 @@ paths:
       responses:
         "200":
           description: Refreshed registry or newly added custom agent and detected-agent list.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AcpAgentRegistryPostResponse" }
+        "400":
+          description: Invalid JSON, custom-agent fields, or version probe command.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ApiErrorResponse" }
+                  - { $ref: "#/components/schemas/StringErrorResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/LocalOnlyAccessDenied"
+        "409":
+          description: A custom agent with the normalized ID already exists.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "500":
+          description: Custom-agent persistence or local detection failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/admin/concurrency:
     get:
       operationId: getApiAdminConcurrency
@@ -16945,7 +17035,13 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: >-
+            Results for `action=results` or `action=working`, a combo-health placeholder for
+            `action=combo-health`, or the action help catalog when action is omitted/unknown.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssessmentGetResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
@@ -16973,13 +17069,26 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Assessment run summary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssessmentRunResponse" }
+        "400":
+          description: Assessment scope or trigger failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
         "403":
           $ref: "#/components/responses/ManagementInvalidToken"
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
+        "500":
+          description: Assessment execution or model discovery failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/auth/csrf:
     get:
       operationId: getApiAuthCsrf
@@ -17516,7 +17625,21 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Chaos run summary and individual model responses.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ChaosRunResponse" }
+        "400":
+          description: Chaos Mode is disabled or the run request is invalid.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Chaos execution failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
   /api/cli-tools/all-statuses:
     get:
       operationId: getApiCliToolsAllStatuses
@@ -18139,7 +18262,24 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: OmniRoute config removed; the original LM Studio config may have been restored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LettaSettingsDeleteResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Remote peer rejected by LOCAL_ONLY policy or management credential rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Letta local auth/settings files could not be reset.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiCliToolsLettaSettings
       tags:
@@ -18161,6 +18301,23 @@ paths:
           x-sensitive: true
           description: >-
             Returns local Letta auth JSON, which may contain API keys and other credentials.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LettaSettingsGetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Remote peer rejected by LOCAL_ONLY policy or management credential rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: Letta settings or raw auth JSON could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCliToolsLettaSettings
       tags:
@@ -18179,7 +18336,34 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: OmniRoute provider added to Letta and local backend mode enabled.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LettaSettingsApplyResponse" }
+        "400":
+          description: Invalid JSON or Letta configuration failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Remote peer rejected by LOCAL_ONLY policy or management credential rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "409":
+          description: Existing non-OmniRoute LM Studio provider would be overwritten; explicit overwrite is required.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LettaSettingsConflictResponse" }
+        "500":
+          description: Letta config backup or file update failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cli-tools/logs:
     get:
       operationId: getApiCliToolsLogs
@@ -18206,7 +18390,21 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           x-sensitive: true
-          description: OK
+          description: >-
+            Recent normalized application log records. When the log file is absent the route returns
+            an empty array without Cache-Control; when it exists, the response is no-store/no-cache.
+          headers:
+            Cache-Control:
+              description: Present when the application log file exists.
+              schema: { type: string, const: "no-store, no-cache, must-revalidate" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolsLogEntriesResponse" }
+        "500":
+          description: Application log file could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StringErrorResponse" }
   /api/cli-tools/omp-settings:
     delete:
       operationId: deleteApiCliToolsOmpSettings
@@ -18226,7 +18424,24 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: OmniRoute removed from Oh My Pi config and credential storage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OmpSettingsDeleteResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Remote peer rejected by LOCAL_ONLY policy or management credential rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: OMP settings or credential storage could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     get:
       operationId: getApiCliToolsOmpSettings
       tags:
@@ -18248,6 +18463,23 @@ paths:
           x-sensitive: true
           description: >-
             Returns Oh My Pi config and auth data, including the configured API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OmpSettingsGetResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Remote peer rejected by LOCAL_ONLY policy or management credential rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: OMP installation or settings could not be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
     post:
       operationId: postApiCliToolsOmpSettings
       tags:
@@ -18266,7 +18498,29 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: OmniRoute provider written to OMP config and credential storage.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OmpSettingsApplyResponse" }
+        "400":
+          description: Invalid JSON or OMP config request failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "401":
+          $ref: "#/components/responses/ManagementAuthenticationRequired"
+        "403":
+          description: Remote peer rejected by LOCAL_ONLY policy or management credential rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "500":
+          description: OMP settings or credential storage could not be updated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503":
+          $ref: "#/components/responses/ManagementAuthUnavailable"
   /api/cli-tools/openclaw/auto-order:
     get:
       operationId: getApiCliToolsOpenclawAutoOrder
@@ -64026,4 +64280,394 @@ components:
           type: array
           items: { $ref: "#/components/schemas/OpenRouterCatalogEntry" }
         meta: { $ref: "#/components/schemas/OpenRouterCatalogMeta" }
+      additionalProperties: false
+
+    AcpAgentInfo:
+      type: object
+      x-sensitive: true
+      required: [id, name, binary, versionCommand, version, installed, providerAlias, spawnArgs, protocol]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        binary: { type: string, x-sensitive: true }
+        versionCommand: { type: string, x-sensitive: true }
+        version: { type: [string, "null"] }
+        installed: { type: boolean }
+        providerAlias: { type: string }
+        spawnArgs:
+          type: array
+          items: { type: string }
+        protocol: { type: string, enum: [stdio, http] }
+        isCustom: { type: boolean }
+      additionalProperties: false
+
+    AcpAgentRegistrySummary:
+      type: object
+      required: [total, installed, notFound, builtIn, custom]
+      properties:
+        total: { type: integer, minimum: 0 }
+        installed: { type: integer, minimum: 0 }
+        notFound: { type: integer, minimum: 0 }
+        builtIn: { type: integer, minimum: 0 }
+        custom: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    AcpAgentRegistryGetResponse:
+      type: object
+      x-sensitive: true
+      required: [agents, summary]
+      properties:
+        agents:
+          type: array
+          items: { $ref: "#/components/schemas/AcpAgentInfo" }
+        summary: { $ref: "#/components/schemas/AcpAgentRegistrySummary" }
+      additionalProperties: false
+
+    AcpAgentRegistryRefreshResponse:
+      type: object
+      x-sensitive: true
+      required: [agents, refreshed]
+      properties:
+        agents:
+          type: array
+          items: { $ref: "#/components/schemas/AcpAgentInfo" }
+        refreshed: { type: boolean, const: true }
+      additionalProperties: false
+
+    AcpCustomAgentDefinition:
+      type: object
+      x-sensitive: true
+      required: [id, name, binary, versionCommand, providerAlias, spawnArgs, protocol]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        binary: { type: string, x-sensitive: true }
+        versionCommand: { type: string, x-sensitive: true }
+        providerAlias: { type: string }
+        spawnArgs:
+          type: array
+          items: { type: string }
+        protocol: { type: string, enum: [stdio, http] }
+      additionalProperties: false
+
+    AcpAgentRegistryAddResponse:
+      type: object
+      x-sensitive: true
+      required: [agents, added]
+      properties:
+        agents:
+          type: array
+          items: { $ref: "#/components/schemas/AcpAgentInfo" }
+        added: { $ref: "#/components/schemas/AcpCustomAgentDefinition" }
+      additionalProperties: false
+
+    AcpAgentRegistryPostResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/AcpAgentRegistryRefreshResponse" }
+        - { $ref: "#/components/schemas/AcpAgentRegistryAddResponse" }
+
+    AcpAgentRegistryDeleteResponse:
+      type: object
+      x-sensitive: true
+      required: [agents, removed]
+      properties:
+        agents:
+          type: array
+          items: { $ref: "#/components/schemas/AcpAgentInfo" }
+        removed: { type: string }
+      additionalProperties: false
+
+    AssessmentModel:
+      type: object
+      x-sensitive: true
+      required:
+        [id, modelId, providerId, status, latencyP50, latencyP95, successRate, supportsVision, supportsToolCall, supportsStreaming, supportsStructuredOutput, maxContextWindow, maxOutputTokens, categories, fitnessScores, tier, lastTested, lastError, consecutiveFails, probeCount, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        modelId: { type: string }
+        providerId: { type: string }
+        status: { type: string, enum: [working, broken, rate_limited, timeout, auth_error, unknown] }
+        latencyP50: { type: [number, "null"], minimum: 0 }
+        latencyP95: { type: [number, "null"], minimum: 0 }
+        successRate: { type: number, minimum: 0, maximum: 1 }
+        supportsVision: { type: boolean }
+        supportsToolCall: { type: boolean }
+        supportsStreaming: { type: boolean }
+        supportsStructuredOutput: { type: boolean }
+        maxContextWindow: { type: [integer, "null"], minimum: 0 }
+        maxOutputTokens: { type: [integer, "null"], minimum: 0 }
+        categories:
+          type: array
+          items:
+            type: string
+            enum: [coding, reasoning, reasoning_deep, chat, fast, vision, tool_call, structured_output]
+        fitnessScores:
+          type: object
+          additionalProperties: { type: number, minimum: 0, maximum: 1 }
+        tier: { type: string, enum: [premium, balanced, fast, free] }
+        lastTested: { type: [string, "null"] }
+        lastError: { type: [string, "null"], x-sensitive: true }
+        consecutiveFails: { type: integer, minimum: 0 }
+        probeCount: { type: integer, minimum: 0 }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+      additionalProperties: false
+
+    AssessmentModelsResponse:
+      type: object
+      x-sensitive: true
+      required: [models]
+      properties:
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/AssessmentModel" }
+      additionalProperties: false
+
+    AssessmentComboHealthPlaceholderResponse:
+      type: object
+      required: [combos, message]
+      properties:
+        combos:
+          type: array
+          maxItems: 0
+          items: {}
+        message: { type: string, const: Combo health requires DB access }
+      additionalProperties: false
+
+    AssessmentHelpResponse:
+      type: object
+      required: [endpoints]
+      properties:
+        endpoints:
+          type: object
+          additionalProperties: { type: string }
+      additionalProperties: false
+
+    AssessmentGetResponse:
+      x-sensitive: true
+      description: GET response varies by `action` query parameter.
+      oneOf:
+        - { $ref: "#/components/schemas/AssessmentModelsResponse" }
+        - { $ref: "#/components/schemas/AssessmentComboHealthPlaceholderResponse" }
+        - { $ref: "#/components/schemas/AssessmentHelpResponse" }
+
+    AssessmentRunResponse:
+      type: object
+      required: [run_id, status, models_tested, models_passed, models_failed, models_rate_limited, duration_ms]
+      properties:
+        run_id: { type: string, format: uuid }
+        status: { type: string, const: completed }
+        models_tested: { type: integer, minimum: 0 }
+        models_passed: { type: integer, minimum: 0 }
+        models_failed: { type: integer, minimum: 0 }
+        models_rate_limited: { type: integer, minimum: 0 }
+        duration_ms: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    ChaosModelResult:
+      type: object
+      x-sensitive: true
+      required: [providerId, providerName, modelId, status, content, durationMs]
+      properties:
+        providerId: { type: string }
+        providerName: { type: string }
+        modelId: { type: string }
+        status: { type: string, enum: [success, error, skipped] }
+        content: { type: [string, "null"], x-sensitive: true }
+        error: { type: string, x-sensitive: true }
+        durationMs: { type: number, minimum: 0 }
+      additionalProperties: false
+
+    ChaosRunResponse:
+      type: object
+      x-sensitive: true
+      required: [task, mode, startedAt, totalProviders, totalResults, models]
+      properties:
+        task: { type: string, x-sensitive: true }
+        mode: { type: string, enum: [parallel, collaborative] }
+        startedAt: { type: string, format: date-time }
+        totalProviders: { type: integer, minimum: 0 }
+        totalResults: { type: integer, minimum: 0 }
+        models:
+          type: array
+          items: { $ref: "#/components/schemas/ChaosModelResult" }
+        summary: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    GuideSettingsSavedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    CliConfigWriteRefusalResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        containerEphemeralTarget: { type: boolean }
+        hostSetupCommand: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    LettaSettingsUninstalledResponse:
+      type: object
+      required: [installed, config, message]
+      properties:
+        installed: { type: boolean, const: false }
+        config: { type: "null" }
+        message: { type: string, const: Letta CLI is not installed }
+      additionalProperties: false
+
+    LettaSettingsInstalledResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, config, hasOmniRoute, lmstudioConflict, configPath, letta, backendMode]
+      properties:
+        installed: { type: boolean, const: true }
+        config:
+          type: object
+          x-sensitive: true
+          description: Raw Letta provider auth file; it may contain API keys or other credentials.
+          additionalProperties: true
+        hasOmniRoute: { type: boolean }
+        lmstudioConflict: { type: boolean }
+        configPath: { type: string, x-sensitive: true }
+        letta:
+          type: object
+          required: [baseURL]
+          properties:
+            baseURL: { type: [string, "null"] }
+          additionalProperties: false
+        backendMode: { type: string }
+      additionalProperties: false
+
+    LettaSettingsGetResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/LettaSettingsUninstalledResponse" }
+        - { $ref: "#/components/schemas/LettaSettingsInstalledResponse" }
+
+    LettaSettingsApplyResponse:
+      type: object
+      required: [success, message, needsRestart]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        needsRestart: { type: boolean, const: true }
+      additionalProperties: false
+
+    LettaSettingsConflictResponse:
+      type: object
+      x-sensitive: true
+      required: [error, conflict, existingBaseUrl]
+      properties:
+        error: { type: string }
+        conflict: { type: boolean, const: true }
+        existingBaseUrl: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    LettaSettingsDeleteResponse:
+      type: object
+      required: [success, message, needsRestart]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          enum:
+            [OmniRoute config removed. Your original LM Studio provider has been restored. Restart Letta CLI to take effect., OmniRoute config removed. Restart Letta CLI to take effect.]
+        needsRestart: { type: boolean, const: true }
+      additionalProperties: false
+
+    CliToolsLogEntry:
+      type: object
+      x-sensitive: true
+      description: Normalized JSON log entry; additional Pino fields are preserved by the handler.
+      properties:
+        level: { type: string, enum: [trace, debug, info, warn, error, fatal] }
+        msg: { type: string, x-sensitive: true }
+        message: { type: string, x-sensitive: true }
+        time: { type: [string, integer] }
+        timestamp: { type: [string, integer] }
+        component: { type: string }
+        module: { type: string }
+      additionalProperties: true
+
+    CliToolsLogEntriesResponse:
+      type: array
+      x-sensitive: true
+      items: { $ref: "#/components/schemas/CliToolsLogEntry" }
+
+    OmpSettingsUninstalledResponse:
+      type: object
+      required: [installed, config, message]
+      properties:
+        installed: { type: boolean, const: false }
+        config: { type: "null" }
+        message: { type: string, const: Oh My Pi is not installed }
+      additionalProperties: false
+
+    OmpSettingsInstalledResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, config, hasOmniRoute, configPath]
+      properties:
+        installed: { type: boolean, const: true }
+        config:
+          type: object
+          required: [providers]
+          properties:
+            providers:
+              type: object
+              required: [omniroute]
+              properties:
+                omniroute:
+                  type: object
+                  required: [baseUrl, apiKey, discovery]
+                  properties:
+                    baseUrl: { type: [string, "null"] }
+                    apiKey: { type: [string, "null"], x-sensitive: true }
+                    discovery: { type: [string, "null"] }
+                  additionalProperties: true
+              additionalProperties: true
+          additionalProperties: true
+        hasOmniRoute: { type: boolean }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    OmpSettingsGetResponse:
+      x-sensitive: true
+      oneOf:
+        - { $ref: "#/components/schemas/OmpSettingsUninstalledResponse" }
+        - { $ref: "#/components/schemas/OmpSettingsInstalledResponse" }
+
+    OmpSettingsApplyResponse:
+      type: object
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+
+    OmpSettingsDeleteResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: OmniRoute removed from Oh My Pi }
+      additionalProperties: false
+
+    OpenClawSettingsDeleteResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          enum: [No settings file to reset, OmniRoute settings removed successfully]
       additionalProperties: false

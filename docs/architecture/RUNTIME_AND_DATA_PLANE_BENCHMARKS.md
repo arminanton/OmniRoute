@@ -34,7 +34,7 @@ the Go sidecar is exposed through the relay endpoints.
 All 1,029 operations now have unique, deterministic method/path-derived `operationId` values. The
 contract is still stronger on route coverage than schema completeness: the deterministic inventory
 in [OPENAPI_CONTRACT_INVENTORY.md](OPENAPI_CONTRACT_INVENTORY.md) finds 981 body-bearing response
-candidates, of which 850 declare schemas on every non-`204` success response and 131 do not. The
+candidates, of which 865 declare schemas on every non-`204` success response and 116 do not. The
 remaining 48 operations are accounted for explicitly: 16 are `204`-only, 30 declare no `2xx`, and
 two are bodyless `HEAD` probes with a `200` response. The 30 without `2xx` include eight redirects,
 one WebSocket upgrade, ten catch-all not-found operations, six bodyless `HEAD` catch-alls/artifact
@@ -2077,8 +2077,8 @@ image, or production deployment were involved.
   selection, service strategies, quotas, caching, tool loops, errors, and usage accounting. Keep the
   frontend/control plane deployed independently from the inference process.
 - Continue the source audit for response schemas and conditional auth behavior. The deterministic
-  inventory reports 850 of 981 body-bearing response candidates with declared schemas on every
-  non-`204` success (131 gaps); route coverage is 705/705. It also lists 202 operations with no
-  effective security declaration; all 299 operations whose text signals conditional auth now have
+  inventory reports 865 of 981 body-bearing response candidates with declared schemas on every
+  non-`204` success (116 gaps); route coverage is 705/705. It also lists 187 operations with no
+  effective security declaration; all 314 operations whose text signals conditional auth now have
   declarations. These are documentation review queues, not proof that handlers are insecure or
   that the declared response schemas are semantically complete.

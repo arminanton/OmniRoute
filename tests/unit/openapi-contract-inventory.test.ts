@@ -128,11 +128,11 @@ test("canonical OpenAPI inventory reconciles the checked-in report counts", () =
   assert.equal(inventory.pathCount, 705);
   assert.equal(inventory.operationCount, 1029);
   assert.equal(inventory.responseContent.candidateOperations, 981);
-  assert.equal(inventory.responseContent.fullyTypedOperations, 850);
-  assert.equal(inventory.responseContent.untypedOperations, 131);
+  assert.equal(inventory.responseContent.fullyTypedOperations, 865);
+  assert.equal(inventory.responseContent.untypedOperations, 116);
   assert.deepEqual(inventory.responseContent.gapStateCounts, {
     "content-without-schema": 0,
-    "no-content": 131,
+    "no-content": 116,
     "unresolved-response": 0,
   });
   assert.equal(inventory.responseContent.bodyless204Operations.length, 16);
