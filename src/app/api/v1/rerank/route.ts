@@ -20,6 +20,7 @@ import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { CORS_HEADERS } from "@omniroute/open-sse/utils/cors.ts";
 import { deriveRerankProviderForChatProvider } from "@omniroute/open-sse/config/rerankRegistry.ts";
+import { reserveAccountRequest } from "@omniroute/open-sse/services/accountRequestOccupancy.ts";
 
 /**
  * Handle CORS preflight
@@ -49,6 +50,15 @@ function buildDynamicRerankProvider(node: any) {
     authHeader: "bearer",
     providerId: node.id, // full provider connection ID for credential lookup
   };
+}
+
+function reserveSelectedAccountRequest(credentials: unknown): () => void {
+  const selected = credentials as {
+    connectionId?: string | null;
+    releaseAccountRequest?: () => void;
+  } | null;
+  if (typeof selected?.releaseAccountRequest === "function") return selected.releaseAccountRequest;
+  return reserveAccountRequest(selected?.connectionId);
 }
 
 /**
@@ -129,7 +139,13 @@ async function postHandler(request, context) {
   if (provider || derivedProvider) {
     // Cloud provider matched (or a generic Cohere-compatible endpoint was derived)
     const effectiveProviderId = provider || derivedProvider!.id;
-    const credentials = await getProviderCredentialsWithQuotaPreflight(effectiveProviderId);
+    const credentials = await getProviderCredentialsWithQuotaPreflight(
+      effectiveProviderId,
+      null,
+      null,
+      body.model,
+      { reserveAccountRequest: true }
+    );
     if (!credentials) {
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
@@ -140,22 +156,27 @@ async function postHandler(request, context) {
       return rateLimitedProviderResponse(effectiveProviderId, credentials);
     }
 
-    const response = await handleRerank({
-      model: body.model,
-      query: body.query,
-      documents: body.documents,
-      top_n: body.top_n,
-      return_documents: body.return_documents,
-      credentials,
-      resolvedProvider: derivedProvider || null,
-      connectionId: (credentials as { connectionId?: string } | null)?.connectionId || null,
-      apiKeyId: policy.apiKeyInfo?.id || null,
-      apiKeyName: policy.apiKeyInfo?.name || null,
-    });
-    if (response?.ok) {
-      await clearRecoveredProviderState(credentials);
+    const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+    try {
+      const response = await handleRerank({
+        model: body.model,
+        query: body.query,
+        documents: body.documents,
+        top_n: body.top_n,
+        return_documents: body.return_documents,
+        credentials,
+        resolvedProvider: derivedProvider || null,
+        connectionId: (credentials as { connectionId?: string } | null)?.connectionId || null,
+        apiKeyId: policy.apiKeyInfo?.id || null,
+        apiKeyName: policy.apiKeyInfo?.name || null,
+      });
+      if (response?.ok) {
+        await clearRecoveredProviderState(credentials);
+      }
+      return response;
+    } finally {
+      releaseAccountRequest();
     }
-    return response;
   }
 
   // Try local provider_nodes (model format: prefix/model-name)
@@ -166,7 +187,13 @@ async function postHandler(request, context) {
     const localProvider = localProviders.find((p) => p.id === prefix);
 
     if (localProvider) {
-      const credentials = await getProviderCredentialsWithQuotaPreflight(localProvider.providerId);
+      const credentials = await getProviderCredentialsWithQuotaPreflight(
+        localProvider.providerId,
+        null,
+        null,
+        localModel,
+        { reserveAccountRequest: true }
+      );
       if (!credentials) {
         return errorResponse(
           HTTP_STATUS.BAD_REQUEST,
@@ -177,6 +204,7 @@ async function postHandler(request, context) {
         return rateLimitedProviderResponse(prefix, credentials);
       }
 
+      const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
       const token = credentials?.apiKey || credentials?.accessToken;
       const startTime = Date.now();
       try {
@@ -300,6 +328,8 @@ async function postHandler(request, context) {
           apiKeyName: policy.apiKeyInfo?.name || undefined,
         }).catch(() => {});
         return errorResponse(500, `Rerank request failed: ${err.message}`);
+      } finally {
+        releaseAccountRequest();
       }
     }
   }

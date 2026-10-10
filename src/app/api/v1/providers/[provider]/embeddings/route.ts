@@ -12,6 +12,7 @@ import * as log from "@/sse/utils/logger";
 import { enforceApiKeyPolicy } from "@/shared/utils/apiKeyPolicy";
 import { v1EmbeddingsSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+import { reserveAccountRequest } from "@omniroute/open-sse/services/accountRequestOccupancy.ts";
 
 /**
  * Handle CORS preflight
@@ -71,7 +72,13 @@ export async function POST(request, { params }) {
     }
   }
 
-  const credentials = await getProviderCredentialsWithQuotaPreflight(providerEntry.id);
+  const credentials = await getProviderCredentialsWithQuotaPreflight(
+    providerEntry.id,
+    null,
+    null,
+    body.model ?? null,
+    { reserveAccountRequest: true }
+  );
   if (!credentials) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${rawProvider}`);
   }
@@ -84,14 +91,25 @@ export async function POST(request, { params }) {
     );
   }
 
-  const result = await handleEmbedding({
-    body,
-    credentials,
-    log,
-    // #10347 — thread the selected connection id so a hard upstream failure cools
-    // the account instead of re-hitting it on every request.
-    connectionId: (credentials as { connectionId?: string } | null)?.connectionId ?? null,
-  });
+  const selected = credentials as {
+    connectionId?: string | null;
+    releaseAccountRequest?: () => void;
+  };
+  const releaseAccountRequest =
+    selected.releaseAccountRequest ?? reserveAccountRequest(selected.connectionId);
+  let result: Awaited<ReturnType<typeof handleEmbedding>>;
+  try {
+    result = await handleEmbedding({
+      body,
+      credentials,
+      log,
+      // #10347 — thread the selected connection id so a hard upstream failure cools
+      // the account instead of re-hitting it on every request.
+      connectionId: selected.connectionId ?? null,
+    });
+  } finally {
+    releaseAccountRequest();
+  }
 
   if (result.success) {
     await clearRecoveredProviderState(credentials);

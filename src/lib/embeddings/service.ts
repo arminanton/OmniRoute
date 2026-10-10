@@ -33,9 +33,23 @@ import { calculateCost } from "@/lib/usage/costCalculator";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { generateRequestId } from "@/shared/utils/requestId";
 import { resolveLocalSyncedEndpointRoute } from "@/lib/providerModels/syncedEndpointRouting";
+import { reserveAccountRequest } from "@omniroute/open-sse/services/accountRequestOccupancy.ts";
 
 type ValidatedEmbeddingBody = Record<string, unknown> & { model: string };
 type ProviderCredentialsResult = Awaited<ReturnType<typeof getProviderCredentials>>;
+type AccountOccupancyCredentials = {
+  connectionId?: string | null;
+  releaseAccountRequest?: () => void;
+};
+
+function reserveSelectedAccountRequest(
+  credentials: unknown,
+  fallbackConnectionId?: string | null
+): () => void {
+  const selected = credentials as AccountOccupancyCredentials | null;
+  if (typeof selected?.releaseAccountRequest === "function") return selected.releaseAccountRequest;
+  return reserveAccountRequest(selected?.connectionId || fallbackConnectionId);
+}
 
 // #6925: a private/LAN host (RFC1918 10/8, 192.168/16, 172.16/12, CGNAT 100.64/10,
 // loopback, .local/.internal, ULA/link-local IPv6) is treated as a trusted no-auth
@@ -185,6 +199,7 @@ export async function createEmbeddingResponse(
   }
 
   let credentials: ProviderCredentialsResult | null = null;
+  let releaseAccountRequest = () => {};
   let providerConfig: EmbeddingProvider | null =
     options.resolvedProvider ||
     dynamicProviders.find((dp) => dp.id === provider) ||
@@ -199,8 +214,12 @@ export async function createEmbeddingResponse(
       provider,
       null,
       syncedEndpointRoute.connectionIds,
-      syncedEndpointRoute.model
+      syncedEndpointRoute.model,
+      { reserveAccountRequest: true }
     );
+    if (credentials && !("allRateLimited" in credentials && credentials.allRateLimited)) {
+      releaseAccountRequest = reserveSelectedAccountRequest(credentials, options.connectionId);
+    }
     if (!credentials) {
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
@@ -208,6 +227,7 @@ export async function createEmbeddingResponse(
       );
     }
     if ("allRateLimited" in credentials && credentials.allRateLimited) {
+      releaseAccountRequest();
       return unavailableResponse(
         HTTP_STATUS.RATE_LIMITED,
         `[${provider}] All accounts rate limited`,
@@ -220,6 +240,7 @@ export async function createEmbeddingResponse(
       .providerSpecificData;
     const configuredBaseUrl = providerSpecificData?.baseUrl;
     if (typeof configuredBaseUrl !== "string" || configuredBaseUrl.trim().length === 0) {
+      releaseAccountRequest();
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
         `No base URL configured for embedding provider: ${provider}`
@@ -297,6 +318,7 @@ export async function createEmbeddingResponse(
   }
 
   if (!providerConfig) {
+    releaseAccountRequest();
     return errorResponse(
       HTTP_STATUS.BAD_REQUEST,
       formatUnknownEmbeddingProviderError(provider, resolvedModel)
@@ -304,7 +326,12 @@ export async function createEmbeddingResponse(
   }
 
   if (!credentials && providerConfig.authType !== "none") {
-    credentials = await getProviderCredentials(credentialsProviderId);
+    credentials = await getProviderCredentials(credentialsProviderId, null, null, resolvedModel, {
+      reserveAccountRequest: true,
+    });
+    if (credentials && !("allRateLimited" in credentials && credentials.allRateLimited)) {
+      releaseAccountRequest = reserveSelectedAccountRequest(credentials, options.connectionId);
+    }
     if (!credentials) {
       return errorResponse(
         HTTP_STATUS.BAD_REQUEST,
@@ -312,6 +339,7 @@ export async function createEmbeddingResponse(
       );
     }
     if ("allRateLimited" in credentials && credentials.allRateLimited) {
+      releaseAccountRequest();
       return unavailableResponse(
         HTTP_STATUS.RATE_LIMITED,
         `[${provider}] All accounts rate limited`,
@@ -320,6 +348,7 @@ export async function createEmbeddingResponse(
       );
     }
     if ("allExpired" in credentials && credentials.allExpired) {
+      releaseAccountRequest();
       const expiredStatus = (credentials as { expiredStatus?: string }).expiredStatus;
       const quota = expiredStatus === "credits_exhausted";
       const reason = quota ? "credits exhausted" : "authentication expired";
@@ -336,13 +365,23 @@ export async function createEmbeddingResponse(
     // resolves the dashboard's hyphenated "lm-studio" connection via the
     // provider search pool/alias (#11233); a selection or rate-limit failure
     // must not break the flow — proceed without credentials.
-    const localCredentials = await getProviderCredentials(credentialsProviderId);
+    const localCredentials = await getProviderCredentials(
+      credentialsProviderId,
+      null,
+      null,
+      resolvedModel,
+      { reserveAccountRequest: true }
+    );
     if (
       localCredentials &&
       !("allRateLimited" in localCredentials) &&
       !("allExpired" in localCredentials)
     ) {
+      releaseAccountRequest();
       credentials = localCredentials;
+      releaseAccountRequest = reserveSelectedAccountRequest(localCredentials, options.connectionId);
+    } else if (localCredentials) {
+      reserveSelectedAccountRequest(localCredentials)();
     }
   }
 
@@ -367,6 +406,12 @@ export async function createEmbeddingResponse(
   // upstream decolua/9router#1701.
   let proxyInfo: Awaited<ReturnType<typeof resolveProxyForConnection>> | null = null;
   const connectionIdForProxy = (credentials as { connectionId?: string } | null)?.connectionId;
+  // Combo callers can carry a selected connection even when the provider is
+  // keyless. Reserve it before proxy resolution or any other await preceding
+  // the actual embedding dispatch.
+  if (!credentials && options.connectionId) {
+    releaseAccountRequest = reserveAccountRequest(options.connectionId);
+  }
   if (connectionIdForProxy) {
     try {
       proxyInfo = await resolveProxyForConnection(connectionIdForProxy);
@@ -404,9 +449,14 @@ export async function createEmbeddingResponse(
         null,
     });
 
-  const result = connectionIdForProxy
-    ? await runWithProxyContext(proxyInfo?.proxy || null, runEmbedding)
-    : await runEmbedding();
+  let result: Awaited<ReturnType<typeof runEmbedding>>;
+  try {
+    result = connectionIdForProxy
+      ? await runWithProxyContext(proxyInfo?.proxy || null, runEmbedding)
+      : await runEmbedding();
+  } finally {
+    releaseAccountRequest();
+  }
 
   const responseHeaders = new Headers(result.headers);
 
