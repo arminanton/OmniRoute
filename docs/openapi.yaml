@@ -19145,70 +19145,172 @@ paths:
       tags:
         - Gamification
       summary: "GET gamification › federation › leaderboard"
+      description: >-
+        Returns federation-safe leaderboard rows containing only API key IDs and scores; display
+        names and key material are not included. `scope` defaults to `global` and `limit` defaults
+        to 100, with the handler accepting limits from 1 through 200.
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          description: Defaults to `global`; other values are passed through to the scope lookup.
+          schema: { type: string, default: global }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 100 }
       responses:
         "200":
-          description: OK
+          description: Federation leaderboard rows without display names.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationFederationLeaderboardResponse" }
   /api/gamification/federation/score:
     post:
       operationId: postApiGamificationFederationScore
       tags:
         - Gamification
       summary: "POST gamification › federation › score"
+      description: >-
+        Accepts a score update authenticated by a connected federation server's Bearer token.
+        The request scope defaults to `global`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GamificationFederationScoreRequest" }
       responses:
         "200":
-          description: OK
+          description: Score update accepted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
   /api/gamification/invite:
     delete:
       operationId: deleteApiGamificationInvite
       tags:
         - Gamification
       summary: "DELETE gamification › invite"
+      description: Revokes an invite by its ID. A missing ID returns HTTP 400.
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: OK
+          description: Invite revocation completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
     get:
       operationId: getApiGamificationInvite
       tags:
         - Gamification
       summary: "GET gamification › invite"
+      description: >-
+        Lists invite records created by an API key. The returned `code` can redeem an invite and
+        is sensitive; plaintext redemption tokens are not included in list records.
+      parameters:
+        - name: apiKeyId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: OK
+          description: Invite records created by the requested API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationInviteListResponse" }
     post:
       operationId: postApiGamificationInvite
       tags:
         - Gamification
       summary: "POST gamification › invite"
+      description: >-
+        Creates an invite and returns its eight-character redemption code and one-time plaintext
+        token. Both returned values are sensitive; the token is stored only as a hash.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GamificationInviteCreateRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Invite created; the redemption code and plaintext token are returned once.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationInviteCreatedResponse" }
   /api/gamification/invite/redeem:
     post:
       operationId: postApiGamificationInviteRedeem
       tags:
         - Gamification
       summary: "POST gamification › invite › redeem"
+      description: Redeems an invite code for an API key. The request code is sensitive.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GamificationInviteRedeemRequest" }
       responses:
         "200":
-          description: OK
+          description: Invite redeemed; `serverUrl` is omitted when no URL was attached.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationInviteRedeemResponse" }
   /api/gamification/leaderboard:
     get:
       operationId: getApiGamificationLeaderboard
       tags:
         - Gamification
       summary: "GET gamification › leaderboard"
+      description: >-
+        Returns the leaderboard with API key display names for the management dashboard. Names
+        are nullable when a leaderboard row has no matching API key. When `apiKeyId` is supplied,
+        the response also includes that key's rank and neighboring entries.
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          description: Defaults to `global`; arbitrary scope strings are passed to the lookup.
+          schema: { type: string, default: global }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: apiKeyId
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: Leaderboard rows, optional rank neighbors, and management display names.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationLeaderboardResponse" }
   /api/gamification/level:
     get:
       operationId: getApiGamificationLevel
       tags:
         - Gamification
       summary: "GET gamification › level"
+      description: >-
+        Returns one API key's XP level when `apiKeyId` is supplied, or the operator-wide aggregate
+        otherwise. An unknown API key returns `level: null`; the streak object is still present.
+      parameters:
+        - name: apiKeyId
+          in: query
+          required: false
+          schema: { type: string }
       responses:
         "200":
-          description: OK
+          description: API key or aggregate XP level together with current and longest streaks.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationLevelResponse" }
   /api/gamification/notifications:
     get:
       operationId: getApiGamificationNotifications
@@ -19224,60 +19326,134 @@ paths:
       tags:
         - Gamification
       summary: "POST gamification › rotate"
+      description: Archives and clears a weekly or monthly leaderboard scope.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GamificationRotateRequest" }
       responses:
         "200":
-          description: OK
+          description: Rotation completed for the requested scope.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationRotateResponse" }
   /api/gamification/servers:
     delete:
       operationId: deleteApiGamificationServers
       tags:
         - Gamification
       summary: "DELETE gamification › servers"
+      description: Disconnects a community server by its ID.
+      parameters:
+        - name: id
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: OK
+          description: Disconnection completed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuccessResponse" }
     get:
       operationId: getApiGamificationServers
       tags:
         - Gamification
       summary: "GET gamification › servers"
+      description: >-
+        Lists community-server connection metadata. The API key hash is excluded from the
+        projection.
       responses:
         "200":
-          description: OK
+          description: Community-server connection metadata without API key hashes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationServersResponse" }
     post:
       operationId: postApiGamificationServers
       tags:
         - Gamification
       summary: "POST gamification › servers"
+      description: >-
+        Connects to a community server. The supplied API key is hashed before storage and is never
+        returned in the created server record.
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GamificationServerConnectRequest" }
       responses:
-        "200":
-          description: OK
+        "201":
+          description: Community server connected; credential material is omitted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationServerConnectResponse" }
   /api/gamification/stream:
     get:
       operationId: getApiGamificationStream
       tags:
         - Gamification
       summary: "GET gamification › stream"
+      description: >-
+        Streams leaderboard updates as Server-Sent Events. Each leaderboard event carries a JSON
+        frame; errors are sent as `event: error` frames and heartbeats are SSE comments. Invalid
+        scopes fall back to `global`.
+      parameters:
+        - name: scope
+          in: query
+          required: false
+          description: Known scopes are global, weekly, monthly, tokens_shared, and contributions; unknown values fall back to global.
+          schema: { type: string, default: global }
       responses:
         "200":
-          description: OK
+          description: >-
+            Server-Sent Events stream with an initial leaderboard frame, updates every five
+            seconds, error event frames, and heartbeat comments.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: UTF-8 Server-Sent Events stream; heartbeat comments have no data payload.
+              x-sse-event-schema:
+                $ref: "#/components/schemas/GamificationStreamEvent"
   /api/gamification/transfer:
     get:
       operationId: getApiGamificationTransfer
       tags:
         - Gamification
       summary: "GET gamification › transfer"
+      description: Returns an API key's token balance and the latest 20 transfer ledger entries.
+      parameters:
+        - name: apiKeyId
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
       responses:
         "200":
-          description: OK
+          description: Current balance and recent transfer history.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationTransferHistoryResponse" }
     post:
       operationId: postApiGamificationTransfer
       tags:
         - Gamification
       summary: "POST gamification › transfer"
+      description: Transfers tokens between API keys and returns the generated idempotency key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GamificationTransferRequest" }
       responses:
         "200":
-          description: OK
+          description: Transfer result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GamificationTransferResponse" }
   /api/github-skills:
     get:
       operationId: getApiGithubSkills
@@ -57432,4 +57608,326 @@ components:
       required: [response]
       properties:
         response: { $ref: "#/components/schemas/AntigravityCloudCodeResponsePayload" }
+      additionalProperties: false
+
+    GamificationFederationLeaderboardEntry:
+      type: object
+      description: Federation projection intentionally omits display names and API key credential material.
+      required: [apiKeyId, score]
+      properties:
+        apiKeyId: { type: string }
+        score: { type: number }
+      additionalProperties: false
+
+    GamificationFederationLeaderboardResponse:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationFederationLeaderboardEntry" }
+      additionalProperties: false
+
+    GamificationFederationScoreRequest:
+      type: object
+      required: [apiKeyId, score]
+      properties:
+        apiKeyId: { type: string }
+        score: { type: number }
+        scope: { type: string, enum: [global, weekly, monthly], default: global }
+      additionalProperties: true
+
+    GamificationInviteListItem:
+      type: object
+      required: [id, code, serverUrl, maxUses, useCount, expiresAt, revokedAt, createdAt]
+      properties:
+        id: { type: string }
+        code:
+          type: string
+          x-sensitive: true
+          description: Redemption code; treat as a credential.
+        serverUrl: { type: [string, "null"] }
+        maxUses: { type: number, exclusiveMinimum: 0 }
+        useCount: { type: integer, minimum: 0 }
+        expiresAt: { type: [string, "null"] }
+        revokedAt: { type: [string, "null"] }
+        createdAt: { type: string }
+      additionalProperties: false
+
+    GamificationInviteListResponse:
+      type: object
+      required: [invites]
+      properties:
+        invites:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationInviteListItem" }
+      additionalProperties: false
+
+    GamificationInviteCreateRequest:
+      type: object
+      required: [apiKeyId]
+      properties:
+        apiKeyId: { type: string, minLength: 1 }
+        serverUrl: { type: string }
+        maxUses: { type: number, exclusiveMinimum: 0, default: 1 }
+      additionalProperties: true
+
+    GamificationInviteCreatedResponse:
+      type: object
+      description: Plaintext invite credentials are returned by this create response only.
+      required: [code, token]
+      properties:
+        code:
+          type: string
+          x-sensitive: true
+          description: Eight-character redemption code; treat as a credential.
+        token:
+          type: string
+          x-sensitive: true
+          description: One-time plaintext token; only its hash is persisted.
+      additionalProperties: false
+
+    GamificationInviteRedeemRequest:
+      type: object
+      required: [code, apiKeyId]
+      properties:
+        code:
+          type: string
+          minLength: 1
+          writeOnly: true
+          x-sensitive: true
+        apiKeyId: { type: string, minLength: 1 }
+      additionalProperties: true
+
+    GamificationInviteRedeemResponse:
+      type: object
+      required: [success]
+      properties:
+        success: { type: boolean, const: true }
+        serverUrl:
+          type: string
+          description: Present only when the invite was created with a non-empty server URL.
+      additionalProperties: false
+
+    GamificationLeaderboardEntry:
+      type: object
+      required: [apiKeyId, scope, score, updatedAt, name]
+      properties:
+        apiKeyId: { type: string }
+        scope: { type: string }
+        score: { type: number }
+        updatedAt: { type: string }
+        name: { type: [string, "null"] }
+      additionalProperties: false
+
+    GamificationLeaderboardNeighborEntry:
+      type: object
+      required: [apiKeyId, score]
+      properties:
+        apiKeyId: { type: string }
+        score: { type: number }
+      additionalProperties: false
+
+    GamificationLeaderboardNeighbors:
+      type: object
+      required: [above, below]
+      properties:
+        above:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationLeaderboardNeighborEntry" }
+        below:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationLeaderboardNeighborEntry" }
+      additionalProperties: false
+
+    GamificationLeaderboardResponse:
+      type: object
+      required: [entries, myRank, neighbors]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationLeaderboardEntry" }
+        myRank: { type: [integer, "null"], minimum: 0 }
+        neighbors:
+          oneOf:
+            - { $ref: "#/components/schemas/GamificationLeaderboardNeighbors" }
+            - { type: "null" }
+      additionalProperties: false
+
+    GamificationLevelRecord:
+      type: object
+      required: [apiKeyId, totalXp, currentLevel, updatedAt]
+      properties:
+        apiKeyId: { type: string }
+        totalXp: { type: number }
+        currentLevel: { type: integer, minimum: 1 }
+        updatedAt: { type: string }
+      additionalProperties: false
+
+    GamificationStreak:
+      type: object
+      required: [current, longest]
+      properties:
+        current: { type: integer, minimum: 0 }
+        longest: { type: integer, minimum: 0 }
+      additionalProperties: false
+
+    GamificationLevelResponse:
+      type: object
+      required: [level, streak]
+      properties:
+        level:
+          oneOf:
+            - { $ref: "#/components/schemas/GamificationLevelRecord" }
+            - { type: "null" }
+        streak: { $ref: "#/components/schemas/GamificationStreak" }
+      additionalProperties: false
+
+    GamificationRotateRequest:
+      type: object
+      required: [scope]
+      properties:
+        scope: { type: string, enum: [weekly, monthly] }
+      additionalProperties: true
+
+    GamificationRotateResponse:
+      type: object
+      required: [success, scope]
+      properties:
+        success: { type: boolean, const: true }
+        scope: { type: string, enum: [weekly, monthly] }
+      additionalProperties: false
+
+    GamificationCommunityServer:
+      type: object
+      description: Safe list projection; the stored API key hash is not included.
+      required: [id, name, url, connectedAt, lastSyncAt, status, errorMessage]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        url: { type: string }
+        connectedAt: { type: string }
+        lastSyncAt: { type: [string, "null"] }
+        status: { type: string, enum: [connected, disconnected, error] }
+        errorMessage: { type: [string, "null"] }
+      additionalProperties: false
+
+    GamificationServersResponse:
+      type: object
+      required: [servers]
+      properties:
+        servers:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationCommunityServer" }
+      additionalProperties: false
+
+    GamificationServerConnectRequest:
+      type: object
+      required: [name, url, apiKey]
+      properties:
+        name: { type: string, minLength: 1 }
+        url: { type: string, format: uri }
+        apiKey:
+          type: string
+          minLength: 1
+          writeOnly: true
+          x-sensitive: true
+      additionalProperties: true
+
+    GamificationServerCreated:
+      type: object
+      description: Created response projection; it never includes the submitted key or stored key hash.
+      required: [id, name, url, status, lastSyncAt, errorMessage]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        url: { type: string }
+        status: { type: string, const: connected }
+        lastSyncAt: { type: [string, "null"] }
+        errorMessage: { type: [string, "null"] }
+      additionalProperties: false
+
+    GamificationServerConnectResponse:
+      type: object
+      required: [server]
+      properties:
+        server: { $ref: "#/components/schemas/GamificationServerCreated" }
+      additionalProperties: false
+
+    GamificationStreamLeaderboardFrame:
+      type: object
+      required: [type, scope, entries]
+      properties:
+        type: { type: string, const: leaderboard }
+        scope:
+          type: string
+          enum: [global, weekly, monthly, tokens_shared, contributions]
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationStreamLeaderboardEntry" }
+      additionalProperties: false
+
+    GamificationStreamLeaderboardEntry:
+      type: object
+      required: [apiKeyId, scope, score, updatedAt]
+      properties:
+        apiKeyId: { type: string }
+        scope: { type: string }
+        score: { type: number }
+        updatedAt: { type: string }
+      additionalProperties: false
+
+    GamificationStreamErrorFrame:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Error message text emitted in an SSE error event.
+      additionalProperties: false
+
+    GamificationStreamEvent:
+      oneOf:
+        - { $ref: "#/components/schemas/GamificationStreamLeaderboardFrame" }
+        - { $ref: "#/components/schemas/GamificationStreamErrorFrame" }
+
+    GamificationTokenLedgerEntry:
+      type: object
+      required: [id, fromApiKeyId, toApiKeyId, amount, reason, idempotencyKey, createdAt]
+      properties:
+        id: { type: integer }
+        fromApiKeyId: { type: string }
+        toApiKeyId: { type: string }
+        amount: { type: number }
+        reason: { type: [string, "null"] }
+        idempotencyKey: { type: [string, "null"] }
+        createdAt: { type: string }
+      additionalProperties: false
+
+    GamificationTransferHistoryResponse:
+      type: object
+      required: [balance, history]
+      properties:
+        balance: { type: number }
+        history:
+          type: array
+          items: { $ref: "#/components/schemas/GamificationTokenLedgerEntry" }
+      additionalProperties: false
+
+    GamificationTransferRequest:
+      type: object
+      required: [fromApiKeyId, toApiKeyId, amount]
+      properties:
+        fromApiKeyId: { type: string, minLength: 1 }
+        toApiKeyId: { type: string, minLength: 1 }
+        amount: { type: number, exclusiveMinimum: 0 }
+        reason: { type: string }
+      additionalProperties: true
+
+    GamificationTransferResponse:
+      type: object
+      required: [success, idempotencyKey]
+      properties:
+        success: { type: boolean, const: true }
+        idempotencyKey: { type: string, format: uuid }
       additionalProperties: false
