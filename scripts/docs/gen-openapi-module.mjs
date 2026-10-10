@@ -33,6 +33,14 @@ const includeManagement = args.includes("--include-management");
 
 function summarizeEndpoint(rawPath, method, op) {
   const tags = Array.isArray(op?.tags) && op.tags.length > 0 ? op.tags : ["Other"];
+  const security = Array.isArray(op?.security) ? op.security : [];
+  const allowsAnonymous = security.some(
+    (requirement) =>
+      requirement !== null &&
+      typeof requirement === "object" &&
+      !Array.isArray(requirement) &&
+      Object.keys(requirement).length === 0
+  );
   return {
     path: rawPath,
     method: method.toUpperCase(),
@@ -40,7 +48,7 @@ function summarizeEndpoint(rawPath, method, op) {
     description: typeof op?.description === "string" ? op.description : "",
     tag: typeof tags[0] === "string" ? tags[0] : "Other",
     tags,
-    requiresAuth: Array.isArray(op?.security) && op.security.length > 0,
+    requiresAuth: security.length > 0 && !allowsAnonymous,
     hasRequestBody: Boolean(op?.requestBody),
   };
 }
@@ -128,7 +136,7 @@ export interface OpenApiEndpoint {
   tag: string;
   /** All tags declared on the operation. */
   tags: string[];
-  /** \`true\` when the operation declares a non-empty \`security\` array. */
+  /** \`true\` when a security scheme is required and anonymous access is not declared. */
   requiresAuth: boolean;
   /** \`true\` when the operation declares a \`requestBody\`. */
   hasRequestBody: boolean;

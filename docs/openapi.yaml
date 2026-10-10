@@ -1757,13 +1757,18 @@ paths:
         Upgrade returns `426 Upgrade Required`. After upgrading, the client
         exchanges JSON frames — `{type:"request", id, payload:{model, messages}}`
         to start a completion and `{type:"cancel", id}` to abort it. A separate
-        live channel (default port `LIVE_WS_PORT=20129`, path `/live`) streams
+        live channel (default port `LIVE_WS_PORT=20132`, path `/live-ws`) streams
         dashboard events on the `requests`, `combo` and `credentials` topics with
-        a 15s heartbeat. The handshake may be anonymous when WebSocket auth is
-        disabled; otherwise a valid API key or authenticated dashboard session is required.
+        a 15s heartbeat. Authentication accepts a valid API key in the Bearer header or the
+        `api_key`, `token`, or `access_token` query parameter, or an authenticated dashboard
+        session cookie. Query credentials must be API keys, not management access tokens. The
+        handshake may be anonymous when WebSocket auth is disabled.
       security:
-        - BearerAuth: []
+        - WebSocketApiKeyBearerAuth: []
         - ManagementSessionAuth: []
+        - WebSocketApiKeyQueryAuth: []
+        - WebSocketTokenQueryAuth: []
+        - WebSocketAccessTokenQueryAuth: []
         - {}
       parameters:
         - name: handshake
@@ -1784,10 +1789,23 @@ paths:
                 $ref: "#/components/schemas/WebSocketHandshakeResponse"
         "401":
           description: WebSocket auth required (no credential supplied)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebSocketHandshakeAuthRequiredResponse" }
         "403":
           description: Invalid WebSocket credential
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebSocketHandshakeAuthInvalidResponse" }
         "426":
           description: Upgrade Required — connect via WebSocket or use `?handshake=1`
+          headers:
+            Upgrade:
+              description: Required WebSocket upgrade protocol.
+              schema: { type: string, const: websocket }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebSocketUpgradeRequiredResponse" }
 
   /api/v1/providers/{provider}/chat/completions:
     post:
@@ -45746,6 +45764,34 @@ components:
       in: cookie
       name: auth_token
       description: Dashboard management session cookie (auth_token) for protected management routes. Distinct from Bearer Access Tokens and API keys. See docs/guides/MANAGEMENT-AUTH.md.
+    WebSocketApiKeyBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: OmniRoute API key
+      description: >-
+        API key accepted by the conditional WebSocket handshake authenticator. The handler validates
+        Bearer credentials as API keys; management access tokens are not accepted by this path.
+    WebSocketApiKeyQueryAuth:
+      type: apiKey
+      in: query
+      name: api_key
+      description: >-
+        Valid OmniRoute API key accepted by the WebSocket handshake. Query credentials may appear in
+        URLs and logs; prefer the Bearer header where possible.
+    WebSocketTokenQueryAuth:
+      type: apiKey
+      in: query
+      name: token
+      description: >-
+        Valid OmniRoute API key alias accepted by the WebSocket handshake. Query credentials may
+        appear in URLs and logs; prefer the Bearer header where possible.
+    WebSocketAccessTokenQueryAuth:
+      type: apiKey
+      in: query
+      name: access_token
+      description: >-
+        Valid OmniRoute API key alias accepted by the WebSocket handshake (not a management access
+        token). Query credentials may appear in URLs and logs; prefer the Bearer header where possible.
     LocalCliTokenAuth:
       type: apiKey
       in: header
@@ -57100,28 +57146,136 @@ components:
         system_fingerprint: { type: string }
       additionalProperties: true
 
+    WebSocketRequestDescriptor:
+      type: object
+      required: [type, id, payload]
+      properties:
+        type: { type: string, const: request }
+        id: { type: string, example: req-1 }
+        payload:
+          type: object
+          description: Sample routed chat payload; clients may include additional ChatCompletionRequest fields.
+          required: [model, messages]
+          properties:
+            model: { type: string, example: openai/gpt-4.1-mini }
+            messages:
+              type: array
+              items:
+                $ref: "#/components/schemas/ChatCompletionRequest/properties/messages/items"
+          additionalProperties: true
+      additionalProperties: false
+
+    WebSocketCancelDescriptor:
+      type: object
+      required: [type, id]
+      properties:
+        type: { type: string, const: cancel }
+        id: { type: string, example: req-1 }
+      additionalProperties: false
+
+    WebSocketProtocolLiveDescriptor:
+      type: object
+      required: [port, publicUrl, path, protocol, channels, auth, heartbeatMs]
+      properties:
+        port: { type: [integer, "null"] }
+        publicUrl: { type: [string, "null"] }
+        path: { type: string }
+        protocol: { type: string, const: json }
+        channels:
+          type: array
+          items: { type: string, enum: [requests, combo, credentials] }
+        auth: { type: string, const: api-key }
+        heartbeatMs: { type: integer, const: 15000 }
+      additionalProperties: false
+
+    WebSocketLiveDescriptor:
+      type: object
+      required: [port, publicUrl, path, protocol, channels, auth, description]
+      properties:
+        port: { type: [integer, "null"] }
+        publicUrl: { type: [string, "null"] }
+        path: { type: string }
+        protocol: { type: string, const: json }
+        channels:
+          type: array
+          items: { type: string, enum: [requests, combo, credentials] }
+        auth: { type: string, const: api-key }
+        description: { type: string, const: Real-time dashboard events via WebSocket }
+      additionalProperties: false
+
+    WebSocketProtocolDescriptor:
+      type: object
+      required: [request, cancel, live]
+      properties:
+        request: { $ref: "#/components/schemas/WebSocketRequestDescriptor" }
+        cancel: { $ref: "#/components/schemas/WebSocketCancelDescriptor" }
+        live: { $ref: "#/components/schemas/WebSocketProtocolLiveDescriptor" }
+      additionalProperties: false
+
+    WebSocketHandshakeAuthRequiredResponse:
+      type: object
+      required: [error, wsAuth, path]
+      properties:
+        error:
+          type: object
+          required: [message, type, code]
+          properties:
+            message: { type: string, const: WebSocket auth required }
+            type: { type: string, const: invalid_request }
+            code: { type: string, const: ws_auth_required }
+          additionalProperties: false
+        wsAuth: { type: boolean, const: true }
+        path: { type: string }
+      additionalProperties: false
+
+    WebSocketHandshakeAuthInvalidResponse:
+      type: object
+      required: [error, wsAuth, path]
+      properties:
+        error:
+          type: object
+          required: [message, type, code]
+          properties:
+            message: { type: string, const: Invalid WebSocket credential }
+            type: { type: string, const: invalid_request }
+            code: { type: string, const: ws_auth_invalid }
+          additionalProperties: false
+        wsAuth: { type: boolean, const: true }
+        path: { type: string }
+      additionalProperties: false
+
+    WebSocketUpgradeRequiredResponse:
+      type: object
+      required: [error, path, wsAuth, protocol]
+      properties:
+        error:
+          type: object
+          required: [message, type, code]
+          properties:
+            message: { type: string, const: Upgrade Required }
+            type: { type: string, const: invalid_request }
+            code: { type: string, const: upgrade_required }
+          additionalProperties: false
+        path: { type: string }
+        wsAuth: { type: boolean }
+        protocol: { $ref: "#/components/schemas/WebSocketProtocolDescriptor" }
+      additionalProperties: false
+
     WebSocketHandshakeResponse:
       type: object
       description: WebSocket connection descriptor returned by GET /api/v1/ws?handshake=1.
+      required: [ok, path, wsAuth, authenticated, authType, protocol, live]
       properties:
-        ok: { type: boolean }
+        ok: { type: boolean, const: true }
         path: { type: string }
         wsAuth: { type: boolean }
         authenticated: { type: boolean }
         authType:
           type: string
           enum: [none, api_key, session]
-        protocol:
-          type: object
-          properties:
-            request: { type: object, additionalProperties: true }
-            cancel: { type: object, additionalProperties: true }
-            live: { type: object, additionalProperties: true }
-          additionalProperties: true
-        live:
-          type: object
-          additionalProperties: true
-      additionalProperties: true
+        protocol: { $ref: "#/components/schemas/WebSocketProtocolDescriptor" }
+        live: { $ref: "#/components/schemas/WebSocketLiveDescriptor" }
+      additionalProperties: false
 
     Model:
       type: object
