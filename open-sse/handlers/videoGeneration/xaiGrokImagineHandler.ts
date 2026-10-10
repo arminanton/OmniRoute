@@ -28,6 +28,12 @@ interface XaiVideoLog {
   error: (scope: string, message: string) => void;
 }
 
+const DEFAULT_TIMEOUT_MS = 300_000;
+// Keep a server-owned upper bound even when a request body asks for a much
+// longer timeout. Callers may choose a shorter window, but cannot pin a worker
+// indefinitely with an unbounded async video job.
+const MAX_TIMEOUT_MS = 10 * 60 * 1000;
+
 /** Map the OmniRoute video body onto xAI's create-job payload. */
 function buildXaiVideoPayload(model: string, prompt: string, body: XaiVideoBody) {
   const payload: Record<string, unknown> = { model, prompt };
@@ -43,13 +49,15 @@ async function createXaiVideoJob({
   baseUrl,
   token,
   payload,
+  signal,
   log,
 }: {
   baseUrl: string;
   token: string;
   payload: Record<string, unknown>;
+  signal: AbortSignal;
   log?: XaiVideoLog | null;
-}): Promise<{ requestId?: string; error?: string }> {
+}): Promise<{ requestId?: string; error?: string; status?: number; terminal?: boolean }> {
   const createRes = await fetch(`${baseUrl}/generations`, {
     method: "POST",
     headers: {
@@ -57,19 +65,38 @@ async function createXaiVideoJob({
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
+    signal,
   });
-  const createData = await createRes.json().catch(() => ({}));
+  const createText = await createRes.text();
+  let createData: Record<string, unknown> = {};
+  try {
+    createData = JSON.parse(createText) as Record<string, unknown>;
+  } catch {
+    // Keep the provider's plain-text error available below.
+  }
   const requestId = createData?.request_id;
   if (requestId) return { requestId: String(requestId) };
 
   const errorMessage =
-    createData?.error?.message ||
+    (createData?.error as { message?: unknown } | undefined)?.message ||
     createData?.message ||
+    createText ||
     "xAI video generation did not return request_id";
   if (log) {
     log.error("VIDEO", `xAI createJob failed: ${JSON.stringify(createData)}`);
   }
-  return { error: String(errorMessage) };
+  // A successful response without an id may still represent accepted work.
+  // Likewise, a timeout/server error after POST dispatch has an ambiguous
+  // acceptance state. Only a clear client rejection is safe for combo retry.
+  return {
+    error: String(errorMessage),
+    // Keep the handler's existing submit-error status mapping for API
+    // compatibility; `terminal` carries the duplicate-work safety decision.
+    status: 502,
+    ...(createRes.ok || createRes.status === 408 || createRes.status >= 500
+      ? { terminal: true }
+      : {}),
+  };
 }
 
 type XaiPollOutcome =
@@ -88,27 +115,77 @@ async function pollXaiVideoJob({
   token,
   deadline,
   pollIntervalMs,
+  signal,
 }: {
   statusUrl: string;
   requestId: string;
   token: string;
   deadline: number;
   pollIntervalMs: number;
+  signal: AbortSignal;
 }): Promise<XaiPollOutcome> {
   let lastStatus = "pending";
   while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    await sleepWithinDeadline(pollIntervalMs, deadline, signal);
     const pollRes = await fetch(`${statusUrl}/${requestId}`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal,
     });
-    const pollData = await pollRes.json().catch(() => ({}));
-    lastStatus = pollData?.status || "pending";
+    const pollText = await pollRes.text();
+    let pollData: Record<string, unknown> = {};
+    try {
+      pollData = JSON.parse(pollText) as Record<string, unknown>;
+    } catch {
+      // A malformed status response cannot establish the accepted task state.
+    }
+    if (!pollRes.ok) {
+      const message =
+        (pollData?.error as { message?: unknown } | undefined)?.message ||
+        pollData?.message ||
+        pollText ||
+        `xAI video status request failed (${pollRes.status})`;
+      throw Object.assign(new Error(String(message)), { status: pollRes.status });
+    }
+    lastStatus = String(pollData?.status || "pending");
 
-    if (lastStatus === "done") return { terminal: "done", videoUrl: pollData?.video?.url };
+    if (lastStatus === "done") {
+      const video = pollData.video as { url?: unknown } | undefined;
+      return { terminal: "done", videoUrl: typeof video?.url === "string" ? video.url : undefined };
+    }
     if (lastStatus === "failed") return { terminal: "failed", error: pollData?.error };
     // pending / processing → keep polling
   }
   return { terminal: "timeout", lastStatus };
+}
+
+/** Wait for a poll interval without sleeping past the absolute job deadline. */
+function sleepWithinDeadline(ms: number, deadline: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) return Promise.reject(signal.reason || timeoutError());
+
+  return new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onAbort = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      reject(signal.reason || timeoutError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeout(
+      () => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      Math.min(ms, remainingMs)
+    );
+  });
+}
+
+function timeoutError() {
+  return Object.assign(new Error("xAI video generation timed out"), {
+    name: "TimeoutError",
+    status: 504,
+  });
 }
 
 /** Resolve the request knobs (timeouts, credential, endpoints, prompt) from the call. */
@@ -119,7 +196,10 @@ function resolveXaiVideoOptions(
 ) {
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
   return {
-    timeoutMs: Number(body.timeout_ms) > 0 ? Number(body.timeout_ms) : 300000,
+    timeoutMs:
+      Number.isFinite(Number(body.timeout_ms)) && Number(body.timeout_ms) > 0
+        ? Math.min(Number(body.timeout_ms), MAX_TIMEOUT_MS)
+        : DEFAULT_TIMEOUT_MS,
     pollIntervalMs: Number(body.poll_interval_ms) > 0 ? Number(body.poll_interval_ms) : 2500,
     token: credentials?.apiKey || credentials?.accessToken,
     baseUrl,
@@ -150,12 +230,18 @@ function buildXaiVideoResponse({
     return {
       success: false,
       status: 504,
+      terminal: true,
       error: `xAI video job ${requestId} timed out (status: ${outcome.lastStatus})`,
     };
   }
 
   if (!outcome.videoUrl) {
-    return { success: false, status: 502, error: "xAI video job done but no video.url" };
+    return {
+      success: false,
+      status: 502,
+      terminal: true,
+      error: "xAI video job done but no video.url",
+    };
   }
 
   saveCallLog({
@@ -207,23 +293,43 @@ export async function handleXaiVideoGeneration({
     log.info("VIDEO", `${provider}/${model} (xai-video) | prompt: "${prompt.slice(0, 60)}..."`);
   }
 
+  const deadline = startTime + timeoutMs;
+  const deadlineController = new AbortController();
+  const deadlineTimer = setTimeout(() => deadlineController.abort(timeoutError()), timeoutMs);
+  let submitDispatched = false;
+  let taskAccepted = false;
+
   try {
+    const payload = buildXaiVideoPayload(model, prompt, body);
+    submitDispatched = true;
     const created = await createXaiVideoJob({
       baseUrl,
       token,
-      payload: buildXaiVideoPayload(model, prompt, body),
+      payload,
+      signal: deadlineController.signal,
       log,
     });
     if (!created.requestId) {
-      return { success: false, status: 502, error: created.error };
+      return {
+        success: false,
+        status: created.status || 502,
+        ...(created.terminal ? { terminal: true } : {}),
+        error: created.error || "xAI video generation did not return request_id",
+      };
+    }
+    taskAccepted = true;
+
+    if (deadlineController.signal.aborted || Date.now() >= deadline) {
+      throw deadlineController.signal.reason || timeoutError();
     }
 
     const outcome = await pollXaiVideoJob({
       statusUrl,
       requestId: created.requestId,
       token,
-      deadline: startTime + timeoutMs,
+      deadline,
       pollIntervalMs,
+      signal: deadlineController.signal,
     });
 
     return buildXaiVideoResponse({
@@ -234,10 +340,19 @@ export async function handleXaiVideoGeneration({
       startTime,
     });
   } catch (err: unknown) {
+    const timedOut = deadlineController.signal.aborted || Date.now() >= deadline;
+    const errorStatus =
+      isJsonObject(err) && Number.isFinite(Number(err.status)) ? Number(err.status) : 502;
     return {
       success: false,
-      status: isJsonObject(err) && Number.isFinite(Number(err.status)) ? Number(err.status) : 502,
+      status: timedOut ? 504 : errorStatus,
+      // Once POST was dispatched, a transport error has an ambiguous acceptance
+      // state. After a request_id is returned, any poll/result transport failure
+      // must also stop combo from creating a duplicate video elsewhere.
+      ...(submitDispatched || taskAccepted ? { terminal: true } : {}),
       error: sanitizeErrorMessage(err) || "Video provider error",
     };
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 }

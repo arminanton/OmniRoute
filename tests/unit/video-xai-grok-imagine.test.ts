@@ -8,9 +8,14 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "omniroute-video-xai-"));
 
 const { handleVideoGeneration } = await import("../../open-sse/handlers/videoGeneration.ts");
 const { VIDEO_PROVIDERS } = await import("../../open-sse/config/videoRegistry.ts");
+const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
 
 // Makes poll-interval waits resolve instantly so tests don't sleep.
 function immediateTimeout(callback, _ms, ...args) {
+  // Preserve real server-deadline timers. The old tests used this shim before
+  // the handler had a deadline timer, so firing every timer immediately would
+  // now make all successful async jobs time out before their first poll.
+  if (Number(_ms) > 4000) return nativeSetTimeout(callback, _ms, ...args);
   if (typeof callback === "function") callback(...args);
   return 0;
 }
@@ -116,8 +121,7 @@ test("handleVideoGeneration rejects xAI video requests without credentials", asy
 
 test("handleVideoGeneration surfaces a 502 when xAI returns no request_id", async () => {
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () =>
-    jsonResponse({ error: { message: "Invalid API key" } }, 401);
+  globalThis.fetch = async () => jsonResponse({ error: { message: "Invalid API key" } }, 401);
 
   try {
     const result = await handleVideoGeneration({
@@ -164,6 +168,11 @@ test("handleVideoGeneration returns 502 when the xAI job status is failed", asyn
     assert.equal(result.success, false);
     assert.equal(result.status, 502);
     assert.equal(result.error, "content policy violation");
+    assert.equal(
+      result.terminal,
+      undefined,
+      "a confirmed failed task may try the next combo target"
+    );
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
@@ -207,11 +216,100 @@ test("handleVideoGeneration returns 504 when the xAI job never completes", async
 
     assert.equal(result.success, false);
     assert.equal(result.status, 504);
+    assert.equal(result.terminal, true, "an accepted task timeout must not create a duplicate job");
     assert.match(result.error, /timed out/);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.setTimeout = originalSetTimeout;
     Date.now = originalNow;
+  }
+});
+
+test("xAI submit hangs are aborted at the server deadline and marked terminal", async () => {
+  const originalFetch = globalThis.fetch;
+  let submitSignal: AbortSignal | null = null;
+  globalThis.fetch = async (_url, init = {}) =>
+    new Promise<Response>((_resolve, reject) => {
+      submitSignal = init.signal as AbortSignal;
+      assert.ok(submitSignal, "xAI submit receives the server-owned deadline signal");
+      submitSignal.addEventListener("abort", () => reject(submitSignal!.reason), { once: true });
+    });
+
+  try {
+    const result = await handleVideoGeneration({
+      body: { model: "xai/grok-imagine-video", prompt: "x", timeout_ms: 25 },
+      credentials: { apiKey: "xai-key" },
+      log: null,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 504);
+    assert.equal(result.terminal, true, "submit acceptance is ambiguous after dispatch");
+    assert.equal(submitSignal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("xAI poll hangs are aborted at the same deadline and do not recreate accepted work", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  let pollSignal: AbortSignal | null = null;
+  globalThis.fetch = async (_url, init = {}) => {
+    calls += 1;
+    if (calls === 1) return jsonResponse({ request_id: "accepted-xai-task", status: "pending" });
+
+    pollSignal = init.signal as AbortSignal;
+    return new Promise<Response>((_resolve, reject) => {
+      assert.ok(pollSignal, "xAI poll uses the same server-owned deadline signal");
+      pollSignal.addEventListener("abort", () => reject(pollSignal!.reason), { once: true });
+    });
+  };
+
+  try {
+    const result = await handleVideoGeneration({
+      body: {
+        model: "xai/grok-imagine-video",
+        prompt: "x",
+        timeout_ms: 60,
+        poll_interval_ms: 1,
+      },
+      credentials: { apiKey: "xai-key" },
+      log: null,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 504);
+    assert.equal(result.terminal, true);
+    assert.equal(calls, 2, "the accepted task is polled once and never submitted again");
+    assert.equal(pollSignal?.aborted, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("xAI accepted-task poll HTTP errors are terminal to video combo fallback", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) return jsonResponse({ request_id: "accepted-xai-task" });
+    return jsonResponse({ error: { message: "rate limited while checking task" } }, 429);
+  };
+
+  try {
+    const result = await handleVideoGeneration({
+      body: { model: "xai/grok-imagine-video", prompt: "x", poll_interval_ms: 1 },
+      credentials: { apiKey: "xai-key" },
+      log: null,
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.status, 429);
+    assert.equal(result.terminal, true);
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
