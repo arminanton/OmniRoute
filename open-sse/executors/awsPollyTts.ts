@@ -91,7 +91,8 @@ export async function handleAwsPollySpeech(
   body,
   modelId,
   token,
-  credentials
+  credentials,
+  signal?: AbortSignal
 ): Promise<Response> {
   const providerSpecificData = getAwsPollyProviderData(credentials);
   const accessKeyId =
@@ -151,6 +152,7 @@ export async function handleAwsPollySpeech(
     method: "POST",
     headers: signedHeaders,
     body: serializedBody,
+    signal,
   });
 
   if (!res.ok) {

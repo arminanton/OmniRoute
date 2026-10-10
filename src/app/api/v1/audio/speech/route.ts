@@ -22,6 +22,7 @@ import {
   releaseAccountRequestAfterResponseBody,
   reserveSelectedAccountRequest,
 } from "@omniroute/open-sse/services/accountRequestLease.ts";
+import { acquireConfiguredSharedAccountAdmission } from "@omniroute/open-sse/services/accountRequestAdmission.ts";
 
 /**
  * Handle CORS preflight
@@ -67,7 +68,7 @@ async function postHandler(request, context) {
     const combo = await getComboByName(body.model);
     if (combo) {
       const { executeSpeechCombo } = await import("@omniroute/open-sse/services/speechCombo");
-      return executeSpeechCombo(body.model, body, startTime);
+      return executeSpeechCombo(body.model, body, startTime, request.signal);
     }
   }
 
@@ -86,14 +87,20 @@ async function postHandler(request, context) {
   // Check provider config — hardcoded first, then dynamic
   const providerConfig =
     getSpeechProvider(provider) || dynamicProviders.find((dp) => dp.id === provider) || null;
+  const credentialProviderKey = providerConfig?.credentialProviderId || provider;
 
   // Get credentials — skip for local providers (authType: "none")
   let credentials = null;
   if (providerConfig && providerConfig.authType !== "none") {
-    const credentialKey = providerConfig.credentialProviderId || provider;
-    credentials = await getProviderCredentialsWithQuotaPreflight(credentialKey, null, null, null, {
-      reserveAccountRequest: true,
-    });
+    credentials = await getProviderCredentialsWithQuotaPreflight(
+      credentialProviderKey,
+      null,
+      null,
+      null,
+      {
+        reserveAccountRequest: true,
+      }
+    );
     if (!credentials) {
       return errorResponse(HTTP_STATUS.BAD_REQUEST, `No credentials for provider: ${provider}`);
     }
@@ -103,13 +110,33 @@ async function postHandler(request, context) {
   }
 
   const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+  let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
   let responseOwnsReservation = false;
+  const releaseReservations = () => {
+    sharedAdmission?.release();
+    releaseAccountRequest();
+  };
   try {
+    // Known Kie remote-job ownership gap: Kie creates a durable task before
+    // polling and exposes no task-cancel API here, so lease loss cannot prove
+    // synthesis stopped. Keep Kie out of shared hard admission.
+    if (providerConfig?.format !== "kie-audio") {
+      const selectedProvider =
+        typeof (credentials as { provider?: unknown } | null)?.provider === "string"
+          ? (credentials as { provider: string }).provider
+          : credentialProviderKey;
+      sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+        provider: selectedProvider,
+        credentials,
+        signal: request.signal,
+      });
+    }
     let response = await handleAudioSpeech({
       body,
       credentials,
       resolvedProvider: providerConfig,
       resolvedModel,
+      signal: sharedAdmission?.signal ?? request.signal,
     });
     if (response?.ok) {
       await clearRecoveredProviderState(credentials);
@@ -128,12 +155,21 @@ async function postHandler(request, context) {
       });
     }
     if (response?.ok && response.body) {
-      response = releaseAccountRequestAfterResponseBody(response, releaseAccountRequest);
+      response = releaseAccountRequestAfterResponseBody(response, releaseReservations);
       responseOwnsReservation = true;
     }
     return response;
+  } catch (error) {
+    const admissionError = error as { code?: string; statusCode?: number; message?: string };
+    if (admissionError.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+      return errorResponse(
+        admissionError.statusCode || HTTP_STATUS.SERVICE_UNAVAILABLE,
+        admissionError.message || "Provider account capacity admission is unavailable"
+      );
+    }
+    throw error;
   } finally {
-    if (!responseOwnsReservation) releaseAccountRequest();
+    if (!responseOwnsReservation) releaseReservations();
   }
 }
 

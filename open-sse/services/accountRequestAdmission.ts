@@ -8,21 +8,23 @@ type AdmissionCredentials = {
   providerSpecificData?: Record<string, unknown> | null;
 };
 
+export type ConfiguredSharedAccountAdmission = {
+  signal: AbortSignal;
+  release: () => void;
+};
+
 /**
  * Run one selected-account media request under the shared account cap when the
  * operator enabled shared admission and configured a positive account limit.
  * Unknown/unlimited accounts keep their existing behavior. The supplied signal
  * is also the lease-loss fence for the upstream operation.
  */
-export async function withConfiguredSharedAccountAdmission<T>(
-  options: {
-    provider: string;
-    credentials: AdmissionCredentials | null | undefined;
-    signal?: AbortSignal;
-  },
-  operation: (signal?: AbortSignal) => Promise<T>
-): Promise<T> {
-  if (process.env.OMNI_SHARED_ADMISSION !== "true") return operation(options.signal);
+export async function acquireConfiguredSharedAccountAdmission(options: {
+  provider: string;
+  credentials: AdmissionCredentials | null | undefined;
+  signal?: AbortSignal;
+}): Promise<ConfiguredSharedAccountAdmission | null> {
+  if (process.env.OMNI_SHARED_ADMISSION !== "true") return null;
 
   const credentials = options.credentials;
   const configuredCapacity = credentials?.maxConcurrent;
@@ -31,12 +33,12 @@ export async function withConfiguredSharedAccountAdmission<T>(
     !Number.isFinite(configuredCapacity) ||
     configuredCapacity <= 0
   ) {
-    return operation(options.signal);
+    return null;
   }
 
   const connectionId = credentials.connectionId ?? credentials.id ?? null;
   const key = resolveQuotaIdentity(options.provider, connectionId, credentials);
-  if (!key) return operation(options.signal);
+  if (!key) return null;
 
   const controller = new AbortController();
   const callerSignal = options.signal;
@@ -44,10 +46,11 @@ export async function withConfiguredSharedAccountAdmission<T>(
   if (callerSignal?.aborted) abortFromCaller();
   else callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
 
-  let release: (() => void) | undefined;
+  let releaseLease: (() => void) | undefined;
+  let handedOff = false;
   try {
     try {
-      release = await acquireMany(
+      releaseLease = await acquireMany(
         [{ key, maxConcurrency: Math.max(1, Math.trunc(configuredCapacity)) }],
         {
           signal: controller.signal,
@@ -70,9 +73,38 @@ export async function withConfiguredSharedAccountAdmission<T>(
     }
 
     controller.signal.throwIfAborted();
-    return await operation(controller.signal);
+    let released = false;
+    handedOff = true;
+    return {
+      signal: controller.signal,
+      release: () => {
+        if (released) return;
+        released = true;
+        releaseLease?.();
+        callerSignal?.removeEventListener("abort", abortFromCaller);
+      },
+    };
   } finally {
-    release?.();
-    callerSignal?.removeEventListener("abort", abortFromCaller);
+    if (!handedOff) {
+      releaseLease?.();
+      callerSignal?.removeEventListener("abort", abortFromCaller);
+    }
+  }
+}
+
+export async function withConfiguredSharedAccountAdmission<T>(
+  options: {
+    provider: string;
+    credentials: AdmissionCredentials | null | undefined;
+    signal?: AbortSignal;
+  },
+  operation: (signal?: AbortSignal) => Promise<T>
+): Promise<T> {
+  const lease = await acquireConfiguredSharedAccountAdmission(options);
+  if (!lease) return operation(options.signal);
+  try {
+    return await operation(lease.signal);
+  } finally {
+    lease.release();
   }
 }

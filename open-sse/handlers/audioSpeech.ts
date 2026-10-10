@@ -180,7 +180,7 @@ function getXiaomiMimoAudioData(data) {
 /**
  * Handle Hyperbolic TTS (returns base64 audio in JSON)
  */
-async function handleHyperbolicSpeech(providerConfig, body, token) {
+async function handleHyperbolicSpeech(providerConfig, body, token, signal) {
   const res = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers: {
@@ -188,6 +188,7 @@ async function handleHyperbolicSpeech(providerConfig, body, token) {
       ...buildAuthHeaders(providerConfig, token),
     },
     body: JSON.stringify({ text: body.input }),
+    signal,
   });
 
   if (!res.ok) {
@@ -209,7 +210,7 @@ async function handleHyperbolicSpeech(providerConfig, body, token) {
 /**
  * Handle Deepgram TTS (model via query param, Token auth, returns binary audio)
  */
-async function handleDeepgramSpeech(providerConfig, body, modelId, token) {
+async function handleDeepgramSpeech(providerConfig, body, modelId, token, signal) {
   const url = new URL(providerConfig.baseUrl);
   url.searchParams.set("model", modelId);
 
@@ -220,6 +221,7 @@ async function handleDeepgramSpeech(providerConfig, body, modelId, token) {
       ...buildAuthHeaders(providerConfig, token),
     },
     body: JSON.stringify({ text: body.input }),
+    signal,
   });
 
   if (!res.ok) {
@@ -242,7 +244,7 @@ export function normalizeSpeechResponseFormat(fmt) {
 /**
  * Handle Soniox TTS (OpenAI speech shape → Soniox /tts, returns raw audio bytes)
  */
-async function handleSonioxSpeech(providerConfig, body, modelId, token) {
+async function handleSonioxSpeech(providerConfig, body, modelId, token, signal) {
   const fmt = typeof body.response_format === "string" ? body.response_format : "mp3";
   const audioFormat = fmt === "pcm" ? "pcm_s16le" : fmt;
 
@@ -258,6 +260,7 @@ async function handleSonioxSpeech(providerConfig, body, modelId, token) {
       ...(body.voice ? { voice: body.voice } : {}),
       audio_format: audioFormat,
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -273,7 +276,7 @@ async function handleSonioxSpeech(providerConfig, body, modelId, token) {
  * POST {baseUrl}/{voice_id} with { text, model_id }
  * voice_id is mapped from the OpenAI `voice` parameter
  */
-async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
+async function handleElevenLabsSpeech(providerConfig, body, modelId, token, signal) {
   // ElevenLabs uses voice_id in URL path. body.voice may be an OpenAI stock voice name
   // (alloy, echo, ...), a known ElevenLabs display name (Rachel, ...), or a raw voice_id;
   // resolve it to a real voice_id before it ever reaches the URL. Defaults to Rachel
@@ -303,6 +306,7 @@ async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
       text: body.input,
       model_id: modelId,
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -316,7 +320,7 @@ async function handleElevenLabsSpeech(providerConfig, body, modelId, token) {
  * Handle Nvidia NIM TTS
  * POST with { input: { text }, voice, model } → audio binary
  */
-async function handleNvidiaTtsSpeech(providerConfig, body, modelId, token) {
+async function handleNvidiaTtsSpeech(providerConfig, body, modelId, token, signal) {
   const res = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers: {
@@ -328,6 +332,7 @@ async function handleNvidiaTtsSpeech(providerConfig, body, modelId, token) {
       voice: body.voice || "default",
       model: modelId,
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -341,7 +346,7 @@ async function handleNvidiaTtsSpeech(providerConfig, body, modelId, token) {
  * Handle HuggingFace Inference TTS
  * POST {baseUrl}/{model_id} with { inputs: text } → audio binary
  */
-async function handleHuggingFaceTtsSpeech(providerConfig, body, modelId, token) {
+async function handleHuggingFaceTtsSpeech(providerConfig, body, modelId, token, signal) {
   if (!isValidPathSegment(modelId)) {
     return errorResponse(400, "Invalid model ID");
   }
@@ -354,6 +359,7 @@ async function handleHuggingFaceTtsSpeech(providerConfig, body, modelId, token) 
       ...buildAuthHeaders(providerConfig, token),
     },
     body: JSON.stringify({ inputs: body.input }),
+    signal,
   });
 
   if (!res.ok) {
@@ -375,7 +381,7 @@ const INWORLD_AUDIO_FORMATS = {
   pcm: { audioEncoding: "PCM", mimeType: "audio/pcm" },
 };
 
-async function handleInworldSpeech(providerConfig, body, modelId, token) {
+async function handleInworldSpeech(providerConfig, body, modelId, token, signal) {
   const requestedFormat =
     typeof body.response_format === "string" ? body.response_format.toLowerCase() : "mp3";
   const audioFormat = INWORLD_AUDIO_FORMATS[requestedFormat];
@@ -397,6 +403,7 @@ async function handleInworldSpeech(providerConfig, body, modelId, token) {
         audioEncoding: audioFormat.audioEncoding,
       },
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -424,7 +431,7 @@ async function handleInworldSpeech(providerConfig, body, modelId, token) {
  * POST { model_id, transcript, voice, output_format } → binary audio bytes
  * Docs: https://docs.cartesia.ai/api-reference/tts/bytes
  */
-async function handleCartesiaSpeech(providerConfig, body, modelId, token) {
+async function handleCartesiaSpeech(providerConfig, body, modelId, token, signal) {
   const outputFormat =
     body.response_format === "wav"
       ? { container: "wav", sample_rate: 44100 }
@@ -443,6 +450,7 @@ async function handleCartesiaSpeech(providerConfig, body, modelId, token) {
       ...(body.voice ? { voice: { mode: "id", id: body.voice } } : {}),
       output_format: outputFormat,
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -458,7 +466,7 @@ async function handleCartesiaSpeech(providerConfig, body, modelId, token) {
  * Auth: Authorization: Bearer <api-key>, model as an HTTP header
  * Docs: https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech
  */
-async function handleFishAudioSpeech(providerConfig, body, modelId, token) {
+async function handleFishAudioSpeech(providerConfig, body, modelId, token, signal) {
   const res = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers: {
@@ -472,6 +480,7 @@ async function handleFishAudioSpeech(providerConfig, body, modelId, token) {
       ...(body.voice ? { reference_id: body.voice } : {}),
       ...(body.speed ? { prosody: { speed: body.speed } } : {}),
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -487,7 +496,7 @@ async function handleFishAudioSpeech(providerConfig, body, modelId, token) {
  * Auth: X-USER-ID header (from token string "userId:apiKey")
  * Docs: https://docs.play.ht/reference/api-generate-tts-audio-stream
  */
-async function handlePlayHtSpeech(providerConfig, body, modelId, token) {
+async function handlePlayHtSpeech(providerConfig, body, modelId, token, signal) {
   // PlayHT tokens are stored as "userId:apiKey"
   const [userId, apiKey] = (token || ":").split(":");
 
@@ -508,6 +517,7 @@ async function handlePlayHtSpeech(providerConfig, body, modelId, token) {
       output_format: body.response_format || "mp3",
       speed: body.speed || 1,
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -521,7 +531,7 @@ async function handlePlayHtSpeech(providerConfig, body, modelId, token) {
  * Handle Kie.ai TTS
  * Kie.ai has model-specific endpoints or uses unified jobs API.
  */
-async function handleKieAudioSpeech(providerConfig, body, modelId, token) {
+async function handleKieAudioSpeech(providerConfig, body, modelId, token, signal) {
   const baseUrl = providerConfig.baseUrl.replace(/\/$/, "");
   const voice = normalizeKieElevenLabsVoice(body.voice);
 
@@ -548,8 +558,10 @@ async function handleKieAudioSpeech(providerConfig, body, modelId, token) {
       baseUrl,
       token,
       payload,
+      signal,
     });
   } catch (err: unknown) {
+    if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
     const status = getKieErrorStatus(err, 502);
     return Response.json(
       {
@@ -564,12 +576,12 @@ async function handleKieAudioSpeech(providerConfig, body, modelId, token) {
 
   const taskId = data?.data?.taskId || data?.taskId;
   if (taskId) {
-    return pollKieAudioResult(baseUrl, modelId, taskId, token);
+    return pollKieAudioResult(baseUrl, modelId, taskId, token, signal);
   }
 
   const audioUrl = findKieAudioUrl(data);
   if (typeof audioUrl === "string" && audioUrl.length > 0) {
-    const audioRes = await fetch(audioUrl);
+    const audioRes = await fetch(audioUrl, { signal });
     return audioStreamResponse(audioRes);
   }
 
@@ -582,7 +594,7 @@ async function handleKieAudioSpeech(providerConfig, body, modelId, token) {
 /**
  * Internal polling for Kie.ai async audio tasks
  */
-async function pollKieAudioResult(baseUrl, modelId, taskId, token) {
+async function pollKieAudioResult(baseUrl, modelId, taskId, token, signal) {
   void modelId;
   const statusUrl = kieExecutor.getTaskStatusUrl(baseUrl);
   try {
@@ -592,17 +604,19 @@ async function pollKieAudioResult(baseUrl, modelId, taskId, token) {
       token,
       timeoutMs: 60000,
       pollIntervalMs: 2000,
+      signal,
     });
 
     if (state === "success") {
       const url = findKieAudioUrl(data);
       if (url) {
-        const audioRes = await fetch(url);
+        const audioRes = await fetch(url, { signal });
         return audioStreamResponse(audioRes);
       }
       return errorResponse(502, "Kie audio task completed without audio URL");
     }
   } catch (err: unknown) {
+    if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
     return errorResponse(
       getKieErrorStatus(err, 504),
       getKieErrorMessage(err, "Kie audio generation timed out or failed")
@@ -616,7 +630,7 @@ async function pollKieAudioResult(baseUrl, modelId, taskId, token) {
  * Xiaomi MiMo TTS uses chat/completions with an audio config instead of OpenAI's /audio/speech
  * request body.
  */
-async function handleXiaomiMimoSpeech(providerConfig, body, modelId, token, credentials) {
+async function handleXiaomiMimoSpeech(providerConfig, body, modelId, token, credentials, signal) {
   const providerSpecificData = getProviderSpecificData(credentials);
   const url = normalizeXiaomiMimoSpeechUrl(providerSpecificData.baseUrl || providerConfig.baseUrl);
   const audioMimeType = normalizeXiaomiMimoMimeType(body.response_format);
@@ -638,6 +652,7 @@ async function handleXiaomiMimoSpeech(providerConfig, body, modelId, token, cred
         voice: body.voice || getStringValue(providerSpecificData.defaultVoice) || "mimo_default",
       },
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -684,7 +699,7 @@ function hexToBytes(audioHex): Uint8Array<ArrayBuffer> {
   return out;
 }
 
-async function handleMinimaxSpeech(providerConfig, body, modelId, token) {
+async function handleMinimaxSpeech(providerConfig, body, modelId, token, signal) {
   const voiceId = (typeof body.voice === "string" && body.voice) || "English_expressive_narrator";
   const res = await fetch(providerConfig.baseUrl, {
     method: "POST",
@@ -711,6 +726,7 @@ async function handleMinimaxSpeech(providerConfig, body, modelId, token) {
         channel: 1,
       },
     }),
+    signal,
   });
 
   const rawText = await res.text();
@@ -757,7 +773,7 @@ async function handleMinimaxSpeech(providerConfig, body, modelId, token) {
  * Handle Coqui TTS (local, no auth)
  * POST {baseUrl} with { text, speaker_id } → WAV audio
  */
-async function handleCoquiSpeech(providerConfig, body) {
+async function handleCoquiSpeech(providerConfig, body, signal) {
   const res = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -765,6 +781,7 @@ async function handleCoquiSpeech(providerConfig, body) {
       text: body.input,
       speaker_id: body.voice || undefined,
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -784,7 +801,7 @@ async function handleCoquiSpeech(providerConfig, body) {
  * Handle Tortoise TTS (local, no auth)
  * POST {baseUrl} with { text, voice } → audio binary
  */
-async function handleTortoiseSpeech(providerConfig, body) {
+async function handleTortoiseSpeech(providerConfig, body, signal) {
   const res = await fetch(providerConfig.baseUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -792,6 +809,7 @@ async function handleTortoiseSpeech(providerConfig, body) {
       text: body.input,
       voice: body.voice || "random",
     }),
+    signal,
   });
 
   if (!res.ok) {
@@ -812,17 +830,19 @@ async function handleTortoiseSpeech(providerConfig, body) {
  * `voice` doubles as the language code since gTTS has no voice concept —
  * defaults to English when omitted or unrecognized.
  */
-async function handleGttsSpeech(body) {
+async function handleGttsSpeech(body, signal) {
   try {
     const audio = await synthesizeGtts({
       text: body.input,
       lang: normalizeGttsLang(body.voice),
+      signal,
     });
     return new Response(audio, {
       status: 200,
       headers: { ...CORS_HEADERS, "Content-Type": "audio/mpeg" },
     });
   } catch (err) {
+    if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
     const status = err instanceof GttsUpstreamError ? err.status : 502;
     const message = err instanceof Error ? err.message : "gTTS synthesis failed";
     return errorResponse(status, message);
@@ -843,6 +863,7 @@ export async function handleAudioSpeech({
   credentials,
   resolvedProvider = null,
   resolvedModel = null,
+  signal = undefined,
 }) {
   if (!body.model) {
     return errorResponse(400, "model is required");
@@ -885,6 +906,7 @@ export async function handleAudioSpeech({
         voice: typeof body.voice === "string" ? body.voice : undefined,
         model: modelId,
         credentials,
+        signal,
       });
       if (!result.ok || !result.audio) {
         return errorResponse(result.status ?? 502, result.error || "UC TTS failed");
@@ -900,6 +922,7 @@ export async function handleAudioSpeech({
         model: modelId,
         input: body.input,
         voice: body.voice,
+        signal,
       });
       return new Response(audio, {
         status: 200,
@@ -911,75 +934,76 @@ export async function handleAudioSpeech({
         model: modelId,
         text: body.input,
         voice: body.voice,
+        signal,
       });
     }
 
     if (providerConfig.format === "hyperbolic") {
-      return handleHyperbolicSpeech(providerConfig, body, token);
+      return handleHyperbolicSpeech(providerConfig, body, token, signal);
     }
 
     if (providerConfig.format === "deepgram") {
-      return handleDeepgramSpeech(providerConfig, body, modelId, token);
+      return handleDeepgramSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "soniox-tts") {
-      return handleSonioxSpeech(providerConfig, body, modelId, token);
+      return handleSonioxSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "elevenlabs") {
-      return handleElevenLabsSpeech(providerConfig, body, modelId, token);
+      return handleElevenLabsSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "nvidia-tts") {
-      return handleNvidiaTtsSpeech(providerConfig, body, modelId, token);
+      return handleNvidiaTtsSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "huggingface-tts") {
-      return handleHuggingFaceTtsSpeech(providerConfig, body, modelId, token);
+      return handleHuggingFaceTtsSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "inworld") {
-      return handleInworldSpeech(providerConfig, body, modelId, token);
+      return handleInworldSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "cartesia") {
-      return handleCartesiaSpeech(providerConfig, body, modelId, token);
+      return handleCartesiaSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "fishaudio") {
-      return handleFishAudioSpeech(providerConfig, body, modelId, token);
+      return handleFishAudioSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "playht") {
-      return handlePlayHtSpeech(providerConfig, body, modelId, token);
+      return handlePlayHtSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "kie-audio") {
-      return handleKieAudioSpeech(providerConfig, body, modelId, token);
+      return handleKieAudioSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "aws-polly") {
-      return handleAwsPollySpeech(providerConfig, body, modelId, token, credentials);
+      return handleAwsPollySpeech(providerConfig, body, modelId, token, credentials, signal);
     }
 
     if (providerConfig.format === "gtts") {
-      return handleGttsSpeech(body);
+      return handleGttsSpeech(body, signal);
     }
 
     if (providerConfig.format === "xiaomi-mimo-tts") {
-      return handleXiaomiMimoSpeech(providerConfig, body, modelId, token, credentials);
+      return handleXiaomiMimoSpeech(providerConfig, body, modelId, token, credentials, signal);
     }
 
     if (providerConfig.format === "minimax-tts") {
-      return handleMinimaxSpeech(providerConfig, body, modelId, token);
+      return handleMinimaxSpeech(providerConfig, body, modelId, token, signal);
     }
 
     if (providerConfig.format === "coqui") {
-      return handleCoquiSpeech(providerConfig, body);
+      return handleCoquiSpeech(providerConfig, body, signal);
     }
 
     if (providerConfig.format === "tortoise") {
-      return handleTortoiseSpeech(providerConfig, body);
+      return handleTortoiseSpeech(providerConfig, body, signal);
     }
 
     // Default: OpenAI-compatible JSON → audio stream proxy (also used by Qwen3)
@@ -996,6 +1020,7 @@ export async function handleAudioSpeech({
         response_format: normalizeSpeechResponseFormat(body.response_format),
         speed: body.speed || 1.0,
       }),
+      signal,
     });
 
     if (!res.ok) {
@@ -1004,6 +1029,7 @@ export async function handleAudioSpeech({
 
     return audioStreamResponse(res);
   } catch (err) {
+    if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
     return errorResponse(500, `Speech request failed: ${err.message}`);
   }
 }

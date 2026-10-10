@@ -57,6 +57,7 @@ export interface GttsSynthInput {
   text: string;
   lang?: string;
   tld?: string;
+  signal?: AbortSignal;
 }
 
 /** Normalize a caller-supplied language code, falling back to English. */
@@ -164,7 +165,8 @@ async function synthesizeGttsChunk(
   chunk: string,
   lang: string,
   tld: string,
-  fetchImpl: FetchLike
+  fetchImpl: FetchLike,
+  signal?: AbortSignal
 ): Promise<Buffer> {
   const body = buildGttsRpcBody(chunk, lang);
   const res = await fetchImpl(
@@ -177,6 +179,7 @@ async function synthesizeGttsChunk(
         Referer: GTTS_REFERER,
       },
       body,
+      signal,
     }
   );
 
@@ -208,7 +211,8 @@ export async function synthesizeGtts(
 
   const buffers: Buffer[] = [];
   for (const chunk of chunks) {
-    buffers.push(await synthesizeGttsChunk(chunk, lang, tld, fetchImpl));
+    input.signal?.throwIfAborted();
+    buffers.push(await synthesizeGttsChunk(chunk, lang, tld, fetchImpl, input.signal));
   }
   return Buffer.concat(buffers);
 }

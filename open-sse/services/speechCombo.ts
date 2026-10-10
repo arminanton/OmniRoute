@@ -31,6 +31,7 @@ import {
   releaseAccountRequestAfterResponseBody,
   reserveSelectedAccountRequest,
 } from "./accountRequestLease.ts";
+import { acquireConfiguredSharedAccountAdmission } from "./accountRequestAdmission.ts";
 
 /**
  * Execute a full combo strategy for a text-to-speech request.
@@ -38,8 +39,11 @@ import {
 export async function executeSpeechCombo(
   comboName: string,
   body: Record<string, unknown>,
-  startTime: number
+  startTime: number,
+  signal?: AbortSignal
 ): Promise<Response> {
+  if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
+
   const combo = await getComboByName(comboName);
   if (!combo) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, `Combo not found: ${comboName}`);
@@ -83,6 +87,7 @@ export async function executeSpeechCombo(
   let fallbackCount = 0;
 
   for (const target of speechTargets) {
+    if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
     const { provider: targetProvider, model: resolvedModel } = parseSpeechModel(
       target.modelStr,
       dynamicProviders
@@ -97,31 +102,34 @@ export async function executeSpeechCombo(
       getSpeechProvider(targetProvider) ||
       dynamicProviders.find((dp) => dp.id === targetProvider) ||
       null;
+    const credentialProviderKey = providerConfig?.credentialProviderId || targetProvider;
 
     let credentials = null;
     if (providerConfig && providerConfig.authType !== "none") {
-      const credentialKey = providerConfig.credentialProviderId || targetProvider;
       try {
         credentials = await getProviderCredentialsWithQuotaPreflight(
-          credentialKey,
+          credentialProviderKey,
           null,
           null,
           null,
           { reserveAccountRequest: true }
         );
       } catch {
+        if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
         lastError = { status: 502, error: `Failed to resolve credentials for ${targetProvider}` };
         fallbackCount += 1;
         continue;
       }
 
       if (!credentials) {
+        if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
         lastError = { status: 400, error: `No credentials for provider: ${targetProvider}` };
         fallbackCount += 1;
         continue;
       }
 
       if (isAllRateLimitedCredentials(credentials)) {
+        if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
         lastError = { status: 429, error: `[${targetProvider}] All accounts rate limited` };
         fallbackCount += 1;
         continue;
@@ -129,14 +137,55 @@ export async function executeSpeechCombo(
     }
 
     const releaseAccountRequest = reserveSelectedAccountRequest(credentials);
+    let sharedAdmission: Awaited<ReturnType<typeof acquireConfiguredSharedAccountAdmission>> = null;
     let responseOwnsReservation = false;
+    const releaseReservations = () => {
+      sharedAdmission?.release();
+      releaseAccountRequest();
+    };
     try {
+      if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
+      // Kie creates a durable remote task before polling and this adapter has no
+      // task-cancel API. Abort stops polling but cannot prove synthesis stopped,
+      // so Kie is excluded from shared hard admission.
+      if (providerConfig?.format !== "kie-audio") {
+        const selectedProvider =
+          typeof (credentials as { provider?: unknown } | null)?.provider === "string"
+            ? (credentials as { provider: string }).provider
+            : credentialProviderKey;
+        try {
+          sharedAdmission = await acquireConfiguredSharedAccountAdmission({
+            provider: selectedProvider,
+            credentials,
+            signal,
+          });
+        } catch (error) {
+          const admissionError = error as { code?: string; statusCode?: number; message?: string };
+          if (admissionError.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+            return errorResponse(
+              admissionError.statusCode || 503,
+              admissionError.message || "Provider account capacity admission is unavailable"
+            );
+          }
+          throw error;
+        }
+      }
       const response = await handleAudioSpeech({
         body: { ...body, model: target.modelStr },
         credentials,
         resolvedProvider: providerConfig,
         resolvedModel,
+        signal: sharedAdmission?.signal ?? signal,
       });
+
+      if (signal?.aborted || sharedAdmission?.signal.aborted) {
+        try {
+          await response?.body?.cancel(signal?.reason ?? sharedAdmission?.signal.reason);
+        } catch {
+          // A consumed/locked body is already on its terminal path.
+        }
+        return errorResponse(499, "Speech request cancelled");
+      }
 
       if (response?.ok) {
         await clearRecoveredProviderState(credentials);
@@ -159,7 +208,7 @@ export async function executeSpeechCombo(
         if (successfulResponse.body) {
           successfulResponse = releaseAccountRequestAfterResponseBody(
             successfulResponse,
-            releaseAccountRequest
+            releaseReservations
           );
           responseOwnsReservation = true;
         }
@@ -167,6 +216,11 @@ export async function executeSpeechCombo(
       }
 
       const status = response?.status || 500;
+      if (status === 499 || signal?.aborted || sharedAdmission?.signal.aborted) {
+        return status === 499 && !signal?.aborted
+          ? response
+          : errorResponse(499, "Speech request cancelled");
+      }
       // The body is read only on the failure path, where it is small and about to
       // be discarded anyway; a successful audio stream is never consumed here.
       let error = `Speech generation failed (HTTP ${status})`;
@@ -177,6 +231,10 @@ export async function executeSpeechCombo(
         // non-text or already-consumed body — keep the status-line message
       }
 
+      if (signal?.aborted || sharedAdmission?.signal.aborted) {
+        return errorResponse(499, "Speech request cancelled");
+      }
+
       if (status === 400 || status === 401 || status === 403) {
         return errorResponse(status, `[${targetProvider}] ${error}`);
       }
@@ -184,9 +242,11 @@ export async function executeSpeechCombo(
       lastError = { status, error: `[${targetProvider}] ${error}` };
       fallbackCount += 1;
     } finally {
-      if (!responseOwnsReservation) releaseAccountRequest();
+      if (!responseOwnsReservation) releaseReservations();
     }
   }
+
+  if (signal?.aborted) return errorResponse(499, "Speech request cancelled");
 
   const errorPayload = toJsonErrorPayload(
     lastError?.error || "All combo targets failed",

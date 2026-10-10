@@ -14,6 +14,7 @@ type KieTaskInput = {
   token: string;
   payload: unknown;
   endpoint?: string;
+  signal?: AbortSignal;
 };
 
 type KiePollInput = {
@@ -22,6 +23,7 @@ type KiePollInput = {
   token: string;
   timeoutMs: number;
   pollIntervalMs: number;
+  signal?: AbortSignal;
 };
 
 export type KieTaskRecord = {
@@ -31,6 +33,25 @@ export type KieTaskRecord = {
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/$/, "");
+}
+
+function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) return sleep(ms);
+  signal.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+  });
 }
 
 export class KieExecutor extends BaseExecutor {
@@ -46,7 +67,13 @@ export class KieExecutor extends BaseExecutor {
     return `${normalizeBaseUrl(baseUrl)}/api/v1/jobs/recordInfo`;
   }
 
-  async createTask({ baseUrl, token, payload, endpoint }: KieTaskInput): Promise<JsonObject> {
+  async createTask({
+    baseUrl,
+    token,
+    payload,
+    endpoint,
+    signal,
+  }: KieTaskInput): Promise<JsonObject> {
     const res = await fetch(this.getTaskCreateUrl(baseUrl, endpoint), {
       method: "POST",
       headers: {
@@ -54,6 +81,7 @@ export class KieExecutor extends BaseExecutor {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
+      signal,
     });
 
     if (!res.ok) {
@@ -73,16 +101,19 @@ export class KieExecutor extends BaseExecutor {
     token,
     timeoutMs,
     pollIntervalMs,
+    signal,
   }: KiePollInput): Promise<KieTaskRecord> {
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
+      signal?.throwIfAborted();
       const pollUrl = new URL(statusUrl);
       pollUrl.searchParams.set("taskId", String(taskId));
 
       const res = await fetch(pollUrl.toString(), {
         method: "GET",
         headers: { Authorization: `Bearer ${token}` },
+        signal,
       });
 
       if (!res.ok) {
@@ -99,7 +130,7 @@ export class KieExecutor extends BaseExecutor {
         return { data: recordData, state };
       }
 
-      await sleep(pollIntervalMs);
+      await sleepWithSignal(pollIntervalMs, signal);
     }
 
     throw Object.assign(new Error("Kie task timed out"), { status: 504 });

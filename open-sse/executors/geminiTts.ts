@@ -20,7 +20,7 @@ export class GeminiTtsUpstreamError extends Error {
 
 export async function geminiGenerateSpeech(
   credentials: GeminiTtsCredentials,
-  options: { model: string; text: string; voice: string }
+  options: { model: string; text: string; voice: string; signal?: AbortSignal }
 ): Promise<Buffer> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (credentials.apiKey) {
@@ -45,6 +45,7 @@ export async function geminiGenerateSpeech(
           },
         },
       }),
+      signal: options.signal,
     }
   );
   if (!response.ok) {
@@ -58,12 +59,13 @@ export async function geminiGenerateSpeech(
 
 export async function handleGeminiTtsSpeech(
   credentials: GeminiTtsCredentials,
-  options: { model: string; text: string; voice?: unknown }
+  options: { model: string; text: string; voice?: unknown; signal?: AbortSignal }
 ): Promise<Response> {
   try {
     const wav = await geminiGenerateSpeech(credentials, {
       model: options.model,
       text: options.text,
+      signal: options.signal,
       voice:
         typeof options.voice === "string" && options.voice.trim() ? options.voice.trim() : "Kore",
     });
@@ -72,6 +74,7 @@ export async function handleGeminiTtsSpeech(
       headers: { ...CORS_HEADERS, "Content-Type": "audio/wav" },
     });
   } catch (error) {
+    if (options.signal?.aborted) return errorResponse(499, "Speech request cancelled");
     if (error instanceof GeminiTtsUpstreamError) {
       return upstreamErrorResponse(error.response, error.body);
     }

@@ -49,7 +49,8 @@ function resolveRegion(credentials: VertexMediaCredentials | null | undefined): 
 }
 
 async function resolveVertexAuth(
-  credentials: VertexMediaCredentials | null | undefined
+  credentials: VertexMediaCredentials | null | undefined,
+  signal?: AbortSignal
 ): Promise<ResolvedVertexAuth> {
   const apiKey = typeof credentials?.apiKey === "string" ? credentials.apiKey.trim() : "";
   const region = resolveRegion(credentials);
@@ -63,7 +64,7 @@ async function resolveVertexAuth(
   if (looksLikeServiceAccountJson(apiKey)) {
     const sa = parseSAFromApiKey(apiKey);
     project = typeof sa.project_id === "string" ? sa.project_id : "";
-    if (!bearerToken) bearerToken = await getAccessToken(sa);
+    if (!bearerToken) bearerToken = await getAccessToken(sa, signal);
   } else if (isExpressApiKey(apiKey)) {
     expressKey = apiKey;
   }
@@ -194,9 +195,9 @@ function extractText(data: unknown): string {
 /** Gemini TTS → WAV audio buffer. */
 export async function vertexGenerateSpeech(
   credentials: VertexMediaCredentials,
-  options: { model: string; input: string; voice?: string }
+  options: { model: string; input: string; voice?: string; signal?: AbortSignal }
 ): Promise<{ audio: Buffer<ArrayBuffer>; contentType: string }> {
-  const auth = await resolveVertexAuth(credentials);
+  const auth = await resolveVertexAuth(credentials, options.signal);
   const { url, headers } = buildModelRequest(auth, options.model, "generateContent");
   const payload = {
     contents: [{ role: "user", parts: [{ text: options.input }] }],
@@ -209,7 +210,12 @@ export async function vertexGenerateSpeech(
       },
     },
   };
-  const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(payload) });
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    signal: options.signal,
+  });
   if (!res.ok) throw await vertexError(res);
   const data = await res.json();
   const inline = extractInlineAudio(data);
