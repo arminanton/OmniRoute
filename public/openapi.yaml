@@ -6057,13 +6057,29 @@ paths:
       operationId: getApiTags
       tags: [System]
       summary: List Ollama-compatible model tags
-      description: Returns models in Ollama /api/tags format for Ollama client compatibility
+      description: >-
+        Returns the configured Ollama-compatible model-tag fixture. The handler has no route-level
+        auth check and relies on the central MANAGEMENT policy. Scoped `oma_` Access Tokens need
+        method-derived `read` scope; on an unlocked profile, `requireLogin=false` permits anonymous
+        access, including remotely. This route is not explicitly public or LOCAL_ONLY. The response
+        is a static model catalog and contains no provider credentials.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Ollama-compatible tags returned from the local model-tag fixture.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OllamaTagsResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   # ─── Proxy Subscriptions ───────────────────────────────────────
 
@@ -7219,7 +7235,21 @@ paths:
       operationId: postApiTranslatorDetect
       tags: [Translator]
       summary: Detect request format
-      description: Detects the API format of a request body (OpenAI, Claude, Gemini, etc.)
+      description: >-
+        Detects the API format of the caller-supplied request object; it does not call a provider or
+        persist the input. The handler has no route-level auth check and relies on the central
+        MANAGEMENT policy. Scoped `oma_` Access Tokens need method-derived `write` scope; on an
+        unlocked profile, `requireLogin=false` permits anonymous access, including remotely. This
+        route is not explicitly public or LOCAL_ONLY. The request body may contain prompt/context data
+        and is sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         x-sensitive: true
@@ -7248,6 +7278,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TranslatorOperationFailureResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/translator/translate:
     post:
@@ -7298,6 +7331,23 @@ paths:
       operationId: postApiTranslatorSend
       tags: [Translator]
       summary: Send translated request to provider
+      description: >-
+        Selects an active stored provider connection, builds provider credentials server-side, and
+        sends the caller's request body to that provider as a streaming request; the route skips
+        connections currently reserved by exclusive leases. It has no handler-level auth check and
+        relies on central MANAGEMENT policy. Scoped `oma_` Access Tokens need method-derived `write`
+        scope; on an unlocked profile, `requireLogin=false` permits anonymous access, including remotely.
+        This route is not explicitly public or LOCAL_ONLY. Requests may consume provider quota or cost,
+        and the body/upstream response can contain prompts, completions, or tool data, so both are
+        sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         x-sensitive: true
@@ -7339,13 +7389,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TranslatorSendUpstreamFailureResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/translator/history:
     get:
       operationId: getApiTranslatorHistory
       tags: [Translator]
       summary: Get translation history
-      description: Returns recent translation events for the Live Monitor
+      description: >-
+        Returns recent in-memory translation-event metadata for the Live Monitor, capped at 200 entries
+        (default 50). Entries include provider/model, status/code, timing, endpoint, and possible route
+        connection/combo identifiers; the event logger does not store the translated body. The handler
+        has no route-level auth check and relies on the central MANAGEMENT policy. Scoped `oma_` Access
+        Tokens need method-derived `read` scope; on an unlocked profile, `requireLogin=false` permits
+        anonymous access, including remotely. This route is not explicitly public or LOCAL_ONLY; the
+        history and linked routing metadata are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       parameters:
         - name: limit
           in: query
@@ -7364,6 +7432,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TranslatorHistoryFailureResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   # ─── CLI Remote Mode ───────────────────────────────────────────
 
@@ -14423,7 +14494,20 @@ paths:
       operationId: getApiTokenHealth
       tags: [Telemetry]
       summary: Get token health status
-      description: Returns health status of OAuth tokens across all providers.
+      description: >-
+        Returns aggregate health counts for active OAuth connections with refresh tokens; no raw token
+        material is returned. The handler has no route-level auth check and relies on the central
+        MANAGEMENT policy. Scoped `oma_` Access Tokens need method-derived `read` scope; on an unlocked
+        profile, `requireLogin=false` permits anonymous access, including remotely. This route is not
+        explicitly public or LOCAL_ONLY. OAuth account health and check timestamps are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Token health status
@@ -14436,6 +14520,9 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TokenHealthFailureResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   # ─── Evals & Policies ──────────────────────────────────────────
 
@@ -37548,7 +37635,22 @@ paths:
       tags:
         - Translator
       summary: "POST translator › transform stream"
-      description: Transforms a bounded Chat Completions SSE text payload into Responses API SSE text.
+      description: >-
+        Transforms caller-supplied Chat Completions SSE text (maximum 100,000 characters) into a
+        Responses API SSE representation. This is a local transform with no provider call or persistent
+        write; the raw stream and transformed result can contain prompts, completions, or tool data.
+        The handler has no route-level auth check and relies on the central MANAGEMENT policy. Scoped
+        `oma_` Access Tokens need method-derived `write` scope; on an unlocked profile,
+        `requireLogin=false` permits anonymous access, including remotely. This route is not explicitly
+        public or LOCAL_ONLY. Input and output content are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         x-sensitive: true
@@ -37572,12 +37674,30 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TranslatorOperationFailureResponse" }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/tunnels/cloudflared:
     get:
       operationId: getApiTunnelsCloudflared
       tags:
         - Tunnels
       summary: "GET tunnels › cloudflared"
+      description: >-
+        Returns Cloudflared installation/process state, public URL, local target, binary/log paths, and
+        the last error. The central MANAGEMENT policy and handler `isAuthenticated()` check both apply;
+        the handler accepts a dashboard session or management-scoped API key, but does not accept
+        central-only `oma_` Access Tokens or loopback CLI/internal-service tokens when auth is required.
+        This GET is explicitly exempt from the tunnel route's LOCAL_ONLY peer gate, so an unlocked
+        `requireLogin=false` deployment permits anonymous remote reads. In runtime policy mode `locked`,
+        the status helper uses a read-only snapshot; otherwise it can perform PATH lookup and stale-state
+        cleanup. Status and path metadata are sensitive. This route is not explicitly public.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Cloudflared tunnel status, including local binary/log paths and public endpoint state.
@@ -37595,12 +37715,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiTunnelsCloudflared
       tags:
         - Tunnels
       summary: "POST tunnels › cloudflared"
       x-local-only: true
+      description: >-
+        Enables or disables the Cloudflared tunnel; enabling can download a managed binary, write
+        tunnel state, and spawn the tunnel process. The central MANAGEMENT policy and handler
+        `isAuthenticated()` check both apply. The handler accepts a dashboard session or
+        management-scoped API key, but does not accept central-only `oma_` Access Tokens or loopback
+        CLI/internal-service tokens when auth is required. **LOCAL_ONLY** — only loopback and trusted
+        private-LAN peers pass the locality gate; this spawn-capable endpoint has no remote manage-scope
+        bypass. On admitted peers, `requireLogin=false` permits anonymous access. The start capability
+        is disabled in runtime policy mode `locked`; stop remains available for cleanup. Tunnel paths,
+        public endpoints, and process state are sensitive.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         content:
@@ -37628,12 +37767,31 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY or management credentials were rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/tunnels/ngrok:
     get:
       operationId: getApiTunnelsNgrok
       tags:
         - Tunnels
       summary: "GET tunnels › ngrok"
+      description: >-
+        Returns Ngrok's running phase, public URL/API URL, local target URL, and whether an auth token
+        is configured; the token itself is not returned. Central MANAGEMENT auth and the handler's
+        narrower `isAuthenticated()` check apply when auth is required. The handler accepts a dashboard
+        session or management-scoped API key, but not central-only `oma_` tokens or CLI/internal-service
+        credentials in that mode. This route is not LOCAL_ONLY; an unlocked `requireLogin=false`
+        deployment permits anonymous remote reads. Tunnel URLs and host topology are sensitive.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Ngrok tunnel status, public endpoint, and current phase.
@@ -37651,11 +37809,29 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
     post:
       operationId: postApiTunnelsNgrok
       tags:
         - Tunnels
       summary: "POST tunnels › ngrok"
+      description: >-
+        Enables or disables the Ngrok listener; enabling creates a public tunnel to OmniRoute's local
+        API and may use the optional caller-supplied `authToken` or `NGROK_AUTHTOKEN`. The token is
+        forwarded to the Ngrok SDK and is not returned. Central MANAGEMENT auth and the handler's
+        narrower `isAuthenticated()` check apply when auth is required. The handler accepts a dashboard
+        session or management-scoped API key, but not central-only `oma_` tokens or CLI/internal-service
+        credentials in that mode. This route is not LOCAL_ONLY or spawn-capable in routeGuard; on an
+        unlocked `requireLogin=false` deployment it can be called anonymously from remote peers. This
+        public-tunnel mutation and its token-bearing request are highly sensitive.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         x-sensitive: true
@@ -37684,12 +37860,28 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/tunnels/tailscale:
     get:
       operationId: getApiTunnelsTailscale
       tags:
         - Tunnels
       summary: "GET tunnels › tailscale"
+      description: >-
+        Returns Tailscale tunnel/daemon state, public URL, install source/path, PID, and last error. The
+        central MANAGEMENT policy and `requireTailscaleAuth()`'s narrower `isAuthenticated()` check both
+        apply when auth is required; the handler accepts a dashboard session or management-scoped API
+        key, but not central-only `oma_` tokens or CLI/internal-service credentials in that mode. This
+        GET is not LOCAL_ONLY, so an unlocked `requireLogin=false` deployment permits anonymous remote
+        reads. Runtime policy mode `locked` reports local evidence only; other modes probe the local
+        Tailscale CLI. Host, process, and tunnel metadata are sensitive.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Tailscale tunnel and daemon status, including local install and process metadata.
@@ -37707,12 +37899,29 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/tunnels/tailscale/check:
     get:
       operationId: getApiTunnelsTailscaleCheck
       tags:
         - Tunnels
       summary: "GET tunnels › tailscale › check"
+      description: >-
+        Probes installation, login, daemon, Funnel, and process status. In non-locked runtime mode the
+        helper resolves/runs the local Tailscale CLI (and may check for Homebrew); runtime policy mode
+        `locked` returns local file/PID evidence without those probes. The central MANAGEMENT policy
+        and `requireTailscaleAuth()`'s narrower `isAuthenticated()` check both apply when auth is
+        required; the handler accepts a dashboard session or management-scoped API key, but not
+        central-only `oma_` tokens or CLI/internal-service credentials in that mode. This GET is not
+        LOCAL_ONLY; unlocked `requireLogin=false` permits anonymous remote reads. Probe/status and host
+        metadata are sensitive.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Current Tailscale support, installation, login, daemon, Funnel, and process probe state.
@@ -37730,6 +37939,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/tunnels/tailscale/disable:
     post:
       operationId: postApiTunnelsTailscaleDisable
@@ -37739,8 +37950,21 @@ paths:
       x-local-only: true
       description: >-
         Stops the Tailscale Funnel and only the managed daemon owned by OmniRoute, then clears the
-        saved enabled state. The optional sudo password is sensitive. Successful status and
-        sanitized error metadata can disclose local install paths and tunnel details.
+        saved enabled state. This is a cleanup operation and remains available when runtime policy is
+        `locked`. The central MANAGEMENT policy and `requireTailscaleAuth()`'s narrower
+        `isAuthenticated()` check both apply when auth is required; the handler accepts a dashboard
+        session or management-scoped API key, but not central-only `oma_` tokens or CLI/internal-service
+        credentials in that mode. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the
+        locality gate; this spawn-capable path has no remote manage-scope bypass. On admitted peers,
+        `requireLogin=false` permits anonymous access. The optional sudo password and status/process
+        metadata are sensitive.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         x-sensitive: true
@@ -37769,6 +37993,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY or management credentials were rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/tunnels/tailscale/enable:
     post:
       operationId: postApiTunnelsTailscaleEnable
@@ -37779,7 +38009,20 @@ paths:
       description: >-
         Enables Funnel or returns a Tailscale login/Funnel-approval branch. The optional sudo
         password and returned login or enable URLs are sensitive. Status fields may disclose local
-        installation and tunnel details.
+        installation and tunnel details. The central MANAGEMENT policy and `requireTailscaleAuth()`'s
+        narrower `isAuthenticated()` check both apply when auth is required; the handler accepts a
+        dashboard session or management-scoped API key, but not central-only `oma_` tokens or
+        CLI/internal-service credentials in that mode. **LOCAL_ONLY** — only loopback and trusted
+        private-LAN peers pass the locality gate; this spawn-capable path has no remote manage-scope
+        bypass. On admitted peers, `requireLogin=false` permits anonymous access. Runtime policy mode
+        `locked` blocks the Tailscale tunnel capability independently of request auth.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         x-sensitive: true
@@ -37808,6 +38051,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/PublicSafeTunnelErrorBody" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY or management credentials were rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/tunnels/tailscale/install:
     post:
       operationId: postApiTunnelsTailscaleInstall
@@ -37818,7 +38067,20 @@ paths:
       description: >-
         Installs Tailscale and emits progress, completion, or public-safe error frames as
         Server-Sent Events. Invalid or unauthenticated requests are rejected as JSON before the
-        stream starts. The optional sudo password and emitted status details are sensitive.
+        stream starts. The optional sudo password and emitted status details are sensitive. The
+        central MANAGEMENT policy and `requireTailscaleAuth()`'s narrower `isAuthenticated()` check
+        both apply when auth is required; the handler accepts a dashboard session or management-scoped
+        API key, but not central-only `oma_` tokens or CLI/internal-service credentials in that mode.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable path has no remote manage-scope bypass. On admitted peers, `requireLogin=false`
+        permits anonymous access. Runtime policy mode `locked` blocks Tailscale installation.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         x-sensitive: true
@@ -37853,6 +38115,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403":
+          description: Remote peers are denied by LOCAL_ONLY or management credentials were rejected.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/tunnels/tailscale/login:
     post:
       operationId: postApiTunnelsTailscaleLogin

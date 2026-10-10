@@ -174,7 +174,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 148 effective OpenAPI operations", () => {
+test("the audited batches declare all 163 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -387,6 +387,106 @@ test("provider stats and expiry remain conditional central-management reads", ()
     assert.ok(routeOperation.responses["403"]);
     assert.ok(routeOperation.responses["503"]);
   }
+});
+
+test("tags, token health, and translator routes document central conditional management auth", () => {
+  for (const [method, route, scope] of [
+    ["get", "/api/tags", "read"],
+    ["get", "/api/token-health", "read"],
+    ["post", "/api/translator/detect", "write"],
+    ["get", "/api/translator/history", "read"],
+    ["post", "/api/translator/send", "write"],
+    ["post", "/api/translator/transform-stream", "write"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.equal(routeOperation["x-local-only"], undefined);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "LocalCliTokenAuth"));
+    assert.ok(hasScheme(routeOperation.security, "InternalServiceTokenAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.match(routeOperation.description, /no .*auth check.*central MANAGEMENT policy/s);
+    assert.match(routeOperation.description, new RegExp(`method-derived.*${scope}.*scope`, "i"));
+    assert.match(routeOperation.description, /requireLogin=false.*anonymous.*remotely/s);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+
+  assert.equal(operation("get", "/api/token-health").responses["200"]["x-sensitive"], true);
+  assert.equal(operation("post", "/api/translator/detect").requestBody["x-sensitive"], true);
+  assert.equal(operation("get", "/api/translator/history").responses["200"]["x-sensitive"], true);
+  const send = operation("post", "/api/translator/send");
+  assert.equal(send.requestBody["x-sensitive"], true);
+  assert.equal(send.responses["200"]["x-sensitive"], true);
+  assert.match(send.description, /builds provider credentials server-side.*provider quota or cost/i);
+  assert.match(operation("get", "/api/translator/history").description, /does not store the translated body/i);
+  const transform = operation("post", "/api/translator/transform-stream");
+  assert.equal(transform.requestBody["x-sensitive"], true);
+  assert.equal(transform.responses["200"]["x-sensitive"], true);
+  assert.match(transform.description, /maximum 100,000 characters.*no provider call/i);
+});
+
+test("tunnel auth intersections, locality exceptions, and sensitive operations match route guards", () => {
+  const handlerAuthRoutes = [
+    ["get", "/api/tunnels/cloudflared"],
+    ["post", "/api/tunnels/cloudflared"],
+    ["get", "/api/tunnels/ngrok"],
+    ["post", "/api/tunnels/ngrok"],
+    ["get", "/api/tunnels/tailscale"],
+    ["get", "/api/tunnels/tailscale/check"],
+    ["post", "/api/tunnels/tailscale/disable"],
+    ["post", "/api/tunnels/tailscale/enable"],
+    ["post", "/api/tunnels/tailscale/install"],
+  ] as const;
+  for (const [method, route] of handlerAuthRoutes) {
+    const routeOperation = operation(method, route);
+    assert.ok(hasScheme(routeOperation.security, "ManagementApiKeyBearerAuth"), `${method} ${route}`);
+    assert.ok(hasScheme(routeOperation.security, "ManagementGoogleApiKeyAuth"), `${method} ${route}`);
+    assert.ok(hasScheme(routeOperation.security, "ManagementAnthropicApiKeyAuth"), `${method} ${route}`);
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"), `${method} ${route}`);
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.ok(!hasScheme(routeOperation.security, "BearerAuth"), `${method} ${route}`);
+    assert.ok(!hasScheme(routeOperation.security, "LocalCliTokenAuth"), `${method} ${route}`);
+    assert.ok(!hasScheme(routeOperation.security, "InternalServiceTokenAuth"), `${method} ${route}`);
+    assert.match(routeOperation.description, /central MANAGEMENT (?:policy|auth).*`isAuthenticated\(\)`/is);
+    assert.match(routeOperation.description, /(?:does not accept|but not)\s+(?:central-only `oma_`|`oma_` tokens)/i);
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+
+  assert.equal(operation("get", "/api/tunnels/cloudflared")["x-local-only"], undefined);
+  assert.match(operation("get", "/api/tunnels/cloudflared").description, /GET is explicitly exempt.*LOCAL_ONLY/s);
+  const cloudflaredPost = operation("post", "/api/tunnels/cloudflared");
+  assert.equal(cloudflaredPost["x-local-only"], true);
+  assert.match(cloudflaredPost.description, /spawn-capable endpoint has no remote manage-scope bypass/i);
+  assert.match(cloudflaredPost.description, /locked.*stop remains available/i);
+
+  assert.equal(operation("get", "/api/tunnels/ngrok")["x-local-only"], undefined);
+  const ngrokPost = operation("post", "/api/tunnels/ngrok");
+  assert.equal(ngrokPost["x-local-only"], undefined);
+  assert.equal(ngrokPost.requestBody["x-sensitive"], true);
+  assert.match(ngrokPost.description, /unlocked `requireLogin=false`.*anonymously from remote peers/s);
+  assert.match(ngrokPost.description, /public tunnel.*highly sensitive/i);
+
+  for (const route of ["/api/tunnels/tailscale", "/api/tunnels/tailscale/check"]) {
+    assert.equal(operation("get", route)["x-local-only"], undefined);
+  }
+  for (const route of [
+    "/api/tunnels/tailscale/disable",
+    "/api/tunnels/tailscale/enable",
+    "/api/tunnels/tailscale/install",
+  ]) {
+    const routeOperation = operation("post", route);
+    assert.equal(routeOperation["x-local-only"], true);
+    assert.match(routeOperation.description, /spawn-capable path has no remote manage-scope bypass/i);
+    assert.equal(routeOperation.requestBody["x-sensitive"], true);
+  }
+  assert.match(operation("post", "/api/tunnels/tailscale/disable").description, /remains available.*locked/i);
+  assert.match(operation("post", "/api/tunnels/tailscale/enable").description, /locked.*blocks.*capability/i);
+  assert.match(operation("post", "/api/tunnels/tailscale/install").description, /locked.*blocks.*installation/i);
 });
 
 test("Command Code callback documents its management-gate ticket mismatch and admin access-token scope", () => {
