@@ -8997,8 +8997,21 @@ paths:
       summary: Install 9Router from npm
       description: >-
         Installs the `9router` npm package under DATA_DIR/services/9router/.
-        Uses execFile (no shell interpolation — hard rule #13).
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Uses execFile (no shell interpolation — hard rule #13); the response includes the local
+        installation path and version metadata. **LOCAL_ONLY** — only loopback and trusted private-LAN
+        peers pass the locality gate; this spawn-capable service prefix has no remote manage-scope
+        bypass. Within that boundary, `requireLogin=false` permits anonymous local/LAN access; when
+        locked, management credentials are required and scoped `oma_` tokens need `admin` on
+        `/api/services/*`. Installation paths and process state are sensitive operational data.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: false
         content:
@@ -9013,6 +9026,7 @@ paths:
       responses:
         "200":
           description: Install succeeded
+          x-sensitive: true
           content:
             application/json:
               schema:
@@ -9028,6 +9042,13 @@ paths:
           description: Invalid request body
         "500":
           description: npm install failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/9router/start:
     post:
@@ -9127,15 +9148,36 @@ paths:
       tags: [Embedded Services]
       summary: Restart 9Router
       description: >-
-        Equivalent to stop() then start() under the operation lock.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Restarts 9Router under the operation lock and returns live process status. **LOCAL_ONLY** —
+        only loopback and trusted private-LAN peers pass the locality gate; this spawn-capable service
+        prefix has no remote manage-scope bypass. Within that boundary, `requireLogin=false` permits
+        anonymous local/LAN access; when locked, management credentials are required and scoped
+        `oma_` tokens need `admin` on `/api/services/*`. Process state and metadata are sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "200":
           description: Service restarted
+          x-sensitive: true
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ServiceStatus"
+        "409": { description: 9Router is not installed. }
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/9router/update:
     post:
@@ -9314,7 +9356,20 @@ paths:
       summary: Toggle 9Router auto-start
       description: >-
         When enabled, 9Router starts automatically on the next OmniRoute boot.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. Within that boundary,
+        `requireLogin=false` permits anonymous local/LAN access; when locked, management credentials
+        are required and scoped `oma_` tokens need `admin` on `/api/services/*`. This mutation
+        controls service lifecycle behavior and is sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         content:
@@ -9326,17 +9381,17 @@ paths:
                 enabled:
                   type: boolean
       responses:
-        "200":
-          description: Auto-start flag updated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  autoStart:
-                    type: boolean
+        "204":
+          description: Auto-start flag updated; no response body.
         "400":
           description: Invalid request body
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/9router/auto-restart-adopted:
     post:
@@ -9348,7 +9403,20 @@ paths:
         When enabled, an externally-adopted (not OmniRoute-spawned) 9Router
         process is restarted under OmniRoute's own supervisor on the next
         health-check cycle instead of being left as adopted-only.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the locality gate; this
+        spawn-capable service prefix has no remote manage-scope bypass. Within that boundary,
+        `requireLogin=false` permits anonymous local/LAN access; when locked, management credentials
+        are required and scoped `oma_` tokens need `admin` on `/api/services/*`. This mutation
+        controls process adoption/restart behavior and is sensitive.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       requestBody:
         required: true
         content:
@@ -9366,6 +9434,13 @@ paths:
           description: Invalid request body
         "500":
           description: Update failed
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   /api/services/cliproxy/install:
     post:
@@ -10736,7 +10811,22 @@ paths:
         Returns a Server-Sent Events stream from the service's in-memory ring buffer
         (5 MB, circular). Sends a `snapshot` event with historical lines first, then
         live `log` events, plus a `heartbeat` every 15 s.
-        **LOCAL_ONLY** — loopback and trusted private-LAN peers are admitted; public/unknown remote peers are blocked.
+        Log lines can contain credentials, request data, local paths, and process diagnostics, so
+        this stream is sensitive. The route has no handler-local auth and relies on the central
+        management policy. **LOCAL_ONLY** — only loopback and trusted private-LAN peers pass the
+        locality gate; this spawn-capable service prefix has no remote manage-scope bypass. Within
+        that boundary, `requireLogin=false` permits anonymous local/LAN access; when locked,
+        management credentials are required and scoped `oma_` tokens need `admin` on
+        `/api/services/*`.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       parameters:
         - name: name
           in: path
@@ -10762,6 +10852,7 @@ paths:
       responses:
         "200":
           description: SSE log stream
+          x-sensitive: true
           content:
             text/event-stream:
               schema:
@@ -10772,6 +10863,13 @@ paths:
           description: filter parameter exceeds maximum length
         "404":
           description: Service not found
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
 
   # ─── OAuth ─────────────────────────────────────────────────────
 
@@ -30853,6 +30951,22 @@ paths:
       tags:
         - Radar
       summary: "POST radar › settings"
+      description: >-
+        Updates Radar opt-in state and/or its supporter key. The raw key is accepted in this request,
+        stored server-side, and returned only as a masked suffix; the successful response is no-store.
+        The handler checks `RADAR_ENABLED` before its own `requireManagementAuth` call, but central
+        MANAGEMENT auth runs first in locked profiles. Scoped `oma_` access tokens use method-derived
+        `write` scope; `requireLogin=false` admits anonymous access, including remotely. Key and opt-in
+        settings are sensitive. This route is conditional MANAGEMENT access, not an explicit public
+        allowlist route.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: true
         x-sensitive: true
@@ -30900,6 +31014,21 @@ paths:
       tags:
         - Radar
       summary: "GET radar › status"
+      description: >-
+        Returns local Radar settings and cache freshness for the catalog, referrals, offers, and Intel
+        feeds. The handler checks `RADAR_ENABLED` before its own `requireManagementAuth` call, but
+        central MANAGEMENT auth runs first in locked profiles. Scoped `oma_` access tokens use
+        method-derived `read` scope; `requireLogin=false` admits anonymous access, including remotely.
+        Provider feed state and supporter-key presence are sensitive. This route is conditional
+        MANAGEMENT access, not an explicit public allowlist route.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Local Radar settings and cache freshness for each feed.
@@ -30929,6 +31058,21 @@ paths:
       tags:
         - Radar
       summary: "POST radar › sync"
+      description: >-
+        Triggers a server-side catalog-feed synchronization; the supporter key remains server-side and
+        sync outcome/provider state is returned. The handler checks `RADAR_ENABLED` before its own
+        `requireManagementAuth` call, but central MANAGEMENT auth runs first in locked profiles.
+        Scoped `oma_` access tokens use method-derived `write` scope; `requireLogin=false` admits
+        anonymous access, including remotely. Feed and provider state are sensitive. This route is
+        conditional MANAGEMENT access, not an explicit public allowlist route.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: false
         description: Optional body; if supplied it must be exactly `{}` and must not exceed 1 KiB.
@@ -30971,6 +31115,21 @@ paths:
       tags:
         - Radar
       summary: "POST radar › sync all"
+      description: >-
+        Triggers independent server-side synchronization of the catalog, referrals, offers, and Intel
+        feeds; supporter credentials remain server-side. The handler checks `RADAR_ENABLED` before
+        its own `requireManagementAuth` call, but central MANAGEMENT auth runs first in locked profiles.
+        Scoped `oma_` access tokens use method-derived `write` scope; `requireLogin=false` admits
+        anonymous access, including remotely. Feed, provider, and referral state are sensitive. This
+        route is conditional MANAGEMENT access, not an explicit public allowlist route.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       requestBody:
         required: false
         description: Optional empty JSON object; absent/blank or `{}` only, at most 1 KiB.
@@ -31215,9 +31374,34 @@ paths:
       tags:
         - Resilience
       summary: "DELETE resilience › model cooldowns"
+      description: >-
+        Clears all model-availability cooldowns when the body sets `all: true`, or clears one matching
+        provider/model entry. The handler also checks `requireManagementAuth`; central MANAGEMENT auth
+        runs first in locked profiles. Scoped `oma_` access tokens use method-derived `write` scope;
+        `requireLogin=false` admits anonymous access, including remotely. Cooldown and provider state are
+        sensitive. This route is conditional MANAGEMENT access, not an explicit public or LOCAL_ONLY
+        route.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      requestBody:
+        required: true
+        description: >-
+          If `all` is true, all cooldowns are cleared. Otherwise both `provider` and `model` must be
+          non-empty after trimming; omitting the body or either field returns a validation error.
+          Unknown object fields are accepted but ignored.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ModelCooldownClearRequest" }
       responses:
         "200":
           description: All cooldowns were cleared, or the matching provider/model cooldown was cleared if present.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ModelCooldownClearResponse" }
@@ -31242,9 +31426,24 @@ paths:
       tags:
         - Resilience
       summary: "GET resilience › model cooldowns"
+      description: >-
+        Lists current provider/model availability cooldowns and remaining durations. The handler also
+        checks `requireManagementAuth`; central MANAGEMENT auth runs first in locked profiles. Scoped
+        `oma_` access tokens use method-derived `read` scope; `requireLogin=false` admits anonymous
+        access, including remotely. Cooldown and provider state are sensitive. This route is conditional
+        MANAGEMENT access, not an explicit public or LOCAL_ONLY route.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
       responses:
         "200":
           description: Current model lockouts, ordered by remaining cooldown.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ModelCooldownListResponse" }
@@ -31312,9 +31511,25 @@ paths:
       tags:
         - Search
       summary: "GET search › providers"
+      description: >-
+        Lists configured search and fetch providers with each credential state (`configured`, `missing`,
+        or `rate_limited`) and cost/quota metadata; raw credentials are not returned. Central
+        MANAGEMENT auth and the handler's narrower `isAuthenticated()` check both apply when auth is
+        required. The handler accepts a dashboard session or a management-scoped API key, but does not
+        accept central-only `oma_` access tokens, loopback CLI tokens, or internal-service tokens in
+        that mode. `requireLogin=false` admits anonymous access, including remotely; first-run bootstrap
+        without credentials admits anonymous access only from loopback. Credential availability and
+        provider state are sensitive. This route is not explicitly public or LOCAL_ONLY.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Search and fetch provider catalog plus the legacy search-provider data array.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SearchProviderCatalogResponse" }
@@ -31323,20 +31538,38 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500":
           description: Provider catalog could not be built.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/search/stats:
     get:
       operationId: getApiSearchStats
       tags:
         - Search
       summary: "GET search › stats"
+      description: >-
+        Returns search-cache counters, per-provider request/latency/cost aggregates, and recent query
+        summaries including query text and filters. Central MANAGEMENT auth and the handler's narrower
+        `isAuthenticated()` check both apply when auth is required. The handler accepts a dashboard
+        session or a management-scoped API key, but does not accept central-only `oma_` access tokens,
+        loopback CLI tokens, or internal-service tokens in that mode. `requireLogin=false` admits
+        anonymous access, including remotely; first-run bootstrap without credentials admits anonymous
+        access only from loopback. Query logs, provider state, and usage data are sensitive. This route
+        is not explicitly public or LOCAL_ONLY.
+      security:
+        - ManagementApiKeyBearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - {}
       responses:
         "200":
           description: Search-cache counters, per-provider aggregates, and up to ten recent search summaries.
+          x-sensitive: true
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SearchStatsResponse" }
@@ -31345,11 +31578,13 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "403": { $ref: "#/components/responses/ManagementInvalidToken" }
         "500":
           description: Search statistics could not be read.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StringErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/services/9router/models:
     get:
       operationId: getApiServices9routerModels
@@ -31371,9 +31606,32 @@ paths:
         - Services
       summary: "POST services › 9router › provider expose"
       x-local-only: true
+      description: >-
+        Changes whether 9Router models are exposed as routable `9router/...` models. **LOCAL_ONLY** —
+        only loopback and trusted private-LAN peers pass the locality gate; this spawn-capable service
+        prefix has no remote manage-scope bypass. Within that boundary, `requireLogin=false` permits
+        anonymous local/LAN access; when locked, management credentials are required and scoped
+        `oma_` tokens need `admin` on `/api/services/*`. Provider exposure and service configuration
+        are sensitive operational state.
+      security:
+        - BearerAuth: []
+        - ManagementGoogleApiKeyAuth: []
+        - ManagementAnthropicApiKeyAuth: []
+        - ManagementSessionAuth: []
+        - LocalCliTokenAuth: []
+        - InternalServiceTokenAuth: []
+        - {}
+      x-sensitive: true
       responses:
         "204":
           description: Provider exposure setting was updated; no response body.
+        "401": { $ref: "#/components/responses/ManagementAuthenticationRequired" }
+        "403":
+          description: Public/unknown remote peers are denied by LOCAL_ONLY or management scope is insufficient.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiErrorResponse" }
+        "503": { $ref: "#/components/responses/ManagementAuthUnavailable" }
   /api/services/cliproxy/accounts:
     get:
       operationId: getApiServicesCliproxyAccounts
@@ -67302,6 +67560,22 @@ components:
         - { $ref: "#/components/schemas/ModelCooldownClearAllResponse" }
         - { $ref: "#/components/schemas/ModelCooldownClearOneResponse" }
 
+    ModelCooldownClearRequest:
+      type: object
+      description: >-
+        The handler accepts an open object. `all: true` clears every cooldown; otherwise both `provider`
+        and `model` must be supplied as non-empty strings after trimming. Unknown fields are ignored.
+      properties:
+        provider: { type: string, minLength: 1 }
+        model: { type: string, minLength: 1 }
+        all: { type: boolean }
+      anyOf:
+        - required: [all]
+          properties:
+            all: { const: true }
+        - required: [provider, model]
+      additionalProperties: true
+
     SearchProviderCatalogItem:
       type: object
       required: [id, name, kind, costPerQuery, freeMonthlyQuota, status, configureHref]
@@ -67317,7 +67591,7 @@ components:
         fetchFormats:
           type: array
           items: { type: string }
-        status: { type: string, enum: [configured, missing, rate_limited] }
+        status: { type: string, enum: [configured, missing, rate_limited], x-sensitive: true }
         configureHref: { type: string }
       additionalProperties: false
 
@@ -67369,10 +67643,11 @@ components:
       type: object
       required: [query, provider, timestamp, filters]
       properties:
-        query: { type: string }
+        query: { type: string, x-sensitive: true }
         provider: { type: string }
         timestamp: { type: string }
         filters:
+          x-sensitive: true
           description: Parsed request-summary JSON value; `{}` is used when parsing fails or filters are absent.
       additionalProperties: false
 

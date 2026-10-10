@@ -116,6 +116,20 @@ const operations = [
   ["post", "/api/services/bifrost/update"],
   ["get", "/api/services/cliproxy/accounts"],
   ["post", "/api/services/cliproxy/auto-restart-adopted"],
+  ["post", "/api/radar/settings"],
+  ["get", "/api/radar/status"],
+  ["post", "/api/radar/sync"],
+  ["post", "/api/radar/sync-all"],
+  ["delete", "/api/resilience/model-cooldowns"],
+  ["get", "/api/resilience/model-cooldowns"],
+  ["get", "/api/search/providers"],
+  ["get", "/api/search/stats"],
+  ["get", "/api/services/{name}/logs"],
+  ["post", "/api/services/9router/auto-restart-adopted"],
+  ["post", "/api/services/9router/auto-start"],
+  ["post", "/api/services/9router/install"],
+  ["post", "/api/services/9router/provider-expose"],
+  ["post", "/api/services/9router/restart"],
 ] as const;
 
 function operation(method: string, route: string) {
@@ -130,7 +144,7 @@ function hasScheme(security: unknown[], name: string) {
   );
 }
 
-test("the audited batches declare all 104 effective OpenAPI operations", () => {
+test("the audited batches declare all 118 effective OpenAPI operations", () => {
   for (const [method, route] of operations) {
     const routeOperation = operation(method, route);
     assert.ok(Array.isArray(routeOperation.security), `${method.toUpperCase()} ${route}`);
@@ -393,6 +407,10 @@ test("Radar endpoints remain conditional MANAGEMENT routes with flag-order and c
     ["post", "/api/radar/offers/sync", "write"],
     ["get", "/api/radar/referrals", "read"],
     ["get", "/api/radar/settings", "read"],
+    ["post", "/api/radar/settings", "write"],
+    ["get", "/api/radar/status", "read"],
+    ["post", "/api/radar/sync", "write"],
+    ["post", "/api/radar/sync-all", "write"],
   ] as const;
   for (const [method, route, scope] of radar) {
     const routeOperation = operation(method, route);
@@ -417,6 +435,7 @@ test("Radar endpoints remain conditional MANAGEMENT routes with flag-order and c
     "/api/radar/offers",
     "/api/radar/referrals",
     "/api/radar/settings",
+    "/api/radar/status",
   ]) {
     const get = operation("get", route);
     assert.equal(get.responses["200"].headers["Cache-Control"].schema.const, "no-store");
@@ -428,6 +447,67 @@ test("Radar endpoints remain conditional MANAGEMENT routes with flag-order and c
   assert.match(operation("get", "/api/radar/settings").description, /masked key suffix.*raw supporter key is never returned/i);
   assert.match(operation("post", "/api/radar/intel/sync").description, /supporter key remains server-side/i);
   assert.match(operation("post", "/api/radar/offers/sync").description, /supporter key remains server-side/i);
+  const settingsPost = operation("post", "/api/radar/settings");
+  assert.equal(settingsPost.requestBody["x-sensitive"], true);
+  assert.equal(settingsPost.responses["200"]["x-sensitive"], true);
+  assert.equal(settingsPost.responses["200"].headers["Cache-Control"].schema.const, "no-store");
+  assert.equal(spec.components.schemas.RadarSettingsUpdateRequest.properties.supporterKey["x-sensitive"], true);
+});
+
+test("model cooldown and search routes document conditional auth and sensitive provider state", () => {
+  for (const [method, route, scope] of [
+    ["get", "/api/resilience/model-cooldowns", "read"],
+    ["delete", "/api/resilience/model-cooldowns", "write"],
+  ] as const) {
+    const routeOperation = operation(method, route);
+    assert.ok(hasScheme(routeOperation.security, "BearerAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.equal(routeOperation["x-local-only"], undefined);
+    assert.match(routeOperation.description, /central MANAGEMENT auth runs first/i);
+    assert.match(routeOperation.description, new RegExp(`method-derived.*${scope}.*scope`, "i"));
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.match(routeOperation.description, /provider state are sensitive/i);
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+
+  const deleteCooldowns = operation("delete", "/api/resilience/model-cooldowns");
+  assert.equal(deleteCooldowns.requestBody.required, true);
+  assert.equal(
+    deleteCooldowns.requestBody.content["application/json"].schema.$ref,
+    "#/components/schemas/ModelCooldownClearRequest",
+  );
+  const clearRequestSchema = spec.components.schemas.ModelCooldownClearRequest;
+  assert.match(clearRequestSchema.description, /`all: true`.*otherwise both `provider`.*`model`/s);
+  assert.deepEqual(clearRequestSchema.anyOf[0].required, ["all"]);
+  assert.equal(clearRequestSchema.anyOf[0].properties.all.const, true);
+  assert.deepEqual(clearRequestSchema.anyOf[1].required, ["provider", "model"]);
+  assert.equal(clearRequestSchema.additionalProperties, true);
+
+  for (const route of ["/api/search/providers", "/api/search/stats"]) {
+    const routeOperation = operation("get", route);
+    assert.ok(hasScheme(routeOperation.security, "ManagementApiKeyBearerAuth"));
+    assert.ok(hasScheme(routeOperation.security, "ManagementSessionAuth"));
+    assert.ok(routeOperation.security.some((alternative: object) => Object.keys(alternative).length === 0));
+    assert.equal(hasScheme(routeOperation.security, "BearerAuth"), false);
+    assert.equal(hasScheme(routeOperation.security, "LocalCliTokenAuth"), false);
+    assert.equal(hasScheme(routeOperation.security, "InternalServiceTokenAuth"), false);
+    assert.equal(routeOperation["x-local-only"], undefined);
+    assert.match(routeOperation.description, /narrower `isAuthenticated\(\)` check/i);
+    assert.match(routeOperation.description, /does not accept central-only `oma_`.*CLI tokens.*internal-service tokens/s);
+    assert.match(routeOperation.description, /requireLogin=false/);
+    assert.match(routeOperation.description, /first-run bootstrap.*loopback/i);
+    assert.equal(routeOperation.responses["200"]["x-sensitive"], true);
+    assert.ok(routeOperation.responses["401"]);
+    assert.ok(routeOperation.responses["403"]);
+    assert.ok(routeOperation.responses["503"]);
+  }
+
+  assert.equal(spec.components.schemas.SearchProviderCatalogItem.properties.status["x-sensitive"], true);
+  assert.equal(spec.components.schemas.SearchStatsRecentItem.properties.query["x-sensitive"], true);
+  assert.equal(spec.components.schemas.SearchStatsRecentItem.properties.filters["x-sensitive"], true);
 });
 
 test("embedded-service endpoints preserve the spawn-capable LOCAL_ONLY gate and admin access-token scope", () => {
@@ -447,6 +527,12 @@ test("embedded-service endpoints preserve the spawn-capable LOCAL_ONLY gate and 
     ["post", "/api/services/bifrost/update"],
     ["get", "/api/services/cliproxy/accounts"],
     ["post", "/api/services/cliproxy/auto-restart-adopted"],
+    ["get", "/api/services/{name}/logs"],
+    ["post", "/api/services/9router/auto-restart-adopted"],
+    ["post", "/api/services/9router/auto-start"],
+    ["post", "/api/services/9router/install"],
+    ["post", "/api/services/9router/provider-expose"],
+    ["post", "/api/services/9router/restart"],
   ] as const) {
     const routeOperation = operation(method, route);
     assert.equal(routeOperation["x-local-only"], true, `${method.toUpperCase()} ${route}`);
@@ -461,6 +547,33 @@ test("embedded-service endpoints preserve the spawn-capable LOCAL_ONLY gate and 
     assert.ok(routeOperation.responses["403"]);
     assert.ok(routeOperation.responses["503"]);
   }
+});
+
+test("service logs and 9Router lifecycle operations are sensitive and auto-start is bodyless 204", () => {
+  const logs = operation("get", "/api/services/{name}/logs");
+  assert.equal(logs["x-sensitive"], true);
+  assert.equal(logs.responses["200"]["x-sensitive"], true);
+  assert.match(logs.description, /log lines can contain credentials.*local paths/i);
+  assert.ok(logs.responses["401"]);
+  assert.ok(logs.responses["403"]);
+  assert.ok(logs.responses["503"]);
+
+  for (const [method, route] of [
+    ["post", "/api/services/9router/auto-restart-adopted"],
+    ["post", "/api/services/9router/auto-start"],
+    ["post", "/api/services/9router/install"],
+    ["post", "/api/services/9router/provider-expose"],
+    ["post", "/api/services/9router/restart"],
+  ] as const) {
+    assert.equal(operation(method, route)["x-sensitive"], true);
+  }
+  assert.equal(operation("post", "/api/services/9router/install").responses["200"]["x-sensitive"], true);
+  assert.equal(operation("post", "/api/services/9router/restart").responses["200"]["x-sensitive"], true);
+
+  const autoStart = operation("post", "/api/services/9router/auto-start");
+  const successes = Object.keys(autoStart.responses).filter((status) => /^2\d\d$/.test(status));
+  assert.deepEqual(successes, ["204"]);
+  assert.equal(autoStart.responses["204"].content, undefined);
 });
 
 test("9Router status scopes and no-store handling cover its explicit raw-key reveal branch", () => {
