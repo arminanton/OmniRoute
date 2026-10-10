@@ -23,6 +23,60 @@ function normalizePositiveNumber(value: unknown, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+const DEFAULT_VIDEO_TIMEOUT_MS = 300_000;
+const MAX_VIDEO_TIMEOUT_MS = 10 * 60_000;
+
+/** Keep fetch, response-body reads, submit retries and polling inside one deadline. */
+function createDeadlineFetch(
+  fetchImpl: typeof fetch,
+  deadlineSignal: AbortSignal,
+  deadline: Promise<never>,
+  onSubmitDispatch: () => void,
+  onSubmitResponse: (response: Response) => void,
+  onSubmitTransportError: () => void
+): typeof fetch {
+  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = input instanceof Request ? input : undefined;
+    const method = String(init?.method || request?.method || "GET").toUpperCase();
+    const url = String(request?.url || input);
+    const isVideoSubmit = method === "POST" && url.includes("/v2/3p-videos/generate-async");
+    if (deadlineSignal.aborted) {
+      throw deadlineSignal.reason;
+    }
+    if (isVideoSubmit) onSubmitDispatch();
+
+    const originalSignal = init?.signal || request?.signal;
+    const signal = originalSignal
+      ? AbortSignal.any([originalSignal, deadlineSignal])
+      : deadlineSignal;
+    let response: Response;
+    try {
+      response = await Promise.race([fetchImpl(input, { ...init, signal }), deadline]);
+    } catch (error) {
+      if (isVideoSubmit) onSubmitTransportError();
+      throw error;
+    }
+    if (isVideoSubmit) onSubmitResponse(response);
+
+    // Fetch resolving at headers is not enough: json()/text() may hang while a
+    // remote generation is already accepted. Bound body reads by this deadline too.
+    return new Proxy(response, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (
+          typeof property === "string" &&
+          ["json", "text", "arrayBuffer", "blob", "formData"].includes(property) &&
+          typeof value === "function"
+        ) {
+          return (...args: unknown[]) =>
+            Promise.race([Promise.resolve(value.apply(target, args)), deadline]);
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as Response;
+  }) as typeof fetch;
+}
+
 export async function handleAdobeFireflyVideoGeneration({
   model,
   provider,
@@ -61,17 +115,82 @@ export async function handleAdobeFireflyVideoGeneration({
     };
   }
 
+  const timeoutMs = Math.max(
+    1,
+    Math.min(
+      MAX_VIDEO_TIMEOUT_MS,
+      Math.floor(normalizePositiveNumber(body.timeout_ms, DEFAULT_VIDEO_TIMEOUT_MS))
+    )
+  );
+  const deadlineError = new AdobeFireflyError(
+    "Adobe Firefly video generation exceeded the task deadline",
+    504,
+    "timeout"
+  );
+  const deadlineController = new AbortController();
+  let deadlineExpired = false;
+  let submitInFlight = false;
+  let ambiguousSubmit = false;
+  let taskAccepted = false;
+  let rejectDeadline!: (reason: unknown) => void;
+  const deadline = new Promise<never>((_, reject) => {
+    rejectDeadline = reject;
+  });
+  const deadlineTimer = setTimeout(() => {
+    deadlineExpired = true;
+    if (submitInFlight) ambiguousSubmit = true;
+    deadlineController.abort(deadlineError);
+    rejectDeadline(deadlineError);
+  }, timeoutMs);
+  deadlineTimer.unref?.();
+  const deadlineFetch = createDeadlineFetch(
+    fetchImpl,
+    deadlineController.signal,
+    deadline,
+    () => {
+      signal?.throwIfAborted();
+      submitInFlight = true;
+    },
+    (response) => {
+      submitInFlight = false;
+      if (response.ok) taskAccepted = true;
+      else if (response.status === 408 || response.status >= 500) ambiguousSubmit = true;
+    },
+    () => {
+      submitInFlight = false;
+      ambiguousSubmit = true;
+    }
+  );
+  const callerCancelled = () => {
+    const message = "Video generation request cancelled";
+    const terminal = taskAccepted || ambiguousSubmit;
+    log?.info?.("VIDEO", `${provider}/${model} adobe-firefly cancelled by caller`);
+    saveCallLog({
+      method: "POST",
+      path: "/v1/videos/generations",
+      status: 499,
+      model: `${provider}/${model}`,
+      provider,
+      duration: Date.now() - startTime,
+      error: message,
+    }).catch(() => {});
+    return {
+      success: false as const,
+      status: 499,
+      ...(terminal ? { terminal: true as const } : {}),
+      error: message,
+    };
+  };
+
   try {
     signal?.throwIfAborted();
-    const session = await ensureAdobeFireflySession({
-      credentials,
-      fetchImpl,
-      log,
-    });
+    const session = await Promise.race([
+      ensureAdobeFireflySession({ credentials, fetchImpl: deadlineFetch, log }),
+      deadline,
+    ]);
     const accessToken = session.accessToken;
     const sessionCookie = session.cookie || undefined;
     const arpSessionId = session.arpSessionId;
-    const timeoutMs = normalizePositiveNumber(body.timeout_ms, 300_000);
     const seed =
       typeof body.seed === "number"
         ? body.seed
@@ -82,17 +201,23 @@ export async function handleAdobeFireflyVideoGeneration({
     // Kling i2v / Veo ref / Sora frame: upload reference images first.
     const { id: videoModelId } = resolveAdobeVideoModel(String(model));
     const maxFrames = videoModelId.includes("kling") || videoModelId.includes("sora") ? 2 : 3;
-    const sourceImageIds = await resolveAdobeSourceImageIds({
-      accessToken,
-      body,
-      max: maxFrames,
-      sessionCookie,
-      arpSessionId,
-      prompt,
-      signal,
-      fetchImpl,
-      log,
-    });
+    const sourceSignal = signal
+      ? AbortSignal.any([signal, deadlineController.signal])
+      : deadlineController.signal;
+    const sourceImageIds = await Promise.race([
+      resolveAdobeSourceImageIds({
+        accessToken,
+        body,
+        max: maxFrames,
+        sessionCookie,
+        arpSessionId,
+        prompt,
+        signal: sourceSignal,
+        fetchImpl: deadlineFetch,
+        log,
+      }),
+      deadline,
+    ]);
     signal?.throwIfAborted();
 
     log?.info?.(
@@ -102,7 +227,7 @@ export async function handleAdobeFireflyVideoGeneration({
         ` | session=${session.source}`
     );
 
-    const result = await adobeFireflyGenerateVideo({
+    const resultPromise = adobeFireflyGenerateVideo({
       accessToken,
       prompt,
       model,
@@ -125,9 +250,17 @@ export async function handleAdobeFireflyVideoGeneration({
       sessionFingerprint: session.fingerprint,
       sessionBrowserKey: session.browserSessionKey,
       timeoutMs,
-      fetchImpl,
+      fetchImpl: deadlineFetch,
       log,
     });
+    const result = await Promise.race([resultPromise, deadline]);
+
+    // Caller cancellation does not cancel a dispatched/accepted Adobe job. Let it
+    // settle, then report 499 so the disconnected request is not recorded as success.
+    if (signal?.aborted) {
+      taskAccepted = true;
+      return callerCancelled();
+    }
 
     saveCallLog({
       method: "POST",
@@ -146,33 +279,55 @@ export async function handleAdobeFireflyVideoGeneration({
       },
     };
   } catch (err) {
-    if (err instanceof RemoteMediaFetchError || signal?.aborted) {
+    if (err instanceof RemoteMediaFetchError) {
+      // The local result-provenance brand is what prevents combo replay for a
+      // remote-media boundary failure. Spreading this value would drop that
+      // private marker and could incorrectly launch another paid video job.
       return createRemoteMediaFailureResult(err, signal);
     }
+    if (signal?.aborted) {
+      return callerCancelled();
+    }
     if (err instanceof AdobeFireflyError) {
-      log?.error?.("VIDEO", `${provider} adobe-firefly error ${err.status}: ${err.message}`);
+      const status = deadlineExpired ? 504 : err.status;
+      const message = deadlineExpired ? deadlineError.message : err.message;
+      log?.error?.("VIDEO", `${provider} adobe-firefly error ${status}: ${message}`);
       saveCallLog({
         method: "POST",
         path: "/v1/videos/generations",
-        status: err.status,
+        status,
         model: `${provider}/${model}`,
         provider,
         duration: Date.now() - startTime,
-        error: err.message.slice(0, 500),
+        error: message.slice(0, 500),
       }).catch(() => {});
-      return { success: false, status: err.status, error: err.message };
+      const terminal = (taskAccepted || ambiguousSubmit) && err.code !== "job_failed";
+      return {
+        success: false,
+        status,
+        ...(terminal ? { terminal: true } : {}),
+        error: message,
+      };
     }
     const errorText = sanitizeErrorMessage(err instanceof Error ? err.message : String(err));
     log?.error?.("VIDEO", `${provider} adobe-firefly exception: ${errorText}`);
+    const status = deadlineExpired ? 504 : 500;
     saveCallLog({
       method: "POST",
       path: "/v1/videos/generations",
-      status: 500,
+      status,
       model: `${provider}/${model}`,
       provider,
       duration: Date.now() - startTime,
       error: errorText.slice(0, 500),
     }).catch(() => {});
-    return { success: false, status: 500, error: errorText };
+    return {
+      success: false,
+      status,
+      ...(taskAccepted || ambiguousSubmit ? { terminal: true } : {}),
+      error: errorText,
+    };
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 }

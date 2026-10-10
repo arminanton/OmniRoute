@@ -734,6 +734,172 @@ test("handleAdobeFireflyVideoGeneration returns 400 without prompt", async () =>
   assert.equal(result.status, 400);
 });
 
+test("Adobe Firefly video deadline aborts a hung submit and marks acceptance ambiguous", async () => {
+  let submitAborted = false;
+  const result = await handleAdobeFireflyVideoGeneration({
+    model: "sora-2",
+    provider: "adobe-firefly",
+    body: { prompt: "deadline test", timeout_ms: 500 },
+    credentials: { apiKey: userImsJwt(), connectionId: "video-deadline-submit-test" },
+    fetchImpl: (async (url, init) => {
+      assert.match(String(url), /3p-videos\/generate-async/);
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            submitAborted = true;
+            reject(init.signal?.reason);
+          },
+          { once: true }
+        );
+      });
+    }) as typeof fetch,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 504);
+  assert.equal(result.terminal, true);
+  assert.equal(submitAborted, true);
+});
+
+test("Adobe Firefly video deadline bounds submit response body reads", async () => {
+  let bodyReadStarted = false;
+  const result = await handleAdobeFireflyVideoGeneration({
+    model: "sora-2",
+    provider: "adobe-firefly",
+    body: { prompt: "body deadline test", timeout_ms: 500 },
+    credentials: { apiKey: userImsJwt(), connectionId: "video-deadline-body-test" },
+    fetchImpl: (async () => {
+      const response = jsonResponse(200, {});
+      response.json = async () => {
+        bodyReadStarted = true;
+        return await new Promise<never>(() => {});
+      };
+      return response;
+    }) as typeof fetch,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 504);
+  assert.equal(result.terminal, true);
+  assert.equal(bodyReadStarted, true);
+});
+
+test("Adobe Firefly video deadline bounds pending-task poll waits", async () => {
+  const resultLink =
+    "https://bks-epo8552.adobe.io/v2/jobs/result/pending-video?host=firefly-epo855232.adobe.io";
+  let polls = 0;
+  const result = await handleAdobeFireflyVideoGeneration({
+    model: "sora-2",
+    provider: "adobe-firefly",
+    body: { prompt: "poll wait deadline test", timeout_ms: 500 },
+    credentials: { apiKey: userImsJwt(), connectionId: "video-deadline-poll-test" },
+    fetchImpl: (async (url) => {
+      if (String(url).includes("3p-videos/generate-async")) {
+        return jsonResponse(200, { links: { result: { href: resultLink } } });
+      }
+      polls++;
+      return jsonResponse(200, { status: "IN_PROGRESS" });
+    }) as typeof fetch,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 504);
+  assert.equal(result.terminal, true);
+  assert.equal(polls, 1);
+});
+
+test("Adobe Firefly video keeps an explicit submit rejection retryable", async () => {
+  const result = await handleAdobeFireflyVideoGeneration({
+    model: "sora-2",
+    provider: "adobe-firefly",
+    body: { prompt: "rejection test", timeout_ms: 1000 },
+    credentials: { apiKey: userImsJwt(), connectionId: "video-explicit-rejection-test" },
+    fetchImpl: (async () => jsonResponse(400, { error: "invalid prompt" })) as typeof fetch,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 400);
+  assert.notEqual(result.terminal, true);
+});
+
+test("Adobe Firefly video preserves confirmed task-failure behavior", async () => {
+  const resultLink =
+    "https://bks-epo8552.adobe.io/v2/jobs/result/failed-video?host=firefly-epo855232.adobe.io";
+  const result = await handleAdobeFireflyVideoGeneration({
+    model: "sora-2",
+    provider: "adobe-firefly",
+    body: { prompt: "confirmed failure test", timeout_ms: 1000 },
+    credentials: { apiKey: userImsJwt(), connectionId: "video-confirmed-failure-test" },
+    fetchImpl: (async (url) =>
+      String(url).includes("3p-videos/generate-async")
+        ? jsonResponse(200, { links: { result: { href: resultLink } } })
+        : jsonResponse(200, {
+            status: "FAILED",
+            error: "provider rejected generation",
+          })) as typeof fetch,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 502);
+  assert.notEqual(result.terminal, true);
+});
+
+test("Adobe Firefly video finishes accepted work, then returns terminal 499 on caller cancellation", async () => {
+  const controller = new AbortController();
+  const resultLink =
+    "https://bks-epo8552.adobe.io/v2/jobs/result/cancelled-video?host=firefly-epo855232.adobe.io";
+  let polls = 0;
+  const result = await handleAdobeFireflyVideoGeneration({
+    model: "sora-2",
+    provider: "adobe-firefly",
+    body: { prompt: "accepted cancellation test", timeout_ms: 1000 },
+    credentials: { apiKey: userImsJwt(), connectionId: "video-cancel-success-test" },
+    signal: controller.signal,
+    fetchImpl: (async (url) => {
+      if (String(url).includes("3p-videos/generate-async")) {
+        // Simulate the downstream disconnect after the submit has been dispatched.
+        controller.abort();
+        return jsonResponse(200, { links: { result: { href: resultLink } } });
+      }
+      polls++;
+      return jsonResponse(200, {
+        status: "COMPLETED",
+        outputs: [{ video: { presignedUrl: "https://cdn.example/cancelled.mp4" } }],
+      });
+    }) as typeof fetch,
+  });
+
+  assert.equal(polls, 1, "the accepted remote task must be polled to completion");
+  assert.equal(result.success, false);
+  assert.equal(result.status, 499);
+  assert.equal(result.terminal, true);
+});
+
+test("Adobe Firefly video reports terminal 499 after cancelled accepted task failure", async () => {
+  const controller = new AbortController();
+  const resultLink =
+    "https://bks-epo8552.adobe.io/v2/jobs/result/cancelled-failed-video?host=firefly-epo855232.adobe.io";
+  const result = await handleAdobeFireflyVideoGeneration({
+    model: "sora-2",
+    provider: "adobe-firefly",
+    body: { prompt: "cancelled task-failure test", timeout_ms: 1000 },
+    credentials: { apiKey: userImsJwt(), connectionId: "video-cancel-failure-test" },
+    signal: controller.signal,
+    fetchImpl: (async (url) => {
+      if (String(url).includes("3p-videos/generate-async")) {
+        controller.abort();
+        return jsonResponse(200, { links: { result: { href: resultLink } } });
+      }
+      return jsonResponse(200, { status: "FAILED", error: "provider task failed" });
+    }) as typeof fetch,
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.status, 499);
+  assert.equal(result.terminal, true);
+});
+
 test("handleAdobeFireflyImageGeneration maps quota exhausted", async () => {
   const fetchImpl = async () =>
     jsonResponse(403, { error: "nope" }, { "x-access-error": "taste_exhausted" });
