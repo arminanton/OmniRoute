@@ -5,6 +5,30 @@
     "maxEntries": 1000,
     "evictEntries": 200
   },
+  "expiryParseCases": [
+    { "name": "date-only-epoch-is-utc", "value": "1970-01-01", "expectedEpochMs": 0 },
+    { "name": "date-only-next-day", "value": "1970-01-02", "expectedEpochMs": 86400000 },
+    {
+      "name": "positive-offset-is-subtracted-from-local-clock",
+      "value": "1970-01-01T05:30:10+05:30",
+      "expectedEpochMs": 10000
+    },
+    {
+      "name": "negative-offset-is-added-to-local-clock",
+      "value": "1970-01-01T02:00:10-02:00",
+      "expectedEpochMs": 14410000
+    },
+    {
+      "name": "offset-and-fraction-preserve-millisecond-boundary",
+      "value": "1970-01-01T05:30:10.001+05:30",
+      "expectedEpochMs": 10001
+    },
+    {
+      "name": "invalid-offset-is-unparsed",
+      "value": "1970-01-01T00:00:10.000+24:00",
+      "expectedEpochMs": null
+    }
+  ],
   "vectors": [
     {
       "name": "positive-only-and-strict-ttl",
@@ -142,6 +166,36 @@
         { "nowMs": 10001, "expected": true },
         { "nowMs": 70000, "expected": false }
       ]
+    },
+    {
+      "name": "date-only-expiry-is-utc-midnight",
+      "key": "lifecycle-date-only-expiry",
+      "isActive": 1,
+      "isBanned": 0,
+      "revokedAt": null,
+      "expiresAt": "1970-01-02",
+      "checks": [
+        { "nowMs": 0, "expected": true },
+        { "nowMs": 86400000, "expected": false }
+      ]
+    },
+    {
+      "name": "offset-expiry-at-current-time-is-denied",
+      "key": "lifecycle-offset-expiry-boundary",
+      "isActive": 1,
+      "isBanned": 0,
+      "revokedAt": null,
+      "expiresAt": "1970-01-01T05:30:10+05:30",
+      "checks": [{ "nowMs": 10000, "expected": false }]
+    },
+    {
+      "name": "fractional-offset-expiry-one-millisecond-ahead-is-allowed",
+      "key": "lifecycle-offset-future-expiry",
+      "isActive": 1,
+      "isBanned": 0,
+      "revokedAt": null,
+      "expiresAt": "1970-01-01T05:30:10.001+05:30",
+      "checks": [{ "nowMs": 10000, "expected": true }]
     },
     {
       "name": "invalid-expiry-is-ignored-by-date-parse-gate",

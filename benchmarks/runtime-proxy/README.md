@@ -355,9 +355,14 @@ That shared fixture also has `lifecycleCases` executed against the real TypeScri
 the Rust SQLite probe. They cover inactive and banned rows, non-empty versus whitespace-only
 `revoked_at`, expiry exactly at `now`, expiry one millisecond ahead, and a positive cache entry
 that stays usable after its key expires until the cache's 60-second boundary. The Rust expiry parser
-supports only the canonical UTC timestamp forms used by these vectors; it does not reproduce the
-full JavaScript `Date.parse()` grammar. A malformed timestamp is treated as unparsed in the Rust
-probe, matching the TypeScript gate's behavior for `Date.parse()` returning a non-finite value.
+mirrors only the tested ISO subset: date-only UTC values and date-times with an explicit `Z` or
+`±HH:MM` zone, including millisecond fractions. Shared parse vectors compare Rust epoch milliseconds
+directly with JavaScript `Date.parse()`, while lifecycle vectors exercise the same date-only and
+offset cases through both the real TypeScript validator and the SQLite-backed Rust probe. This is
+still not the full JavaScript `Date.parse()` grammar: local-zone date-times, legacy date strings,
+extended years, and other accepted JavaScript forms are not implemented. An unsupported/malformed
+timestamp is treated as unparsed by the Rust probe, matching the TypeScript gate's behavior for
+`Date.parse()` returning a non-finite value.
 
 The TypeScript validator checks banned/active/revoked/expiry state; a revoke writes
 `revoked_at` and `is_active = 0` before clearing local caches, then attempts to delete the optional

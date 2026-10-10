@@ -33,6 +33,11 @@ type VectorAction =
 type CacheVectorFixture = {
   schemaVersion: number;
   policy: { ttlMs: number; maxEntries: number; evictEntries: number };
+  expiryParseCases: Array<{
+    name: string;
+    value: string;
+    expectedEpochMs: number | null;
+  }>;
   vectors: Array<{ name: string; actions: VectorAction[] }>;
   lifecycleCases: Array<{
     name: string;
@@ -52,6 +57,17 @@ const fixturePath = fileURLToPath(
   )
 );
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as CacheVectorFixture;
+
+test("shared API-key expiry parse cases match JavaScript Date.parse", () => {
+  for (const vector of fixture.expiryParseCases) {
+    const actual = Date.parse(vector.value);
+    if (vector.expectedEpochMs === null) {
+      assert.equal(Number.isFinite(actual), false, vector.name);
+    } else {
+      assert.equal(actual, vector.expectedEpochMs, vector.name);
+    }
+  }
+});
 
 type ApiKeysDb = {
   exec(sql: string): void;

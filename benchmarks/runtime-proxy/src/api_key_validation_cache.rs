@@ -159,7 +159,7 @@ mod tests {
             let expired = expires_at
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
-                .and_then(parse_canonical_utc_timestamp_ms)
+                .and_then(parse_iso_expiry_timestamp_ms)
                 .is_some_and(|expires_at_ms| expires_at_ms <= now_ms);
 
             // Match rowParsers.ts: inactive only when exactly 0; banned only when exactly 1.
@@ -172,18 +172,12 @@ mod tests {
         Ok(valid)
     }
 
-    /// Parse the canonical UTC timestamp shape used by the shared test vectors. JavaScript's
-    /// Date.parse accepts a broader grammar; unsupported/malformed values intentionally return
-    /// None because validateApiKey() ignores expiry strings for which Date.parse is non-finite.
-    fn parse_canonical_utc_timestamp_ms(value: &str) -> Option<i64> {
+    /// Parse the ISO date-only and date-time-with-explicit-zone shapes used by the shared vectors.
+    /// JavaScript's Date.parse accepts a broader grammar; unsupported/malformed values intentionally
+    /// return None because validateApiKey() ignores expiry strings for which Date.parse is non-finite.
+    fn parse_iso_expiry_timestamp_ms(value: &str) -> Option<i64> {
         let bytes = value.as_bytes();
-        if bytes.len() < 20
-            || bytes[4] != b'-'
-            || bytes[7] != b'-'
-            || bytes[10] != b'T'
-            || bytes[13] != b':'
-            || bytes[16] != b':'
-        {
+        if !bytes.is_ascii() || bytes.len() < 10 || bytes[4] != b'-' || bytes[7] != b'-' {
             return None;
         }
 
@@ -198,15 +192,7 @@ mod tests {
         let year = number(0, 4)?;
         let month = number(5, 7)?;
         let day = number(8, 10)?;
-        let hour = number(11, 13)?;
-        let minute = number(14, 16)?;
-        let second = number(17, 19)?;
-        if !(1..=9999).contains(&year)
-            || !(1..=12).contains(&month)
-            || !(0..=23).contains(&hour)
-            || !(0..=59).contains(&minute)
-            || !(0..=59).contains(&second)
-        {
+        if !(1..=9999).contains(&year) || !(1..=12).contains(&month) {
             return None;
         }
         let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
@@ -220,33 +206,83 @@ mod tests {
             return None;
         }
 
-        let fraction_ms = match bytes.get(19..) {
-            Some([b'Z']) => 0,
-            Some([b'.', fraction @ .., b'Z']) if !fraction.is_empty() => {
-                if !fraction.iter().all(u8::is_ascii_digit) {
+        let days_since_epoch = days_from_civil(year, month, day);
+        // ECMAScript parses ISO date-only values as UTC midnight. Keep this deterministic subset
+        // explicit: date-times without a zone depend on the process-local timezone and are omitted.
+        if bytes.len() == 10 {
+            return Some(days_since_epoch * 86_400_000);
+        }
+        if bytes.len() < 20 || bytes[10] != b'T' || bytes[13] != b':' || bytes[16] != b':' {
+            return None;
+        }
+
+        let hour = number(11, 13)?;
+        let minute = number(14, 16)?;
+        let second = number(17, 19)?;
+        if !(0..=23).contains(&hour) || !(0..=59).contains(&minute) || !(0..=59).contains(&second) {
+            return None;
+        }
+
+        let mut remainder = &bytes[19..];
+        let mut fraction_ms = 0;
+        if remainder.first() == Some(&b'.') {
+            let zone_start = remainder
+                .iter()
+                .position(|byte| *byte == b'Z' || *byte == b'+' || *byte == b'-')?;
+            let fraction = &remainder[1..zone_start];
+            if fraction.is_empty() || !fraction.iter().all(u8::is_ascii_digit) {
+                return None;
+            }
+            let millis_digits = &fraction[..fraction.len().min(3)];
+            let parsed: i64 = std::str::from_utf8(millis_digits).ok()?.parse().ok()?;
+            fraction_ms = parsed * 10_i64.pow((3 - millis_digits.len()) as u32);
+            remainder = &remainder[zone_start..];
+        }
+
+        // Only explicit UTC or ISO-8601 ±HH:MM zones are mirrored here. Local-time dates and
+        // JavaScript's legacy/non-ISO Date.parse forms remain outside this prototype's contract.
+        let offset_minutes = match remainder {
+            [b'Z'] => 0,
+            [
+                sign @ (b'+' | b'-'),
+                offset_hour_tens,
+                offset_hour_ones,
+                b':',
+                offset_minute_tens,
+                offset_minute_ones,
+            ] => {
+                if !offset_hour_tens.is_ascii_digit()
+                    || !offset_hour_ones.is_ascii_digit()
+                    || !offset_minute_tens.is_ascii_digit()
+                    || !offset_minute_ones.is_ascii_digit()
+                {
                     return None;
                 }
-                let millis_digits = &fraction[..fraction.len().min(3)];
-                let parsed: i64 = std::str::from_utf8(millis_digits).ok()?.parse().ok()?;
-                parsed * 10_i64.pow((3 - millis_digits.len()) as u32)
+                let offset_hour =
+                    i64::from(offset_hour_tens - b'0') * 10 + i64::from(offset_hour_ones - b'0');
+                let offset_minute = i64::from(offset_minute_tens - b'0') * 10
+                    + i64::from(offset_minute_ones - b'0');
+                if offset_hour > 23 || offset_minute > 59 {
+                    return None;
+                }
+                let magnitude = offset_hour * 60 + offset_minute;
+                if *sign == b'+' { magnitude } else { -magnitude }
             }
             _ => return None,
         };
 
+        let local_clock_ms = hour * 3_600_000 + minute * 60_000 + second * 1_000 + fraction_ms;
+        Some(days_since_epoch * 86_400_000 + local_clock_ms - offset_minutes * 60_000)
+    }
+
+    fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
         let adjusted_year = year - i64::from(month <= 2);
         let era = adjusted_year.div_euclid(400);
         let year_of_era = adjusted_year - era * 400;
         let adjusted_month = month + if month > 2 { -3 } else { 9 };
         let day_of_year = (153 * adjusted_month + 2) / 5 + day - 1;
         let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-        let days_since_epoch = era * 146_097 + day_of_era - 719_468;
-        Some(
-            days_since_epoch * 86_400_000
-                + hour * 3_600_000
-                + minute * 60_000
-                + second * 1_000
-                + fraction_ms,
-        )
+        era * 146_097 + day_of_era - 719_468
     }
 
     fn sqlite_api_key_authority() -> Connection {
@@ -372,6 +408,24 @@ mod tests {
                     other => panic!("{context}: unsupported fixture operation {other}"),
                 }
             }
+        }
+    }
+
+    #[test]
+    fn shared_expiry_parse_vectors_match_iso_subset_used_by_typescript() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../fixtures/api-key-validation-cache-v1.json"))
+                .expect("shared API-key cache fixture must be valid JSON");
+
+        for vector in fixture["expiryParseCases"]
+            .as_array()
+            .expect("expiry parse cases array")
+        {
+            let name = vector["name"].as_str().expect("case name");
+            let value = vector["value"].as_str().expect("expiry string");
+            let actual = parse_iso_expiry_timestamp_ms(value);
+            let expected = vector["expectedEpochMs"].as_i64();
+            assert_eq!(actual, expected, "{name}: parse {value:?}");
         }
     }
 
