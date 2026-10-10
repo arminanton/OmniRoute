@@ -3,6 +3,90 @@ import { saveCallLog } from "@/lib/usageDb";
 import { resolveAlibabaProviderMediaBaseUrl } from "@/shared/constants/alibabaProviderRegions";
 import { sanitizeErrorMessage } from "../../utils/error.ts";
 
+const DEFAULT_TASK_TIMEOUT_MS = 300_000;
+const DEFAULT_POLL_INTERVAL_MS = 2_500;
+const MAX_TIMER_DELAY_MS = 2_147_000_000;
+
+class DashscopeDeadlineExceeded extends Error {
+  constructor(readonly phase: string) {
+    super(`DashScope video ${phase} exceeded the task deadline`);
+    this.name = "DashscopeDeadlineExceeded";
+  }
+}
+
+function createTaskDeadline(timeoutMs: number) {
+  const deadlineAt = Date.now() + timeoutMs;
+  const controller = new AbortController();
+  let expired = false;
+  let expiryPhase = "task";
+
+  return {
+    signal: controller.signal,
+    remainingMs: () => Math.max(0, deadlineAt - Date.now()),
+    isExpired: () => expired,
+    getExpiryPhase: () => expiryPhase,
+    async run<T>(operation: () => Promise<T>, phase: string): Promise<T> {
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs <= 0) {
+        expired = true;
+        expiryPhase = phase;
+        controller.abort(new DashscopeDeadlineExceeded(phase));
+        throw new DashscopeDeadlineExceeded(phase);
+      }
+
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => {
+            expired = true;
+            expiryPhase = phase;
+            const error = new DashscopeDeadlineExceeded(phase);
+            controller.abort(error);
+            reject(error);
+          },
+          Math.min(remainingMs, MAX_TIMER_DELAY_MS)
+        );
+      });
+
+      try {
+        return await Promise.race([Promise.resolve().then(operation), timeout]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+    dispose() {
+      if (!controller.signal.aborted) controller.abort();
+    },
+  };
+}
+
+function sleepWithSignal(delayMs: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function isDeadlineError(error: unknown): error is DashscopeDeadlineExceeded {
+  return error instanceof DashscopeDeadlineExceeded;
+}
+
+function responseErrorMessage(data: any, fallback: string): string {
+  return String(data?.message || data?.errors?.[0]?.message || fallback);
+}
+
 /**
  * Alibaba-family video generation: create async task → poll → MP4.
  *
@@ -55,8 +139,16 @@ export async function handleDashscopeVideoGeneration({
   } | null;
 }) {
   const startTime = Date.now();
-  const timeoutMs = Number(body.timeout_ms) > 0 ? Number(body.timeout_ms) : 300000;
-  const pollIntervalMs = Number(body.poll_interval_ms) > 0 ? Number(body.poll_interval_ms) : 2500;
+  const requestedTimeoutMs = Number(body.timeout_ms);
+  const timeoutMs =
+    Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+      ? Math.min(requestedTimeoutMs, MAX_TIMER_DELAY_MS)
+      : DEFAULT_TASK_TIMEOUT_MS;
+  const requestedPollIntervalMs = Number(body.poll_interval_ms);
+  const pollIntervalMs =
+    Number.isFinite(requestedPollIntervalMs) && requestedPollIntervalMs > 0
+      ? Math.min(requestedPollIntervalMs, MAX_TIMER_DELAY_MS)
+      : DEFAULT_POLL_INTERVAL_MS;
   const token = credentials?.apiKey || credentials?.accessToken;
   const isAlibabaManagedMediaProvider =
     provider === "alibaba" ||
@@ -111,18 +203,33 @@ export async function handleDashscopeVideoGeneration({
     );
   }
 
+  const taskDeadline = createTaskDeadline(timeoutMs);
+  let taskAccepted = false;
   try {
     // Step 1: create async task (X-DashScope-Async: enable)
-    const createRes = await fetch(`${baseUrl}/services/aigc/video-generation/video-synthesis`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "X-DashScope-Async": "enable",
-      },
-      body: JSON.stringify(payload),
-    });
-    const createData = await createRes.json().catch(() => ({}));
+    const createRes = await taskDeadline.run(
+      () =>
+        fetch(`${baseUrl}/services/aigc/video-generation/video-synthesis`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "X-DashScope-Async": "enable",
+          },
+          body: JSON.stringify(payload),
+          signal: taskDeadline.signal,
+        }),
+      "task submission"
+    );
+    let createData: any = {};
+    try {
+      createData = await taskDeadline.run(() => createRes.json(), "submission response handling");
+    } catch (error) {
+      if (isDeadlineError(error)) throw error;
+      // A non-JSON create response is still an explicit HTTP rejection when
+      // the provider returned a non-success status. A 2xx without a task id
+      // remains ambiguous and must not trigger another generation attempt.
+    }
     const taskId = createData?.output?.task_id;
     if (!taskId) {
       const errorMessage =
@@ -132,18 +239,62 @@ export async function handleDashscopeVideoGeneration({
       if (log) {
         log.error("VIDEO", `DashScope createTask failed: ${JSON.stringify(createData)}`);
       }
-      return { success: false, status: 502, error: String(errorMessage) };
+      const explicitlyFailed =
+        createData?.output?.task_status === "FAILED" ||
+        createData?.output?.task_status === "UNKNOWN_ERROR";
+      return {
+        success: false,
+        status: createRes.ok ? 502 : createRes.status,
+        ...(!explicitlyFailed &&
+        (createRes.ok || createRes.status === 408 || createRes.status >= 500)
+          ? { terminal: true }
+          : {}),
+        error: String(errorMessage),
+      };
     }
+    taskAccepted = true;
 
     // Step 2: poll statusUrl/{task_id} until terminal
-    const deadline = startTime + timeoutMs;
     let lastStatus = "PENDING";
-    while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      const pollRes = await fetch(`${statusUrl}/${taskId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const pollData = await pollRes.json().catch(() => ({}));
+    while (taskDeadline.remainingMs() > 0) {
+      const sleepMs = Math.min(pollIntervalMs, taskDeadline.remainingMs());
+      await taskDeadline.run(() => sleepWithSignal(sleepMs, taskDeadline.signal), "poll interval");
+      if (taskDeadline.remainingMs() <= 0) {
+        throw new DashscopeDeadlineExceeded("polling");
+      }
+
+      const pollRes = await taskDeadline.run(
+        () =>
+          fetch(`${statusUrl}/${taskId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: taskDeadline.signal,
+          }),
+        "task poll"
+      );
+      let pollData: any;
+      try {
+        pollData = await taskDeadline.run(() => pollRes.json(), "poll response handling");
+      } catch (error) {
+        if (isDeadlineError(error)) throw error;
+        return {
+          success: false,
+          status: 502,
+          terminal: true,
+          error: "DashScope accepted the video task but returned an unreadable poll response",
+        };
+      }
+
+      if (!pollRes.ok) {
+        return {
+          success: false,
+          status: pollRes.status,
+          terminal: true,
+          error: responseErrorMessage(
+            pollData,
+            `DashScope accepted the video task but polling returned HTTP ${pollRes.status}`
+          ),
+        };
+      }
       lastStatus = pollData?.output?.task_status || "PENDING";
 
       if (lastStatus === "SUCCEEDED") {
@@ -152,6 +303,7 @@ export async function handleDashscopeVideoGeneration({
           return {
             success: false,
             status: 502,
+            terminal: true,
             error: "DashScope task SUCCEEDED but no video_url",
           };
         }
@@ -186,14 +338,28 @@ export async function handleDashscopeVideoGeneration({
     return {
       success: false,
       status: 504,
+      terminal: true,
       error: `DashScope task ${taskId} timed out (status: ${lastStatus})`,
     };
   } catch (err: unknown) {
+    const deadlineExceeded = isDeadlineError(err) || taskDeadline.isExpired();
+    const deadlinePhase = isDeadlineError(err) ? err.phase : taskDeadline.getExpiryPhase();
     return {
       success: false,
-      status: isJsonObject(err) && Number.isFinite(Number(err.status)) ? Number(err.status) : 502,
-      error: sanitizeErrorMessage(err) || "Video provider error",
+      status: deadlineExceeded
+        ? 504
+        : isJsonObject(err) && Number.isFinite(Number(err.status))
+          ? Number(err.status)
+          : 502,
+      // A failed create transport has an unknown acceptance outcome; every
+      // failure after a task id is returned must also avoid duplicate submits.
+      terminal: true,
+      error: deadlineExceeded
+        ? `DashScope video ${deadlinePhase} timed out${taskAccepted ? " after task acceptance" : ""}`
+        : sanitizeErrorMessage(err) || "Video provider error",
     };
+  } finally {
+    taskDeadline.dispose();
   }
 }
 
