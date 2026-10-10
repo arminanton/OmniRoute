@@ -22,6 +22,8 @@ import { runWithProxyContext } from "@omniroute/open-sse/utils/proxyFetch.ts";
 import { attachOmniRouteMetaHeaders } from "@/domain/omnirouteResponseMeta";
 import { calculateModalCost } from "@/lib/usage/costCalculator";
 import { generateRequestId } from "@/shared/utils/requestId";
+import { withConfiguredSharedAccountAdmission } from "@omniroute/open-sse/services/accountRequestAdmission.ts";
+import type { UpscaleHandlerResult } from "@omniroute/open-sse/handlers/imageUpscale.ts";
 
 export const dynamic = "force-dynamic";
 
@@ -207,6 +209,7 @@ async function postHandler(request: Request) {
       apiKey?: string | null;
       accessToken?: string | null;
       connectionId?: string | null;
+      maxConcurrent?: number | null;
       providerSpecificData?: Record<string, unknown> | null;
     };
 
@@ -239,18 +242,42 @@ async function postHandler(request: Request) {
       }
     }
 
-    const runUpscale = () =>
-      handleImageUpscale({ body, credentials: upscaleCredentials, log, signal: request.signal });
+    const runUpscale = (signal?: AbortSignal) =>
+      handleImageUpscale({ body, credentials: upscaleCredentials, log, signal });
+    const runAdmittedUpscale = () =>
+      withConfiguredSharedAccountAdmission(
+        {
+          provider,
+          credentials: creds,
+          signal: request.signal,
+        },
+        runUpscale
+      );
 
-    const result = await (creds.connectionId
-      ? runWithProxyContext((proxyInfo?.proxy as never) || null, runUpscale).catch(
-          (err: { statusCode?: number; message?: string }) => ({
-            success: false,
-            status: err.statusCode || 500,
-            error: err.message,
-          })
-        )
-      : runUpscale());
+    let result: UpscaleHandlerResult;
+    try {
+      result = await (creds.connectionId
+        ? runWithProxyContext((proxyInfo?.proxy as never) || null, runAdmittedUpscale)
+        : await runAdmittedUpscale());
+    } catch (error) {
+      const admissionError = error as { code?: string; statusCode?: number; message?: string };
+      if (admissionError.code === "ACCOUNT_ADMISSION_UNAVAILABLE") {
+        return errorResponse(
+          admissionError.statusCode || HTTP_STATUS.SERVICE_UNAVAILABLE,
+          admissionError.message || "Provider account capacity admission is unavailable"
+        );
+      }
+      if (creds.connectionId) {
+        const providerError = error as { statusCode?: number; message?: string };
+        result = {
+          success: false,
+          status: providerError.statusCode || 500,
+          error: providerError.message || "Image upscale provider error",
+        };
+      } else {
+        throw error;
+      }
+    }
 
     if (result.success) {
       await clearRecoveredProviderState(credentialsResult);
