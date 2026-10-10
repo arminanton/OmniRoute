@@ -7349,8 +7349,13 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Backup list
+          description: >-
+            Backup metadata for one selected tool, or a map of tool IDs to backup metadata when no
+            tool is selected. Original host paths are sensitive operational data.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolBackupsListResponse" }
     post:
       operationId: postApiCliToolsBackups
       tags: [CLI Tools]
@@ -7374,7 +7379,11 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Backup created
+          description: Backup restore result. The original host path is sensitive.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolBackupRestoreResponse" }
     delete:
       operationId: deleteApiCliToolsBackups
       tags: [CLI Tools]
@@ -7413,6 +7422,9 @@ paths:
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
           description: CLI tool backup deleted
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolBackupDeleteResponse" }
         "400":
           description: Invalid tool or backup ID
 
@@ -8511,7 +8523,13 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Kilo CLI configuration
+          description: >-
+            Runtime status and selected Kilo settings. Extension values and the host auth path may
+            expose local credential material.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KiloSettingsStatusResponse" }
     post:
       operationId: postApiCliToolsKiloSettings
       tags: [CLI Tools]
@@ -8529,10 +8547,10 @@ paths:
         anonymous access is not.
       requestBody:
         required: true
+        x-sensitive: true
         content:
           application/json:
-            schema:
-              type: object
+            schema: { $ref: "#/components/schemas/CliModelConfigRequest" }
       responses:
         "401":
           $ref: "#/components/responses/ManagementAuthenticationRequired"
@@ -8541,7 +8559,11 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Kilo CLI settings applied
+          description: Kilo Code settings apply result with a host auth path.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KiloSettingsAppliedResponse" }
     delete:
       operationId: deleteApiCliToolsKiloSettings
       tags: [CLI Tools]
@@ -8565,7 +8587,10 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: Kilo CLI settings reset
+          description: Result of removing the OmniRoute Kilo provider entry.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KiloSettingsRemovedResponse" }
 
   /api/cli-tools/openclaw-settings:
     get:
@@ -16810,6 +16835,12 @@ paths:
       tags:
         - Cli tools
       summary: "POST cli tools › apply"
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CliToolsApplyRequest" }
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -16829,8 +16860,13 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: >-
+            Dry-run or applied config result. Generated content and local filesystem paths can
+            contain sensitive credentials or host details.
           x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolsApplyResponse" }
   /api/cli-tools/config:
     get:
       operationId: getApiCliToolsConfig
@@ -16863,6 +16899,9 @@ paths:
           x-sensitive: true
           description: >-
             Generated configurations can include the complete API key supplied in the query and must be handled as credential material.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolsGeneratedConfigListResponse" }
     post:
       operationId: postApiCliToolsConfig
       tags:
@@ -16896,6 +16935,9 @@ paths:
           x-sensitive: true
           description: >-
             Generated config text can include the complete API key supplied in the request and must be handled as credential material.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolsGeneratedConfigResponse" }
   /api/cli-tools/deepseek-tui-settings:
     delete:
       operationId: deleteApiCliToolsDeepseekTuiSettings
@@ -17195,12 +17237,21 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: Current per-role Hermes Agent settings and first-setup metadata.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HermesAgentSettingsStatusResponse" }
     post:
       operationId: postApiCliToolsHermesAgentSettings
       tags:
         - Cli tools
       summary: "POST cli tools › hermes agent settings"
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HermesAgentSettingsRequest" }
       security:
         - BearerAuth: []
         - ManagementSessionAuth: []
@@ -17219,7 +17270,13 @@ paths:
         "503":
           $ref: "#/components/responses/ManagementAuthUnavailable"
         "200":
-          description: OK
+          description: >-
+            Preview returns generated YAML containing the configured API key; save returns the
+            config path. Treat either result as sensitive.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HermesAgentSettingsApplyResponse" }
   /api/cli-tools/jcode-settings:
     delete:
       operationId: deleteApiCliToolsJcodeSettings
@@ -17239,7 +17296,10 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: Result of removing the OmniRoute-managed JCode provider block.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JcodeSettingsRemovedResponse" }
     get:
       operationId: getApiCliToolsJcodeSettings
       tags:
@@ -17261,11 +17321,20 @@ paths:
           x-sensitive: true
           description: >-
             Returns the local JCode TOML config, which may include a plaintext API key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CliToolTextSettingsStatusResponse" }
     post:
       operationId: postApiCliToolsJcodeSettings
       tags:
         - Cli tools
       summary: "POST cli tools › jcode settings"
+      requestBody:
+        required: true
+        x-sensitive: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CliModelConfigRequest" }
       description: >-
         Uses requireCliToolsAuth, which delegates to requireManagementAuth. Accepted credentials include a supported management Bearer token or API key, dashboard session, loopback CLI token, trusted internal-service token, Google management key, or Anthropic-qualified management key. Authentication remains conditional: unlocked management with requireLogin=false may allow anonymous access, and first-run bootstrap may allow loopback access. A separate source policy restricts this route to loopback/private-LAN callers; valid credentials do not make it remotely reachable.
       security:
@@ -17279,7 +17348,11 @@ paths:
       x-local-only: true
       responses:
         "200":
-          description: OK
+          description: JCode settings apply result with a local config path.
+          x-sensitive: true
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/JcodeSettingsAppliedResponse" }
   /api/cli-tools/keys:
     get:
       operationId: getApiCliToolsKeys
@@ -17481,7 +17554,10 @@ paths:
         - {}
       responses:
         "200":
-          description: OK
+          description: Auto-Combo provider order or its static fallback.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenClawAutoOrderResponse" }
   /api/cli-tools/pi-settings:
     delete:
       operationId: deleteApiCliToolsPiSettings
@@ -40046,6 +40122,354 @@ components:
       oneOf:
         - { $ref: "#/components/schemas/CliToolSettingsUnavailableResponse" }
         - { $ref: "#/components/schemas/CliToolJsonSettingsReadyResponse" }
+    CliModelConfigRequest:
+      type: object
+      x-sensitive: true
+      description: >-
+        Shared JCode/Kilo model settings payload. `apiKey` is plaintext credential input and is
+        write-only. The handlers read `keyId` before shared validation; other unknown fields are
+        accepted by the Zod object and stripped.
+      required: [baseUrl, model]
+      properties:
+        baseUrl: { type: string, minLength: 1 }
+        model: { type: string, minLength: 1 }
+        keyId: { type: string }
+        apiKey: { type: [string, "null"], writeOnly: true, x-sensitive: true }
+        reasoningEffort: { type: string, enum: [none, low, medium, high, xhigh, max, ultra] }
+        wireApi: { type: string, enum: [chat, responses] }
+        modelMappings:
+          type: object
+          propertyNames: { type: string, minLength: 1 }
+          additionalProperties: { type: string, minLength: 1 }
+      additionalProperties: true
+    CliToolsApplyRequest:
+      type: object
+      x-sensitive: true
+      required: [toolId, apiKey]
+      properties:
+        toolId: { type: string, minLength: 1 }
+        baseUrl: { type: string }
+        apiKey: { type: string, minLength: 1, writeOnly: true, x-sensitive: true }
+        model: { type: string }
+        dryRun: { type: boolean }
+      additionalProperties: true
+    HermesAgentSettingsRequest:
+      type: object
+      x-sensitive: true
+      required: [baseUrl, selections]
+      properties:
+        baseUrl: { type: string, minLength: 1 }
+        keyId: { type: [string, "null"] }
+        apiKey: { type: [string, "null"], writeOnly: true, x-sensitive: true }
+        selections:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [role, model]
+            properties:
+              role: { type: string }
+              model: { type: string }
+            additionalProperties: true
+        preview: { type: boolean }
+      additionalProperties: true
+    CliToolBackupToolId:
+      type: string
+      enum: [claude, codex, droid, grok-build, openclaw, cline, kilo, qwen]
+    CliToolBackupEntry:
+      type: object
+      x-sensitive: true
+      required: [id, toolId, originalPath, createdAt, size]
+      properties:
+        id:
+          type: string
+          description: Backup filename identifier, not the original file contents.
+        toolId: { $ref: "#/components/schemas/CliToolBackupToolId" }
+        originalPath:
+          type: string
+          description: Original absolute host path; sensitive local system metadata.
+          x-sensitive: true
+        createdAt: { type: string, format: date-time }
+        size: { type: integer, minimum: 0 }
+      additionalProperties: false
+    CliToolBackupsForOneToolResponse:
+      type: object
+      x-sensitive: true
+      required: [tool, backups]
+      properties:
+        tool: { $ref: "#/components/schemas/CliToolBackupToolId" }
+        backups: { type: array, items: { $ref: "#/components/schemas/CliToolBackupEntry" } }
+      additionalProperties: false
+    CliToolBackupsForAllToolsResponse:
+      type: object
+      x-sensitive: true
+      required: [backups]
+      properties:
+        backups:
+          type: object
+          propertyNames: { $ref: "#/components/schemas/CliToolBackupToolId" }
+          additionalProperties: { type: array, items: { $ref: "#/components/schemas/CliToolBackupEntry" } }
+      additionalProperties: false
+    CliToolBackupsListResponse:
+      oneOf:
+        - $ref: "#/components/schemas/CliToolBackupsForOneToolResponse"
+        - $ref: "#/components/schemas/CliToolBackupsForAllToolsResponse"
+      description: >-
+        GET with a valid `tool` or `toolId` query returns the single-tool branch; without one it
+        returns a per-tool map. Backup metadata includes original host filesystem paths.
+    CliToolBackupRestoreResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, restored, backupId, originalPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        restored: { type: boolean, const: true }
+        backupId: { type: string }
+        originalPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    CliToolBackupDeleteResponse:
+      type: object
+      required: [success, message, deleted, backupId]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string }
+        deleted: { type: boolean, const: true }
+        backupId: { type: string }
+      additionalProperties: false
+    CliToolsGeneratedConfigSuccess:
+      type: object
+      x-sensitive: true
+      required: [success, configPath, content]
+      properties:
+        success: { type: boolean, const: true }
+        configPath: { type: string, x-sensitive: true }
+        content:
+          type: string
+          description: Generated CLI config text may contain the API key supplied to this endpoint.
+          x-sensitive: true
+        migration: { type: string }
+      additionalProperties: false
+    CliToolsGeneratedConfigFailure:
+      type: object
+      required: [success, configPath, error]
+      properties:
+        success: { type: boolean, const: false }
+        configPath: { type: string }
+        error: { type: string }
+      additionalProperties: false
+    CliToolsGeneratedConfigResult:
+      oneOf:
+        - $ref: "#/components/schemas/CliToolsGeneratedConfigSuccess"
+        - $ref: "#/components/schemas/CliToolsGeneratedConfigFailure"
+    CliToolsGeneratedConfigListResponse:
+      type: object
+      x-sensitive: true
+      required: [configs]
+      properties:
+        configs: { type: array, items: { $ref: "#/components/schemas/CliToolsGeneratedConfigResult" } }
+      additionalProperties: false
+    CliToolsGeneratedConfigResponse:
+      type: object
+      x-sensitive: true
+      required: [configPath, content]
+      properties:
+        configPath: { type: string, x-sensitive: true }
+        content:
+          type: string
+          description: Generated CLI config text may contain the API key supplied to this endpoint.
+          x-sensitive: true
+      additionalProperties: false
+    CliToolsApplyDryRunResponse:
+      type: object
+      x-sensitive: true
+      required: [dryRun, configPath, content]
+      properties:
+        dryRun: { type: boolean, const: true }
+        configPath: { type: string, x-sensitive: true }
+        content: { type: string, x-sensitive: true }
+        migration: { type: string }
+      additionalProperties: false
+    CliToolsApplyWrittenResponse:
+      type: object
+      x-sensitive: true
+      required: [success, configPath, backupPath, content]
+      properties:
+        success: { type: boolean, const: true }
+        configPath: { type: string, x-sensitive: true }
+        backupPath: { type: [string, "null"], x-sensitive: true }
+        content: { type: string, x-sensitive: true }
+        migration: { type: string }
+      additionalProperties: false
+    CliToolsApplyResponse:
+      oneOf:
+        - $ref: "#/components/schemas/CliToolsApplyDryRunResponse"
+        - $ref: "#/components/schemas/CliToolsApplyWrittenResponse"
+      description: >-
+        `dryRun: true` returns generated config without writing it; otherwise the route writes the
+        config and returns the optional prior-file backup path. Both forms contain generated config
+        text that may include an API key.
+    HermesAgentRoleSettings:
+      type: object
+      additionalProperties:
+        type: object
+        required: [model]
+        properties:
+          model: { type: string }
+          provider: { type: string }
+          base_url: { type: string }
+        additionalProperties: false
+    HermesAgentSettingsStatusResponse:
+      type: object
+      required: [success, roles, firstSetupAt]
+      properties:
+        success: { type: boolean, const: true }
+        roles: { $ref: "#/components/schemas/HermesAgentRoleSettings" }
+        firstSetupAt: { type: [string, "null"] }
+      additionalProperties: false
+    HermesAgentSettingsPreviewResponse:
+      type: object
+      x-sensitive: true
+      required: [success, preview, yaml, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        preview: { type: boolean, const: true }
+        yaml:
+          type: string
+          description: Generated YAML can include the resolved plaintext API key.
+          x-sensitive: true
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    HermesAgentSettingsSavedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, description: Message includes the host config path., x-sensitive: true }
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    HermesAgentSettingsApplyResponse:
+      oneOf:
+        - $ref: "#/components/schemas/HermesAgentSettingsPreviewResponse"
+        - $ref: "#/components/schemas/HermesAgentSettingsSavedResponse"
+      description: Preview and persistent-save response variants from the Hermes Agent settings route.
+    JcodeSettingsAppliedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, configPath]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          const: "jcode settings applied! Start jcode with `jcode --provider-profile omniroute` or pick the profile with /model."
+        configPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    JcodeSettingsRemovedResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, enum: ["No config file to reset", "jcode OmniRoute settings removed"] }
+      additionalProperties: false
+    KiloSettingsUnavailableResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, settings, message]
+      properties:
+        installed: { type: boolean }
+        runnable: { type: boolean, const: false }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        settings: { type: "null" }
+        message: { type: string }
+      additionalProperties: false
+    KiloSettingsReadyResponse:
+      type: object
+      x-sensitive: true
+      required: [installed, runnable, command, commandPath, runtimeMode, reason, settings, hasOmniRoute, authPath]
+      properties:
+        installed: { type: boolean, const: true }
+        runnable: { type: boolean, const: true }
+        command: { type: [string, "null"] }
+        commandPath: { type: [string, "null"] }
+        runtimeMode: { type: string, enum: [auto, host, container] }
+        reason: { type: [string, "null"] }
+        settings:
+          type: object
+          required: [auth, extensionSettings]
+          properties:
+            auth: { type: array, items: { type: string } }
+            extensionSettings:
+              type: [object, "null"]
+              description: Selected VS Code extension values can contain credentials.
+              x-sensitive: true
+              additionalProperties: true
+          additionalProperties: false
+        hasOmniRoute: { type: boolean }
+        authPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    KiloSettingsStatusResponse:
+      type: object
+      x-sensitive: true
+      oneOf:
+        - $ref: "#/components/schemas/KiloSettingsUnavailableResponse"
+        - $ref: "#/components/schemas/KiloSettingsReadyResponse"
+    KiloSettingsAppliedResponse:
+      type: object
+      x-sensitive: true
+      required: [success, message, authPath]
+      properties:
+        success: { type: boolean, const: true }
+        message: { type: string, const: "Kilo Code settings applied successfully!" }
+        authPath: { type: string, x-sensitive: true }
+      additionalProperties: false
+    KiloSettingsRemovedResponse:
+      type: object
+      required: [success, message]
+      properties:
+        success: { type: boolean, const: true }
+        message:
+          type: string
+          enum: ["No settings file to reset", "OmniRoute settings removed from Kilo Code"]
+      additionalProperties: false
+    OpenClawAutoOrderProvider:
+      type: object
+      required: [order, allow_fallbacks]
+      properties:
+        order: { type: array, items: { type: string } }
+        allow_fallbacks: { type: boolean, const: true }
+      additionalProperties: false
+    OpenClawAutoOrderGeneratedResponse:
+      type: object
+      required: [provider, generated_at, source]
+      properties:
+        provider: { $ref: "#/components/schemas/OpenClawAutoOrderProvider" }
+        generated_at: { type: string, format: date-time }
+        source: { type: string, const: omniroute-auto-combo }
+      additionalProperties: false
+    OpenClawAutoOrderFallbackResponse:
+      type: object
+      required: [provider, generated_at, source]
+      properties:
+        provider:
+          allOf:
+            - $ref: "#/components/schemas/OpenClawAutoOrderProvider"
+            - type: object
+              properties:
+                order:
+                  type: array
+                  const: [anthropic, google, openai]
+        generated_at: { type: string, format: date-time }
+        source: { type: string, const: omniroute-fallback }
+      additionalProperties: false
+    OpenClawAutoOrderResponse:
+      oneOf:
+        - $ref: "#/components/schemas/OpenClawAutoOrderGeneratedResponse"
+        - $ref: "#/components/schemas/OpenClawAutoOrderFallbackResponse"
+      description: Dynamic provider scores or the fixed fallback order when fetching inputs fails.
     CodeWhaleSettingsAppliedResponse:
       type: object
       x-sensitive: true
